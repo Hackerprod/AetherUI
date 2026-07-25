@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0-windows10.0.19041.0</TargetFramework>
+    <AssemblyName>AetherUI.Windows</AssemblyName>
+    <RootNamespace>AetherUI.Windows</RootNamespace>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <Description>Win32, Direct2D and DirectWrite host for AetherUI.</Description>
+    <PackageId>AetherUI.Windows</PackageId>
+    <SupportedOSPlatformVersion>10.0.19041.0</SupportedOSPlatformVersion>
+    <NoWarn>$(NoWarn);CS0649</NoWarn>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../AetherUI.Core/AetherUI.Core.csproj" />
+    <PackageReference Include="Vortice.Direct2D1" />
+  </ItemGroup>
+</Project>

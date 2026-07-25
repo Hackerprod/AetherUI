@@ -1,0 +1,20 @@
+bin/
+obj/
+.vs/
+.idea/
+*.user
+*.suo
+TestResults/
+artifacts/
+*.nupkg
+*.snupkg
+
+# AI agent / assistant tooling — local only, never published
+.claude/
+.cursor/
+.windsurf/
+.copilot/
+.codex/
+CLAUDE.md
+AGENTS.md
+.aider*

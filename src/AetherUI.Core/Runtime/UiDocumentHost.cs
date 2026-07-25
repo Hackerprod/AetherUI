@@ -1,0 +1,488 @@
+using AetherUI.Css;
+using AetherUI.Dom;
+using AetherUI.Events;
+using AetherUI.Layout;
+using AetherUI.Primitives;
+using AetherUI.Rendering;
+
+namespace AetherUI.Runtime;
+
+/// <summary>
+/// Coordinates a generated component, DOM, style resolution, layout, input routing, and rendering.
+/// Platform hosts translate native messages into the methods exposed here.
+/// </summary>
+public sealed class UiDocumentHost : IDisposable
+{
+    private readonly UiComponent _component;
+    private readonly UiHostOptions _options;
+    private readonly IRenderBackend _renderer;
+    private readonly LayoutEngine _layoutEngine;
+    private readonly DisplayListBuilder _displayListBuilder;
+    private readonly Dictionary<string, string> _uncontrolledInputValues = new(StringComparer.Ordinal);
+    private DocumentNode? _document;
+    private LayoutResult? _layout;
+    private DisplayList? _displayList;
+    private StyleMap? _styles;
+    private ElementNode? _hovered;
+    private ElementNode? _active;
+    private ElementNode? _focused;
+    private SizeF _viewport;
+    private float _dpiScale = 1;
+    private bool _markupDirty = true;
+    private bool _visualDirty = true;
+    private bool _disposed;
+
+    public UiDocumentHost(
+        UiComponent component,
+        ITextMeasurer textMeasurer,
+        IRenderBackend renderer,
+        UiHostOptions? options = null)
+    {
+        _component = component ?? throw new ArgumentNullException(nameof(component));
+        ArgumentNullException.ThrowIfNull(textMeasurer);
+        _renderer = renderer ?? throw new ArgumentNullException(nameof(renderer));
+        _options = options ?? new UiHostOptions();
+        _layoutEngine = new LayoutEngine(textMeasurer);
+        _displayListBuilder = new DisplayListBuilder(textMeasurer);
+        _viewport = new SizeF(_options.Width, _options.Height);
+        _component.Invalidated += OnComponentInvalidated;
+    }
+
+    public event EventHandler? RenderRequested;
+
+    public UiHostOptions Options => _options;
+    public DocumentNode? Document => _document;
+    public LayoutResult? Layout => _layout;
+    public ElementNode? FocusedElement => _focused;
+    public bool NeedsRender => _markupDirty || _visualDirty;
+    public float DpiScale => _dpiScale;
+
+    public void SetViewport(int pixelWidth, int pixelHeight, float dpiScale)
+    {
+        ThrowIfDisposed();
+        if (pixelWidth <= 0 || pixelHeight <= 0 || !float.IsFinite(dpiScale) || dpiScale <= 0)
+        {
+            return;
+        }
+
+        _dpiScale = dpiScale;
+        _viewport = new SizeF(pixelWidth / dpiScale, pixelHeight / dpiScale);
+        _renderer.Resize(pixelWidth, pixelHeight, dpiScale);
+        InvalidateVisual();
+    }
+
+    public void Render()
+    {
+        ThrowIfDisposed();
+        EnsureVisualTree();
+        _renderer.Render(_displayList!, _options.ClearColor);
+        _visualDirty = false;
+    }
+
+    public void PointerMoved(PointF point)
+    {
+        ThrowIfDisposed();
+        EnsureVisualTree();
+        var target = _layout!.HitTest(point);
+        if (ReferenceEquals(target, _hovered))
+        {
+            return;
+        }
+
+        var previous = _hovered;
+        if (previous is not null)
+        {
+            previous.State &= ~ElementState.Hover;
+            Dispatch("mouseout", previous, point);
+        }
+
+        _hovered = target;
+        if (_hovered is not null)
+        {
+            _hovered.State |= ElementState.Hover;
+            Dispatch("mouseover", _hovered, point);
+        }
+
+        InvalidateVisual();
+    }
+
+    public void PointerLeft()
+    {
+        ThrowIfDisposed();
+        if (_hovered is null)
+        {
+            return;
+        }
+
+        var previous = _hovered;
+        _hovered = null;
+        previous.State &= ~ElementState.Hover;
+        Dispatch("mouseout", previous, default);
+        InvalidateVisual();
+    }
+
+    public void PointerPressed(PointF point)
+    {
+        ThrowIfDisposed();
+        EnsureVisualTree();
+        var target = _layout!.HitTest(point);
+        if (target is null || target.IsDisabled)
+        {
+            Focus(null);
+            return;
+        }
+
+        if (_active is not null)
+        {
+            _active.State &= ~ElementState.Active;
+        }
+
+        _active = target;
+        _active.State |= ElementState.Active;
+        Focus(target.IsFocusable ? target : null);
+        Dispatch("mousedown", target, point);
+        InvalidateVisual();
+    }
+
+    public void PointerReleased(PointF point)
+    {
+        ThrowIfDisposed();
+        EnsureVisualTree();
+        var target = _layout!.HitTest(point);
+        var pressed = _active;
+        if (pressed is not null)
+        {
+            pressed.State &= ~ElementState.Active;
+            Dispatch("mouseup", pressed, point);
+        }
+
+        _active = null;
+        if (pressed is not null && ReferenceEquals(pressed, target) && !pressed.IsDisabled)
+        {
+            var click = Dispatch("click", pressed, point);
+            if (!click.IsDefaultPrevented && pressed.TagName == "button" &&
+                !string.Equals(pressed.GetAttribute("type"), "button", StringComparison.OrdinalIgnoreCase))
+            {
+                SubmitClosestForm(pressed);
+            }
+        }
+
+        InvalidateVisual();
+    }
+
+    public void TextInput(char character)
+    {
+        ThrowIfDisposed();
+        if (_focused is not { TagName: "input" } input || input.IsDisabled || char.IsControl(character))
+        {
+            return;
+        }
+
+        var current = input.RuntimeValue ?? input.GetAttribute("value") ?? string.Empty;
+        var maxLength = ParsePositiveInt(input.GetAttribute("maxlength"));
+        if (maxLength is not null && current.Length >= maxLength.Value)
+        {
+            return;
+        }
+
+        SetInputValue(input, current + character);
+        var uiEvent = Dispatch("input", input, default, character: character);
+        if (uiEvent.IsDefaultPrevented)
+        {
+            SetInputValue(input, current);
+        }
+
+        InvalidateVisual();
+    }
+
+    public void KeyPressed(UiKey key)
+    {
+        ThrowIfDisposed();
+        if (_focused is null)
+        {
+            return;
+        }
+
+        var keyEvent = Dispatch("keydown", _focused, default, key);
+        if (keyEvent.IsDefaultPrevented)
+        {
+            return;
+        }
+
+        if (key == UiKey.Tab)
+        {
+            FocusNext();
+            return;
+        }
+
+        if (_focused.TagName != "input" || _focused.IsDisabled)
+        {
+            if (key is UiKey.Enter or UiKey.Space && _focused.TagName == "button")
+            {
+                var click = Dispatch("click", _focused, default, key);
+                if (!click.IsDefaultPrevented &&
+                    !string.Equals(_focused.GetAttribute("type"), "button", StringComparison.OrdinalIgnoreCase))
+                {
+                    SubmitClosestForm(_focused);
+                }
+            }
+
+            return;
+        }
+
+        var input = _focused;
+        var current = input.RuntimeValue ?? input.GetAttribute("value") ?? string.Empty;
+        if (key is UiKey.Backspace or UiKey.Delete)
+        {
+            if (current.Length == 0)
+            {
+                return;
+            }
+
+            SetInputValue(input, current[..^1]);
+            Dispatch("input", input, default, key);
+            InvalidateVisual();
+        }
+        else if (key == UiKey.Enter)
+        {
+            SubmitClosestForm(input);
+        }
+    }
+
+    public CursorKind CursorAt(PointF point)
+    {
+        ThrowIfDisposed();
+        EnsureVisualTree();
+        var target = _layout!.HitTest(point);
+        return target is not null && _styles!.TryGetValue(target, out var style)
+            ? style.Cursor
+            : CursorKind.Default;
+    }
+
+    private void SubmitClosestForm(ElementNode source)
+    {
+        var form = source.Closest("form");
+        if (form is null)
+        {
+            return;
+        }
+
+        if (!ValidateForm(form))
+        {
+            InvalidateVisual();
+            return;
+        }
+
+        Dispatch("submit", form, default);
+    }
+
+    private bool ValidateForm(ElementNode form)
+    {
+        var valid = true;
+        foreach (var input in form.DescendantElements().Where(static element => element.TagName == "input" && element.IsRequired))
+        {
+            var value = input.RuntimeValue ?? input.GetAttribute("value") ?? string.Empty;
+            var invalid = string.IsNullOrWhiteSpace(value);
+            if (invalid)
+            {
+                input.State |= ElementState.Invalid;
+                Dispatch("invalid", input, default);
+                valid = false;
+            }
+            else
+            {
+                input.State &= ~ElementState.Invalid;
+            }
+        }
+
+        return valid;
+    }
+
+    private UiEvent Dispatch(string type, ElementNode target, PointF point, UiKey key = UiKey.None, char character = '\0')
+    {
+        var uiEvent = new UiEvent(type, target)
+        {
+            PointerPosition = point,
+            Key = key,
+            Character = character,
+            Value = target.RuntimeValue ?? target.GetAttribute("value"),
+        };
+
+        for (ElementNode? current = target; current is not null; current = current.Parent as ElementNode)
+        {
+            uiEvent.CurrentTarget = current;
+            var token = current.GetAttribute($"on{type}");
+            if (token is { Length: > 0 } && _component.TryGetEventHandler(token, out var handler))
+            {
+                handler(uiEvent);
+            }
+
+            if (uiEvent.IsPropagationStopped)
+            {
+                break;
+            }
+        }
+
+        return uiEvent;
+    }
+
+    private void Focus(ElementNode? target)
+    {
+        if (ReferenceEquals(target, _focused))
+        {
+            return;
+        }
+
+        var previous = _focused;
+        if (previous is not null)
+        {
+            previous.State &= ~ElementState.Focus;
+            Dispatch("blur", previous, default);
+        }
+
+        _focused = target;
+        if (_focused is not null)
+        {
+            _focused.State |= ElementState.Focus;
+            Dispatch("focus", _focused, default);
+        }
+
+        InvalidateVisual();
+    }
+
+    private void FocusNext()
+    {
+        EnsureVisualTree();
+        var focusable = _document!.DescendantElements()
+            .Where(static element => element.IsFocusable && !element.IsDisabled)
+            .ToArray();
+        if (focusable.Length == 0)
+        {
+            Focus(null);
+            return;
+        }
+
+        var index = Array.IndexOf(focusable, _focused);
+        Focus(focusable[(index + 1 + focusable.Length) % focusable.Length]);
+    }
+
+    private void SetInputValue(ElementNode input, string value)
+    {
+        input.RuntimeValue = value;
+        if (input.Id is { Length: > 0 } id)
+        {
+            _uncontrolledInputValues[id] = value;
+        }
+
+        if (input.IsRequired && !string.IsNullOrWhiteSpace(value))
+        {
+            input.State &= ~ElementState.Invalid;
+        }
+    }
+
+    private void EnsureVisualTree()
+    {
+        if (_markupDirty)
+        {
+            RebuildDocument();
+        }
+
+        if (!_visualDirty && _displayList is not null)
+        {
+            return;
+        }
+
+        _styles = StyleResolver.Resolve(_document!, _viewport.Width, _viewport.Height);
+        _layout = _layoutEngine.Layout(_document!, _styles, _viewport);
+        _displayList = _displayListBuilder.Build(_layout, _focused);
+    }
+
+    private void RebuildDocument()
+    {
+        var focusedId = _focused?.Id;
+        var hoveredId = _hovered?.Id;
+        var activeId = _active?.Id;
+        var markup = _component.RenderMarkup();
+        _document = HtmlParser.Parse(markup);
+        _styles = null;
+        _layout = null;
+        _displayList = null;
+
+        foreach (var input in _document.GetElementsByTagName("input"))
+        {
+            if (input.GetAttribute("value") is { } controlledValue)
+            {
+                input.RuntimeValue = controlledValue;
+                if (input.Id is { Length: > 0 } controlledId)
+                {
+                    _uncontrolledInputValues[controlledId] = controlledValue;
+                }
+            }
+            else if (input.Id is { Length: > 0 } id && _uncontrolledInputValues.TryGetValue(id, out var saved))
+            {
+                input.RuntimeValue = saved;
+            }
+        }
+
+        _focused = RestoreElement(focusedId, ElementState.Focus);
+        _hovered = RestoreElement(hoveredId, ElementState.Hover);
+        _active = RestoreElement(activeId, ElementState.Active);
+        _markupDirty = false;
+        _visualDirty = true;
+    }
+
+    private ElementNode? RestoreElement(string? id, ElementState state)
+    {
+        if (string.IsNullOrEmpty(id))
+        {
+            return null;
+        }
+
+        var element = _document!.GetElementById(id);
+        if (element is not null)
+        {
+            element.State |= state;
+        }
+
+        return element;
+    }
+
+    private void OnComponentInvalidated(object? sender, EventArgs e)
+    {
+        _markupDirty = true;
+        _visualDirty = true;
+        RenderRequested?.Invoke(this, EventArgs.Empty);
+    }
+
+    private void InvalidateVisual()
+    {
+        _visualDirty = true;
+        RenderRequested?.Invoke(this, EventArgs.Empty);
+    }
+
+    private static int? ParsePositiveInt(string? value) =>
+        int.TryParse(value, out var result) && result >= 0 ? result : null;
+
+    private void ThrowIfDisposed() => ObjectDisposedException.ThrowIf(_disposed, this);
+
+    public void Dispose()
+    {
+        if (_disposed)
+        {
+            return;
+        }
+
+        _disposed = true;
+        _component.Invalidated -= OnComponentInvalidated;
+        try
+        {
+            _component.Dispose();
+        }
+        finally
+        {
+            _renderer.Dispose();
+        }
+
+        GC.SuppressFinalize(this);
+    }
+}

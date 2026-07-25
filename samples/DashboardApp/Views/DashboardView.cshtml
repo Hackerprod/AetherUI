@@ -1,0 +1,358 @@
+@namespace DashboardApp.Views
+@class DashboardView
+
+@code {
+    private int Progress { get; set; } = 40;
+    private bool DarkMode { get; set; }
+    private bool NotifOn { get; set; } = true;
+    private bool AutoSaveOn { get; set; }
+    private string Nombre { get; set; } = string.Empty;
+    private string Saludo { get; set; } = "Escribe tu nombre y saluda para ver el motor reaccionar.";
+
+    private string RootClass => DarkMode ? "app dark" : "app";
+    private string ProgressFillStyle => $"width: {Progress}%;";
+    private string ProgressStatusText => Progress >= 100 ? "Completado" : Progress <= 0 ? "Sin iniciar" : "En progreso";
+    private string ProgressStatusClass => Progress >= 100 ? "status-pill done" : Progress <= 0 ? "status-pill idle" : "status-pill active";
+    private string DarkSwitchClass => DarkMode ? "switch on" : "switch off";
+    private string NotifSwitchClass => NotifOn ? "switch on" : "switch off";
+    private string AutoSaveSwitchClass => AutoSaveOn ? "switch on" : "switch off";
+
+    private void IncreaseProgress(UiEvent e)
+    {
+        Progress = Math.Min(100, Progress + 10);
+        StateHasChanged();
+    }
+
+    private void DecreaseProgress(UiEvent e)
+    {
+        Progress = Math.Max(0, Progress - 10);
+        StateHasChanged();
+    }
+
+    private void ToggleDarkMode(UiEvent e)
+    {
+        DarkMode = !DarkMode;
+        StateHasChanged();
+    }
+
+    private void ToggleNotif(UiEvent e)
+    {
+        NotifOn = !NotifOn;
+        StateHasChanged();
+    }
+
+    private void ToggleAutoSave(UiEvent e)
+    {
+        AutoSaveOn = !AutoSaveOn;
+        StateHasChanged();
+    }
+
+    private void OnNombreInput(UiEvent e)
+    {
+        Nombre = e.Value ?? string.Empty;
+        StateHasChanged();
+    }
+
+    private void Saludar(UiEvent e)
+    {
+        e.PreventDefault();
+        Saludo = string.IsNullOrWhiteSpace(Nombre)
+            ? "Escribe tu nombre y saluda para ver el motor reaccionar."
+            : $"Hola, {Nombre}. Este texto se renderizo sin Chromium ni WebView2.";
+        StateHasChanged();
+    }
+}
+
+<style>
+  html, body {
+    width: 100%;
+    height: 100vh;
+    margin: 0;
+  }
+
+  .app {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    width: 100%;
+    height: 100vh;
+    background-color: #eef2f9;
+    color: #0f172a;
+    font-family: "Segoe UI";
+  }
+
+  .app.dark {
+    background-color: #0b1220;
+    color: #e5e7eb;
+  }
+
+  .page {
+    width: 720px;
+    padding: 32px;
+  }
+
+  .top-row {
+    display: flex;
+    flex-direction: row;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 24px;
+  }
+
+  h1 {
+    margin: 0 0 4px 0;
+    font-size: 26px;
+  }
+
+  .subtitle {
+    margin: 0;
+    font-size: 14px;
+    color: #64748b;
+  }
+
+  .app.dark .subtitle {
+    color: #94a3b8;
+  }
+
+  .card {
+    width: 100%;
+    padding: 24px;
+    margin-bottom: 20px;
+    border: 1px solid #d8deea;
+    border-radius: 14px;
+    background-color: #ffffff;
+  }
+
+  .app.dark .card {
+    background-color: #131c2e;
+    border-color: #23304a;
+  }
+
+  .card-title {
+    margin: 0 0 16px 0;
+    font-size: 16px;
+    font-weight: 600;
+  }
+
+  .row {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+  }
+
+  .row-between {
+    display: flex;
+    flex-direction: row;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 14px;
+  }
+
+  .row-between:last-child {
+    margin-bottom: 0;
+  }
+
+  .progress-track {
+    width: 100%;
+    height: 16px;
+    border-radius: 8px;
+    background-color: #e2e8f0;
+    margin: 4px 0 16px 0;
+  }
+
+  .app.dark .progress-track {
+    background-color: #1e293b;
+  }
+
+  .progress-fill {
+    height: 16px;
+    border-radius: 8px;
+    background-color: #2563eb;
+  }
+
+  .progress-controls {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    justify-content: space-between;
+  }
+
+  .stepper {
+    display: flex;
+    flex-direction: row;
+  }
+
+  .step-button {
+    width: 40px;
+    height: 40px;
+    border-radius: 8px;
+    background-color: #e2e8f0;
+    color: #0f172a;
+    font-size: 18px;
+    font-weight: 700;
+    margin-right: 8px;
+  }
+
+  .step-button:hover {
+    background-color: #cbd5e1;
+  }
+
+  .app.dark .step-button {
+    background-color: #1e293b;
+    color: #e5e7eb;
+  }
+
+  .app.dark .step-button:hover {
+    background-color: #29456e;
+  }
+
+  .status-pill {
+    padding: 6px 14px;
+    border-radius: 999px;
+    font-size: 13px;
+    font-weight: 600;
+    background-color: #e2e8f0;
+    color: #334155;
+  }
+
+  .status-pill.active {
+    background-color: #dbeafe;
+    color: #1d4ed8;
+  }
+
+  .status-pill.done {
+    background-color: #dcfce7;
+    color: #15803d;
+  }
+
+  .status-pill.idle {
+    background-color: #fee2e2;
+    color: #b91c1c;
+  }
+
+  .switch {
+    width: 52px;
+    height: 28px;
+    border-radius: 999px;
+    background-color: #cbd5e1;
+  }
+
+  .switch.on {
+    background-color: #2563eb;
+  }
+
+  .switch:hover {
+    background-color: #94a3b8;
+  }
+
+  .switch.on:hover {
+    background-color: #1d4ed8;
+  }
+
+  label {
+    display: block;
+    margin-bottom: 8px;
+    font-weight: 600;
+    font-size: 14px;
+  }
+
+  input {
+    display: block;
+    width: 100%;
+    height: 42px;
+    margin-bottom: 14px;
+    padding: 9px 12px;
+    border-radius: 8px;
+    font-size: 15px;
+  }
+
+  .primary-button {
+    display: block;
+    width: 100%;
+    height: 42px;
+    border-radius: 8px;
+    font-size: 15px;
+    font-weight: 600;
+    background-color: #2563eb;
+  }
+
+  .primary-button:hover {
+    background-color: #1e40af;
+  }
+
+  .greeting {
+    min-height: 20px;
+    margin: 14px 0 0 0;
+    font-size: 14px;
+    color: #334155;
+  }
+
+  .app.dark .greeting {
+    color: #cbd5e1;
+  }
+
+  .footer-note {
+    margin: 4px 0 0 0;
+    font-size: 12px;
+    color: #94a3b8;
+    text-align: center;
+  }
+</style>
+
+<body class="@(RootClass)">
+  <main class="page">
+    <div class="top-row">
+      <div>
+        <h1>Panel AetherUI</h1>
+        <p class="subtitle">Motor nativo Win32 + Direct2D, sin navegador.</p>
+      </div>
+      <div class="row">
+        <span class="subtitle" id="darkLabel">Modo oscuro</span>
+        <div class="switch @(DarkSwitchClass)" id="darkSwitch" onclick="@ToggleDarkMode" style="margin-left: 10px;"></div>
+      </div>
+    </div>
+
+    <section class="card">
+      <p class="card-title">Progreso de tareas</p>
+      <div class="progress-track">
+        <div class="progress-fill" style="@(ProgressFillStyle)"></div>
+      </div>
+      <div class="progress-controls">
+        <div class="stepper">
+          <button type="button" class="step-button" id="btnMinus" onclick="@DecreaseProgress">-</button>
+          <button type="button" class="step-button" id="btnPlus" onclick="@IncreaseProgress">+</button>
+        </div>
+        <span class="@(ProgressStatusClass)" id="progressStatus">@Progress% - @ProgressStatusText</span>
+      </div>
+    </section>
+
+    <section class="card">
+      <p class="card-title">Preferencias</p>
+      <div class="row-between">
+        <span>Notificaciones</span>
+        <div class="switch @(NotifSwitchClass)" id="notifSwitch" onclick="@ToggleNotif"></div>
+      </div>
+      <div class="row-between">
+        <span>Autoguardado</span>
+        <div class="switch @(AutoSaveSwitchClass)" id="autoSaveSwitch" onclick="@ToggleAutoSave"></div>
+      </div>
+    </section>
+
+    <section class="card">
+      <p class="card-title">Saludo en vivo</p>
+      <form id="greetForm" onsubmit="@Saludar">
+        <label for="nombre">Tu nombre</label>
+        <input type="text"
+               id="nombre"
+               value="@Nombre"
+               oninput="@OnNombreInput"
+               placeholder="Escribe tu nombre"
+               maxlength="60">
+        <button type="submit" class="primary-button" id="btnSaludar">Saludar</button>
+      </form>
+      <p class="greeting" id="greeting">@Saludo</p>
+    </section>
+
+    <p class="footer-note">Renderizado con Direct2D/DirectWrite - sin Chromium, WebView2, WPF ni WinForms.</p>
+  </main>
+</body>

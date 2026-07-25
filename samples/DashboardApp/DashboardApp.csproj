@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows10.0.19041.0</TargetFramework>
+    <AssemblyName>DashboardApp</AssemblyName>
+    <IsPackable>false</IsPackable>
+    <RootNamespace>DashboardApp</RootNamespace>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <SupportedOSPlatformVersion>10.0.19041.0</SupportedOSPlatformVersion>
+    <PublishAot>false</PublishAot>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../../src/AetherUI.Core/AetherUI.Core.csproj" />
+    <ProjectReference Include="../../src/AetherUI.Windows/AetherUI.Windows.csproj" />
+    <ProjectReference Include="../../src/AetherUI.Generator/AetherUI.Generator.csproj"
+                      OutputItemType="Analyzer"
+                      ReferenceOutputAssembly="false" />
+    <AdditionalFiles Include="Views/**/*.cshtml" />
+  </ItemGroup>
+</Project>
