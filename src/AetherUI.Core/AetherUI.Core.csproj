@@ -6,4 +6,7 @@
     <Description>DOM, CSS, layout, event and retained display-list runtime for AetherUI.</Description>
     <PackageId>AetherUI.Core</PackageId>
   </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../AetherUI.StyleRuntime/AetherUI.StyleRuntime.csproj" />
+  </ItemGroup>
 </Project>

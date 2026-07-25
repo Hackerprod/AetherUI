@@ -32,6 +32,12 @@ public sealed class LayoutBox
     public RectF ContentBox { get; internal set; }
     public bool IsAtomicControl { get; internal set; }
 
+    /// <summary>How much taller this box's content is than its own content-box height (0 if it fits or isn't a scroll container).</summary>
+    public float ScrollableOverflowY { get; internal set; }
+
+    /// <summary>The scroll offset actually applied this layout pass (already clamped to <see cref="ScrollableOverflowY"/>).</summary>
+    public float ScrollOffsetY { get; internal set; }
+
     internal void AddChild(LayoutBox child) => _children.Add(child);
 
     public IEnumerable<LayoutBox> DescendantsAndSelf()

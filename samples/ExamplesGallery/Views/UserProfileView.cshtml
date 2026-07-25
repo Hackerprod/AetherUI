@@ -1,0 +1,154 @@
+@namespace ExamplesGallery.Views
+@class UserProfileView
+
+@code {
+}
+
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            background-color: #f8fafc;
+            color: #1e293b;
+            font-family: 'Inter', 'Segoe UI', sans-serif;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+        }
+
+        .profile-card {
+            width: 400px;
+            background: white;
+            border-radius: 32px;
+            box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.05);
+            overflow: hidden;
+            text-align: center;
+        }
+
+        .cover {
+            height: 120px;
+            background: linear-gradient(to right, #f43f5e, #fb923c);
+        }
+
+        .avatar-container {
+            margin-top: -50px;
+            display: flex;
+            justify-content: center;
+        }
+
+        .avatar {
+            width: 100px;
+            height: 100px;
+            background: #e2e8f0;
+            border: 4px solid white;
+            border-radius: 50%;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            font-size: 40px;
+        }
+
+        .info {
+            padding: 24px 32px 32px;
+        }
+
+        .name {
+            font-size: 24px;
+            font-weight: 800;
+            margin: 0;
+        }
+
+        .title {
+            color: #64748b;
+            font-size: 14px;
+            margin: 4px 0 20px;
+        }
+
+        .stats {
+            display: flex;
+            justify-content: space-around;
+            padding: 20px 0;
+            border-top: 1px solid #f1f5f9;
+            border-bottom: 1px solid #f1f5f9;
+            margin-bottom: 24px;
+        }
+
+        .stat-item {
+            display: flex;
+            flex-direction: column;
+        }
+
+        .stat-value {
+            font-weight: 700;
+            font-size: 18px;
+        }
+
+        .stat-label {
+            font-size: 12px;
+            color: #94a3b8;
+        }
+
+        .actions {
+            display: flex;
+            gap: 12px;
+        }
+
+        .btn {
+            flex: 1;
+            padding: 12px;
+            border-radius: 12px;
+            font-weight: 600;
+            border: none;
+            cursor: pointer;
+        }
+
+        .btn-primary {
+            background: #0f172a;
+            color: white;
+        }
+
+        .btn-outline {
+            background: white;
+            border: 1px solid #e2e8f0;
+            color: #1e293b;
+        }
+    </style>
+</head>
+<body>
+    <div class="profile-card">
+        <div class="cover"></div>
+        <div class="avatar-container">
+            <div class="avatar">👨‍💻</div>
+        </div>
+        <div class="info">
+            <h2 class="name">Hackerprod</h2>
+            <p class="title">Lead UI Architect</p>
+
+            <div class="stats">
+                <div class="stat-item">
+                    <span class="stat-value">1.2k</span>
+                    <span class="stat-label">Commits</span>
+                </div>
+                <div class="stat-item">
+                    <span class="stat-value">45</span>
+                    <span class="stat-label">Projects</span>
+                </div>
+                <div class="stat-item">
+                    <span class="stat-value">8.9k</span>
+                    <span class="stat-label">Stars</span>
+                </div>
+            </div>
+
+            <div class="actions">
+                <button class="btn btn-primary">Follow</button>
+                <button class="btn btn-outline">Message</button>
+            </div>
+        </div>
+    </div>
+</body>
+</html>

@@ -124,6 +124,9 @@ public sealed class Direct2DRenderBackend : IRenderBackend, ITextMeasurer
                 case FillRoundedRectangleCommand fill:
                     target.FillRoundedRectangle(ToRoundedRectangle(fill.Rectangle, fill.Radius), GetBrush(fill.Color));
                     break;
+                case FillRoundedRectangleGradientCommand gradientFill:
+                    DrawGradientFill(target, gradientFill);
+                    break;
                 case StrokeRoundedRectangleCommand stroke:
                     target.DrawRoundedRectangle(
                         ToRoundedRectangle(stroke.Rectangle, stroke.Radius),
@@ -132,6 +135,9 @@ public sealed class Direct2DRenderBackend : IRenderBackend, ITextMeasurer
                     break;
                 case DrawTextCommand text:
                     DrawText(target, text);
+                    break;
+                case DrawTextGradientCommand textGradient:
+                    DrawTextGradient(target, textGradient);
                     break;
                 case PushClipCommand push:
                     target.PushAxisAlignedClip(ToRawRect(push.Rectangle), AntialiasMode.PerPrimitive);
@@ -185,6 +191,49 @@ public sealed class Direct2DRenderBackend : IRenderBackend, ITextMeasurer
         target.DrawText(command.Text, format, rectangle, GetBrush(command.Color), DrawTextOptions.Clip);
     }
 
+    private void DrawTextGradient(ID2D1HwndRenderTarget target, DrawTextGradientCommand command)
+    {
+        if (string.IsNullOrEmpty(command.Text) || command.Rectangle.IsEmpty || command.Gradient.Stops.Count < 2)
+        {
+            return;
+        }
+
+        var format = GetTextFormat(
+            command.FontFamily,
+            command.FontSize,
+            command.FontWeight,
+            command.Alignment,
+            wrap: false,
+            verticalCenter: true);
+
+        var rect = command.Rectangle;
+        var gradient = command.Gradient;
+        var stops = new Vortice.Direct2D1.GradientStop[gradient.Stops.Count];
+        for (var i = 0; i < gradient.Stops.Count; i++)
+        {
+            var stop = gradient.Stops[i];
+            var alpha = Math.Clamp(stop.Color.A * command.Opacity, 0f, 1f);
+            stops[i] = new Vortice.Direct2D1.GradientStop
+            {
+                Position = stop.Offset,
+                Color = ToColor4(stop.Color.WithAlpha(alpha)),
+            };
+        }
+
+        using var stopCollection = target.CreateGradientStopCollection(stops);
+        var centerX = rect.X + rect.Width / 2f;
+        var centerY = rect.Y + rect.Height / 2f;
+        var halfLength = MathF.Abs(rect.Width / 2f * gradient.DirectionX) + MathF.Abs(rect.Height / 2f * gradient.DirectionY);
+        var start = new Vector2(centerX - gradient.DirectionX * halfLength, centerY - gradient.DirectionY * halfLength);
+        var end = new Vector2(centerX + gradient.DirectionX * halfLength, centerY + gradient.DirectionY * halfLength);
+
+        using var brush = target.CreateLinearGradientBrush(
+            new LinearGradientBrushProperties { StartPoint = start, EndPoint = end },
+            stopCollection);
+
+        target.DrawText(command.Text, format, ToRect(rect), brush, DrawTextOptions.Clip);
+    }
+
     private IDWriteTextFormat GetTextFormat(
         string family,
         float fontSize,
@@ -230,6 +279,47 @@ public sealed class Direct2DRenderBackend : IRenderBackend, ITextMeasurer
         brush = target.CreateSolidColorBrush(ToColor4(color));
         _brushes.Add(color, brush);
         return brush;
+    }
+
+    /// <summary>
+    /// The gradient line's start/end points span the full box along the direction vector, matching
+    /// how CSS sizes a linear-gradient's axis against its box (project the box's half-extent onto
+    /// the axis rather than just using the box's corners).
+    /// </summary>
+    private static void DrawGradientFill(ID2D1RenderTarget target, FillRoundedRectangleGradientCommand command)
+    {
+        var rect = command.Rectangle;
+        var gradient = command.Gradient;
+        if (gradient.Stops.Count < 2 || rect.Width <= 0 || rect.Height <= 0)
+        {
+            return;
+        }
+
+        var stops = new Vortice.Direct2D1.GradientStop[gradient.Stops.Count];
+        for (var i = 0; i < gradient.Stops.Count; i++)
+        {
+            var stop = gradient.Stops[i];
+            var alpha = Math.Clamp(stop.Color.A * command.Opacity, 0f, 1f);
+            stops[i] = new Vortice.Direct2D1.GradientStop
+            {
+                Position = stop.Offset,
+                Color = ToColor4(stop.Color.WithAlpha(alpha)),
+            };
+        }
+
+        using var stopCollection = target.CreateGradientStopCollection(stops);
+
+        var centerX = rect.X + rect.Width / 2f;
+        var centerY = rect.Y + rect.Height / 2f;
+        var halfLength = MathF.Abs(rect.Width / 2f * gradient.DirectionX) + MathF.Abs(rect.Height / 2f * gradient.DirectionY);
+        var start = new Vector2(centerX - gradient.DirectionX * halfLength, centerY - gradient.DirectionY * halfLength);
+        var end = new Vector2(centerX + gradient.DirectionX * halfLength, centerY + gradient.DirectionY * halfLength);
+
+        using var brush = target.CreateLinearGradientBrush(
+            new LinearGradientBrushProperties { StartPoint = start, EndPoint = end },
+            stopCollection);
+
+        target.FillRoundedRectangle(ToRoundedRectangle(rect, command.Radius), brush);
     }
 
     private void EnsureRenderTarget()

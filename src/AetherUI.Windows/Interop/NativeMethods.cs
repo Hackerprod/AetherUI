@@ -28,6 +28,7 @@ internal static class NativeMethods
     internal const uint WmLButtonDown = 0x0201;
     internal const uint WmLButtonUp = 0x0202;
     internal const uint WmMouseLeave = 0x02A3;
+    internal const uint WmMouseWheel = 0x020A;
     internal const uint TmeLeave = 0x00000002;
     internal const uint DlGcWantArrows = 0x0001;
     internal const uint DlGcWantTab = 0x0002;
@@ -260,4 +261,10 @@ internal static class NativeMethods
     [DllImport("user32.dll")]
     [return: MarshalAs(UnmanagedType.Bool)]
     internal static extern bool ReleaseCapture();
+
+    // WM_MOUSEWHEEL's lParam carries screen coordinates (a Win32 quirk every other mouse message
+    // here does not share, which is why this one needs a coordinate-space conversion the others don't).
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static extern bool ScreenToClient(nint window, ref Point point);
 }

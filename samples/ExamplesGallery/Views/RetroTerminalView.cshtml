@@ -1,0 +1,114 @@
+@namespace ExamplesGallery.Views
+@class RetroTerminalView
+
+@code {
+}
+
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            background-color: #000;
+            color: #00ff41;
+            font-family: 'Consolas', 'Courier New', monospace;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+        }
+
+        .terminal {
+            width: 600px;
+            height: 400px;
+            border: 2px solid #003b00;
+            padding: 20px;
+            box-shadow: 0 0 20px rgba(0, 255, 65, 0.2);
+            position: relative;
+            overflow: hidden;
+            background: rgba(0, 10, 0, 0.9);
+        }
+
+        .terminal::before {
+            content: "";
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: repeating-linear-gradient(
+                0deg,
+                rgba(0, 0, 0, 0.15),
+                rgba(0, 0, 0, 0.15) 1px,
+                transparent 1px,
+                transparent 2px
+            );
+            pointer-events: none;
+        }
+
+        .line {
+            margin-bottom: 8px;
+            line-height: 1.4;
+        }
+
+        .prompt {
+            color: #fff;
+        }
+
+        .command {
+            color: #00ff41;
+        }
+
+        .output {
+            color: #008f11;
+        }
+
+        .cursor {
+            display: inline-block;
+            width: 10px;
+            height: 18px;
+            background: #00ff41;
+            vertical-align: middle;
+            margin-left: 4px;
+        }
+
+        .system-msg {
+            color: #ffb000;
+        }
+    </style>
+</head>
+<body>
+    <div class="terminal">
+        <div class="line">
+            <span class="system-msg">AetherUI Kernel v0.1.0-alpha.1 [Win32/Direct2D]</span>
+        </div>
+        <div class="line">
+            <span class="system-msg">System initialized. Rendering engine: Retained Display List.</span>
+        </div>
+        <div class="line">
+            <span class="prompt">C:\AetherUI></span> <span class="command">engine --status</span>
+        </div>
+        <div class="line output">
+            - Status: RUNNING<br>
+            - Backend: Direct2D / DirectWrite<br>
+            - Layout: Flexbox 1D Enabled<br>
+            - JS Engine: NONE (Compiled C#)
+        </div>
+        <div class="line">
+            <span class="prompt">C:\AetherUI></span> <span class="command">render --test-ui</span>
+        </div>
+        <div class="line output">
+            Starting UI stress test...<br>
+            Drawing 150+ nodes... OK<br>
+            Calculating styles... OK<br>
+            Hit testing active.
+        </div>
+        <div class="line">
+            <span class="prompt">C:\AetherUI></span> <span class="cursor"></span>
+        </div>
+    </div>
+</body>
+</html>

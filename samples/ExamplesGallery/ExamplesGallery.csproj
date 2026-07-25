@@ -2,9 +2,9 @@
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
     <TargetFramework>net10.0-windows10.0.19041.0</TargetFramework>
-    <AssemblyName>DashboardApp</AssemblyName>
+    <AssemblyName>ExamplesGallery</AssemblyName>
     <IsPackable>false</IsPackable>
-    <RootNamespace>DashboardApp</RootNamespace>
+    <RootNamespace>ExamplesGallery</RootNamespace>
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <SupportedOSPlatformVersion>10.0.19041.0</SupportedOSPlatformVersion>
     <PublishAot>false</PublishAot>

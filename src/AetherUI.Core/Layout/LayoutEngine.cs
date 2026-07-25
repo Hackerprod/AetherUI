@@ -17,13 +17,14 @@ public sealed class LayoutEngine
     private StyleMap _styles = null!;
     private SizeF _viewport;
     private float _rootFontSize = 16;
+    private Func<ElementNode, float>? _getScrollOffsetY;
 
     public LayoutEngine(ITextMeasurer textMeasurer)
     {
         _textMeasurer = textMeasurer ?? throw new ArgumentNullException(nameof(textMeasurer));
     }
 
-    public LayoutResult Layout(DocumentNode document, StyleMap styles, SizeF viewport)
+    public LayoutResult Layout(DocumentNode document, StyleMap styles, SizeF viewport, Func<ElementNode, float>? getScrollOffsetY = null)
     {
         ArgumentNullException.ThrowIfNull(document);
         ArgumentNullException.ThrowIfNull(styles);
@@ -34,6 +35,7 @@ public sealed class LayoutEngine
 
         _styles = styles;
         _viewport = viewport;
+        _getScrollOffsetY = getScrollOffsetY;
         _primaryBoxes.Clear();
         _paintOrder.Clear();
 
@@ -45,7 +47,13 @@ public sealed class LayoutEngine
         return new LayoutResult(root, new Dictionary<ElementNode, LayoutBox>(_primaryBoxes), _paintOrder.ToArray(), viewport);
     }
 
-    private LayoutBox LayoutElement(ElementNode element, RectF containingBlock, float normalFlowY, bool forceAvailableWidth = false)
+    private LayoutBox LayoutElement(
+        ElementNode element,
+        RectF containingBlock,
+        float normalFlowY,
+        bool forceAvailableWidth = false,
+        float? forcedBorderWidth = null,
+        float? forcedBorderHeight = null)
     {
         var style = _styles[element];
         var box = new LayoutBox(LayoutBoxKind.Element, element, style);
@@ -56,7 +64,7 @@ public sealed class LayoutEngine
             return box;
         }
 
-        var margin = ResolveEdges(style.Margin, containingBlock.Width, style);
+        var margin = ResolveMarginEdges(style.Margin, containingBlock.Width, style);
         var padding = ResolveEdges(style.Padding, containingBlock.Width, style);
         var border = ResolveEdges(style.BorderWidth, containingBlock.Width, style);
 
@@ -64,7 +72,13 @@ public sealed class LayoutEngine
         var specifiedWidth = Resolve(style.Width, containingBlock.Width, style);
         var borderWidth = specifiedWidth;
 
-        if (!float.IsFinite(borderWidth))
+        if (forcedBorderWidth.HasValue)
+        {
+            // A flex-item's grow-distributed width (computed by the parent flex container from
+            // leftover free space), overriding the item's own auto/specified width for this pass.
+            borderWidth = forcedBorderWidth.Value;
+        }
+        else if (!float.IsFinite(borderWidth))
         {
             borderWidth = forceAvailableWidth
                 ? availableBorderWidth
@@ -96,7 +110,14 @@ public sealed class LayoutEngine
         var contentY = borderY + border.Top + padding.Top;
         var contentWidth = MathF.Max(0, borderWidth - border.Horizontal - padding.Horizontal);
 
-        var explicitHeight = Resolve(style.Height, containingBlock.Height, style);
+        // A forced height (align-items:stretch on a row-direction flex container) names the
+        // final border-box height directly, matching forcedBorderWidth; convert it through the
+        // same box-sizing math as an explicit CSS height so it reproduces exactly that border box.
+        var explicitHeight = forcedBorderHeight.HasValue
+            ? style.BoxSizing == BoxSizing.ContentBox
+                ? MathF.Max(0, forcedBorderHeight.Value - padding.Vertical - border.Vertical)
+                : forcedBorderHeight.Value
+            : Resolve(style.Height, containingBlock.Height, style);
         var intrinsicControl = IsAtomicControl(element);
         box.IsAtomicControl = intrinsicControl;
         var definiteContentHeight = float.IsFinite(explicitHeight)
@@ -125,6 +146,30 @@ public sealed class LayoutEngine
         else
         {
             contentHeight = LayoutFlowChildren(box, element, new RectF(contentX, contentY, contentWidth, childContainingHeight), style);
+        }
+
+        // A scroll container only makes sense when its own content-box height is definite (an
+        // auto-height box just grows to fit its content, so there's nothing to scroll to). Content
+        // is already laid out in absolute coordinates at this point, so overflowing it is just a
+        // matter of shifting every child up by the clamped offset — the same primitive used for
+        // text-align and flex positioning (OffsetBox).
+        if ((style.Overflow is OverflowKind.Auto or OverflowKind.Scroll) && float.IsFinite(definiteContentHeight))
+        {
+            var scrollableOverflowY = MathF.Max(0, contentHeight - definiteContentHeight);
+            box.ScrollableOverflowY = scrollableOverflowY;
+            if (scrollableOverflowY > 0)
+            {
+                var desired = _getScrollOffsetY?.Invoke(element) ?? 0f;
+                var scrollOffsetY = Math.Clamp(desired, 0f, scrollableOverflowY);
+                box.ScrollOffsetY = scrollOffsetY;
+                if (scrollOffsetY != 0f)
+                {
+                    foreach (var child in box.Children)
+                    {
+                        OffsetBox(child, 0, -scrollOffsetY);
+                    }
+                }
+            }
         }
 
         var borderHeight = float.IsFinite(explicitHeight)
@@ -345,7 +390,20 @@ public sealed class LayoutEngine
             .ToArray();
         if (children.Length == 0)
         {
-            return 0;
+            // A flex container with only text content (no element children) has no flex items to
+            // lay out, but the text itself must still render — fall back to normal inline flow
+            // instead of silently dropping it (e.g. <div class="nav-item" style="display:flex">
+            // Dashboard</div>, a common pattern for icon+label rows written without a wrapping span).
+            var inlineItems = new List<InlineItem>();
+            foreach (var node in parent.Children)
+            {
+                if (node is TextNode textNode)
+                {
+                    CollectTextItems(parent, style, textNode.TextContent, inlineItems);
+                }
+            }
+
+            return inlineItems.Count == 0 ? 0 : LayoutInlineItems(parentBox, inlineItems, content.X, content.Y, content.Width, style);
         }
 
         if (style.FlexDirection == FlexDirection.Column)
@@ -393,46 +451,143 @@ public sealed class LayoutEngine
             return totalHeight;
         }
 
-        var rowBoxes = new List<LayoutBox>(children.Length);
-        var totalWidth = 0f;
-        var maxHeight = 0f;
-        foreach (var child in children)
+        // align-items:stretch only makes sense for a single line — with wrap, each line keeps its
+        // own natural cross-size (no align-content/multi-line distribution implemented).
+        var stretchRow = !style.FlexWrap && hasDefiniteHeight && style.AlignItems == AlignItems.Stretch;
+
+        // Base pass: measure every child at its natural (pre-grow) size, needed to decide wrapping.
+        var baseBoxes = new LayoutBox[children.Length];
+        for (var i = 0; i < children.Length; i++)
         {
-            var childBox = LayoutElement(child, new RectF(content.X, content.Y, content.Width, content.Height), content.Y);
-            rowBoxes.Add(childBox);
-            totalWidth += childBox.MarginBox.Width;
-            maxHeight = MathF.Max(maxHeight, childBox.MarginBox.Height);
+            var childStyle = _styles[children[i]];
+            var stretchHeight = stretchRow && childStyle.Height.IsAuto ? content.Height : (float?)null;
+            baseBoxes[i] = LayoutElement(
+                children[i],
+                new RectF(content.X, content.Y, content.Width, content.Height),
+                content.Y,
+                forcedBorderHeight: stretchHeight);
         }
 
-        totalWidth += style.Gap * Math.Max(0, rowBoxes.Count - 1);
-        var free = MathF.Max(0, content.Width - totalWidth);
-        var spacing = style.Gap;
-        var cursorX = style.JustifyContent switch
+        var lines = new List<List<int>>();
+        if (style.FlexWrap)
         {
-            JustifyContent.Center => content.X + free / 2,
-            JustifyContent.End => content.X + free,
-            _ => content.X,
-        };
-        if (style.JustifyContent == JustifyContent.SpaceBetween && rowBoxes.Count > 1)
-        {
-            spacing += free / (rowBoxes.Count - 1);
-        }
-
-        var crossExtent = hasDefiniteHeight ? content.Height : maxHeight;
-        foreach (var childBox in rowBoxes)
-        {
-            var y = style.AlignItems switch
+            var current = new List<int>();
+            var runningWidth = 0f;
+            for (var i = 0; i < children.Length; i++)
             {
-                AlignItems.Center => content.Y + (crossExtent - childBox.MarginBox.Height) / 2,
-                AlignItems.End => content.Y + crossExtent - childBox.MarginBox.Height,
-                _ => content.Y,
-            };
-            OffsetBox(childBox, cursorX - childBox.MarginBox.X, y - childBox.MarginBox.Y);
-            parentBox.AddChild(childBox);
-            cursorX += childBox.MarginBox.Width + spacing;
+                var itemWidth = baseBoxes[i].MarginBox.Width;
+                if (current.Count > 0 && runningWidth + style.Gap + itemWidth > content.Width)
+                {
+                    lines.Add(current);
+                    current = [];
+                    runningWidth = 0f;
+                }
+
+                current.Add(i);
+                runningWidth += (current.Count > 1 ? style.Gap : 0) + itemWidth;
+            }
+
+            if (current.Count > 0)
+            {
+                lines.Add(current);
+            }
+        }
+        else
+        {
+            lines.Add([.. Enumerable.Range(0, children.Length)]);
         }
 
-        return hasDefiniteHeight ? MathF.Max(maxHeight, content.Height) : maxHeight;
+        var rowCursorY = content.Y;
+        var rowTotalHeight = 0f;
+        foreach (var line in lines)
+        {
+            var lineBoxes = new List<LayoutBox>(line.Count);
+            var lineWidth = 0f;
+            var lineMaxHeight = 0f;
+            foreach (var i in line)
+            {
+                lineBoxes.Add(baseBoxes[i]);
+                lineWidth += baseBoxes[i].MarginBox.Width;
+                lineMaxHeight = MathF.Max(lineMaxHeight, baseBoxes[i].MarginBox.Height);
+            }
+
+            lineWidth += style.Gap * Math.Max(0, line.Count - 1);
+
+            // flex-grow: leftover free space in this line is distributed among its auto-width
+            // children proportionally to their flex-grow.
+            var growTotal = 0f;
+            foreach (var i in line)
+            {
+                var childStyle = _styles[children[i]];
+                if (childStyle.FlexGrow > 0 && childStyle.Width.IsAuto)
+                {
+                    growTotal += childStyle.FlexGrow;
+                }
+            }
+
+            if (growTotal > 0)
+            {
+                var growable = MathF.Max(0, content.Width - lineWidth);
+                if (growable > 0)
+                {
+                    for (var li = 0; li < line.Count; li++)
+                    {
+                        var i = line[li];
+                        var childStyle = _styles[children[i]];
+                        if (childStyle.FlexGrow <= 0 || !childStyle.Width.IsAuto)
+                        {
+                            continue;
+                        }
+
+                        var extra = growable * (childStyle.FlexGrow / growTotal);
+                        var stretchHeight = stretchRow && childStyle.Height.IsAuto ? content.Height : (float?)null;
+                        var grown = LayoutElement(
+                            children[i],
+                            new RectF(content.X, content.Y, content.Width, content.Height),
+                            content.Y,
+                            forcedBorderWidth: lineBoxes[li].BorderBox.Width + extra,
+                            forcedBorderHeight: stretchHeight);
+                        lineBoxes[li] = grown;
+                        lineMaxHeight = MathF.Max(lineMaxHeight, grown.MarginBox.Height);
+                    }
+
+                    lineWidth = content.Width;
+                }
+            }
+
+            var free = MathF.Max(0, content.Width - lineWidth);
+            var spacing = style.Gap;
+            var cursorX = style.JustifyContent switch
+            {
+                JustifyContent.Center => content.X + free / 2,
+                JustifyContent.End => content.X + free,
+                _ => content.X,
+            };
+            if (style.JustifyContent == JustifyContent.SpaceBetween && lineBoxes.Count > 1)
+            {
+                spacing += free / (lineBoxes.Count - 1);
+            }
+
+            var crossExtent = lines.Count == 1 && hasDefiniteHeight ? content.Height : lineMaxHeight;
+            foreach (var childBox in lineBoxes)
+            {
+                var y = style.AlignItems switch
+                {
+                    AlignItems.Center => rowCursorY + (crossExtent - childBox.MarginBox.Height) / 2,
+                    AlignItems.End => rowCursorY + crossExtent - childBox.MarginBox.Height,
+                    _ => rowCursorY,
+                };
+                OffsetBox(childBox, cursorX - childBox.MarginBox.X, y - childBox.MarginBox.Y);
+                parentBox.AddChild(childBox);
+                cursorX += childBox.MarginBox.Width + spacing;
+            }
+
+            rowCursorY += lineMaxHeight + style.Gap;
+            rowTotalHeight += lineMaxHeight;
+        }
+
+        rowTotalHeight += style.Gap * Math.Max(0, lines.Count - 1);
+        return hasDefiniteHeight ? MathF.Max(rowTotalHeight, content.Height) : rowTotalHeight;
     }
 
     private void CollectInlineElement(ElementNode element, ComputedStyle style, List<InlineItem> output)
@@ -482,6 +637,22 @@ public sealed class LayoutEngine
             return MeasureIntrinsicFlexWidth(element, style, padding, border, maximum);
         }
 
+        if (element.Children.OfType<ElementNode>().Any())
+        {
+            // A block container's own text (its ElementNode.TextContent) concatenates every
+            // descendant's text recursively — meaningful for a text-only leaf (e.g. a button or an
+            // inline-flex nav item), but nonsense for a div full of nested block children (it would
+            // measure one enormous single-line string across the whole subtree's text, wildly
+            // overshooting its real size). This engine has no real shrink-to-fit/min-content
+            // algorithm for nested block content, so treat it like flex-basis:0 — an empty base that
+            // an explicit min-width (if any) still clamps upward, and that flex-grow (if any) then
+            // expands to fill the real available space. Returning the full "maximum" here instead
+            // (tried first) breaks both the wrap-fit and the grow math: every such box would claim
+            // the whole line's width up front, leaving no free space left for the grow pass to work
+            // with, which overflows containers instead of sharing space with their siblings.
+            return padding.Horizontal + border.Horizontal;
+        }
+
         var text = NormalizeWhitespace(element.TextContent);
         var metrics = _textMeasurer.MeasureText(text, style);
         return metrics.Width + padding.Horizontal + border.Horizontal;
@@ -511,7 +682,7 @@ public sealed class LayoutEngine
     private float MeasureChildNaturalWidth(ElementNode child, float maximum)
     {
         var childStyle = _styles[child];
-        var childMargin = ResolveEdges(childStyle.Margin, maximum, childStyle);
+        var childMargin = ResolveMarginEdges(childStyle.Margin, maximum, childStyle);
         var specified = Resolve(childStyle.Width, maximum, childStyle);
         var childPadding = ResolveEdges(childStyle.Padding, maximum, childStyle);
         var childBorder = ResolveEdges(childStyle.BorderWidth, maximum, childStyle);
@@ -536,6 +707,18 @@ public sealed class LayoutEngine
         ResolveOrZero(edges.Top, reference, style),
         ResolveOrZero(edges.Right, reference, style),
         ResolveOrZero(edges.Bottom, reference, style));
+
+    private ThicknessF ResolveMarginEdges(CssEdges edges, float reference, ComputedStyle style) => new(
+        ResolveMarginValue(edges.Left, reference, style),
+        ResolveMarginValue(edges.Top, reference, style),
+        ResolveMarginValue(edges.Right, reference, style),
+        ResolveMarginValue(edges.Bottom, reference, style));
+
+    private float ResolveMarginValue(CssLength value, float reference, ComputedStyle style)
+    {
+        var resolved = Resolve(value, reference, style);
+        return float.IsFinite(resolved) ? resolved : 0;
+    }
 
     private float Resolve(CssLength value, float reference, ComputedStyle style) =>
         value.Resolve(reference, style.FontSize, _rootFontSize, _viewport.Width, _viewport.Height);

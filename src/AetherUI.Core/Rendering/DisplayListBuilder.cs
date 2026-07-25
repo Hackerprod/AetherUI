@@ -35,21 +35,37 @@ public sealed class DisplayListBuilder
         {
             if (!string.IsNullOrEmpty(box.Text))
             {
-                _commands.Add(new DrawTextCommand(
-                    box.Text,
-                    box.ContentBox,
-                    style.FontFamily,
-                    style.FontSize,
-                    style.FontWeight,
-                    TextAlign.Start,
-                    ApplyOpacity(style.Color, style.Opacity)));
+                if (style.TextGradient is { } textGradient)
+                {
+                    _commands.Add(new DrawTextGradientCommand(
+                        box.Text,
+                        box.ContentBox,
+                        style.FontFamily,
+                        style.FontSize,
+                        style.FontWeight,
+                        TextAlign.Start,
+                        textGradient,
+                        style.Opacity));
+                }
+                else
+                {
+                    _commands.Add(new DrawTextCommand(
+                        box.Text,
+                        box.ContentBox,
+                        style.FontFamily,
+                        style.FontSize,
+                        style.FontWeight,
+                        TextAlign.Start,
+                        ApplyOpacity(style.Color, style.Opacity)));
+                }
             }
 
             return;
         }
 
         PaintBackgroundAndBorder(box);
-        var clips = style.Overflow == OverflowKind.Hidden;
+        var isScrollContainer = style.Overflow is OverflowKind.Auto or OverflowKind.Scroll;
+        var clips = style.Overflow == OverflowKind.Hidden || isScrollContainer;
         if (clips)
         {
             _commands.Add(new PushClipCommand(box.PaddingBox));
@@ -67,6 +83,11 @@ public sealed class DisplayListBuilder
             }
         }
 
+        if (isScrollContainer && box.ScrollableOverflowY > 0)
+        {
+            PaintScrollbar(box);
+        }
+
         if (clips)
         {
             _commands.Add(new PopClipCommand());
@@ -74,9 +95,10 @@ public sealed class DisplayListBuilder
 
         if (ReferenceEquals(box.Element, focusedElement))
         {
+            var focusRadius = ResolveBorderRadius(style.BorderRadius, box.BorderBox, style.FontSize);
             _commands.Add(new StrokeRoundedRectangleCommand(
                 box.BorderBox.Inflate(2),
-                style.BorderRadius + 2,
+                focusRadius + 2,
                 1,
                 new ColorRgba(0.145f, 0.388f, 0.922f, .75f)));
         }
@@ -85,10 +107,18 @@ public sealed class DisplayListBuilder
     private void PaintBackgroundAndBorder(LayoutBox box)
     {
         var style = box.Style;
-        var background = ApplyOpacity(style.BackgroundColor, style.Opacity);
-        if (background.A > 0)
+        var radius = ResolveBorderRadius(style.BorderRadius, box.BorderBox, style.FontSize);
+        if (style.BackgroundGradient is { } gradient)
         {
-            _commands.Add(new FillRoundedRectangleCommand(box.BorderBox, style.BorderRadius, background));
+            _commands.Add(new FillRoundedRectangleGradientCommand(box.BorderBox, radius, gradient, style.Opacity));
+        }
+        else
+        {
+            var background = ApplyOpacity(style.BackgroundColor, style.Opacity);
+            if (background.A > 0)
+            {
+                _commands.Add(new FillRoundedRectangleCommand(box.BorderBox, radius, background));
+            }
         }
 
         var borderWidth = ResolveUniformBorder(style.BorderWidth, box.BorderBox.Width, style.FontSize);
@@ -101,8 +131,35 @@ public sealed class DisplayListBuilder
                 box.BorderBox.Y + inset,
                 MathF.Max(0, box.BorderBox.Width - borderWidth),
                 MathF.Max(0, box.BorderBox.Height - borderWidth));
-            _commands.Add(new StrokeRoundedRectangleCommand(rect, MathF.Max(0, style.BorderRadius - inset), borderWidth, borderColor));
+            _commands.Add(new StrokeRoundedRectangleCommand(rect, MathF.Max(0, radius - inset), borderWidth, borderColor));
         }
+    }
+
+    /// <summary>
+    /// A percentage radius resolves against the box's own border-box (the smaller of width/height,
+    /// since this engine models a single uniform radius rather than per-axis horizontal/vertical
+    /// radii) — never against font-size, which was a historical bug in this engine.
+    /// </summary>
+    private static float ResolveBorderRadius(CssLength radius, RectF borderBox, float fontSize) =>
+        MathF.Max(0, radius.Resolve(MathF.Min(borderBox.Width, borderBox.Height), fontSize, fontSize, 0, 0));
+
+    /// <summary>
+    /// A minimal always-visible thumb (no track background, no buttons) on the right edge of the
+    /// scroll container's padding box — enough to show scroll position exists, not a full theme.
+    /// </summary>
+    private void PaintScrollbar(LayoutBox box)
+    {
+        const float thumbWidth = 4f;
+        const float margin = 2f;
+        var track = box.PaddingBox;
+        var trackHeight = track.Height;
+        var contentExtent = trackHeight + box.ScrollableOverflowY;
+        var thumbHeight = MathF.Max(24f, trackHeight * (trackHeight / contentExtent));
+        var available = MathF.Max(0, trackHeight - thumbHeight);
+        var progress = box.ScrollableOverflowY > 0 ? box.ScrollOffsetY / box.ScrollableOverflowY : 0f;
+        var thumbY = track.Y + available * progress;
+        var thumbRect = new RectF(track.Right - thumbWidth - margin, thumbY, thumbWidth, thumbHeight);
+        _commands.Add(new FillRoundedRectangleCommand(thumbRect, thumbWidth / 2, new ColorRgba(0.5f, 0.5f, 0.5f, 0.55f)));
     }
 
     private void PaintControl(LayoutBox box, ElementNode? focusedElement)

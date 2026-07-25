@@ -6,6 +6,7 @@ namespace AetherUI.Rendering;
 public abstract record PaintCommand;
 
 public sealed record FillRoundedRectangleCommand(RectF Rectangle, float Radius, ColorRgba Color) : PaintCommand;
+public sealed record FillRoundedRectangleGradientCommand(RectF Rectangle, float Radius, LinearGradient Gradient, float Opacity) : PaintCommand;
 public sealed record StrokeRoundedRectangleCommand(RectF Rectangle, float Radius, float StrokeWidth, ColorRgba Color) : PaintCommand;
 public sealed record DrawTextCommand(
     string Text,
@@ -16,6 +17,15 @@ public sealed record DrawTextCommand(
     TextAlign Alignment,
     ColorRgba Color,
     bool Wrap = false) : PaintCommand;
+public sealed record DrawTextGradientCommand(
+    string Text,
+    RectF Rectangle,
+    string FontFamily,
+    float FontSize,
+    FontWeight FontWeight,
+    TextAlign Alignment,
+    LinearGradient Gradient,
+    float Opacity) : PaintCommand;
 public sealed record PushClipCommand(RectF Rectangle) : PaintCommand;
 public sealed record PopClipCommand : PaintCommand;
 

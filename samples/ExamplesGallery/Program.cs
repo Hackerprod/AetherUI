@@ -1,9 +1,9 @@
 using AetherUI.Primitives;
 using AetherUI.Runtime;
 using AetherUI.Windows.Hosting;
-using DashboardApp.Views;
+using ExamplesGallery.Views;
 
-namespace DashboardApp;
+namespace ExamplesGallery;
 
 internal static class Program
 {
@@ -12,14 +12,14 @@ internal static class Program
     {
         var options = new UiHostOptions
         {
-            Title = "AetherUI — Panel",
-            Width = 860,
-            Height = 720,
+            Title = "AetherUI — Examples Gallery",
+            Width = 760,
+            Height = 640,
             MinimumWidth = 560,
-            MinimumHeight = 560,
+            MinimumHeight = 480,
             ClearColor = ColorRgba.White,
         };
 
-        return WindowsUiApplication.Run<DashboardView>(options);
+        return WindowsUiApplication.Run<LauncherView>(options);
     }
 }

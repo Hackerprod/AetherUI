@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <LangVersion>14.0</LangVersion>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <NoWarn>$(NoWarn);1591</NoWarn>
+    <IsAotCompatible>true</IsAotCompatible>
+    <IsTrimmable>true</IsTrimmable>
+    <AssemblyName>AetherUI.StyleRuntime</AssemblyName>
+    <RootNamespace>AetherUI.StyleRuntime</RootNamespace>
+    <PackageId>AetherUI.StyleRuntime</PackageId>
+    <Version>0.1.0</Version>
+    <Description>Aether-native dynamic style runtime. CSS-compatible source without browser runtime abstractions.</Description>
+  </PropertyGroup>
+</Project>

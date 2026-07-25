@@ -1,0 +1,198 @@
+@namespace ExamplesGallery.Views
+@class LauncherView
+@using AetherUI.Windows.Hosting
+@using AetherUI.Primitives
+
+@code {
+    private string Status { get; set; } = "Pick an example to open it in its own native window.";
+
+    private void OpenGlassDashboard(UiEvent e)
+    {
+        Status = "Opened: Glass Dashboard.";
+        StateHasChanged();
+        WindowsUiApplication.Run<GlassDashboardView>(new UiHostOptions
+        {
+            Title = "Example — Glass Dashboard",
+            Width = 960,
+            Height = 620,
+            MinimumWidth = 720,
+            MinimumHeight = 480,
+            ClearColor = new ColorRgba(0.06f, 0.09f, 0.16f, 1f),
+        });
+    }
+
+    private void OpenMusicPlayer(UiEvent e)
+    {
+        Status = "Opened: Music Player.";
+        StateHasChanged();
+        WindowsUiApplication.Run<MusicPlayerView>(new UiHostOptions
+        {
+            Title = "Example — Music Player",
+            Width = 440,
+            Height = 640,
+            MinimumWidth = 380,
+            MinimumHeight = 560,
+            ClearColor = new ColorRgba(0.035f, 0.035f, 0.04f, 1f),
+        });
+    }
+
+    private void OpenRetroTerminal(UiEvent e)
+    {
+        Status = "Opened: Retro Terminal.";
+        StateHasChanged();
+        WindowsUiApplication.Run<RetroTerminalView>(new UiHostOptions
+        {
+            Title = "Example — Retro Terminal",
+            Width = 700,
+            Height = 500,
+            MinimumWidth = 640,
+            MinimumHeight = 440,
+            ClearColor = ColorRgba.Black,
+        });
+    }
+
+    private void OpenUserProfile(UiEvent e)
+    {
+        Status = "Opened: User Profile.";
+        StateHasChanged();
+        WindowsUiApplication.Run<UserProfileView>(new UiHostOptions
+        {
+            Title = "Example — User Profile",
+            Width = 480,
+            Height = 640,
+            MinimumWidth = 420,
+            MinimumHeight = 560,
+            ClearColor = new ColorRgba(0.97f, 0.98f, 0.99f, 1f),
+        });
+    }
+}
+
+<style>
+  html, body {
+    width: 100%;
+    height: 100vh;
+    margin: 0;
+  }
+
+  body {
+    display: flex;
+    flex-direction: column;
+    width: 100%;
+    height: 100vh;
+    background-color: #f1f5f9;
+    color: #0f172a;
+    font-family: "Segoe UI";
+    box-sizing: border-box;
+    padding: 32px;
+  }
+
+  .page-header {
+    margin-bottom: 24px;
+  }
+
+  h1 {
+    margin: 0 0 6px 0;
+    font-size: 26px;
+  }
+
+  .subtitle {
+    margin: 0;
+    font-size: 14px;
+    color: #64748b;
+  }
+
+  .grid-row {
+    display: flex;
+    flex-direction: row;
+    margin-bottom: 20px;
+  }
+
+  .card {
+    width: 48%;
+    margin-right: 4%;
+    padding: 22px;
+    border: 1px solid #d8deea;
+    border-radius: 16px;
+    background-color: #ffffff;
+  }
+
+  .card-last {
+    width: 48%;
+    padding: 22px;
+    border: 1px solid #d8deea;
+    border-radius: 16px;
+    background-color: #ffffff;
+  }
+
+  .card-title {
+    margin: 0 0 8px 0;
+    font-size: 18px;
+    font-weight: 700;
+  }
+
+  .card-desc {
+    margin: 0 0 18px 0;
+    font-size: 13px;
+    color: #64748b;
+    line-height: 1.4;
+  }
+
+  .open-button {
+    display: block;
+    width: 100%;
+    height: 40px;
+    min-width: 0;
+    padding: 0;
+    border: none;
+    border-radius: 8px;
+    font-size: 14px;
+    font-weight: 600;
+    background-color: #2563eb;
+  }
+
+  .open-button:hover {
+    background-color: #1e40af;
+  }
+
+  .status-bar {
+    margin-top: 8px;
+    padding-top: 16px;
+    font-size: 13px;
+    color: #64748b;
+  }
+</style>
+
+<body>
+  <div class="page-header">
+    <h1>AetherUI Examples Gallery</h1>
+    <p class="subtitle">Reference UIs ported to AetherUI's HTML/CSS/C# view engine. Each card opens its own native Win32/Direct2D window.</p>
+  </div>
+
+  <div class="grid-row">
+    <section class="card">
+      <p class="card-title">Glass Dashboard</p>
+      <p class="card-desc">Sidebar navigation, stat cards and a bar chart on a dark glass-style layout.</p>
+      <button type="button" class="open-button" id="btnGlass" onclick="@OpenGlassDashboard">Open example</button>
+    </section>
+    <section class="card-last">
+      <p class="card-title">Music Player</p>
+      <p class="card-desc">Album art, progress bar and transport controls in a compact player card.</p>
+      <button type="button" class="open-button" id="btnMusic" onclick="@OpenMusicPlayer">Open example</button>
+    </section>
+  </div>
+
+  <div class="grid-row">
+    <section class="card">
+      <p class="card-title">Retro Terminal</p>
+      <p class="card-desc">Monospace green-on-black terminal boot log with a blinking-style cursor.</p>
+      <button type="button" class="open-button" id="btnTerminal" onclick="@OpenRetroTerminal">Open example</button>
+    </section>
+    <section class="card-last">
+      <p class="card-title">User Profile</p>
+      <p class="card-desc">Profile card with avatar, stats row and primary/outline action buttons.</p>
+      <button type="button" class="open-button" id="btnProfile" onclick="@OpenUserProfile">Open example</button>
+    </section>
+  </div>
+
+  <p class="status-bar" id="status">@Status</p>
+</body>

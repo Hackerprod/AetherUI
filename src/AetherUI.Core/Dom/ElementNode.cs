@@ -1,3 +1,5 @@
+using AetherUI.StyleRuntime;
+
 namespace AetherUI.Dom;
 
 [Flags]
@@ -10,9 +12,12 @@ public enum ElementState
     Invalid = 1 << 3,
 }
 
-public sealed class ElementNode : Node
+public sealed class ElementNode : Node, IAetherStyleNode
 {
+    private static long _nextStyleNodeId = 1;
+
     private readonly Dictionary<string, string> _attributes = new(StringComparer.OrdinalIgnoreCase);
+    private readonly long _styleNodeId = System.Threading.Interlocked.Increment(ref _nextStyleNodeId);
 
     public ElementNode(string tagName) : base(NodeType.Element)
     {
@@ -96,4 +101,41 @@ public sealed class ElementNode : Node
         AncestorsAndSelf().FirstOrDefault(element => string.Equals(element.TagName, tagName, StringComparison.OrdinalIgnoreCase));
 
     public override string ToString() => $"<{TagName}{(Id is null ? string.Empty : $" id=\"{Id}\"")}>";
+
+    // IAetherStyleNode: a minimal read view AetherUI.StyleRuntime uses to match selectors and
+    // cascade styles against the live tree. Implemented directly on ElementNode (not a wrapper)
+    // since ElementNode already owns stable identity, classes, attributes and tree structure.
+    long IAetherStyleNode.StyleNodeId => _styleNodeId;
+    string IAetherStyleNode.StyleType => TagName;
+    string? IAetherStyleNode.StyleId => Id;
+    IReadOnlyList<string> IAetherStyleNode.StyleClasses =>
+        ClassName.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
+
+    StylePseudoState IAetherStyleNode.StyleStates
+    {
+        get
+        {
+            var states = StylePseudoState.None;
+            if (State.HasFlag(ElementState.Hover)) states |= StylePseudoState.Hover;
+            if (State.HasFlag(ElementState.Active)) states |= StylePseudoState.Active;
+            if (State.HasFlag(ElementState.Focus)) states |= StylePseudoState.Focus;
+            if (State.HasFlag(ElementState.Invalid)) states |= StylePseudoState.Invalid;
+            if (IsDisabled) states |= StylePseudoState.Disabled;
+            if (HasAttribute("checked")) states |= StylePseudoState.Checked;
+            if (HasAttribute("readonly")) states |= StylePseudoState.ReadOnly;
+            return states;
+        }
+    }
+
+    string? IAetherStyleNode.InlineStyleText => GetAttribute("style");
+    IAetherStyleNode? IAetherStyleNode.StyleParent => Parent as ElementNode;
+    IReadOnlyList<IAetherStyleNode> IAetherStyleNode.StyleChildren => Children.OfType<ElementNode>().ToArray();
+
+    bool IAetherStyleNode.HasStyleClass(string className) => HasClass(className);
+
+    bool IAetherStyleNode.TryGetStyleAttribute(string name, out string? value)
+    {
+        value = GetAttribute(name);
+        return value is not null;
+    }
 }

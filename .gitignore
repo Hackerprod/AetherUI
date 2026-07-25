@@ -8,6 +8,7 @@ TestResults/
 artifacts/
 *.nupkg
 *.snupkg
+AetherUI.StyleRuntime-0.1.0.zip
 
 # AI agent / assistant tooling — local only, never published
 .claude/
@@ -15,6 +16,8 @@ artifacts/
 .windsurf/
 .copilot/
 .codex/
+.temp/
+.tmp/
 CLAUDE.md
 AGENTS.md
 .aider*

@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Text;
 using AetherUI.Dom;
 using AetherUI.Primitives;
 
@@ -138,6 +139,21 @@ public static class StyleResolver
         }
     }
 
+    /// <summary>
+    /// One entry per supported CSS property: converts the raw declaration value and applies it
+    /// to <see cref="ComputedStyle"/>. Returns false when the value could not be converted, so the
+    /// dispatcher can report it via <see cref="CssDiagnostics"/> instead of silently dropping it.
+    /// </summary>
+    private delegate bool PropertyApplier(
+        ComputedStyle style,
+        string value,
+        ComputedStyle? parent,
+        float viewportWidth,
+        float viewportHeight,
+        float rootFontSize);
+
+    private static readonly Dictionary<string, PropertyApplier> PropertyBindings = BuildPropertyBindings();
+
     private static void Apply(
         ComputedStyle style,
         string property,
@@ -148,83 +164,247 @@ public static class StyleResolver
         float rootFontSize)
     {
         var value = rawValue.Trim();
-        switch (property)
+        if (!PropertyBindings.TryGetValue(property, out var applier))
         {
-            case "display":
-                style.Display = value.ToLowerInvariant() switch
-                {
-                    "none" => DisplayKind.None,
-                    "block" => DisplayKind.Block,
-                    "inline-block" => DisplayKind.InlineBlock,
-                    "flex" => DisplayKind.Flex,
-                    "br" => DisplayKind.LineBreak,
-                    _ => DisplayKind.Inline,
-                };
-                break;
-            case "width": SetLength(value, length => style.Width = length); break;
-            case "height": SetLength(value, length => style.Height = length); break;
-            case "min-width": SetLength(value, length => style.MinWidth = length); break;
-            case "min-height": SetLength(value, length => style.MinHeight = length); break;
-            case "max-width": SetLength(value, length => style.MaxWidth = length); break;
-            case "max-height": SetLength(value, length => style.MaxHeight = length); break;
-            case "margin": style.Margin = ParseEdges(value, style.Margin); break;
-            case "margin-left": SetEdge(value, style.Margin, edge => style.Margin = style.Margin with { Left = edge }); break;
-            case "margin-top": SetEdge(value, style.Margin, edge => style.Margin = style.Margin with { Top = edge }); break;
-            case "margin-right": SetEdge(value, style.Margin, edge => style.Margin = style.Margin with { Right = edge }); break;
-            case "margin-bottom": SetEdge(value, style.Margin, edge => style.Margin = style.Margin with { Bottom = edge }); break;
-            case "padding": style.Padding = ParseEdges(value, style.Padding); break;
-            case "padding-left": SetEdge(value, style.Padding, edge => style.Padding = style.Padding with { Left = edge }); break;
-            case "padding-top": SetEdge(value, style.Padding, edge => style.Padding = style.Padding with { Top = edge }); break;
-            case "padding-right": SetEdge(value, style.Padding, edge => style.Padding = style.Padding with { Right = edge }); break;
-            case "padding-bottom": SetEdge(value, style.Padding, edge => style.Padding = style.Padding with { Bottom = edge }); break;
-            case "border": ApplyBorder(style, value); break;
-            case "border-width": style.BorderWidth = ParseEdges(value, style.BorderWidth); break;
-            case "border-left-width": SetEdge(value, style.BorderWidth, edge => style.BorderWidth = style.BorderWidth with { Left = edge }); break;
-            case "border-top-width": SetEdge(value, style.BorderWidth, edge => style.BorderWidth = style.BorderWidth with { Top = edge }); break;
-            case "border-right-width": SetEdge(value, style.BorderWidth, edge => style.BorderWidth = style.BorderWidth with { Right = edge }); break;
-            case "border-bottom-width": SetEdge(value, style.BorderWidth, edge => style.BorderWidth = style.BorderWidth with { Bottom = edge }); break;
-            case "border-color": if (ColorRgba.TryParse(value, out var borderColor)) style.BorderColor = borderColor; break;
-            case "border-radius": if (CssLength.TryParse(value, out var radius)) style.BorderRadius = ResolveLength(radius, style.FontSize, style.FontSize, rootFontSize, viewportWidth, viewportHeight); break;
-            case "background":
-            case "background-color": if (ColorRgba.TryParse(value, out var background)) style.BackgroundColor = background; break;
-            case "color": if (ColorRgba.TryParse(value, out var color)) style.Color = color; break;
-            case "opacity": if (TryFloat(value, out var opacity)) style.Opacity = Math.Clamp(opacity, 0, 1); break;
-            case "font-family": style.FontFamily = value.Trim('\'', '"').Split(',')[0].Trim(); break;
-            case "font-size":
-                if (CssLength.TryParse(value, out var fontSize))
-                {
-                    var inheritedSize = parent?.FontSize ?? 16;
-                    var resolved = fontSize.Resolve(inheritedSize, inheritedSize, rootFontSize, viewportWidth, viewportHeight);
-                    if (float.IsFinite(resolved) && resolved > 0) style.FontSize = resolved;
-                }
-                break;
-            case "font-weight": style.FontWeight = ParseFontWeight(value); break;
-            case "line-height":
-                if (TryFloat(value, out var multiplier)) style.LineHeight = Math.Max(.5f, multiplier);
-                else if (CssLength.TryParse(value, out var lineHeight))
-                {
-                    var resolved = lineHeight.Resolve(style.FontSize, style.FontSize, rootFontSize, viewportWidth, viewportHeight);
-                    if (float.IsFinite(resolved) && resolved > 0) style.LineHeight = resolved / style.FontSize;
-                }
-                break;
-            case "text-align": style.TextAlign = value.ToLowerInvariant() switch { "center" => TextAlign.Center, "right" or "end" => TextAlign.End, _ => TextAlign.Start }; break;
-            case "box-sizing": style.BoxSizing = value.Equals("border-box", StringComparison.OrdinalIgnoreCase) ? BoxSizing.BorderBox : BoxSizing.ContentBox; break;
-            case "overflow": style.Overflow = value.Equals("hidden", StringComparison.OrdinalIgnoreCase) ? OverflowKind.Hidden : OverflowKind.Visible; break;
-            case "visibility": style.Visible = !value.Equals("hidden", StringComparison.OrdinalIgnoreCase); break;
-            case "cursor": style.Cursor = value.ToLowerInvariant() switch { "pointer" => CursorKind.Pointer, "text" => CursorKind.Text, _ => CursorKind.Default }; break;
-            case "flex-direction": style.FlexDirection = value.Equals("column", StringComparison.OrdinalIgnoreCase) ? FlexDirection.Column : FlexDirection.Row; break;
-            case "justify-content": style.JustifyContent = value.ToLowerInvariant() switch { "center" => JustifyContent.Center, "end" or "flex-end" => JustifyContent.End, "space-between" => JustifyContent.SpaceBetween, _ => JustifyContent.Start }; break;
-            case "align-items": style.AlignItems = value.ToLowerInvariant() switch { "center" => AlignItems.Center, "end" or "flex-end" => AlignItems.End, "start" or "flex-start" => AlignItems.Start, _ => AlignItems.Stretch }; break;
-            case "flex-grow": if (TryFloat(value, out var grow)) style.FlexGrow = Math.Max(0, grow); break;
-            case "gap": if (CssLength.TryParse(value, out var gap)) style.Gap = Math.Max(0, ResolveLength(gap, viewportWidth, style.FontSize, rootFontSize, viewportWidth, viewportHeight)); break;
+            CssDiagnostics.ReportUnknownProperty(property, value);
+            return;
         }
+
+        if (!applier(style, value, parent, viewportWidth, viewportHeight, rootFontSize))
+        {
+            CssDiagnostics.ReportUnsupportedValue(property, value);
+        }
+    }
+
+    private static Dictionary<string, PropertyApplier> BuildPropertyBindings()
+    {
+        var map = new Dictionary<string, PropertyApplier>(StringComparer.OrdinalIgnoreCase);
+
+        void Keyword(string name, Action<ComputedStyle, string> apply) =>
+            map[name] = (style, value, _, _, _, _) => { apply(style, value); return true; };
+
+        void Length(string name, Action<ComputedStyle, CssLength> apply) =>
+            map[name] = (style, value, _, _, _, _) => TryParseLength(value, length => apply(style, length));
+
+        void Edges(string name, Func<ComputedStyle, CssEdges> current, Action<ComputedStyle, CssEdges> apply) =>
+            map[name] = (style, value, _, _, _, _) => TryParseEdges(value, edges => apply(style, edges));
+
+        Keyword("display", static (style, value) => style.Display = value.ToLowerInvariant() switch
+        {
+            "none" => DisplayKind.None,
+            "block" => DisplayKind.Block,
+            "inline-block" => DisplayKind.InlineBlock,
+            "flex" => DisplayKind.Flex,
+            "br" => DisplayKind.LineBreak,
+            _ => DisplayKind.Inline,
+        });
+
+        Length("width", static (style, length) => style.Width = length);
+        Length("height", static (style, length) => style.Height = length);
+        Length("min-width", static (style, length) => style.MinWidth = length);
+        Length("min-height", static (style, length) => style.MinHeight = length);
+        Length("max-width", static (style, length) => style.MaxWidth = length);
+        Length("max-height", static (style, length) => style.MaxHeight = length);
+
+        Edges("margin", static style => style.Margin, static (style, edges) => style.Margin = edges);
+        Length("margin-left", static (style, length) => style.Margin = style.Margin with { Left = length });
+        Length("margin-top", static (style, length) => style.Margin = style.Margin with { Top = length });
+        Length("margin-right", static (style, length) => style.Margin = style.Margin with { Right = length });
+        Length("margin-bottom", static (style, length) => style.Margin = style.Margin with { Bottom = length });
+
+        Edges("padding", static style => style.Padding, static (style, edges) => style.Padding = edges);
+        Length("padding-left", static (style, length) => style.Padding = style.Padding with { Left = length });
+        Length("padding-top", static (style, length) => style.Padding = style.Padding with { Top = length });
+        Length("padding-right", static (style, length) => style.Padding = style.Padding with { Right = length });
+        Length("padding-bottom", static (style, length) => style.Padding = style.Padding with { Bottom = length });
+
+        map["border"] = static (style, value, _, _, _, _) => { ApplyBorder(style, value); return true; };
+        Edges("border-width", static style => style.BorderWidth, static (style, edges) => style.BorderWidth = edges);
+        Length("border-left-width", static (style, length) => style.BorderWidth = style.BorderWidth with { Left = length });
+        Length("border-top-width", static (style, length) => style.BorderWidth = style.BorderWidth with { Top = length });
+        Length("border-right-width", static (style, length) => style.BorderWidth = style.BorderWidth with { Right = length });
+        Length("border-bottom-width", static (style, length) => style.BorderWidth = style.BorderWidth with { Bottom = length });
+
+        map["border-color"] = static (style, value, _, _, _, _) =>
+        {
+            if (!ColorRgba.TryParse(value, out var color)) return false;
+            style.BorderColor = color;
+            return true;
+        };
+
+        map["border-radius"] = static (style, value, _, _, _, _) =>
+        {
+            if (!CssLength.TryParse(value, out var radius)) return false;
+            style.BorderRadius = radius;
+            return true;
+        };
+
+        PropertyApplier backgroundColor = static (style, value, _, _, _, _) =>
+        {
+            if (!ColorRgba.TryParse(value, out var background)) return false;
+            style.BackgroundColor = background;
+            return true;
+        };
+        map["background"] = backgroundColor;
+        map["background-color"] = backgroundColor;
+
+        map["color"] = static (style, value, _, _, _, _) =>
+        {
+            if (!ColorRgba.TryParse(value, out var color)) return false;
+            style.Color = color;
+            return true;
+        };
+
+        map["opacity"] = static (style, value, _, _, _, _) =>
+        {
+            if (!TryFloat(value, out var opacity)) return false;
+            style.Opacity = Math.Clamp(opacity, 0, 1);
+            return true;
+        };
+
+        Keyword("font-family", static (style, value) => style.FontFamily = value.Trim('\'', '"').Split(',')[0].Trim());
+
+        map["font-size"] = static (style, value, parent, viewportWidth, viewportHeight, rootFontSize) =>
+        {
+            if (!CssLength.TryParse(value, out var fontSize)) return false;
+            var inheritedSize = parent?.FontSize ?? 16;
+            var resolved = fontSize.Resolve(inheritedSize, inheritedSize, rootFontSize, viewportWidth, viewportHeight);
+            if (!float.IsFinite(resolved) || resolved <= 0) return false;
+            style.FontSize = resolved;
+            return true;
+        };
+
+        Keyword("font-weight", static (style, value) => style.FontWeight = ParseFontWeight(value));
+
+        map["line-height"] = static (style, value, _, viewportWidth, viewportHeight, rootFontSize) =>
+        {
+            if (TryFloat(value, out var multiplier))
+            {
+                style.LineHeight = Math.Max(.5f, multiplier);
+                return true;
+            }
+
+            if (CssLength.TryParse(value, out var lineHeight))
+            {
+                var resolved = lineHeight.Resolve(style.FontSize, style.FontSize, rootFontSize, viewportWidth, viewportHeight);
+                if (float.IsFinite(resolved) && resolved > 0)
+                {
+                    style.LineHeight = resolved / style.FontSize;
+                    return true;
+                }
+            }
+
+            return false;
+        };
+
+        Keyword("text-align", static (style, value) => style.TextAlign = value.ToLowerInvariant() switch
+        {
+            "center" => TextAlign.Center,
+            "right" or "end" => TextAlign.End,
+            _ => TextAlign.Start,
+        });
+        Keyword("box-sizing", static (style, value) => style.BoxSizing =
+            value.Equals("border-box", StringComparison.OrdinalIgnoreCase) ? BoxSizing.BorderBox : BoxSizing.ContentBox);
+        Keyword("overflow", static (style, value) => style.Overflow =
+            value.Equals("hidden", StringComparison.OrdinalIgnoreCase) ? OverflowKind.Hidden : OverflowKind.Visible);
+        Keyword("visibility", static (style, value) => style.Visible = !value.Equals("hidden", StringComparison.OrdinalIgnoreCase));
+        Keyword("cursor", static (style, value) => style.Cursor = value.ToLowerInvariant() switch
+        {
+            "pointer" => CursorKind.Pointer,
+            "text" => CursorKind.Text,
+            _ => CursorKind.Default,
+        });
+        Keyword("flex-direction", static (style, value) => style.FlexDirection =
+            value.Equals("column", StringComparison.OrdinalIgnoreCase) ? FlexDirection.Column : FlexDirection.Row);
+        Keyword("justify-content", static (style, value) => style.JustifyContent = value.ToLowerInvariant() switch
+        {
+            "center" => JustifyContent.Center,
+            "end" or "flex-end" => JustifyContent.End,
+            "space-between" => JustifyContent.SpaceBetween,
+            _ => JustifyContent.Start,
+        });
+        Keyword("align-items", static (style, value) => style.AlignItems = value.ToLowerInvariant() switch
+        {
+            "center" => AlignItems.Center,
+            "end" or "flex-end" => AlignItems.End,
+            "start" or "flex-start" => AlignItems.Start,
+            _ => AlignItems.Stretch,
+        });
+
+        map["flex-grow"] = static (style, value, _, _, _, _) =>
+        {
+            if (!TryFloat(value, out var grow)) return false;
+            style.FlexGrow = Math.Max(0, grow);
+            return true;
+        };
+
+        map["gap"] = static (style, value, _, viewportWidth, viewportHeight, rootFontSize) =>
+        {
+            if (!CssLength.TryParse(value, out var gap)) return false;
+            style.Gap = Math.Max(0, ResolveLength(gap, viewportWidth, style.FontSize, rootFontSize, viewportWidth, viewportHeight));
+            return true;
+        };
+
+        return map;
+    }
+
+    private static readonly HashSet<string> BorderStyleKeywords = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "solid", "dashed", "dotted", "double", "groove", "ridge", "inset", "outset", "hidden",
+    };
+
+    /// <summary>
+    /// Splits a shorthand value on whitespace, treating a parenthesized function call
+    /// (e.g. <c>rgba(255, 255, 255, 0.1)</c>) as a single token even though it contains spaces.
+    /// </summary>
+    private static IEnumerable<string> TokenizeRespectingParens(string value)
+    {
+        var tokens = new List<string>();
+        var current = new StringBuilder();
+        var depth = 0;
+        foreach (var character in value)
+        {
+            if (character == '(')
+            {
+                depth++;
+                current.Append(character);
+            }
+            else if (character == ')')
+            {
+                depth = Math.Max(0, depth - 1);
+                current.Append(character);
+            }
+            else if (char.IsWhiteSpace(character) && depth == 0)
+            {
+                if (current.Length > 0)
+                {
+                    tokens.Add(current.ToString());
+                    current.Clear();
+                }
+            }
+            else
+            {
+                current.Append(character);
+            }
+        }
+
+        if (current.Length > 0)
+        {
+            tokens.Add(current.ToString());
+        }
+
+        return tokens;
     }
 
     private static void ApplyBorder(ComputedStyle style, string value)
     {
-        foreach (var token in value.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries))
+        foreach (var token in TokenizeRespectingParens(value))
         {
-            if (CssLength.TryParse(token, out var width))
+            if (token.Equals("none", StringComparison.OrdinalIgnoreCase))
+            {
+                style.BorderWidth = new CssEdges(CssLength.Zero);
+            }
+            else if (CssLength.TryParse(token, out var width))
             {
                 style.BorderWidth = new CssEdges(width);
             }
@@ -232,36 +412,44 @@ public static class StyleResolver
             {
                 style.BorderColor = color;
             }
+            else if (!BorderStyleKeywords.Contains(token))
+            {
+                // Border-style keywords (solid, dashed, ...) are recognized but not modeled;
+                // anything else is a genuinely unsupported token worth surfacing.
+                CssDiagnostics.ReportUnsupportedValue("border", token);
+            }
         }
     }
 
-    private static CssEdges ParseEdges(string value, CssEdges fallback)
+    private static bool TryParseEdges(string value, Action<CssEdges> setter)
     {
         var parts = value.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
         var parsed = parts.Select(static part => CssLength.TryParse(part, out var length) ? length : (CssLength?)null).ToArray();
-        if (parsed.Any(static length => length is null) || parsed.Length is < 1 or > 4)
+        if (parsed.Length is < 1 or > 4 || parsed.Any(static length => length is null))
         {
-            return fallback;
+            return false;
         }
 
-        return parsed.Length switch
+        var edges = parsed.Length switch
         {
             1 => new CssEdges(parsed[0]!.Value),
             2 => new CssEdges(parsed[1]!.Value, parsed[0]!.Value, parsed[1]!.Value, parsed[0]!.Value),
             3 => new CssEdges(parsed[1]!.Value, parsed[0]!.Value, parsed[1]!.Value, parsed[2]!.Value),
-            4 => new CssEdges(parsed[3]!.Value, parsed[0]!.Value, parsed[1]!.Value, parsed[2]!.Value),
-            _ => fallback,
+            _ => new CssEdges(parsed[3]!.Value, parsed[0]!.Value, parsed[1]!.Value, parsed[2]!.Value),
         };
+        setter(edges);
+        return true;
     }
 
-    private static void SetLength(string value, Action<CssLength> setter)
+    private static bool TryParseLength(string value, Action<CssLength> setter)
     {
-        if (CssLength.TryParse(value, out var length)) setter(length);
-    }
+        if (!CssLength.TryParse(value, out var length))
+        {
+            return false;
+        }
 
-    private static void SetEdge(string value, CssEdges _, Action<CssLength> setter)
-    {
-        if (CssLength.TryParse(value, out var length)) setter(length);
+        setter(length);
+        return true;
     }
 
     private static float ResolveLength(CssLength length, float reference, float fontSize, float rootFontSize, float viewportWidth, float viewportHeight)

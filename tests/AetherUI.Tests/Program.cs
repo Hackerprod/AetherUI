@@ -23,6 +23,8 @@ internal static class Program
         ("Safe generated markup and event dispatch", MarkupIsEncodedAndEventsDispatch),
         ("Required form validation", RequiredInputBlocksSubmit),
         (".cshtml compiler", CshtmlCompilerGeneratesCSharp),
+        ("StyleRuntime integration: negative margin + diagnostics", StyleRuntimeHandlesNegativeMarginAndReportsGaps),
+        ("Gradient text via -webkit-background-clip", GradientTextClipAppliesToTextRun),
     ];
 
     public static int Main()
@@ -126,6 +128,39 @@ internal static class Program
         Assert.Equal(1, component.SubmitCount);
     }
 
+    private static void StyleRuntimeHandlesNegativeMarginAndReportsGaps()
+    {
+        var reported = new List<CssStyleDiagnostic>();
+        void OnReported(CssStyleDiagnostic diagnostic) => reported.Add(diagnostic);
+        CssDiagnostics.Reported += OnReported;
+        try
+        {
+            var component = new NegativeMarginComponent();
+            using var renderer = new RecordingRenderer();
+            using var host = new UiDocumentHost(component, new ApproximateTextMeasurer(), renderer, new UiHostOptions());
+            host.SetViewport(640, 480, 1);
+            host.Render();
+
+            var first = Assert.NotNull(host.Document?.GetElementById("a"));
+            var second = Assert.NotNull(host.Document?.GetElementById("b"));
+            var firstBox = Assert.NotNull(host.Layout?.FindPrimaryBox(first));
+            var secondBox = Assert.NotNull(host.Layout?.FindPrimaryBox(second));
+
+            // margin-top: -20px must pull "b" 20px above where normal flow would place it —
+            // the old hand-rolled cascade used to clamp negative margins to zero.
+            Assert.True(secondBox.BorderBox.Y < firstBox.BorderBox.Y + firstBox.BorderBox.Height);
+            Assert.Equal(firstBox.BorderBox.Y + firstBox.BorderBox.Height - 20f, secondBox.BorderBox.Y);
+
+            // box-shadow is valid CSS StyleRuntime parses but this engine cannot paint yet —
+            // it must be reported, not silently dropped.
+            Assert.True(reported.Exists(static d => d.Code == "AUI-CSS-100" && d.Property == "box-shadow"));
+        }
+        finally
+        {
+            CssDiagnostics.Reported -= OnReported;
+        }
+    }
+
     private static void CshtmlCompilerGeneratesCSharp()
     {
         var view = """
@@ -219,6 +254,70 @@ internal static class Program
         {
             e.PreventDefault();
             SubmitCount++;
+        }
+    }
+
+    private static void GradientTextClipAppliesToTextRun()
+    {
+        var reported = new List<CssStyleDiagnostic>();
+        void OnReported(CssStyleDiagnostic diagnostic) => reported.Add(diagnostic);
+        CssDiagnostics.Reported += OnReported;
+        try
+        {
+            var component = new GradientLogoComponent();
+            using var renderer = new RecordingRenderer();
+            using var host = new UiDocumentHost(component, new ApproximateTextMeasurer(), renderer, new UiHostOptions());
+            host.SetViewport(640, 480, 1);
+            host.Render();
+
+            var logo = Assert.NotNull(host.Document?.GetElementById("logo"));
+            var box = Assert.NotNull(host.Layout?.FindPrimaryBox(logo));
+
+            Assert.True(box.Style.TextGradient is not null);
+            Assert.True(box.Style.BackgroundGradient is null);
+            Assert.Equal(0f, box.Style.BackgroundColor.A);
+            Assert.True(!reported.Exists(static d => d.Property is "-webkit-background-clip" or "-webkit-text-fill-color"));
+        }
+        finally
+        {
+            CssDiagnostics.Reported -= OnReported;
+        }
+    }
+
+    private sealed class GradientLogoComponent : UiComponent
+    {
+        protected override void BuildRenderTree(MarkupWriter writer)
+        {
+            writer.WriteLiteral("""
+                <style>
+                  #logo {
+                    background: linear-gradient(to right, #60a5fa, #a78bfa);
+                    -webkit-background-clip: text;
+                    -webkit-text-fill-color: transparent;
+                  }
+                </style>
+                <body>
+                  <div id="logo">AetherUI</div>
+                </body>
+                """);
+        }
+    }
+
+    private sealed class NegativeMarginComponent : UiComponent
+    {
+        protected override void BuildRenderTree(MarkupWriter writer)
+        {
+            writer.WriteLiteral("""
+                <style>
+                  body { margin: 0; }
+                  #a { width: 100px; height: 50px; background: red; box-shadow: 0 2px 4px rgba(0,0,0,.2); }
+                  #b { width: 100px; height: 50px; margin-top: -20px; background: blue; }
+                </style>
+                <body>
+                  <div id="a"></div>
+                  <div id="b"></div>
+                </body>
+                """);
         }
     }
 

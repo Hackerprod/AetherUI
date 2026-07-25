@@ -262,6 +262,9 @@ internal sealed class NativeWindow : IDisposable
             case NativeMethods.WmMouseMove:
                 MouseMoved(lParam);
                 return nint.Zero;
+            case NativeMethods.WmMouseWheel:
+                MouseWheel(wParam, lParam);
+                return nint.Zero;
             case NativeMethods.WmMouseLeave:
                 _trackingMouse = false;
                 _host?.PointerLeft();
@@ -349,6 +352,24 @@ internal sealed class NativeWindow : IDisposable
         _host?.PointerMoved(point);
         _cursor = _host?.CursorAt(point) ?? CursorKind.Default;
         SetCursor(_cursor);
+    }
+
+    private void MouseWheel(nuint wParam, nint lParam)
+    {
+        // High word of wParam is the signed wheel delta in multiples of WHEEL_DELTA (120).
+        var rawDelta = unchecked((short)((wParam >> 16) & 0xffff));
+        var notches = rawDelta / 120f;
+
+        // lParam here is screen coordinates, unlike every other mouse message's client-relative
+        // lParam (see ToLogicalPoint) — must convert before it means anything to the host/layout.
+        var screenPoint = new NativeMethods.Point
+        {
+            X = unchecked((short)((long)lParam & 0xffff)),
+            Y = unchecked((short)(((long)lParam >> 16) & 0xffff)),
+        };
+        _ = NativeMethods.ScreenToClient(_windowHandle, ref screenPoint);
+        var point = new PointF(screenPoint.X / _dpiScale, screenPoint.Y / _dpiScale);
+        _host?.MouseWheelScrolled(point, notches);
     }
 
     private void UpdateDpiAndViewport()

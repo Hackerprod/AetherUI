@@ -64,6 +64,10 @@ public enum OverflowKind : byte
 {
     Visible,
     Hidden,
+    /// <summary>Clips like <see cref="Hidden"/> but is a scroll container (scrollable + shows a thumb only when content overflows).</summary>
+    Auto,
+    /// <summary>Clips like <see cref="Hidden"/> and is always a scroll container regardless of overflow.</summary>
+    Scroll,
 }
 
 public enum CursorKind : byte
@@ -80,6 +84,7 @@ public sealed class ComputedStyle
     public JustifyContent JustifyContent { get; set; } = JustifyContent.Start;
     public AlignItems AlignItems { get; set; } = AlignItems.Stretch;
     public float FlexGrow { get; set; }
+    public bool FlexWrap { get; set; }
     public float Gap { get; set; }
 
     public CssLength Width { get; set; } = CssLength.Auto;
@@ -95,8 +100,22 @@ public sealed class ComputedStyle
 
     public ColorRgba Color { get; set; } = ColorRgba.Black;
     public ColorRgba BackgroundColor { get; set; } = ColorRgba.Transparent;
+    public LinearGradient? BackgroundGradient { get; set; }
     public ColorRgba BorderColor { get; set; } = ColorRgba.Transparent;
-    public float BorderRadius { get; set; }
+
+    /// <summary>
+    /// From <c>-webkit-background-clip: text</c> (e.g. a gradient logo wordmark): the element's own
+    /// background-image paints as the fill of its text instead of a box fill. Mutually exclusive
+    /// with <see cref="BackgroundGradient"/> — never both set at once, see StyleRuntimeBridge.
+    /// </summary>
+    public LinearGradient? TextGradient { get; set; }
+
+    /// <summary>
+    /// Kept symbolic (not a resolved float) because a percentage radius must resolve against the
+    /// element's own border-box size, which is only known at paint time.
+    /// </summary>
+    public CssLength BorderRadius { get; set; } = CssLength.Zero;
+
     public float Opacity { get; set; } = 1;
 
     public string FontFamily { get; set; } = "Segoe UI";

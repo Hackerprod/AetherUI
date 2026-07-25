@@ -4,6 +4,7 @@ using AetherUI.Events;
 using AetherUI.Layout;
 using AetherUI.Primitives;
 using AetherUI.Rendering;
+using AetherUI.StyleRuntime;
 
 namespace AetherUI.Runtime;
 
@@ -13,16 +14,62 @@ namespace AetherUI.Runtime;
 /// </summary>
 public sealed class UiDocumentHost : IDisposable
 {
+    /// <summary>
+    /// AetherUI.StyleRuntime ships no hidden user-agent sheet by design — the host decides what
+    /// default rules exist. This mirrors the defaults the old hand-rolled StyleResolver used to
+    /// bake in, minus the "display: br" hack (line breaks are now special-cased by tag name in
+    /// <see cref="StyleRuntimeBridge"/>, since "br" was never a real CSS display keyword).
+    /// </summary>
+    private const string EngineDefaultsCss = """
+        html, body { display: block; }
+        body { margin: 8px; color: #202124; font-family: "Segoe UI"; font-size: 16px; line-height: 1.25; }
+        head, title, meta, link, style, script { display: none; }
+        div, form, p, section, article, header, footer, main, nav, h1, h2, h3, h4, h5, h6 { display: block; }
+        span, label, strong, em, a { display: inline; }
+        h1 { font-size: 2em; font-weight: 700; margin: .67em 0; }
+        h2 { font-size: 1.5em; font-weight: 700; margin: .83em 0; }
+        h3 { font-size: 1.17em; font-weight: 700; margin: 1em 0; }
+        h4 { font-size: 1em; font-weight: 700; margin: 1.33em 0; }
+        p { margin: 1em 0; }
+        input, button { display: inline-block; font-family: "Segoe UI"; font-size: 14px; box-sizing: border-box; }
+        input { min-width: 180px; height: 34px; padding: 6px 9px; border: 1px solid #9aa0a6; border-radius: 4px; background-color: white; color: #202124; cursor: text; }
+        input:focus { border-color: #2563eb; }
+        input:invalid { border-color: #dc2626; }
+        button { min-width: 84px; height: 34px; padding: 6px 14px; border: 1px solid #1d4ed8; border-radius: 4px; background-color: #2563eb; color: white; cursor: pointer; text-align: center; }
+        button:hover { background-color: #1d4ed8; }
+        button:active { background-color: #1e40af; }
+        button:disabled { opacity: .55; cursor: default; }
+        """;
+
     private readonly UiComponent _component;
     private readonly UiHostOptions _options;
     private readonly IRenderBackend _renderer;
     private readonly LayoutEngine _layoutEngine;
     private readonly DisplayListBuilder _displayListBuilder;
+    private readonly AetherStyleRuntime _styleRuntime;
     private readonly Dictionary<string, string> _uncontrolledInputValues = new(StringComparer.Ordinal);
+
+    /// <summary>
+    /// Vertical scroll offset per scroll-container element. Most real markup scrolls a plain
+    /// <c>&lt;div class="..."&gt;</c> with no id, so this is keyed by <see cref="ElementNode"/>
+    /// instance (like <see cref="_computedStyles"/>) rather than by id — which means, like every
+    /// other node-identity-dependent piece of state here, it resets on a markup rebuild instead of
+    /// surviving it. Cleared alongside <see cref="_computedStyles"/> in RebuildDocument.
+    /// </summary>
+    private readonly Dictionary<ElementNode, float> _scrollOffsets = new();
+
+    /// <summary>
+    /// Persistent across renders (cleared only when the tree itself is rebuilt): AetherStyleRuntime's
+    /// <c>ResolveSubtree</c> returns only the nodes whose computed style changed since its last call,
+    /// not a full snapshot, so unchanged nodes must be carried forward rather than dropped.
+    /// </summary>
+    private readonly Dictionary<ElementNode, ComputedStyle> _computedStyles = new();
+
     private DocumentNode? _document;
     private LayoutResult? _layout;
     private DisplayList? _displayList;
     private StyleMap? _styles;
+    private StyleSheetHandle? _authorStyleSheet;
     private ElementNode? _hovered;
     private ElementNode? _active;
     private ElementNode? _focused;
@@ -45,6 +92,11 @@ public sealed class UiDocumentHost : IDisposable
         _layoutEngine = new LayoutEngine(textMeasurer);
         _displayListBuilder = new DisplayListBuilder(textMeasurer);
         _viewport = new SizeF(_options.Width, _options.Height);
+        _styleRuntime = new AetherStyleRuntime(
+            options: new StyleRuntimeOptions { ThrowOnInvalidStyleSheet = false },
+            environment: new StyleEnvironment(_viewport.Width, _viewport.Height, _dpiScale, 16f));
+        _styleRuntime.DiagnosticsProduced += OnStyleDiagnosticsProduced;
+        _styleRuntime.AddStyleSheet(EngineDefaultsCss, StyleSheetLayer.EngineDefaults, "aether-defaults.css");
         _component.Invalidated += OnComponentInvalidated;
     }
 
@@ -392,9 +444,64 @@ public sealed class UiDocumentHost : IDisposable
             return;
         }
 
-        _styles = StyleResolver.Resolve(_document!, _viewport.Width, _viewport.Height);
-        _layout = _layoutEngine.Layout(_document!, _styles, _viewport);
+        var roots = _document!.Children.OfType<ElementNode>().ToArray();
+        var environment = new StyleEnvironment(_viewport.Width, _viewport.Height, _dpiScale, 16f);
+        void Merge(IReadOnlyList<StyleUpdate> updates)
+        {
+            foreach (var update in updates)
+            {
+                var element = (ElementNode)update.Node;
+                _computedStyles[element] = StyleRuntimeBridge.ToComputedStyle(update.Current, element);
+            }
+        }
+
+        if (roots.Length > 0 && environment != _styleRuntime.Environment)
+        {
+            Merge(_styleRuntime.SetEnvironment(environment, roots[0]));
+        }
+
+        foreach (var root in roots)
+        {
+            Merge(_styleRuntime.ResolveSubtree(root));
+        }
+
+        _styles = new StyleMap(_computedStyles);
+        _layout = _layoutEngine.Layout(_document!, _styles, _viewport, ScrollOffsetFor);
         _displayList = _displayListBuilder.Build(_layout, _focused);
+    }
+
+    private float ScrollOffsetFor(ElementNode element) =>
+        _scrollOffsets.TryGetValue(element, out var offset) ? offset : 0f;
+
+    /// <summary>
+    /// Routes a mouse-wheel notch to the nearest scrollable ancestor of whatever's under the
+    /// cursor (walking up like <see cref="Dispatch"/> does for bubbling DOM events), matching how
+    /// a real browser picks which scroll container a wheel event affects.
+    /// </summary>
+    public void MouseWheelScrolled(PointF point, float notches)
+    {
+        ThrowIfDisposed();
+        EnsureVisualTree();
+        const float pixelsPerNotch = 48f;
+        var offsetDelta = -notches * pixelsPerNotch;
+
+        for (var current = _layout!.HitTest(point); current is not null; current = current.Parent as ElementNode)
+        {
+            var box = _layout.FindPrimaryBox(current);
+            if (box is null || box.ScrollableOverflowY <= 0)
+            {
+                continue;
+            }
+
+            var next = Math.Clamp(box.ScrollOffsetY + offsetDelta, 0f, box.ScrollableOverflowY);
+            if (next != box.ScrollOffsetY)
+            {
+                _scrollOffsets[current] = next;
+                InvalidateVisual();
+            }
+
+            return;
+        }
     }
 
     private void RebuildDocument()
@@ -407,6 +514,22 @@ public sealed class UiDocumentHost : IDisposable
         _styles = null;
         _layout = null;
         _displayList = null;
+
+        // The previous tree's ElementNode instances (and their StyleNodeId-keyed cache entries)
+        // are discarded on every rebuild — this engine has no cross-render node identity yet.
+        // Clearing here prevents the runtime's node-state cache from growing unbounded, and drops
+        // the now-stale ComputedStyle entries for nodes that no longer exist.
+        _styleRuntime.ClearCache();
+        _computedStyles.Clear();
+        _scrollOffsets.Clear();
+        if (_authorStyleSheet is { } previousSheet)
+        {
+            _styleRuntime.RemoveStyleSheet(previousSheet);
+        }
+
+        var authorCss = string.Join('\n', _document.GetElementsByTagName("style").Select(static element => element.TextContent));
+        var loadResult = _styleRuntime.AddStyleSheet(authorCss, StyleSheetLayer.Author, "<style>");
+        _authorStyleSheet = loadResult.Handle;
 
         foreach (var input in _document.GetElementsByTagName("input"))
         {
@@ -447,6 +570,18 @@ public sealed class UiDocumentHost : IDisposable
         return element;
     }
 
+    private static void OnStyleDiagnosticsProduced(IReadOnlyList<StyleDiagnostic> diagnostics)
+    {
+        foreach (var diagnostic in diagnostics)
+        {
+            CssDiagnostics.ReportFromStyleRuntime(
+                diagnostic.Code,
+                $"{diagnostic.SourceName}:{diagnostic.Line}:{diagnostic.Column}",
+                diagnostic.Message,
+                $"{diagnostic.SourceName}({diagnostic.Line},{diagnostic.Column}) {diagnostic.Code}: {diagnostic.Message}");
+        }
+    }
+
     private void OnComponentInvalidated(object? sender, EventArgs e)
     {
         _markupDirty = true;
@@ -474,12 +609,14 @@ public sealed class UiDocumentHost : IDisposable
 
         _disposed = true;
         _component.Invalidated -= OnComponentInvalidated;
+        _styleRuntime.DiagnosticsProduced -= OnStyleDiagnosticsProduced;
         try
         {
             _component.Dispose();
         }
         finally
         {
+            _styleRuntime.Dispose();
             _renderer.Dispose();
         }
 
