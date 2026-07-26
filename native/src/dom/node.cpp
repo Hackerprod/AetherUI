@@ -10,13 +10,18 @@ AETHER_API aether_node_t aether_node_get_parent(aether_node_t node) {
 }
 
 AETHER_API int32_t aether_node_get_child_count(aether_node_t node) {
-    return node ? static_cast<int32_t>(node->children.size()) : 0;
+    if (!node) return 0;
+    return static_cast<int32_t>(std::count_if(node->children.begin(), node->children.end(),
+        [](const aether_node_s* child) { return !child->is_generated; }));
 }
 
 AETHER_API aether_node_t aether_node_get_child(aether_node_t node, int32_t index) {
-    if (!node || index < 0 || index >= static_cast<int32_t>(node->children.size()))
-        return nullptr;
-    return node->children[index];
+    if (!node || index < 0) return nullptr;
+    for (auto* child : node->children) {
+        if (child->is_generated) continue;
+        if (index-- == 0) return child;
+    }
+    return nullptr;
 }
 
 AETHER_API char* aether_node_get_text_content(aether_node_t node) {

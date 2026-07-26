@@ -1,5 +1,6 @@
 #pragma once
 #include <aether/aether.h>
+#include "pseudo_element.h"
 #include <string>
 #include <vector>
 #include <map>
@@ -18,6 +19,11 @@ struct aether_node_s {
     int32_t state = 0;
     std::string text;
     int64_t style_node_id = 0;
+    bool is_generated = false;
+    aether_pseudo_element_t pseudo_element = aether_pseudo_element_t::none;
+    // The originating element is kept separately from parent: generated nodes inherit from their
+    // host, while selector combinators must navigate from the host's real DOM position.
+    aether_node_s* style_origin = nullptr;
     virtual ~aether_node_s() = default;
 };
 

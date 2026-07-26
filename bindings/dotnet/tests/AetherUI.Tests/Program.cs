@@ -32,6 +32,8 @@ internal static class Program
         ("Native style runtime emits nested element background", NativeStyleRuntimeEmitsNestedElementBackground),
         ("Native pipeline renders dashboard fixture", NativePipelineRendersDashboardFixture),
         ("Native flex layout preserves nested content width", NativeFlexLayoutPreservesNestedContentWidth),
+        ("Native layout positions absolute children and anonymous flex text", NativeLayoutPositionsAbsoluteChildrenAndAnonymousFlexText),
+        ("Native runtime renders generated pseudo-elements", NativeRuntimeRendersGeneratedPseudoElements),
         ("Native root scrolls overflowing content", NativeRootScrollsOverflowingContent),
     ];
 
@@ -519,6 +521,79 @@ internal static class Program
 
         var scrolled = Assert.NotNull(host.Layout?.FindPrimaryBox(body));
         Assert.True(scrolled.ScrollOffsetY > 0);
+    }
+
+    private static void NativeRuntimeRendersGeneratedPseudoElements()
+    {
+        const string markup = """
+            <style>
+              body { margin: 0; }
+              .weather > #temperature { position: relative; font-size: 80px; }
+              .weather > #temperature::after {
+                content: "°";
+                position: absolute;
+                font-size: 40px;
+                top: 10px;
+              }
+            </style>
+            <body><div class="weather"><div id="temperature">24</div></div></body>
+            """;
+
+        using var renderer = new RecordingRenderer();
+        using var host = new UiDocumentHost(new RawMarkupComponent(markup), new ApproximateTextMeasurer(), renderer, new UiHostOptions());
+        host.SetViewport(640, 480, 1);
+        host.Render();
+
+        var commands = renderer.LastDisplayList?.Commands.OfType<DrawTextCommand>().ToArray()
+            ?? throw new InvalidOperationException("Native renderer did not produce text commands.");
+        var temperature = commands.Single(command => command.Text == "24");
+        var degree = commands.Single(command => command.Text == "\u00B0");
+        Assert.True(degree.Rectangle.X >= temperature.Rectangle.Right - 1f);
+    }
+
+    private static void NativeLayoutPositionsAbsoluteChildrenAndAnonymousFlexText()
+    {
+        const string markup = """
+            <style>
+              body { margin: 0; }
+              #card { position: relative; width: 320px; padding: 20px; }
+              #badge { position: absolute; top: 20px; left: 20px; padding: 6px 12px; }
+              #image { width: 320px; height: 200px; display: flex; justify-content: center; align-items: center; }
+            </style>
+            <body>
+              <div id="card"><div id="badge">NEW</div><div id="image">★</div></div>
+            </body>
+            """;
+
+        using var renderer = new RecordingRenderer();
+        using var host = new UiDocumentHost(new RawMarkupComponent(markup), new ApproximateTextMeasurer(), renderer, new UiHostOptions());
+        host.SetViewport(640, 480, 1);
+        host.Render();
+
+        var card = Assert.NotNull(host.Document?.GetElementById("card"));
+        var badge = Assert.NotNull(host.Document?.GetElementById("badge"));
+        var image = Assert.NotNull(host.Document?.GetElementById("image"));
+        var cardBox = Assert.NotNull(host.Layout?.FindPrimaryBox(card));
+        var badgeBox = Assert.NotNull(host.Layout?.FindPrimaryBox(badge));
+        var imageBox = Assert.NotNull(host.Layout?.FindPrimaryBox(image));
+
+        Assert.Equal(cardBox.BorderBox.X + 20f, badgeBox.BorderBox.X);
+        Assert.Equal(cardBox.BorderBox.Y + 20f, badgeBox.BorderBox.Y);
+        if (badgeBox.BorderBox.Width >= 100f)
+        {
+            throw new InvalidOperationException("An auto-sized absolute box must shrink to its content, not fill its parent.");
+        }
+
+        var star = Assert.NotNull(renderer.LastDisplayList?.Commands
+            .OfType<DrawTextCommand>()
+            .SingleOrDefault(command => command.Text == "★"));
+        var textCenter = star.Rectangle.X + star.Rectangle.Width / 2f;
+        var imageCenter = imageBox.BorderBox.X + imageBox.BorderBox.Width / 2f;
+        if (MathF.Abs(textCenter - imageCenter) >= 1f)
+        {
+            throw new InvalidOperationException(
+                $"Anonymous flex text was not centered: text={textCenter}, container={imageCenter}.");
+        }
     }
 
     private sealed class NestedSolidBackgroundComponent : UiComponent

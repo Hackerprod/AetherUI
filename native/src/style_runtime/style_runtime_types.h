@@ -1,4 +1,5 @@
 #pragma once
+#include "../dom/pseudo_element.h"
 
 #include <aether/aether.h>
 #include <string>
@@ -256,6 +257,7 @@ struct compiled_selector_s {
     selector_anchor_s anchor;
     specificity_s specificity;
     selector_dependency_flags dependencies = SELECTOR_DEP_NONE;
+    aether_pseudo_element_t pseudo_element = aether_pseudo_element_t::none;
     std::string source;
 };
 
@@ -286,6 +288,12 @@ struct compiled_property_declaration_s {
 
 struct custom_property_declaration_s {
     std::string name;
+    std::string source;
+    bool important = false;
+    int32_t declaration_order = 0;
+};
+
+struct compiled_content_declaration_s {
     std::string source;
     bool important = false;
     int32_t declaration_order = 0;
@@ -371,6 +379,7 @@ struct compiled_rule_s {
     media_condition_s* condition = nullptr;
     std::vector<compiled_property_declaration_s> declarations;
     std::vector<custom_property_declaration_s>   custom_declarations;
+    std::vector<compiled_content_declaration_s>  content_declarations;
     int32_t source_order = 0;
 };
 

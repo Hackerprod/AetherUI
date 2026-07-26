@@ -61,6 +61,7 @@ std::string text_splitter_remove_comments(const std::string& source) {
 struct declaration_compilation_result {
     std::vector<compiled_property_declaration_s> properties;
     std::vector<custom_property_declaration_s> custom;
+    std::vector<compiled_content_declaration_s> content;
 };
 
 // ═══ Internal helpers ═══════════════════════════════════════════════════
@@ -253,6 +254,15 @@ static declaration_compilation_result compile_declarations(
 
         bool important = try_strip_important(value);
 
+        if (name == "content") {
+            compiled_content_declaration_s content;
+            content.source = value;
+            content.important = important;
+            content.declaration_order = declaration_order++;
+            result.content.push_back(std::move(content));
+            continue;
+        }
+
         if (name.size() >= 2 && name[0] == '-' && name[1] == '-') {
             custom_property_declaration_s custom;
             custom.name = name;
@@ -380,7 +390,7 @@ static void compile_range(
         auto declarations = compile_declarations(declaration_text, registry);
 
         if (!selectors.empty() &&
-            (!declarations.properties.empty() || !declarations.custom.empty()))
+            (!declarations.properties.empty() || !declarations.custom.empty() || !declarations.content.empty()))
         {
             int32_t source_order = rule_id_counter;
             for (auto& sel : selectors) {
@@ -392,6 +402,7 @@ static void compile_range(
                 rule.condition = inherited_condition;
                 rule.declarations = declarations.properties;
                 rule.custom_declarations = declarations.custom;
+                rule.content_declarations = declarations.content;
                 rule.source_order = source_order;
                 out_rules.push_back(std::move(rule));
             }

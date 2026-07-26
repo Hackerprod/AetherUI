@@ -12,6 +12,7 @@ public readonly record struct NativeShadow(float X, float Y, float Blur, float S
 
 public sealed record NativeComputedStyle(
     int Display, int FlexDirection, int JustifyContent, int AlignItems, float FlexGrow, bool FlexWrap, float Gap,
+    int Position, NativeEdges Inset,
     NativeLength Width, NativeLength Height, NativeLength MinWidth, NativeLength MinHeight,
     NativeLength MaxWidth, NativeLength MaxHeight, NativeEdges Margin, NativeEdges Padding, NativeEdges BorderWidth,
     int BoxSizing, NativeColor Color, NativeColor BackgroundColor, NativeGradient? BackgroundGradient,
@@ -217,6 +218,7 @@ public sealed unsafe class StyleRuntimeInterop : IDisposable
     {
         public int Display, FlexDirection, JustifyContent, AlignItems;
         public float FlexGrow; public int FlexWrap; public float Gap;
+        public int Position; public EdgesRaw Inset;
         public LengthRaw Width, Height, MinWidth, MinHeight, MaxWidth, MaxHeight;
         public EdgesRaw Margin, Padding, BorderWidth; public int BoxSizing;
         public ColorRaw Color, BackgroundColor; public int HasBackgroundGradient; public GradientRaw BackgroundGradient;
@@ -232,6 +234,7 @@ public sealed unsafe class StyleRuntimeInterop : IDisposable
             string family;
             fixed (byte* p = FontFamily) family = Marshal.PtrToStringUTF8((IntPtr)p) ?? "Segoe UI";
             return new(Display, FlexDirection, JustifyContent, AlignItems, FlexGrow, FlexWrap != 0, Gap,
+                Position, Inset.ToPublic(),
                 Width.ToPublic(), Height.ToPublic(), MinWidth.ToPublic(), MinHeight.ToPublic(),
                 MaxWidth.ToPublic(), MaxHeight.ToPublic(), Margin.ToPublic(), Padding.ToPublic(),
                 BorderWidth.ToPublic(), BoxSizing, Color.ToPublic(), BackgroundColor.ToPublic(),

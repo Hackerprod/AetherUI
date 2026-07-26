@@ -5,7 +5,7 @@ static void rebuild_id_index(aether_doc_s* doc) {
     doc->id_index.clear();
     std::function<void(aether_node_s*)> walk = [&](aether_node_s* node) {
         for (auto* child : node->children) {
-            if (child->type == AETHER_NODE_ELEMENT) {
+            if (!child->is_generated && child->type == AETHER_NODE_ELEMENT) {
                 auto it = child->attributes.find("id");
                 if (it != child->attributes.end() && !it->second.empty()) {
                     doc->id_index[it->second] = child;
@@ -18,6 +18,7 @@ static void rebuild_id_index(aether_doc_s* doc) {
 }
 
 static aether_node_s* find_body(aether_node_s* node) {
+    if (node->is_generated) return nullptr;
     if (node->type == AETHER_NODE_ELEMENT && node->tag_name == "body") return node;
     for (auto* child : node->children) {
         if (auto* found = find_body(child)) return found;
@@ -51,9 +52,10 @@ AETHER_API aether_node_t aether_doc_get_body(aether_doc_t doc) {
 AETHER_API aether_node_t aether_doc_get_document_element(aether_doc_t doc) {
     if (!doc) return nullptr;
     for (auto* child : doc->children) {
-        if (child->type == AETHER_NODE_ELEMENT && child->tag_name == "html") return child;
+        if (!child->is_generated && child->type == AETHER_NODE_ELEMENT && child->tag_name == "html") return child;
     }
-    return doc->children.empty() ? nullptr : doc->children[0];
+    for (auto* child : doc->children) if (!child->is_generated) return child;
+    return nullptr;
 }
 
 AETHER_API aether_node_t aether_doc_get_element_by_id(aether_doc_t doc, const char* id) {

@@ -142,6 +142,11 @@ static aether_computed_style_t get_style(aether_style_map_s* styles, aether_node
     return (it != styles->styles.end()) ? it->second : aether_computed_style_default();
 }
 
+static bool is_out_of_flow(const aether_computed_style_t& style) {
+    return style.position == AETHER_POSITION_ABSOLUTE ||
+           style.position == AETHER_POSITION_FIXED;
+}
+
 static void offset_box(aether_layout_box_s* box, float dx, float dy);
 
 static void offset_rect(aether_rectf& r, float dx, float dy) {
@@ -194,6 +199,14 @@ static aether_layout_box_s* layout_element(
     bool has_forced_border_width,
     float forced_border_height,
     bool has_forced_border_height,
+    aether_layout_result_s* result);
+
+static void layout_positioned_children(
+    const aether_layout_engine_s* engine,
+    aether_style_map_s* styles,
+    aether_layout_box_s* parent_box,
+    aether_node_s* parent,
+    aether_rectf positioning_block,
     aether_layout_result_s* result);
 
 static float layout_atomic_control(
@@ -389,6 +402,18 @@ static aether_layout_box_s* layout_element(
                                               style, result);
     }
 
+    // Absolute and fixed descendants do not take part in normal-flow sizing. Lay them out only
+    // after the in-flow content has established this element's padding box, which is their
+    // containing block for position: absolute.
+    const float positioning_height = std::isfinite(definite_content_height)
+        ? definite_content_height + aether_thicknessf_vertical(padding)
+        : content_height + aether_thicknessf_vertical(padding);
+    layout_positioned_children(engine, styles, box, element,
+                               {border_x + border.left, border_y + border.top,
+                                std::max(0.f, border_width - aether_thicknessf_horizontal(border)),
+                                std::max(0.f, positioning_height)},
+                               result);
+
     // Scroll container
     if ((style.overflow == AETHER_OVERFLOW_AUTO || style.overflow == AETHER_OVERFLOW_SCROLL)
         && std::isfinite(definite_content_height))
@@ -440,7 +465,115 @@ static aether_layout_box_s* layout_element(
     box->margin_box  = { containing_block.x, normal_flow_y,
                          border_width + aether_thicknessf_horizontal(margin),
                          border_height + aether_thicknessf_vertical(margin) };
+
+    // Relative positioning preserves the element's space in normal flow while moving its visual
+    // box (and its descendants) by the requested inset. A specified left/top wins over right/bottom.
+    if (style.position == AETHER_POSITION_RELATIVE) {
+        const float left = resolve(engine, style.inset.left, containing_block.width, style);
+        const float right = resolve(engine, style.inset.right, containing_block.width, style);
+        const float top = resolve(engine, style.inset.top, containing_block.height, style);
+        const float bottom = resolve(engine, style.inset.bottom, containing_block.height, style);
+        const float dx = std::isfinite(left) ? left : (std::isfinite(right) ? -right : 0.f);
+        const float dy = std::isfinite(top) ? top : (std::isfinite(bottom) ? -bottom : 0.f);
+        if (dx != 0.f || dy != 0.f) offset_box(box, dx, dy);
+    }
     return box;
+}
+
+/* ── Out-of-flow positioned descendants ───────────────────────────── */
+
+static void layout_positioned_children(
+    const aether_layout_engine_s* engine,
+    aether_style_map_s* styles,
+    aether_layout_box_s* parent_box,
+    aether_node_s* parent,
+    aether_rectf positioning_block,
+    aether_layout_result_s* result)
+{
+    auto static_position = [&](aether_node_s* node) {
+        // A positioned box with an auto inset keeps the position it would have occupied in
+        // normal flow. The laid-out in-flow children give us that anchor without putting the
+        // positioned box back into sizing. In particular this keeps ::after adjacent to the
+        // preceding text even when the parent is center-aligned.
+        if (node->pseudo_element == aether_pseudo_element_t::before) {
+            if (!parent_box->children.empty()) {
+                const auto* first = parent_box->children.front();
+                return aether_rectf{first->margin_box.x, first->margin_box.y, 0.f, 0.f};
+            }
+            return aether_rectf{positioning_block.x, positioning_block.y, 0.f, 0.f};
+        }
+
+        auto node_it = std::find(parent->children.begin(), parent->children.end(), node);
+        if (node_it != parent->children.begin()) {
+            for (auto previous = node_it; previous != parent->children.begin();) {
+                --previous;
+                const auto* previous_node = *previous;
+                for (auto box_it = parent_box->children.rbegin(); box_it != parent_box->children.rend(); ++box_it) {
+                    const auto* candidate = *box_it;
+                    const bool is_previous_element = previous_node->type == AETHER_NODE_ELEMENT &&
+                        candidate->element == previous_node;
+                    const bool is_parent_text = previous_node->type == AETHER_NODE_TEXT &&
+                        candidate->kind == LAYOUT_BOX_TEXT && candidate->element == parent;
+                    if (is_previous_element || is_parent_text) {
+                        return aether_rectf{
+                            candidate->margin_box.x + candidate->margin_box.width,
+                            candidate->margin_box.y,
+                            0.f, 0.f,
+                        };
+                    }
+                }
+            }
+        }
+        return aether_rectf{positioning_block.x, positioning_block.y, 0.f, 0.f};
+    };
+
+    for (auto* node : parent->children) {
+        if (node->type != AETHER_NODE_ELEMENT) continue;
+        const auto style = get_style(styles, node);
+        if (!is_out_of_flow(style) || style.display == AETHER_DISPLAY_NONE || !style.visible) continue;
+
+        // Fixed-position descendants use the viewport; absolute descendants use the nearest
+        // positioned ancestor supplied by their parent layout call.
+        const aether_rectf containing = style.position == AETHER_POSITION_FIXED
+            ? aether_rectf{0.f, 0.f, result->viewport.width, result->viewport.height}
+            : positioning_block;
+        const auto margin = resolve_margin_edges(engine, style.margin, containing.width, style);
+        const float left = resolve(engine, style.inset.left, containing.width, style);
+        const float right = resolve(engine, style.inset.right, containing.width, style);
+        const float top = resolve(engine, style.inset.top, containing.height, style);
+        const float bottom = resolve(engine, style.inset.bottom, containing.height, style);
+
+        const float specified_width = resolve(engine, style.width, containing.width, style);
+        const float specified_height = resolve(engine, style.height, containing.height, style);
+        const bool constrain_width = !std::isfinite(specified_width) &&
+            std::isfinite(left) && std::isfinite(right);
+        const bool constrain_height = !std::isfinite(specified_height) &&
+            std::isfinite(top) && std::isfinite(bottom);
+        const float forced_width = std::max(0.f, containing.width - left - right -
+                                             aether_thicknessf_horizontal(margin));
+        const float forced_height = std::max(0.f, containing.height - top - bottom -
+                                              aether_thicknessf_vertical(margin));
+
+        auto* child_box = layout_element(engine, styles, node, containing, containing.y,
+                                         false, forced_width, constrain_width,
+                                         forced_height, constrain_height, result);
+
+        const auto static_anchor = static_position(node);
+        float x = static_anchor.x;
+        if (std::isfinite(left)) {
+            x = containing.x + left;
+        } else if (std::isfinite(right)) {
+            x = containing.x + containing.width - right - child_box->margin_box.width;
+        }
+        float y = static_anchor.y;
+        if (std::isfinite(top)) {
+            y = containing.y + top;
+        } else if (std::isfinite(bottom)) {
+            y = containing.y + containing.height - bottom - child_box->margin_box.height;
+        }
+        offset_box(child_box, x - child_box->margin_box.x, y - child_box->margin_box.y);
+        parent_box->add_child(child_box);
+    }
 }
 
 /* ── LayoutAtomicControl ───────────────────────────────────────────── */
@@ -499,6 +632,7 @@ static float layout_flow_children(
         } else if (node->type == AETHER_NODE_ELEMENT) {
             auto child_style = get_style(styles, node);
             if (child_style.display == AETHER_DISPLAY_NONE || !child_style.visible) continue;
+            if (is_out_of_flow(child_style)) continue;
 
             if (child_style.display == AETHER_DISPLAY_BLOCK || child_style.display == AETHER_DISPLAY_FLEX) {
                 flush_inline();
@@ -632,7 +766,7 @@ static float layout_flex_children(
     for (auto* node : parent->children) {
         if (node->type != AETHER_NODE_ELEMENT) continue;
         auto cs = get_style(styles, node);
-        if (cs.display != AETHER_DISPLAY_NONE && cs.visible) {
+        if (cs.display != AETHER_DISPLAY_NONE && cs.visible && !is_out_of_flow(cs)) {
             children.push_back(node);
         }
     }
@@ -646,13 +780,32 @@ static float layout_flex_children(
             }
         }
         if (inline_items.empty()) return 0.f;
+        // Text nodes are anonymous flex items. In a row they align on the main axis through
+        // justify-content; in a column, align-items controls their horizontal position.
+        auto inline_style = style;
+        if (style.flex_direction == AETHER_FLEX_DIRECTION_ROW) {
+            inline_style.text_align = style.justify_content == AETHER_JUSTIFY_CENTER
+                ? AETHER_TEXT_ALIGN_CENTER
+                : style.justify_content == AETHER_JUSTIFY_END
+                    ? AETHER_TEXT_ALIGN_END
+                    : AETHER_TEXT_ALIGN_START;
+        } else {
+            inline_style.text_align = style.align_items == AETHER_ALIGN_CENTER
+                ? AETHER_TEXT_ALIGN_CENTER
+                : style.align_items == AETHER_ALIGN_END
+                    ? AETHER_TEXT_ALIGN_END
+                    : AETHER_TEXT_ALIGN_START;
+        }
         float used_height = layout_inline_items(engine, styles, parent_box, inline_items,
-                                                content.x, content.y, content.width, style, result);
+                                                content.x, content.y, content.width, inline_style, result);
         if (has_definite_height) {
             float vertical_free = std::max(0.f, content.height - used_height);
             float dy = 0.f;
-            if (style.align_items == AETHER_ALIGN_CENTER) dy = vertical_free / 2;
-            else if (style.align_items == AETHER_ALIGN_END) dy = vertical_free;
+            const int vertical_alignment = style.flex_direction == AETHER_FLEX_DIRECTION_ROW
+                ? style.align_items
+                : style.justify_content;
+            if (vertical_alignment == AETHER_ALIGN_CENTER || vertical_alignment == AETHER_JUSTIFY_CENTER) dy = vertical_free / 2;
+            else if (vertical_alignment == AETHER_ALIGN_END || vertical_alignment == AETHER_JUSTIFY_END) dy = vertical_free;
             if (dy != 0.f) {
                 for (auto* child : parent_box->children) {
                     offset_box(child, 0, dy);
