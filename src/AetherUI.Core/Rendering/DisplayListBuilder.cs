@@ -63,12 +63,17 @@ public sealed class DisplayListBuilder
             return;
         }
 
+        PaintBoxShadows(box);
         PaintBackgroundAndBorder(box);
         var isScrollContainer = style.Overflow is OverflowKind.Auto or OverflowKind.Scroll;
         var clips = style.Overflow == OverflowKind.Hidden || isScrollContainer;
         if (clips)
         {
-            _commands.Add(new PushClipCommand(box.PaddingBox));
+            // Match the corner radius of this box's own fill/border — a rounded card with
+            // overflow:hidden must clip its children to the same rounded silhouette, not a sharp
+            // rectangle (which would leave a square-cornered child poking past a rounded parent).
+            var clipRadius = ResolveBorderRadius(style.BorderRadius, box.BorderBox, style.FontSize);
+            _commands.Add(new PushClipCommand(box.PaddingBox, clipRadius));
         }
 
         if (box.IsAtomicControl)
@@ -101,6 +106,25 @@ public sealed class DisplayListBuilder
                 focusRadius + 2,
                 1,
                 new ColorRgba(0.145f, 0.388f, 0.922f, .75f)));
+        }
+    }
+
+    /// <summary>
+    /// Box-shadows paint behind the box's own background/border, and — per the CSS stacking rule —
+    /// the first shadow listed sits closest to the box (painted last/on top of any later ones).
+    /// </summary>
+    private void PaintBoxShadows(LayoutBox box)
+    {
+        var style = box.Style;
+        if (style.BoxShadows.Count == 0)
+        {
+            return;
+        }
+
+        var radius = ResolveBorderRadius(style.BorderRadius, box.BorderBox, style.FontSize);
+        for (var i = style.BoxShadows.Count - 1; i >= 0; i--)
+        {
+            _commands.Add(new DrawBoxShadowCommand(box.BorderBox, radius, style.BoxShadows[i]));
         }
     }
 

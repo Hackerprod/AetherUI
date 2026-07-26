@@ -32,10 +32,10 @@ public sealed class UiDocumentHost : IDisposable
         h4 { font-size: 1em; font-weight: 700; margin: 1.33em 0; }
         p { margin: 1em 0; }
         input, button { display: inline-block; font-family: "Segoe UI"; font-size: 14px; box-sizing: border-box; }
-        input { min-width: 180px; height: 34px; padding: 6px 9px; border: 1px solid #9aa0a6; border-radius: 4px; background-color: white; color: #202124; cursor: text; }
+        input { min-width: 180px; padding: 6px 9px; border: 1px solid #9aa0a6; border-radius: 4px; background-color: white; color: #202124; cursor: text; }
         input:focus { border-color: #2563eb; }
         input:invalid { border-color: #dc2626; }
-        button { min-width: 84px; height: 34px; padding: 6px 14px; border: 1px solid #1d4ed8; border-radius: 4px; background-color: #2563eb; color: white; cursor: pointer; text-align: center; }
+        button { min-width: 84px; padding: 6px 14px; border: 1px solid #1d4ed8; border-radius: 4px; background-color: #2563eb; color: white; cursor: pointer; text-align: center; }
         button:hover { background-color: #1d4ed8; }
         button:active { background-color: #1e40af; }
         button:disabled { opacity: .55; cursor: default; }

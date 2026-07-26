@@ -110,6 +110,9 @@ public sealed class ComputedStyle
     /// </summary>
     public LinearGradient? TextGradient { get; set; }
 
+    /// <summary>Outer (non-inset) box-shadows, back-to-front paint order (first CSS shadow paints on top).</summary>
+    public IReadOnlyList<BoxShadow> BoxShadows { get; set; } = [];
+
     /// <summary>
     /// Kept symbolic (not a resolved float) because a percentage radius must resolve against the
     /// element's own border-box size, which is only known at paint time.

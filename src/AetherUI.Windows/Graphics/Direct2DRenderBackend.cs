@@ -116,7 +116,7 @@ public sealed class Direct2DRenderBackend : IRenderBackend, ITextMeasurer
         target.Transform = Matrix3x2.Identity;
         target.Clear(ToColor4(clearColor));
 
-        var clipDepth = 0;
+        var clipStack = new Stack<bool>();
         foreach (var command in displayList.Commands)
         {
             switch (command)
@@ -126,6 +126,9 @@ public sealed class Direct2DRenderBackend : IRenderBackend, ITextMeasurer
                     break;
                 case FillRoundedRectangleGradientCommand gradientFill:
                     DrawGradientFill(target, gradientFill);
+                    break;
+                case DrawBoxShadowCommand shadow:
+                    DrawBoxShadow(target, shadow);
                     break;
                 case StrokeRoundedRectangleCommand stroke:
                     target.DrawRoundedRectangle(
@@ -140,22 +143,20 @@ public sealed class Direct2DRenderBackend : IRenderBackend, ITextMeasurer
                     DrawTextGradient(target, textGradient);
                     break;
                 case PushClipCommand push:
-                    target.PushAxisAlignedClip(ToRawRect(push.Rectangle), AntialiasMode.PerPrimitive);
-                    clipDepth++;
+                    PushClip(target, push, clipStack);
                     break;
                 case PopClipCommand:
-                    if (clipDepth > 0)
+                    if (clipStack.Count > 0)
                     {
-                        target.PopAxisAlignedClip();
-                        clipDepth--;
+                        PopClip(target, clipStack.Pop());
                     }
                     break;
             }
         }
 
-        while (clipDepth-- > 0)
+        while (clipStack.Count > 0)
         {
-            target.PopAxisAlignedClip();
+            PopClip(target, clipStack.Pop());
         }
 
         var result = target.EndDraw();
@@ -286,6 +287,52 @@ public sealed class Direct2DRenderBackend : IRenderBackend, ITextMeasurer
     /// how CSS sizes a linear-gradient's axis against its box (project the box's half-extent onto
     /// the axis rather than just using the box's corners).
     /// </summary>
+    /// <summary>
+    /// This render target has no Direct2D effects pipeline set up (that needs an
+    /// <c>ID2D1DeviceContext</c>, not the plain <c>ID2D1HwndRenderTarget</c> used here), so a real
+    /// Gaussian blur isn't available. Approximating it with several concentric rounded rects —
+    /// growing outward, fading out — gives a soft-edged glow that's visually close for the blur
+    /// radii box-shadow is normally used with, without pulling in the effects/device-context stack.
+    /// </summary>
+    private void DrawBoxShadow(ID2D1RenderTarget target, DrawBoxShadowCommand command)
+    {
+        var shadow = command.Shadow;
+        if (shadow.Color.A <= 0)
+        {
+            return;
+        }
+
+        var baseRect = command.BorderBoxRectangle
+            .Inflate(shadow.SpreadRadius)
+            .Offset(shadow.OffsetX, shadow.OffsetY);
+        var baseRadius = MathF.Max(0, command.Radius + shadow.SpreadRadius);
+
+        if (shadow.BlurRadius <= 0.5f)
+        {
+            target.FillRoundedRectangle(ToRoundedRectangle(baseRect, baseRadius), GetBrush(shadow.Color));
+            return;
+        }
+
+        const int steps = 8;
+        for (var i = steps; i >= 1; i--)
+        {
+            var t = i / (float)steps;
+            var expand = shadow.BlurRadius * t;
+            // Roughly gaussian-shaped falloff: strongest near the box edge, tapering to ~0 at the
+            // full blur radius, split across `steps` concentric layers so no single ring reads as
+            // a hard band.
+            var alpha = shadow.Color.A * (1f - t) * (1f - t) / steps * 2.2f;
+            if (alpha <= 0.002f)
+            {
+                continue;
+            }
+
+            var rect = baseRect.Inflate(expand);
+            var radius = baseRadius + expand;
+            target.FillRoundedRectangle(ToRoundedRectangle(rect, radius), GetBrush(shadow.Color.WithAlpha(MathF.Min(1f, alpha))));
+        }
+    }
+
     private static void DrawGradientFill(ID2D1RenderTarget target, FillRoundedRectangleGradientCommand command)
     {
         var rect = command.Rectangle;
@@ -322,6 +369,48 @@ public sealed class Direct2DRenderBackend : IRenderBackend, ITextMeasurer
         target.FillRoundedRectangle(ToRoundedRectangle(rect, command.Radius), brush);
     }
 
+    /// <summary>
+    /// A plain rect uses the cheap axis-aligned clip; a rounded one needs a geometry-masked layer,
+    /// since Direct2D's axis-aligned clip has no notion of corner radius. <paramref name="clipStack"/>
+    /// records which kind was pushed so <see cref="PopClip"/> pairs it with the matching pop call.
+    /// </summary>
+    private void PushClip(ID2D1HwndRenderTarget target, PushClipCommand command, Stack<bool> clipStack)
+    {
+        if (command.Radius > 0.5f)
+        {
+            using var geometry = _d2dFactory.CreateRoundedRectangleGeometry(
+                ToRoundedRectangle(command.Rectangle, command.Radius));
+            var layerParameters = new LayerParameters
+            {
+                ContentBounds = ToRawRect(command.Rectangle),
+                GeometricMask = geometry,
+                MaskAntialiasMode = AntialiasMode.PerPrimitive,
+                MaskTransform = Matrix3x2.Identity,
+                Opacity = 1f,
+                LayerOptions = LayerOptions.None,
+            };
+            target.PushLayer(layerParameters, null);
+            clipStack.Push(true);
+        }
+        else
+        {
+            target.PushAxisAlignedClip(ToRawRect(command.Rectangle), AntialiasMode.PerPrimitive);
+            clipStack.Push(false);
+        }
+    }
+
+    private static void PopClip(ID2D1HwndRenderTarget target, bool wasLayer)
+    {
+        if (wasLayer)
+        {
+            target.PopLayer();
+        }
+        else
+        {
+            target.PopAxisAlignedClip();
+        }
+    }
+
     private void EnsureRenderTarget()
     {
         if (_renderTarget is null)
@@ -341,7 +430,11 @@ public sealed class Direct2DRenderBackend : IRenderBackend, ITextMeasurer
         _renderTarget = _d2dFactory.CreateHwndRenderTarget(new RenderTargetProperties(), properties);
         _renderTarget.Dpi = new Vortice.Mathematics.Size(96f * _dpiScale, 96f * _dpiScale);
         _renderTarget.AntialiasMode = AntialiasMode.PerPrimitive;
-        _renderTarget.TextAntialiasMode = Vortice.Direct2D1.TextAntialiasMode.Default;
+        // ClearType ("Default") assumes a light background and applies per-subpixel RGB color
+        // correction — on an arbitrary (often dark) UI background color it produces visible red/
+        // blue fringing on glyph edges, which can look like clipped/missing ink on thin strokes.
+        // Grayscale antialiasing has no background-color assumption, matching a themeable UI.
+        _renderTarget.TextAntialiasMode = Vortice.Direct2D1.TextAntialiasMode.Grayscale;
     }
 
     private void ReleaseRenderTarget()

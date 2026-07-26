@@ -151,8 +151,19 @@ internal static class Program
             Assert.True(secondBox.BorderBox.Y < firstBox.BorderBox.Y + firstBox.BorderBox.Height);
             Assert.Equal(firstBox.BorderBox.Y + firstBox.BorderBox.Height - 20f, secondBox.BorderBox.Y);
 
-            // box-shadow is valid CSS StyleRuntime parses but this engine cannot paint yet —
-            // it must be reported, not silently dropped.
+            // An outer box-shadow is a rendered capability now — resolved onto ComputedStyle, not
+            // just parsed-and-dropped.
+            Assert.Equal(1, firstBox.Style.BoxShadows.Count);
+            var shadow = firstBox.Style.BoxShadows[0];
+            Assert.Equal(0f, shadow.OffsetX);
+            Assert.Equal(2f, shadow.OffsetY);
+            Assert.Equal(4f, shadow.BlurRadius);
+
+            // An inset shadow still needs clipping to the box interior (not implemented), so it
+            // must be excluded from what's painted and still reported as a gap, not silently dropped.
+            var third = Assert.NotNull(host.Document?.GetElementById("c"));
+            var thirdBox = Assert.NotNull(host.Layout?.FindPrimaryBox(third));
+            Assert.Equal(0, thirdBox.Style.BoxShadows.Count);
             Assert.True(reported.Exists(static d => d.Code == "AUI-CSS-100" && d.Property == "box-shadow"));
         }
         finally
@@ -312,10 +323,12 @@ internal static class Program
                   body { margin: 0; }
                   #a { width: 100px; height: 50px; background: red; box-shadow: 0 2px 4px rgba(0,0,0,.2); }
                   #b { width: 100px; height: 50px; margin-top: -20px; background: blue; }
+                  #c { width: 100px; height: 50px; box-shadow: inset 0 2px 4px rgba(0,0,0,.2); }
                 </style>
                 <body>
                   <div id="a"></div>
                   <div id="b"></div>
+                  <div id="c"></div>
                 </body>
                 """);
         }

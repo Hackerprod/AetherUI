@@ -207,15 +207,43 @@ public sealed class LayoutEngine
         ThicknessF padding,
         ThicknessF border)
     {
-        var naturalHeight = style.FontSize * style.LineHeight;
+        float naturalHeight;
         if (float.IsFinite(explicitHeight))
         {
             naturalHeight = style.BoxSizing == BoxSizing.ContentBox
                 ? explicitHeight
                 : MathF.Max(0, explicitHeight - padding.Vertical - border.Vertical);
         }
+        else
+        {
+            // FontSize*LineHeight is only an approximation of a real font's rendered glyph
+            // height — bold weights in particular can render taller than that guess, which used
+            // to clip the top of button/input text against a content box sized from the guess
+            // instead of the actual metrics DisplayListBuilder paints with.
+            var displayedText = GetAtomicControlText(element);
+            naturalHeight = string.IsNullOrEmpty(displayedText)
+                ? style.FontSize * style.LineHeight
+                : _textMeasurer.MeasureText(displayedText, style, contentWidth).Height;
+        }
 
         return MathF.Max(naturalHeight, style.FontSize * 1.1f);
+    }
+
+    private static string GetAtomicControlText(ElementNode element)
+    {
+        if (element.TagName == "button")
+        {
+            return NormalizeWhitespace(element.TextContent);
+        }
+
+        if (element.RuntimeValue is { Length: > 0 } value)
+        {
+            return value;
+        }
+
+        return element.GetAttribute("value") is { Length: > 0 } attrValue
+            ? attrValue
+            : element.GetAttribute("placeholder") ?? string.Empty;
     }
 
     private float LayoutFlowChildren(LayoutBox parentBox, ElementNode parent, RectF content, ComputedStyle parentStyle)
@@ -403,7 +431,36 @@ public sealed class LayoutEngine
                 }
             }
 
-            return inlineItems.Count == 0 ? 0 : LayoutInlineItems(parentBox, inlineItems, content.X, content.Y, content.Width, style);
+            if (inlineItems.Count == 0)
+            {
+                return 0;
+            }
+
+            var usedHeight = LayoutInlineItems(parentBox, inlineItems, content.X, content.Y, content.Width, style);
+
+            // LayoutInlineItems only knows plain top-aligned block/inline flow — it has no notion
+            // of this element's own justify-content/align-items. A flex container that happens to
+            // hold nothing but text (e.g. a single emoji centered in a circular avatar) still owes
+            // its content that cross-axis alignment, so re-center the produced line(s) here.
+            if (hasDefiniteHeight)
+            {
+                var verticalFree = MathF.Max(0, content.Height - usedHeight);
+                var dy = style.AlignItems switch
+                {
+                    AlignItems.Center => verticalFree / 2,
+                    AlignItems.End => verticalFree,
+                    _ => 0f,
+                };
+                if (dy != 0f)
+                {
+                    foreach (var child in parentBox.Children)
+                    {
+                        OffsetBox(child, 0, dy);
+                    }
+                }
+            }
+
+            return usedHeight;
         }
 
         if (style.FlexDirection == FlexDirection.Column)

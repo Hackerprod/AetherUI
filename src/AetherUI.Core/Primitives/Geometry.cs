@@ -30,6 +30,8 @@ public readonly record struct RectF(float X, float Y, float Width, float Height)
         Width + (value * 2),
         Height + (value * 2));
 
+    public RectF Offset(float dx, float dy) => new(X + dx, Y + dy, Width, Height);
+
     public static RectF FromEdges(float left, float top, float right, float bottom) =>
         new(left, top, MathF.Max(0, right - left), MathF.Max(0, bottom - top));
 }

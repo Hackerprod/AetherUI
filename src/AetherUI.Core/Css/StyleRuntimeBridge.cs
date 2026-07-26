@@ -78,8 +78,9 @@ public static class StyleRuntimeBridge
         // FontSize must land before LineHeight, since an em/percent line-height resolves against it.
         style.FontSize = MathF.Max(1f, ResolveOrZero(source.Text.FontSize, fontSize: 16f));
         style.LineHeight = ToLineHeightMultiplier(source.Text.LineHeight, style.FontSize);
+        style.BoxShadows = ToBoxShadows(source.Paint.BoxShadows, style.FontSize);
 
-        ReportUnrenderableCapabilities(source);
+        ReportUnrenderableCapabilities(source, style.BoxShadows.Count);
         return style;
     }
 
@@ -89,11 +90,13 @@ public static class StyleRuntimeBridge
     /// to land in — flag that explicitly instead of letting them disappear silently at this
     /// boundary, the same way an unknown property or an unparseable value already are.
     /// </summary>
-    private static void ReportUnrenderableCapabilities(AetherComputedStyle source)
+    private static void ReportUnrenderableCapabilities(AetherComputedStyle source, int renderedShadowCount)
     {
-        if (source.Paint.BoxShadows.Count > 0)
+        // Outer box-shadows are painted (see ToBoxShadows); inset ones are parsed but still
+        // dropped here — inset shadows need clipping to the box interior, not implemented yet.
+        if (source.Paint.BoxShadows.Count > renderedShadowCount)
         {
-            CssDiagnostics.ReportUnknownProperty("box-shadow", "<parsed, not yet painted>");
+            CssDiagnostics.ReportUnknownProperty("box-shadow", "<inset, not yet painted>");
         }
 
         if (source.Layout.Position != PositionMode.Static)
@@ -160,6 +163,38 @@ public static class StyleRuntimeBridge
     };
 
     private static ColorRgba ToColorRgba(StyleColor color) => new(color.RedF, color.GreenF, color.BlueF, color.AlphaF);
+
+    /// <summary>
+    /// Only non-inset shadows are resolved here — an inset shadow needs clipping to the box's
+    /// interior to look right (it should never spill past the box's own edges), which this engine
+    /// doesn't implement yet, so it's left out and separately reported as unrenderable.
+    /// </summary>
+    private static IReadOnlyList<BoxShadow> ToBoxShadows(IReadOnlyList<StyleShadow> shadows, float fontSize)
+    {
+        if (shadows.Count == 0)
+        {
+            return [];
+        }
+
+        var resolved = new List<BoxShadow>(shadows.Count);
+        foreach (var shadow in shadows)
+        {
+            if (shadow.Inset)
+            {
+                continue;
+            }
+
+            resolved.Add(new BoxShadow(
+                ResolveOrZero(shadow.OffsetX, fontSize: fontSize),
+                ResolveOrZero(shadow.OffsetY, fontSize: fontSize),
+                MathF.Max(0, ResolveOrZero(shadow.BlurRadius, fontSize: fontSize)),
+                ResolveOrZero(shadow.SpreadRadius, fontSize: fontSize),
+                ToColorRgba(shadow.Color),
+                Inset: false));
+        }
+
+        return resolved;
+    }
 
     private static LinearGradient? ToLinearGradient(StyleLinearGradient? gradient)
     {
