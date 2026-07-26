@@ -27,7 +27,7 @@ extern "C" {
  * ABI 1.0, a major-version change denotes an incompatible ABI.
  */
 #define AETHER_ABI_VERSION_MAJOR 0u
-#define AETHER_ABI_VERSION_MINOR 1u
+#define AETHER_ABI_VERSION_MINOR 2u
 #define AETHER_ABI_VERSION_PATCH 0u
 
 #define AETHER_ABI_VERSION_MAKE(major, minor, patch) \
@@ -156,6 +156,13 @@ typedef enum {
 } aether_display_kind_t;
 
 typedef enum {
+    AETHER_POSITION_STATIC = 0,
+    AETHER_POSITION_RELATIVE,
+    AETHER_POSITION_ABSOLUTE,
+    AETHER_POSITION_FIXED
+} aether_position_kind_t;
+
+typedef enum {
     AETHER_FLEX_DIRECTION_ROW = 0,
     AETHER_FLEX_DIRECTION_COLUMN
 } aether_flex_direction_t;
@@ -221,6 +228,8 @@ typedef struct {
     float             flex_grow;
     aether_bool_t     flex_wrap;
     float             gap;
+    int32_t           position;
+    aether_css_edges  inset;
 
     /* Sizing */
     aether_css_length width;

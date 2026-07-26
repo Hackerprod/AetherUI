@@ -103,6 +103,7 @@ struct parser_s {
     size_t index = 0;
     specificity_s specificity;
     selector_dependency_t dependencies = SELECTOR_DEP_NONE;
+    aether_pseudo_element_t pseudo_element = aether_pseudo_element_t::none;
 
     bool eof() const { return index >= source.size(); }
     char peek() const { return eof() ? '\0' : source[index]; }
@@ -444,6 +445,22 @@ static bool try_parse_compound(parser_s& p, compound_selector_s& compound) {
             p.dependencies = p.dependencies | SELECTOR_DEP_SELF_ATTRIBUTE;
             consumed = true;
         } else if (c == ':') {
+            if (p.index + 1 < p.source.size() && p.source[p.index + 1] == ':') {
+                if (p.pseudo_element != aether_pseudo_element_t::none) return false;
+                p.index += 2;
+                auto name = to_lower_ascii(p.read_identifier());
+                if (name == "before") {
+                    p.pseudo_element = aether_pseudo_element_t::before;
+                } else if (name == "after") {
+                    p.pseudo_element = aether_pseudo_element_t::after;
+                } else {
+                    return false;
+                }
+                // Pseudo-elements have type-selector specificity.
+                p.specificity = p.specificity + specificity_s{0, 0, 1};
+                consumed = true;
+                continue;
+            }
             pseudo_selector_s pseudo;
             specificity_s pseudo_spec{};
             selector_dependency_t pseudo_deps = SELECTOR_DEP_NONE;
@@ -473,6 +490,9 @@ static bool selector_parse_core(parser_s& p, compiled_selector_s& out) {
         compounds.push_back(std::move(compound));
 
         bool had_ws = p.skip_whitespace();
+        // ::before and ::after terminate a selector. They represent a generated child of the
+        // element matched by the final compound, not an intermediate selector step.
+        if (p.pseudo_element != aether_pseudo_element_t::none && !p.eof()) return false;
         if (p.eof()) break;
 
         selector_combinator_t comb;
@@ -515,6 +535,7 @@ static bool selector_parse_core(parser_s& p, compiled_selector_s& out) {
 
     out.specificity   = p.specificity;
     out.dependencies  = p.dependencies;
+    out.pseudo_element = p.pseudo_element;
     return true;
 }
 

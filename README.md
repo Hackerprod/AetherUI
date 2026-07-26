@@ -26,6 +26,14 @@ bindings/
   dotnet/               Reference binding, Windows backend, tests, and Validator
   java/                 Planned Java binding contract
   go/                   Planned Go binding contract
+  rust/                 Planned Rust binding contract
+  python/               Planned Python binding contract
+  cpp/                  Planned modern C++ (RAII) binding contract
+  swift/                Planned Swift binding contract
+  kotlin/                Planned Kotlin/Native binding contract
+  zig/                  Planned Zig binding contract
+  dart/                 Planned Dart binding contract
+  javascript/           Planned JavaScript/TypeScript binding contract
 examples/
   cpp/                  Installed CMake-package consumer
   dotnet/               .NET example applications
@@ -38,6 +46,14 @@ Language-specific guidance:
 - [.NET](bindings/dotnet/README.md)
 - [Java](bindings/java/README.md)
 - [Go](bindings/go/README.md)
+- [Rust](bindings/rust/README.md)
+- [Python](bindings/python/README.md)
+- [C++ (modern/RAII binding)](bindings/cpp/README.md)
+- [Swift](bindings/swift/README.md)
+- [Kotlin/Native](bindings/kotlin/README.md)
+- [Zig](bindings/zig/README.md)
+- [Dart](bindings/dart/README.md)
+- [JavaScript/TypeScript](bindings/javascript/README.md)
 
 ## Architecture boundary
 
@@ -107,6 +123,14 @@ Every binding must validate `aether_abi_version()` and the required bits from `a
 | .NET | Reference binding | Windows backend (Direct2D/DirectWrite) included | 0.1.0 |
 | Java | Contract defined, not implemented | Headless or future Java backend | — |
 | Go | Contract defined, not implemented | Headless or future Go backend | — |
+| Rust | Contract defined, not implemented | Headless or future Rust backend | — |
+| Python | Contract defined, not implemented | Headless or future Python backend | — |
+| C++ (RAII binding) | Contract defined, not implemented | Headless or consumer-provided backend | — |
+| Swift | Contract defined, not implemented | Headless or future Swift backend | — |
+| Kotlin/Native | Contract defined, not implemented | Headless or future Kotlin/Native backend | — |
+| Zig | Contract defined, not implemented | Headless or future Zig backend | — |
+| Dart | Contract defined, not implemented | Headless or future Dart backend | — |
+| JavaScript/TypeScript | Contract defined, not implemented | Headless or future JS/TS backend | — |
 
 "Contract defined" means the binding's `README.md` documents the ownership, threading, and callback
 rules it must implement, with the .NET binding as the reference to mirror — see

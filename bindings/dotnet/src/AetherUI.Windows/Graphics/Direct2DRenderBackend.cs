@@ -24,7 +24,7 @@ public sealed class Direct2DRenderBackend : IRenderBackend, ITextMeasurer
 {
     private readonly nint _windowHandle;
     private readonly ID2D1Factory _d2dFactory;
-    private readonly IDWriteFactory _writeFactory;
+    private readonly IDWriteFactory2 _writeFactory;
     private readonly Dictionary<ColorRgba, ID2D1SolidColorBrush> _brushes = new();
     private readonly Dictionary<TextFormatKey, IDWriteTextFormat> _textFormats = new();
     private ID2D1HwndRenderTarget? _renderTarget;
@@ -46,10 +46,10 @@ public sealed class Direct2DRenderBackend : IRenderBackend, ITextMeasurer
         _dpiScale = NormalizeDpiScale(dpiScale);
 
         var d2dFactory = D2D1.D2D1CreateFactory<ID2D1Factory>();
-        IDWriteFactory? writeFactory = null;
+        IDWriteFactory2? writeFactory = null;
         try
         {
-            writeFactory = DWrite.DWriteCreateFactory<IDWriteFactory>();
+            writeFactory = DWrite.DWriteCreateFactory<IDWriteFactory2>();
             _d2dFactory = d2dFactory;
             _writeFactory = writeFactory;
             CreateRenderTarget();
@@ -189,7 +189,18 @@ public sealed class Direct2DRenderBackend : IRenderBackend, ITextMeasurer
             command.Wrap,
             verticalCenter: true);
         var rectangle = ToRect(command.Rectangle);
-        target.DrawText(command.Text, format, rectangle, GetBrush(command.Color), DrawTextOptions.Clip);
+        using var layout = _writeFactory.CreateTextLayout(command.Text, format, rectangle.Width, rectangle.Height);
+        target.PushAxisAlignedClip(rectangle, AntialiasMode.PerPrimitive);
+        try
+        {
+            layout.Draw(IntPtr.Zero,
+                new ColorGlyphTextRenderer(_writeFactory, target, GetBrush(command.Color), _dpiScale),
+                rectangle.Left, rectangle.Top);
+        }
+        finally
+        {
+            target.PopAxisAlignedClip();
+        }
     }
 
     private void DrawTextGradient(ID2D1HwndRenderTarget target, DrawTextGradientCommand command)
@@ -313,23 +324,32 @@ public sealed class Direct2DRenderBackend : IRenderBackend, ITextMeasurer
             return;
         }
 
-        const int steps = 8;
-        for (var i = steps; i >= 1; i--)
+        // An HWND render target has no effects pipeline, so render the blurred mask as nested
+        // rounded rectangles. Work from the outside in and solve each layer's source alpha from
+        // the opacity already laid down. That produces a stable Gaussian falloff instead of
+        // repeatedly adding opacity (which made wide shadows too dark and too large).
+        const int steps = 16;
+        var extent = MathF.Max(1f, shadow.BlurRadius * 1.5f);
+        var sigma = MathF.Max(.25f, shadow.BlurRadius * .5f);
+        var accumulatedAlpha = 0f;
+
+        for (var i = steps; i >= 0; i--)
         {
-            var t = i / (float)steps;
-            var expand = shadow.BlurRadius * t;
-            // Roughly gaussian-shaped falloff: strongest near the box edge, tapering to ~0 at the
-            // full blur radius, split across `steps` concentric layers so no single ring reads as
-            // a hard band.
-            var alpha = shadow.Color.A * (1f - t) * (1f - t) / steps * 2.2f;
-            if (alpha <= 0.002f)
+            var expand = extent * i / steps;
+            var targetAlpha = shadow.Color.A * .5f *
+                MathF.Exp(-(expand * expand) / (2f * sigma * sigma));
+            var layerAlpha = (targetAlpha - accumulatedAlpha) / MathF.Max(.0001f, 1f - accumulatedAlpha);
+            if (layerAlpha <= .001f)
             {
                 continue;
             }
 
             var rect = baseRect.Inflate(expand);
             var radius = baseRadius + expand;
-            target.FillRoundedRectangle(ToRoundedRectangle(rect, radius), GetBrush(shadow.Color.WithAlpha(MathF.Min(1f, alpha))));
+            target.FillRoundedRectangle(
+                ToRoundedRectangle(rect, radius),
+                GetBrush(shadow.Color.WithAlpha(MathF.Min(1f, layerAlpha))));
+            accumulatedAlpha = targetAlpha;
         }
     }
 

@@ -7,6 +7,9 @@ AETHER_API aether_computed_style_t aether_computed_style_default(void) {
     s.flex_direction = AETHER_FLEX_DIRECTION_ROW;
     s.justify_content = AETHER_JUSTIFY_START;
     s.align_items = AETHER_ALIGN_STRETCH;
+    s.position = AETHER_POSITION_STATIC;
+    s.inset = { aether_css_length_auto(), aether_css_length_auto(),
+                aether_css_length_auto(), aether_css_length_auto() };
     s.box_sizing = AETHER_BOX_SIZING_CONTENT_BOX;
     s.color = {0, 0, 0, 1};
     s.opacity = 1.0f;

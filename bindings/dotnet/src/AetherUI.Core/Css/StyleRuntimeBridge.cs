@@ -33,6 +33,8 @@ public static class StyleRuntimeBridge
             FlexGrow = source.FlexGrow,
             FlexWrap = source.FlexWrap,
             Gap = source.Gap,
+            Position = (PositionKind)source.Position,
+            Inset = ToCssEdges(source.Inset),
             Width = ToCssLength(source.Width),
             Height = ToCssLength(source.Height),
             MinWidth = ToCssLength(source.MinWidth),

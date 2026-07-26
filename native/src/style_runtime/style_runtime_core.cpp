@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <cstring>
 #include <memory>
+#include <optional>
 #include <unordered_map>
 #include <vector>
 
@@ -90,17 +91,44 @@ static void report(aether_style_runtime_s* runtime, const char* code,
         runtime->diag_cb(code, property, value, message, runtime->diag_user_data);
 }
 
+static bool try_parse_generated_content(const std::string& source, std::string& output) {
+    std::string value = str_trim(source);
+    if (value.empty() || str_iequals(value, "none") || str_iequals(value, "normal")) return false;
+
+    output.clear();
+    size_t index = 0;
+    bool found_string = false;
+    while (index < value.size()) {
+        while (index < value.size() && std::isspace(static_cast<unsigned char>(value[index]))) ++index;
+        if (index >= value.size()) break;
+        const char quote = value[index];
+        if (quote != '\'' && quote != '"') return false;
+        ++index;
+        found_string = true;
+        while (index < value.size() && value[index] != quote) {
+            if (value[index] == '\\' && index + 1 < value.size()) ++index;
+            output += value[index++];
+        }
+        if (index >= value.size()) return false;
+        ++index;
+    }
+    return found_string;
+}
+
 static runtime_node_state_s* compute_node(aether_style_runtime_s* runtime, aether_node_s* node,
-                                          runtime_node_state_s* parent, uint32_t& impact) {
+                                          runtime_node_state_s* parent, uint32_t& impact,
+                                          std::optional<std::string>* generated_content = nullptr) {
     auto* registry = style_property_registry_get_global();
     auto next = aether_computed_style_inherit_from(parent ? &parent->style.style : nullptr);
     std::vector<cascade_entry_s> cascade(static_cast<size_t>(registry->property_count()));
     std::unordered_map<std::string, cascade_entry_custom_s> custom_winners;
+    cascade_entry_custom_s content_winner;
 
     std::vector<const compiled_rule_s*> candidates;
     auto info = get_node_info(node);
     rule_index_get_candidates(&runtime->index, &info, candidates);
     for (const auto* rule : candidates) {
+        if (rule->selector.pseudo_element != node->pseudo_element) continue;
         if (!media_condition_matches(rule->condition, &runtime->environment) ||
             !selector_match(rule->selector, node)) continue;
         for (const auto& declaration : rule->declarations) {
@@ -118,6 +146,13 @@ static runtime_node_state_s* compute_node(aether_style_runtime_s* runtime, aethe
                 rule->source_order, declaration.declaration_order
             };
             custom_winners[declaration.name].offer(priority, declaration.source);
+        }
+        for (const auto& declaration : rule->content_declarations) {
+            cascade_priority_t priority{
+                declaration.important, false, rule->layer, rule->selector.specificity,
+                rule->source_order, declaration.declaration_order
+            };
+            content_winner.offer(priority, declaration.source);
         }
     }
 
@@ -150,6 +185,25 @@ static runtime_node_state_s* compute_node(aether_style_runtime_s* runtime, aethe
         if (str_iequals(value, "inherit") || str_iequals(value, "unset")) continue;
         scope.local[pair.first] = str_iequals(value, "initial") || str_iequals(value, "revert")
             ? custom_property_invalid_value() : pair.second.source;
+    }
+
+    if (generated_content) {
+        generated_content->reset();
+        if (content_winner.is_set) {
+            std::string content_source = content_winner.source;
+            if (str_to_lower(content_source).find("var(") != std::string::npos &&
+                !variable_resolve(content_source.c_str(), &scope,
+                                  runtime->options.max_variable_depth,
+                                  runtime->options.max_variable_expansion_length, content_source)) {
+                report(runtime, "AETHER-CSS-VAR", "content", content_winner.source.c_str(),
+                       "Unable to resolve CSS variable.");
+            } else {
+                std::string parsed_content;
+                if (try_parse_generated_content(content_source, parsed_content)) {
+                    *generated_content = std::move(parsed_content);
+                }
+            }
+        }
     }
 
     for (size_t i = 0; i < cascade.size(); ++i) {
@@ -201,16 +255,77 @@ static runtime_node_state_s* compute_node(aether_style_runtime_s* runtime, aethe
     return result;
 }
 
+static void discard_generated_subtree(aether_style_runtime_s* runtime, aether_node_s* node) {
+    for (auto* child : node->children) discard_generated_subtree(runtime, child);
+    runtime->states.erase(node);
+    delete node;
+}
+
+static void clear_generated_children(aether_style_runtime_s* runtime, aether_node_s* parent) {
+    auto& children = parent->children;
+    auto next = std::remove_if(children.begin(), children.end(), [&](aether_node_s* child) {
+        if (!child->is_generated) return false;
+        discard_generated_subtree(runtime, child);
+        return true;
+    });
+    children.erase(next, children.end());
+}
+
+static void add_generated_pseudo(
+    aether_style_runtime_s* runtime,
+    aether_node_s* host,
+    runtime_node_state_s* host_state,
+    aether_pseudo_element_t pseudo,
+    bool insert_before,
+    std::vector<aether_style_update_s*>& updates)
+{
+    auto* generated = new aether_node_s();
+    generated->type = AETHER_NODE_ELEMENT;
+    generated->parent = host;
+    generated->tag_name = host->tag_name;
+    generated->attributes = host->attributes;
+    generated->state = host->state;
+    generated->is_generated = true;
+    generated->pseudo_element = pseudo;
+    generated->style_origin = host;
+
+    uint32_t impact = STYLE_IMPACT_NONE;
+    std::optional<std::string> content;
+    auto* state = compute_node(runtime, generated, host_state, impact, &content);
+    if (!content) {
+        runtime->states.erase(generated);
+        delete generated;
+        return;
+    }
+
+    if (!content->empty()) {
+        auto* text = new aether_node_s();
+        text->type = AETHER_NODE_TEXT;
+        text->parent = generated;
+        text->text = std::move(*content);
+        generated->children.push_back(text);
+    }
+    if (insert_before) host->children.insert(host->children.begin(), generated);
+    else host->children.push_back(generated);
+    if (impact != STYLE_IMPACT_NONE)
+        updates.push_back(new aether_style_update_s{generated, &state->style, impact});
+}
+
 static void resolve_tree(aether_style_runtime_s* runtime, aether_node_s* node,
                          runtime_node_state_s* parent, std::vector<aether_style_update_s*>& updates) {
     if (!node) return;
     runtime_node_state_s* current_parent = parent;
     if (node->type == AETHER_NODE_ELEMENT) {
+        if (!node->is_generated) clear_generated_children(runtime, node);
         uint32_t impact = STYLE_IMPACT_NONE;
         auto* current = compute_node(runtime, node, parent, impact);
         current_parent = current;
         if (impact != STYLE_IMPACT_NONE)
             updates.push_back(new aether_style_update_s{node, &current->style, impact});
+        if (!node->is_generated) {
+            add_generated_pseudo(runtime, node, current, aether_pseudo_element_t::before, true, updates);
+            add_generated_pseudo(runtime, node, current, aether_pseudo_element_t::after, false, updates);
+        }
     }
     for (auto* child : node->children) resolve_tree(runtime, child, current_parent, updates);
 }

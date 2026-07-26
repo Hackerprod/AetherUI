@@ -358,11 +358,22 @@ void builtin_properties_register(style_property_registry_s* reg) {
     // position
     {
         static const char* kw[] = { "static", "relative", "absolute", "fixed" };
+        static const int32_t vals[] = {
+            AETHER_POSITION_STATIC, AETHER_POSITION_RELATIVE,
+            AETHER_POSITION_ABSOLUTE, AETHER_POSITION_FIXED
+        };
         reg->register_property("position", false,
             STYLE_IMPACT_LAYOUT | STYLE_IMPACT_PAINT | STYLE_IMPACT_HITTEST,
             "static",
             [](const char* s, std::string& o) -> bool { return bi_try_keyword(s, kw, 4, o); },
-            [](aether_computed_style_t* st, const std::string& v) { (void)st; (void)v; });
+            [](aether_computed_style_t* st, const std::string& v) {
+                for (int i = 0; i < 4; ++i) {
+                    if (str_iequals(v, kw[i])) {
+                        st->position = vals[i];
+                        return;
+                    }
+                }
+            });
     }
 
     // visibility
@@ -519,13 +530,22 @@ void builtin_properties_register(style_property_registry_s* reg) {
     // inset: top/right/bottom/left
     {
         auto ip = [](const char* s, std::string& o) -> bool { return bi_try_length_or_auto(s, o); };
-        auto ia = [](aether_computed_style_t* st, const std::string& v) {
-            (void)st; (void)v;
+        auto ia = [](int side) -> property_apply_fn {
+            return [side](aether_computed_style_t* st, const std::string& v) {
+                aether_css_length length;
+                aether_css_length_try_parse(v.c_str(), &length);
+                switch (side) {
+                    case 0: st->inset.top = length; break;
+                    case 1: st->inset.right = length; break;
+                    case 2: st->inset.bottom = length; break;
+                    case 3: st->inset.left = length; break;
+                }
+            };
         };
-        reg->register_property("top",    false, STYLE_IMPACT_LAYOUT|STYLE_IMPACT_PAINT|STYLE_IMPACT_HITTEST, "auto", ip, ia);
-        reg->register_property("right",  false, STYLE_IMPACT_LAYOUT|STYLE_IMPACT_PAINT|STYLE_IMPACT_HITTEST, "auto", ip, ia);
-        reg->register_property("bottom", false, STYLE_IMPACT_LAYOUT|STYLE_IMPACT_PAINT|STYLE_IMPACT_HITTEST, "auto", ip, ia);
-        reg->register_property("left",   false, STYLE_IMPACT_LAYOUT|STYLE_IMPACT_PAINT|STYLE_IMPACT_HITTEST, "auto", ip, ia);
+        reg->register_property("top",    false, STYLE_IMPACT_LAYOUT|STYLE_IMPACT_PAINT|STYLE_IMPACT_HITTEST, "auto", ip, ia(0));
+        reg->register_property("right",  false, STYLE_IMPACT_LAYOUT|STYLE_IMPACT_PAINT|STYLE_IMPACT_HITTEST, "auto", ip, ia(1));
+        reg->register_property("bottom", false, STYLE_IMPACT_LAYOUT|STYLE_IMPACT_PAINT|STYLE_IMPACT_HITTEST, "auto", ip, ia(2));
+        reg->register_property("left",   false, STYLE_IMPACT_LAYOUT|STYLE_IMPACT_PAINT|STYLE_IMPACT_HITTEST, "auto", ip, ia(3));
     }
 
     // z-index

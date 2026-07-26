@@ -12,6 +12,14 @@ public enum DisplayKind : byte
     LineBreak,
 }
 
+public enum PositionKind : byte
+{
+    Static,
+    Relative,
+    Absolute,
+    Fixed,
+}
+
 public enum FlexDirection : byte
 {
     Row,
@@ -86,6 +94,8 @@ public sealed class ComputedStyle
     public float FlexGrow { get; set; }
     public bool FlexWrap { get; set; }
     public float Gap { get; set; }
+    public PositionKind Position { get; set; } = PositionKind.Static;
+    public CssEdges Inset { get; set; } = new(CssLength.Auto);
 
     public CssLength Width { get; set; } = CssLength.Auto;
     public CssLength Height { get; set; } = CssLength.Auto;

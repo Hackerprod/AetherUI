@@ -26,7 +26,8 @@ internal sealed class LayoutInterop : IDisposable
     {
         var boxes = new Dictionary<IntPtr, LayoutBox>();
         var primary = new Dictionary<ElementNode, LayoutBox>();
-        var root = Project(nativeResult.Root, nativeResult, dom, styles, boxes, primary);
+        var root = Project(nativeResult.Root, nativeResult, dom, styles, boxes, primary)
+            ?? throw new InvalidOperationException("Native layout returned an internal root box.");
         var paintOrder = new List<LayoutBox>(nativeResult.PaintOrderCount);
         for (var index = 0; index < nativeResult.PaintOrderCount; index++)
         {
@@ -39,7 +40,7 @@ internal sealed class LayoutInterop : IDisposable
 
     public void Dispose() => _native.Dispose();
 
-    private static LayoutBox Project(NativeLayoutBox nativeBox, NativeLayoutResult nativeResult, DomInterop dom,
+    private static LayoutBox? Project(NativeLayoutBox nativeBox, NativeLayoutResult nativeResult, DomInterop dom,
         StyleMap styles, Dictionary<IntPtr, LayoutBox> boxes, Dictionary<ElementNode, LayoutBox> primary)
     {
         if (nativeBox.Handle == IntPtr.Zero)
@@ -48,8 +49,11 @@ internal sealed class LayoutInterop : IDisposable
         }
 
         if (boxes.TryGetValue(nativeBox.Handle, out var existing)) return existing;
-        var element = dom.GetManagedElement(nativeBox.Element)
-            ?? throw new InvalidOperationException("Native layout box points outside the current DOM.");
+        // The native engine may create layout-only nodes for CSS generated content. They must
+        // paint and take part in layout, but are deliberately not exposed as managed DOM nodes
+        // (and cannot be event targets). Leave them out of the host-facing projection.
+        var element = dom.GetManagedElement(nativeBox.Element);
+        if (element is null) return null;
         var kind = nativeBox.Kind == 2 ? LayoutBoxKind.Text : LayoutBoxKind.Element;
         var box = new LayoutBox(kind, element, styles[element])
         {
@@ -66,7 +70,10 @@ internal sealed class LayoutInterop : IDisposable
         if (kind == LayoutBoxKind.Element) primary.TryAdd(element, box);
         for (var index = 0; index < nativeBox.ChildCount; index++)
         {
-            box.AddChild(Project(nativeResult.GetChild(nativeBox, index), nativeResult, dom, styles, boxes, primary));
+            if (Project(nativeResult.GetChild(nativeBox, index), nativeResult, dom, styles, boxes, primary) is { } child)
+            {
+                box.AddChild(child);
+            }
         }
 
         return box;
