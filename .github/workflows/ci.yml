@@ -8,9 +8,43 @@ permissions:
   contents: read
 
 jobs:
-  windows:
-    runs-on: windows-latest
+  native:
+    name: Native core (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+          - macos-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure
+        run: >-
+          cmake
+          -S native
+          -B artifacts/build/native-ci
+          -DCMAKE_BUILD_TYPE=Release
+          -DCMAKE_INSTALL_PREFIX=${{ github.workspace }}/artifacts/native-ci
+          -DAETHERUI_BUILD_TESTS=ON
+
+      - name: Build
+        run: cmake --build artifacts/build/native-ci --config Release --parallel
+
+      - name: Test
+        run: ctest --test-dir artifacts/build/native-ci -C Release --output-on-failure
+
+      - name: Install
+        run: cmake --install artifacts/build/native-ci --config Release
+
+  windows-dotnet:
+    name: Native core + .NET reference binding
+    runs-on: windows-latest
+    timeout-minutes: 30
 
     steps:
       - name: Checkout
@@ -21,9 +55,88 @@ jobs:
         with:
           dotnet-version: 10.0.302
 
-      - name: Verify
+      - name: Configure native core
+        run: >-
+          cmake
+          -S native
+          -B artifacts/build/native/win-x64
+          -A x64
+          -DAETHERUI_BUILD_TESTS=ON
+          -DCMAKE_INSTALL_PREFIX=${{ github.workspace }}/artifacts/native/win-x64
+
+      - name: Build native core
+        run: cmake --build artifacts/build/native/win-x64 --config Release --parallel
+
+      - name: Test native core
+        run: ctest --test-dir artifacts/build/native/win-x64 -C Release --output-on-failure
+
+      - name: Install native core
+        run: cmake --install artifacts/build/native/win-x64 --config Release
+
+      - name: Configure installed-package consumer
+        run: >-
+          cmake
+          -S native/tests/package_consumer
+          -B artifacts/build/package-consumer/win-x64
+          -A x64
+          -DCMAKE_PREFIX_PATH=${{ github.workspace }}/artifacts/native/win-x64
+
+      - name: Test installed-package consumer
+        run: |
+          cmake --build artifacts/build/package-consumer/win-x64 --config Release --parallel
+          ctest --test-dir artifacts/build/package-consumer/win-x64 -C Release --output-on-failure
+
+      - name: Restore .NET binding
+        run: dotnet restore bindings/dotnet/AetherUI.DotNet.sln -p:AetherNativeRuntimeIdentifier=win-x64
+
+      - name: Build .NET binding
+        run: >-
+          dotnet build bindings/dotnet/AetherUI.DotNet.sln
+          -c Release
+          --no-restore
+          -p:AetherNativeRuntimeIdentifier=win-x64
+
+      - name: Run .NET integration tests
+        run: >-
+          dotnet run
+          --project bindings/dotnet/tests/AetherUI.Tests/AetherUI.Tests.csproj
+          -c Release
+          --no-build
+          -p:AetherNativeRuntimeIdentifier=win-x64
+
+      - name: Pack .NET binding
         shell: pwsh
-        run: ./scripts/verify.ps1
+        run: |
+          New-Item artifacts/packages -ItemType Directory -Force | Out-Null
+          $projects = @(
+            'bindings/dotnet/src/AetherUI.Core.Native.Interop/AetherUI.Core.Native.Interop.csproj',
+            'bindings/dotnet/src/AetherUI.Core/AetherUI.Core.csproj',
+            'bindings/dotnet/src/AetherUI.Windows/AetherUI.Windows.csproj',
+            'bindings/dotnet/src/AetherUI.Generator/AetherUI.Generator.csproj'
+          )
+          foreach ($project in $projects) {
+            dotnet pack $project -c Release --no-build -o artifacts/packages `
+              -p:AetherNativeRuntimeIdentifier=win-x64
+            if ($LASTEXITCODE -ne 0) { throw "Packing failed: $project" }
+          }
+
+      - name: Verify NuGet RID asset
+        shell: pwsh
+        run: |
+          Add-Type -AssemblyName System.IO.Compression.FileSystem
+          $package = Get-ChildItem artifacts/packages/AetherUI.Core.Native.Interop.*.nupkg |
+            Where-Object Name -NotLike '*.symbols.nupkg' |
+            Select-Object -First 1
+          if (-not $package) { throw 'Interop package was not produced.' }
+          $archive = [IO.Compression.ZipFile]::OpenRead($package.FullName)
+          try {
+            if ($archive.Entries.FullName -notcontains 'runtimes/win-x64/native/aether_core.dll') {
+              throw 'Interop package is missing runtimes/win-x64/native/aether_core.dll.'
+            }
+          }
+          finally {
+            $archive.Dispose()
+          }
 
       - name: Upload packages
         uses: actions/upload-artifact@v4

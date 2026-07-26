@@ -1,0 +1,66 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>AetherUI dashboard regression fixture</title>
+  <style>
+    * { box-sizing: border-box; }
+    html, body { width: 100%; min-height: 100%; margin: 0; }
+    body {
+      min-height: 900px;
+      color: #e2e8f0;
+      background: linear-gradient(45deg, #0f172a, #1e293b, #334155);
+      font-family: Segoe UI, sans-serif;
+    }
+    .main-content { padding: 32px; }
+    .header {
+      display: flex;
+      flex-direction: row;
+      justify-content: space-between;
+      align-items: center;
+      min-height: 72px;
+    }
+    h1 {
+      width: 340px;
+      min-height: 48px;
+      margin: 0;
+      font-size: 36px;
+      line-height: 44px;
+    }
+    .user-chip {
+      display: flex;
+      flex-direction: row;
+      align-items: center;
+      min-width: 150px;
+      min-height: 44px;
+      padding: 10px 16px;
+      border-radius: 22px;
+      background: rgba(255, 255, 255, 0.08);
+    }
+    .metrics {
+      display: flex;
+      flex-direction: row;
+      margin-top: 32px;
+    }
+    .card {
+      width: 240px;
+      min-height: 140px;
+      padding: 24px;
+      margin-right: 16px;
+      border-radius: 16px;
+      background: rgba(255, 255, 255, 0.05);
+    }
+  </style>
+</head>
+<body>
+  <div class="main-content">
+    <div class="header">
+      <h1>System Overview</h1>
+      <div class="user-chip"><span>Admin</span><span>User</span></div>
+    </div>
+    <div class="metrics">
+      <div class="card"><strong>GPU</strong><span>USAGE</span></div>
+    </div>
+  </div>
+</body>
+</html>

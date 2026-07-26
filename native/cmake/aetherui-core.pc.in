@@ -1,0 +1,10 @@
+prefix=${pcfiledir}/@AETHERUI_PKGCONFIG_PREFIX_RELATIVE@
+exec_prefix=${prefix}
+libdir=${prefix}/@CMAKE_INSTALL_LIBDIR@
+includedir=${prefix}/@CMAKE_INSTALL_INCLUDEDIR@
+
+Name: AetherUI Core
+Description: Portable DOM, CSS cascade, layout, and display-list engine
+Version: @PROJECT_VERSION@
+Libs: -L"${libdir}" -laether_core
+Cflags: -I"${includedir}"

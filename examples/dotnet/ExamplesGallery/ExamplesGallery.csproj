@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows10.0.19041.0</TargetFramework>
+    <AssemblyName>ExamplesGallery</AssemblyName>
+    <IsPackable>false</IsPackable>
+    <RootNamespace>ExamplesGallery</RootNamespace>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <SupportedOSPlatformVersion>10.0.19041.0</SupportedOSPlatformVersion>
+    <PublishAot>false</PublishAot>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../../../bindings/dotnet/src/AetherUI.Core/AetherUI.Core.csproj" />
+    <ProjectReference Include="../../../bindings/dotnet/src/AetherUI.Windows/AetherUI.Windows.csproj" />
+    <ProjectReference Include="../../../bindings/dotnet/src/AetherUI.Generator/AetherUI.Generator.csproj"
+                      OutputItemType="Analyzer"
+                      ReferenceOutputAssembly="false" />
+    <AdditionalFiles Include="Views/**/*.cshtml;Views/**/*.view.html;Views/**/*.view.css" />
+  </ItemGroup>
+</Project>
