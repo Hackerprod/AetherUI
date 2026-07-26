@@ -1,0 +1,28 @@
+<body>
+  <main class="card">
+    <h1>Registro básico</h1>
+    <p class="subtitle">HTML, CSS y C# compilados por AetherUI.</p>
+
+    <form id="miFormulario" onsubmit="EnviarFormulario">
+      <label for="nombre">Nombre</label>
+      <input type="text"
+             id="nombre"
+             value="{{ Nombre }}"
+             oninput="MostrarEscritura"
+             placeholder="Escribe tu nombre"
+             maxlength="80"
+             required>
+
+      <button type="submit"
+              id="btnEnviar"
+              class="{{ ClaseBoton }}"
+              onmouseover="ResaltarBoton"
+              onmouseout="RestaurarBoton">
+        Enviar
+      </button>
+    </form>
+
+    <p id="mensajeResultado" class="status">{{ Mensaje }}</p>
+    <p class="engine-note">Sin Chromium, WebView2, WPF ni WinForms.</p>
+  </main>
+</body>

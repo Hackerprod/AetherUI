@@ -1,0 +1,456 @@
+#include "style_runtime_types.h"
+#include "style_property_registry_internal.h"
+#include <string_view>
+#include <cctype>
+#include <cstring>
+
+// ═══ Comment removal (port of TextSplitter.RemoveComments) ════════════
+
+std::string text_splitter_remove_comments(const std::string& source) {
+    std::string output;
+    output.reserve(source.size());
+    int32_t index = 0;
+    int32_t len = static_cast<int32_t>(source.size());
+    char quote = '\0';
+    bool escaped = false;
+
+    while (index < len) {
+        char c = source[index];
+        if (quote != '\0') {
+            output += c;
+            if (escaped) {
+                escaped = false;
+            } else if (c == '\\') {
+                escaped = true;
+            } else if (c == quote) {
+                quote = '\0';
+            }
+            index++;
+            continue;
+        }
+        if (c == '\'' || c == '"') {
+            quote = c;
+            output += c;
+            index++;
+            continue;
+        }
+        if (c == '/' && index + 1 < len && source[index + 1] == '*') {
+            output += ' ';
+            output += ' ';
+            index += 2;
+            while (index < len &&
+                   !(source[index] == '*' && index + 1 < len && source[index + 1] == '/')) {
+                output += (source[index] == '\n') ? '\n' : ' ';
+                index++;
+            }
+            if (index + 1 < len) {
+                output += ' ';
+                output += ' ';
+                index += 2;
+            }
+            continue;
+        }
+        output += c;
+        index++;
+    }
+    return output;
+}
+
+// ═══ Internal compilation result ═══════════════════════════════════════
+
+struct declaration_compilation_result {
+    std::vector<compiled_property_declaration_s> properties;
+    std::vector<custom_property_declaration_s> custom;
+};
+
+// ═══ Internal helpers ═══════════════════════════════════════════════════
+
+static void skip_whitespace(const std::string& source, int32_t& index, int32_t end) {
+    while (index < end && std::isspace(static_cast<unsigned char>(source[index]))) {
+        index++;
+    }
+}
+
+static int32_t find_open_brace(const std::string& source, int32_t start, int32_t end) {
+    int32_t parens = 0;
+    int32_t brackets = 0;
+    char quote = '\0';
+    bool escaped = false;
+    for (int32_t i = start; i < end; i++) {
+        char c = source[i];
+        if (quote != '\0') {
+            if (escaped) {
+                escaped = false;
+            } else if (c == '\\') {
+                escaped = true;
+            } else if (c == quote) {
+                quote = '\0';
+            }
+            continue;
+        }
+        if (c == '\'' || c == '"') { quote = c; continue; }
+        if (c == '(') { parens++; continue; }
+        if (c == ')') { parens = std::max(0, parens - 1); continue; }
+        if (c == '[') { brackets++; continue; }
+        if (c == ']') { brackets = std::max(0, brackets - 1); continue; }
+        if (parens == 0 && brackets == 0 && c == '{') return i;
+    }
+    return -1;
+}
+
+static int32_t find_matching_brace(const std::string& source, int32_t opening, int32_t end) {
+    int32_t depth = 1;
+    char quote = '\0';
+    bool escaped = false;
+    for (int32_t i = opening + 1; i < end; i++) {
+        char c = source[i];
+        if (quote != '\0') {
+            if (escaped) {
+                escaped = false;
+            } else if (c == '\\') {
+                escaped = true;
+            } else if (c == quote) {
+                quote = '\0';
+            }
+            continue;
+        }
+        if (c == '\'' || c == '"') { quote = c; continue; }
+        if (c == '{') { depth++; continue; }
+        if (c == '}' && --depth == 0) return i;
+    }
+    return -1;
+}
+
+static int32_t find_at_rule_delimiter(const std::string& source, int32_t start, int32_t end) {
+    int32_t parens = 0;
+    int32_t brackets = 0;
+    char quote = '\0';
+    bool escaped = false;
+    for (int32_t i = start; i < end; i++) {
+        char c = source[i];
+        if (quote != '\0') {
+            if (escaped) {
+                escaped = false;
+            } else if (c == '\\') {
+                escaped = true;
+            } else if (c == quote) {
+                quote = '\0';
+            }
+            continue;
+        }
+        if (c == '\'' || c == '"') { quote = c; continue; }
+        if (c == '(') { parens++; continue; }
+        if (c == ')') { parens = std::max(0, parens - 1); continue; }
+        if (c == '[') { brackets++; continue; }
+        if (c == ']') { brackets = std::max(0, brackets - 1); continue; }
+        if (parens == 0 && brackets == 0 && (c == ';' || c == '{')) return i;
+    }
+    return -1;
+}
+
+static bool contains_variable(const std::string& s) {
+    std::string lower = str_to_lower(s);
+    return lower.find("var(") != std::string::npos;
+}
+
+static bool try_strip_important(std::string& value) {
+    std::string trimmed = str_trim(value);
+    const char marker[] = "!important";
+    size_t marker_len = std::strlen(marker);
+    if (trimmed.size() < marker_len) {
+        value = trimmed;
+        return false;
+    }
+    std::string tail = trimmed.substr(trimmed.size() - marker_len);
+    if (!str_iequals(tail, marker)) {
+        value = trimmed;
+        return false;
+    }
+    size_t marker_start = trimmed.size() - marker_len;
+    if (marker_start > 0 && trimmed[marker_start - 1] == '\\') {
+        value = trimmed;
+        return false;
+    }
+    value = str_trim(trimmed.substr(0, marker_start));
+    return true;
+}
+
+static std::vector<std::string> split_and_trim(const std::string& s, char ch) {
+    auto parts = split_top_level(s, ch);
+    std::vector<std::string> result;
+    result.reserve(parts.size());
+    for (auto& p : parts) {
+        result.push_back(str_trim(p));
+    }
+    return result;
+}
+
+static int32_t find_top_level_colon(const std::string& s) {
+    return find_top_level(s, ':');
+}
+
+// ═══ Compile longhand ══════════════════════════════════════════════════
+
+static void compile_longhand(
+    const std::string& name,
+    const std::string& value,
+    bool important,
+    int32_t declaration_order,
+    style_property_registry_s* registry,
+    std::vector<compiled_property_declaration_s>& output)
+{
+    const auto* def = registry->try_get(name.c_str());
+    if (!def) return;
+
+    std::string normalized = str_trim(value);
+    compiled_style_value_s compiled;
+
+    if (str_iequals(normalized, "initial") || str_iequals(normalized, "revert")) {
+        compiled.mode = compiled_value_mode::initial;
+    } else if (str_iequals(normalized, "inherit")) {
+        compiled.mode = compiled_value_mode::inherit;
+    } else if (str_iequals(normalized, "unset")) {
+        compiled.mode = compiled_value_mode::unset;
+    } else if (contains_variable(normalized)) {
+        compiled.mode = compiled_value_mode::deferred;
+        compiled.deferred_source = normalized;
+    } else {
+        std::string parsed;
+        if (!def->parse(normalized.c_str(), parsed)) {
+            return;
+        }
+        compiled.mode = compiled_value_mode::value;
+        compiled.typed_value = parsed;
+    }
+
+    compiled_property_declaration_s decl;
+    decl.property_id = def->id;
+    decl.value = compiled;
+    decl.important = important;
+    decl.declaration_order = declaration_order;
+    output.push_back(decl);
+}
+
+// ═══ Compile declarations ══════════════════════════════════════════════
+
+static declaration_compilation_result compile_declarations(
+    const std::string& source,
+    style_property_registry_s* registry)
+{
+    declaration_compilation_result result;
+    int32_t declaration_order = 0;
+
+    auto segments = split_and_trim(source, ';');
+    for (auto& segment : segments) {
+        if (segment.empty()) continue;
+
+        int32_t colon = find_top_level_colon(segment);
+        if (colon <= 0) continue;
+
+        std::string name = str_to_lower(str_trim(segment.substr(0, colon)));
+        std::string value = str_trim(segment.substr(colon + 1));
+        if (name.empty() || value.empty()) continue;
+
+        bool important = try_strip_important(value);
+
+        if (name.size() >= 2 && name[0] == '-' && name[1] == '-') {
+            custom_property_declaration_s custom;
+            custom.name = name;
+            custom.source = value;
+            custom.important = important;
+            custom.declaration_order = declaration_order++;
+            result.custom.push_back(custom);
+            continue;
+        }
+
+        const auto* shorthand = registry->try_get_shorthand(name.c_str());
+        if (shorthand) {
+            if (contains_variable(value)) {
+                continue;
+            }
+
+            style_shorthand_writer_s writer;
+            if (!shorthand->expand(value.c_str(), writer)) {
+                continue;
+            }
+
+            for (auto& item : writer.items) {
+                compile_longhand(
+                    item.name, item.value, important,
+                    declaration_order++, registry, result.properties);
+            }
+            continue;
+        }
+
+        if (!registry->try_get(name.c_str())) {
+            continue;
+        }
+
+        compile_longhand(
+            name, value, important,
+            declaration_order++, registry, result.properties);
+    }
+
+    return result;
+}
+
+// ═══ Compile range (recursive) ═════════════════════════════════════════
+
+static void compile_range(
+    const std::string& source,
+    int32_t start,
+    int32_t end,
+    media_condition_s* inherited_condition,
+    int64_t sheet_handle,
+    style_sheet_layer layer,
+    style_property_registry_s* registry,
+    int32_t& rule_id_counter,
+    std::vector<compiled_rule_s>& out_rules)
+{
+    int32_t index = start;
+    while (index < end) {
+        skip_whitespace(source, index, end);
+        if (index >= end) break;
+
+        if (source[index] == '@') {
+            int32_t at_offset = index;
+            index++;
+            int32_t name_start = index;
+            while (index < end &&
+                   (std::isalnum(static_cast<unsigned char>(source[index])) ||
+                    source[index] == '-' || source[index] == '_')) {
+                index++;
+            }
+
+            std::string name = str_to_lower(source.substr(name_start, index - name_start));
+            skip_whitespace(source, index, end);
+
+            int32_t delimiter = find_at_rule_delimiter(source, index, end);
+            if (delimiter < 0) {
+                index = end;
+                continue;
+            }
+
+            if (source[delimiter] == ';') {
+                index = delimiter + 1;
+                continue;
+            }
+
+            int32_t closing = find_matching_brace(source, delimiter, end);
+            if (closing < 0) {
+                index = end;
+                continue;
+            }
+
+            std::string prelude = str_trim(source.substr(index, delimiter - index));
+
+            if (name == "media") {
+                media_condition_s* media = media_condition_parse(
+                    prelude.c_str(), nullptr, nullptr, static_cast<int32_t>(at_offset));
+                media_condition_s* combined = media_condition_and(inherited_condition, media);
+                compile_range(
+                    source, delimiter + 1, closing, combined,
+                    sheet_handle, layer, registry, rule_id_counter, out_rules);
+            }
+
+            index = closing + 1;
+            continue;
+        }
+
+        int32_t opening = find_open_brace(source, index, end);
+        if (opening < 0) {
+            break;
+        }
+
+        int32_t closing = find_matching_brace(source, opening, end);
+        if (closing < 0) {
+            break;
+        }
+
+        std::string selector_text = str_trim(
+            source.substr(index, opening - index));
+        std::string declaration_text =
+            source.substr(opening + 1, closing - opening - 1);
+
+        std::vector<compiled_selector_s> selectors;
+        if (!selector_text.empty()) {
+            selector_parse_list(selector_text.c_str(), selectors);
+        }
+
+        auto declarations = compile_declarations(declaration_text, registry);
+
+        if (!selectors.empty() &&
+            (!declarations.properties.empty() || !declarations.custom.empty()))
+        {
+            int32_t source_order = rule_id_counter;
+            for (auto& sel : selectors) {
+                compiled_rule_s rule;
+                rule.rule_id = rule_id_counter++;
+                rule.sheet_handle = sheet_handle;
+                rule.layer = layer;
+                rule.selector = std::move(sel);
+                rule.condition = inherited_condition;
+                rule.declarations = declarations.properties;
+                rule.custom_declarations = declarations.custom;
+                rule.source_order = source_order;
+                out_rules.push_back(std::move(rule));
+            }
+        }
+
+        index = closing + 1;
+    }
+}
+
+// ═══ Public API: stylesheet compilation ════════════════════════════════
+
+aether_status_t style_source_compile(
+    const char* source,
+    int64_t sheet_handle,
+    int32_t layer,
+    std::vector<compiled_rule_s>& out_rules,
+    int32_t& out_rule_id_counter)
+{
+    if (!source) return AETHER_ERROR_NULL_ARG;
+
+    auto* registry = style_property_registry_get_global();
+    if (!registry) return AETHER_ERROR_INVALID_STATE;
+
+    std::string cleaned = text_splitter_remove_comments(source);
+
+    style_sheet_layer sheet_layer = static_cast<style_sheet_layer>(layer);
+    media_condition_s* always = media_condition_always();
+
+    compile_range(
+        cleaned,
+        0,
+        static_cast<int32_t>(cleaned.size()),
+        always,
+        sheet_handle,
+        sheet_layer,
+        registry,
+        out_rule_id_counter,
+        out_rules);
+
+    return AETHER_OK;
+}
+
+// ═══ Public API: inline style compilation ══════════════════════════════
+
+aether_status_t style_source_compile_inline(
+    const char* source,
+    std::vector<compiled_property_declaration_s>& out_properties,
+    std::vector<custom_property_declaration_s>& out_custom)
+{
+    if (!source) return AETHER_ERROR_NULL_ARG;
+
+    auto* registry = style_property_registry_get_global();
+    if (!registry) return AETHER_ERROR_INVALID_STATE;
+
+    std::string cleaned = text_splitter_remove_comments(source);
+    auto result = compile_declarations(cleaned, registry);
+
+    out_properties = std::move(result.properties);
+    out_custom = std::move(result.custom);
+
+    return AETHER_OK;
+}

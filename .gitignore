@@ -10,6 +10,11 @@ artifacts/
 *.snupkg
 AetherUI.StyleRuntime-0.1.0.zip
 
+# CMake outputs are staged under artifacts/. Keep accidental in-tree builds out.
+native/build/
+native/**/build/
+native/CMakeUserPresets.json
+
 # AI agent / assistant tooling — local only, never published
 .claude/
 .cursor/

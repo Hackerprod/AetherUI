@@ -1,0 +1,35 @@
+#include <aether/aether.h>
+
+#include <stdio.h>
+
+static int fail(const char* message) {
+    fprintf(stderr, "FAIL: %s\n", message);
+    return 1;
+}
+
+int main(void) {
+    const uint32_t version = aether_abi_version();
+    const aether_capabilities_t required_capabilities =
+        AETHER_CAPABILITY_DOM |
+        AETHER_CAPABILITY_STYLE_RUNTIME |
+        AETHER_CAPABILITY_LAYOUT |
+        AETHER_CAPABILITY_DISPLAY_LIST;
+
+    if (version != AETHER_ABI_VERSION_CURRENT) {
+        return fail("runtime ABI version differs from the C header");
+    }
+    if (AETHER_ABI_VERSION_GET_MAJOR(version) != AETHER_ABI_VERSION_MAJOR ||
+        AETHER_ABI_VERSION_GET_MINOR(version) != AETHER_ABI_VERSION_MINOR ||
+        AETHER_ABI_VERSION_GET_PATCH(version) != AETHER_ABI_VERSION_PATCH) {
+        return fail("ABI version packing is incorrect in C");
+    }
+    if ((aether_abi_capabilities() & required_capabilities) != required_capabilities) {
+        return fail("runtime capability mask is incomplete");
+    }
+    if (aether_paint_command_size() != sizeof(aether_paint_command_t)) {
+        return fail("runtime paint-command size differs from the C header");
+    }
+
+    puts("OK: C ABI smoke test passed");
+    return 0;
+}

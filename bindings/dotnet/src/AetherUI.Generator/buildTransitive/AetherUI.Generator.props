@@ -1,0 +1,10 @@
+<Project>
+  <ItemGroup>
+    <AdditionalFiles Include="$(MSBuildProjectDirectory)/**/*.cshtml"
+                     Exclude="$(MSBuildProjectDirectory)/bin/**;$(MSBuildProjectDirectory)/obj/**"
+                     Condition="'$(DesignTimeBuild)' != 'true' Or '$(BuildingProject)' == 'true'" />
+    <AdditionalFiles Include="$(MSBuildProjectDirectory)/**/*.view.html;$(MSBuildProjectDirectory)/**/*.view.css"
+                     Exclude="$(MSBuildProjectDirectory)/bin/**;$(MSBuildProjectDirectory)/obj/**"
+                     Condition="'$(DesignTimeBuild)' != 'true' Or '$(BuildingProject)' == 'true'" />
+  </ItemGroup>
+</Project>
