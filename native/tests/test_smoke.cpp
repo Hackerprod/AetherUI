@@ -3,6 +3,7 @@
 #include <cstdlib>
 #include <cmath>
 #include <cstring>
+#include <string>
 
 static void require(bool condition, const char* message) {
     if (!condition) {
@@ -13,18 +14,18 @@ static void require(bool condition, const char* message) {
 
 struct diagnostic_capture_s {
     int count = 0;
-    const char* code = nullptr;
-    const char* property = nullptr;
-    const char* value = nullptr;
+    std::string code;
+    std::string property;
+    std::string value;
 };
 
 static void capture_diagnostic(const char* code, const char* property, const char* value,
                                const char*, void* user_data) {
     auto* capture = static_cast<diagnostic_capture_s*>(user_data);
     ++capture->count;
-    capture->code = code;
-    capture->property = property;
-    capture->value = value;
+    capture->code = code ? code : "";
+    capture->property = property ? property : "";
+    capture->value = value ? value : "";
 }
 
 int main() {
@@ -214,11 +215,11 @@ int main() {
     require(update_count > 0, "invalid gradient fixture style resolution failed");
     aether_style_updates_free(updates, update_count);
     require(diagnostics.count == 1, "unsupported gradient stop must emit exactly one diagnostic");
-    require(diagnostics.code && std::strcmp(diagnostics.code, "AETHER-CSS-GRADIENT") == 0,
+    require(diagnostics.code == "AETHER-CSS-GRADIENT",
         "unsupported gradient stop diagnostic code is incorrect");
-    require(diagnostics.property && std::strcmp(diagnostics.property, "background-image") == 0,
+    require(diagnostics.property == "background-image",
         "gradient diagnostic must identify the longhand property");
-    require(diagnostics.value && std::strstr(diagnostics.value, "10px"),
+    require(diagnostics.value.find("10px") != std::string::npos,
         "gradient diagnostic must retain the unsupported source value");
 
     diagnostics = {};
@@ -228,8 +229,7 @@ int main() {
     updates = nullptr;
     update_count = aether_style_runtime_resolve_subtree(runtime, aether_doc_get_body(doc), &updates);
     aether_style_updates_free(updates, update_count);
-    require(diagnostics.count == 1 && diagnostics.code &&
-                std::strcmp(diagnostics.code, "AETHER-CSS-BACKGROUND-IMAGE-URL") == 0,
+    require(diagnostics.count == 1 && diagnostics.code == "AETHER-CSS-BACKGROUND-IMAGE-URL",
         "malformed url() must report its dedicated background-image diagnostic");
 
     diagnostics = {};
@@ -239,8 +239,7 @@ int main() {
     updates = nullptr;
     update_count = aether_style_runtime_resolve_subtree(runtime, aether_doc_get_body(doc), &updates);
     aether_style_updates_free(updates, update_count);
-    require(diagnostics.count == 1 && diagnostics.code &&
-                std::strcmp(diagnostics.code, "AETHER-CSS-GRADIENT-APPROXIMATION") == 0,
+    require(diagnostics.count == 1 && diagnostics.code == "AETHER-CSS-GRADIENT-APPROXIMATION",
         "corner keyword gradient must report the current fixed-vector approximation");
 
     require(aether_doc_parse_html(

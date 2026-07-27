@@ -648,7 +648,8 @@ typedef struct {
 /* Diagnostics callback: invoked by native StyleRuntimeBridge when a CSS property
    is parsed correctly but cannot be rendered by the current engine (e.g. inset
    box-shadow, position: absolute, transform). The callback fires on the native
-   stack, so the managed side must marshal it to CssDiagnostics.ReportFromStyleRuntime. */
+   stack; all string pointers are borrowed and valid only for the callback's
+   duration, so consumers that retain them must copy their contents. */
 typedef void (*aether_style_diagnostic_fn)(
     const char* code,
     const char* property,
