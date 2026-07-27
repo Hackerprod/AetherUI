@@ -98,6 +98,6 @@ AETHER_API aether_bool_t aether_css_length_try_parse(const char* input, aether_c
 }
 
 AETHER_API aether_css_edges aether_css_edges_zero(void) {
-    aether_css_edges e{};
-    return e;
+    const auto zero = aether_css_length_zero();
+    return {zero, zero, zero, zero};
 }

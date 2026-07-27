@@ -27,3 +27,6 @@ native/CMakeUserPresets.json
 CLAUDE.md
 AGENTS.md
 .aider*
+
+# Local design/planning docs — not for commit
+CANVAS_IMPLEMENTATION.md

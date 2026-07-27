@@ -2,6 +2,7 @@ using System.Runtime.InteropServices;
 using AetherUI.Primitives;
 using AetherUI.Runtime;
 using AetherUI.Windows.Hosting;
+using AetherUI.Windows.Resources;
 using Microsoft.Web.WebView2.WinForms;
 
 namespace AetherUI.Validator;
@@ -97,6 +98,8 @@ public sealed class ValidatorForm : Form
         var thread = new Thread(() =>
         {
             _component = new RawHtmlFileComponent(_htmlPath);
+            using var imageLoader = new HttpImageResourceLoader();
+            using var imageResolver = new ImageResourceResolver(imageLoader);
             var options = new UiHostOptions
             {
                 Title = _aetherWindowTitle,
@@ -106,6 +109,7 @@ public sealed class ValidatorForm : Form
                 // may not be able to paint yet, e.g. an unsupported gradient) stays legible either
                 // way instead of white-on-white or black-on-black hiding it.
                 ClearColor = new ColorRgba(0.5f, 0.5f, 0.5f, 1f),
+                ImageResolver = imageResolver,
             };
             WindowsUiApplication.Run(() => _component, options);
         })

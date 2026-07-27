@@ -47,6 +47,17 @@ public enum TextAlign : byte
     Start,
     Center,
     End,
+    Left,
+    Right,
+    Justify,
+}
+
+public enum TextTransform : byte
+{
+    None,
+    Capitalize,
+    Uppercase,
+    Lowercase,
 }
 
 public enum FontWeight : ushort
@@ -66,6 +77,30 @@ public enum BoxSizing : byte
 {
     ContentBox,
     BorderBox,
+}
+
+public enum BorderStyle : byte
+{
+    None,
+    Hidden,
+    Dotted,
+    Dashed,
+    Solid,
+    Double,
+    Groove,
+    Ridge,
+    Inset,
+    Outset,
+}
+
+public readonly record struct ColorEdges(ColorRgba Left, ColorRgba Top, ColorRgba Right, ColorRgba Bottom)
+{
+    public static ColorEdges Transparent { get; } = new(ColorRgba.Transparent, ColorRgba.Transparent, ColorRgba.Transparent, ColorRgba.Transparent);
+}
+
+public readonly record struct BorderStyleEdges(BorderStyle Left, BorderStyle Top, BorderStyle Right, BorderStyle Bottom)
+{
+    public static BorderStyleEdges None { get; } = new(BorderStyle.None, BorderStyle.None, BorderStyle.None, BorderStyle.None);
 }
 
 public enum OverflowKind : byte
@@ -112,6 +147,8 @@ public sealed class ComputedStyle
     public ColorRgba BackgroundColor { get; set; } = ColorRgba.Transparent;
     public LinearGradient? BackgroundGradient { get; set; }
     public ColorRgba BorderColor { get; set; } = ColorRgba.Transparent;
+    public ColorEdges BorderColors { get; set; } = ColorEdges.Transparent;
+    public BorderStyleEdges BorderStyles { get; set; } = BorderStyleEdges.None;
 
     /// <summary>
     /// From <c>-webkit-background-clip: text</c> (e.g. a gradient logo wordmark): the element's own
@@ -119,6 +156,9 @@ public sealed class ComputedStyle
     /// with <see cref="BackgroundGradient"/> — never both set at once, see StyleRuntimeBridge.
     /// </summary>
     public LinearGradient? TextGradient { get; set; }
+
+    /// <summary>Text shadows in CSS declaration order. The native text-shadow parser rejects inset and spread radii.</summary>
+    public IReadOnlyList<BoxShadow> TextShadows { get; set; } = [];
 
     /// <summary>Outer (non-inset) box-shadows, back-to-front paint order (first CSS shadow paints on top).</summary>
     public IReadOnlyList<BoxShadow> BoxShadows { get; set; } = [];
@@ -128,6 +168,7 @@ public sealed class ComputedStyle
     /// element's own border-box size, which is only known at paint time.
     /// </summary>
     public CssLength BorderRadius { get; set; } = CssLength.Zero;
+    public CssBorderRadii BorderRadii { get; set; } = CssBorderRadii.Zero;
 
     public float Opacity { get; set; } = 1;
 
@@ -136,6 +177,7 @@ public sealed class ComputedStyle
     public FontWeight FontWeight { get; set; } = FontWeight.Normal;
     public float LineHeight { get; set; } = 1.25f;
     public TextAlign TextAlign { get; set; } = TextAlign.Start;
+    public TextTransform TextTransform { get; set; } = TextTransform.None;
 
     public OverflowKind Overflow { get; set; } = OverflowKind.Visible;
     public CursorKind Cursor { get; set; } = CursorKind.Default;
@@ -157,6 +199,7 @@ public sealed class ComputedStyle
         result.FontWeight = parent.FontWeight;
         result.LineHeight = parent.LineHeight;
         result.TextAlign = parent.TextAlign;
+        result.TextTransform = parent.TextTransform;
         result.Cursor = parent.Cursor;
         return result;
     }

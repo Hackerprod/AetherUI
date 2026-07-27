@@ -33,6 +33,7 @@ public sealed class NativeLayoutInterop : IDisposable
 
     public NativeLayoutInterop(Func<string, NativeComputedStyle, float, NativeTextMetrics> measure)
     {
+        NativeAbiContract.EnsureCompatible();
         _measure = measure ?? throw new ArgumentNullException(nameof(measure));
         _measureDelegate = Measure;
         _scrollDelegate = Scroll;

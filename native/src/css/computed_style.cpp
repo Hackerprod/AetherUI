@@ -10,15 +10,27 @@ AETHER_API aether_computed_style_t aether_computed_style_default(void) {
     s.position = AETHER_POSITION_STATIC;
     s.inset = { aether_css_length_auto(), aether_css_length_auto(),
                 aether_css_length_auto(), aether_css_length_auto() };
+    s.margin = aether_css_edges_zero();
+    s.padding = aether_css_edges_zero();
+    s.border_width = aether_css_edges_zero();
     s.box_sizing = AETHER_BOX_SIZING_CONTENT_BOX;
     s.color = {0, 0, 0, 1};
+    // CSS Color: each border color initially resolves to currentColor.
+    // The style runtime preserves that symbolic relationship until its
+    // post-cascade color-resolution phase; direct default callers receive the
+    // equivalent concrete initial color.
+    s.border_color = s.color;
+    s.border_colors = {s.border_color, s.border_color, s.border_color, s.border_color};
+    s.border_styles = {AETHER_BORDER_STYLE_NONE, AETHER_BORDER_STYLE_NONE,
+                       AETHER_BORDER_STYLE_NONE, AETHER_BORDER_STYLE_NONE};
     s.opacity = 1.0f;
     s.font_size = 16.0f;
     s.font_weight = AETHER_FONT_WEIGHT_NORMAL;
     s.line_height = 1.25f;
     s.overflow = AETHER_OVERFLOW_VISIBLE;
     s.visible = AETHER_TRUE;
-    s.border_radius = aether_css_length_zero(); // CSS initial value for border-radius is 0, not auto
+    const auto zero_radius = aether_corner_radius{aether_css_length_zero(), aether_css_length_zero()};
+    s.border_radii = {zero_radius, zero_radius, zero_radius, zero_radius};
     strncpy(s.font_family, "Segoe UI", sizeof(s.font_family) - 1);
     return s;
 }
@@ -32,14 +44,21 @@ AETHER_API aether_computed_style_t aether_computed_style_inherit_from(const aeth
         s.font_weight = parent->font_weight;
         s.line_height = parent->line_height;
         s.text_align = parent->text_align;
+        s.text_transform = parent->text_transform;
         s.cursor = parent->cursor;
+        // text-shadow is inherited. Keep an owned copy so parent and child
+        // style handles never alias list storage.
+        (void)aether_shadow_list_copy(&parent->text_shadows, &s.text_shadows);
     }
     return s;
 }
 
 AETHER_API void aether_computed_style_free(aether_computed_style_t* s) {
     if (s) {
-        aether_linear_gradient_free(&s->background_gradient);
+        aether_background_layer_list_free(&s->background_layers);
+        aether_backdrop_filter_list_free(&s->backdrop_filters);
         aether_linear_gradient_free(&s->text_gradient);
+        aether_shadow_list_free(&s->text_shadows);
+        aether_shadow_list_free(&s->box_shadows);
     }
 }

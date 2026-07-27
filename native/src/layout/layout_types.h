@@ -21,6 +21,10 @@ struct aether_layout_box_s {
     bool  is_atomic_control = false;
     float scrollable_overflow_y = 0.f;
     float scroll_offset_y = 0.f;
+    // Used vertical margins visible to the enclosing block formatting context.
+    // They begin as the specified margins and may be collapsed through children.
+    float collapsed_margin_before = 0.f;
+    float collapsed_margin_after = 0.f;
 
     aether_rectf margin_box{};
     aether_rectf border_box{};

@@ -1,6 +1,12 @@
 #include "style_property_registry_internal.h"
+#include "../css/border_utils.h"
+#include "../css/border_radii.h"
+#include "../css/background_layers.h"
+#include "../css/backdrop_filters.h"
+#include "../css/linear_gradient.h"
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 
 // ═══ Parse helpers ═════════════════════════════════════════════
 
@@ -100,6 +106,7 @@ static bool bi_try_color(const char* src, std::string& out) {
     if (!src || !*src) return false;
     aether_color_rgba c;
     std::string t = str_trim(src);
+    if (str_iequals(t, "currentcolor")) { out = "currentColor"; return true; }
     if (aether_color_rgba_try_parse(t.c_str(), &c)) { out = t; return true; }
     return false;
 }
@@ -181,7 +188,17 @@ static bool bi_try_font_family(const char* src, std::string& out) {
     if (!src || !*src) return false;
     std::string t = str_trim(src);
     if (t.empty()) return false;
-    out = t; return true;
+    // The ABI carries one resolved family, rather than the CSS fallback list. Choose the first
+    // family and normalize CSS quoting so platform text APIs receive a real family name instead
+    // of the literal CSS token (for example, "'Segoe UI', sans-serif").
+    auto families = split_top_level(t, ',');
+    if (families.empty()) return false;
+    out = str_trim(families.front());
+    if (out.size() >= 2 && ((out.front() == '\'' && out.back() == '\'') ||
+                            (out.front() == '"' && out.back() == '"'))) {
+        out = out.substr(1, out.size() - 2);
+    }
+    return !out.empty();
 }
 
 static bool bi_try_line_height(const char* src, std::string& out) {
@@ -201,6 +218,13 @@ static bool bi_try_border_width(const char* src, std::string& out) {
     return bi_try_non_negative_length(src, out);
 }
 
+static bool bi_parse_border_width(const std::string& value, aether_css_length& out) {
+    if (str_iequals(value, "thin")) { out = aether_css_length_zero(); out.value = 1.f; out.unit = AETHER_CSS_UNIT_PX; return true; }
+    if (str_iequals(value, "medium")) { out = aether_css_length_zero(); out.value = 3.f; out.unit = AETHER_CSS_UNIT_PX; return true; }
+    if (str_iequals(value, "thick")) { out = aether_css_length_zero(); out.value = 5.f; out.unit = AETHER_CSS_UNIT_PX; return true; }
+    return aether_css_length_try_parse(value.c_str(), &out) != AETHER_FALSE;
+}
+
 static bool bi_try_border_style(const char* src, std::string& out) {
     std::string t = str_trim(src);
     static const char* styles[] = {
@@ -210,80 +234,271 @@ static bool bi_try_border_style(const char* src, std::string& out) {
     return false;
 }
 
+static bool bi_try_border_radii(const char* src, std::string& out) {
+    if (!src) return false;
+    aether_border_radii radii;
+    if (!aether_border_radii_try_parse(src, &radii)) return false;
+    out = str_trim(src);
+    return true;
+}
+
 static bool bi_try_gradient(const char* src, std::string& out) {
     std::string t = str_trim(src);
     if (str_starts_with_i(t, "linear-gradient")) { out = t; return true; }
     return false;
 }
 
-static void bi_apply_gradient(aether_computed_style_t* st, const std::string& value) {
-    aether_linear_gradient_free(&st->background_gradient);
-    st->has_background_gradient = AETHER_FALSE;
-    auto open = value.find('(');
-    auto close = value.rfind(')');
-    if (open == std::string::npos || close <= open) return;
-    auto parts = split_top_level(value.substr(open + 1, close - open - 1), ',');
-    if (parts.size() < 2) return;
-    size_t first = 0;
-    auto direction = str_to_lower(str_trim(parts[0]));
-    float x = 0, y = 1;
-    // CSS angles point clockwise from up: 0deg is up, 90deg is right.
-    // Keep this in sync with StyleValueParsers.TryLinearGradient on the
-    // managed path so a stylesheet renders identically on either runtime.
-    if (direction.size() > 3 && direction.ends_with("deg")) {
-        auto degrees_text = direction.substr(0, direction.size() - 3);
-        char* end = nullptr;
-        const auto degrees = std::strtof(degrees_text.c_str(), &end);
-        if (end != degrees_text.c_str() && *end == '\0' && std::isfinite(degrees)) {
-            constexpr float pi = 3.14159265358979323846f;
-            const auto radians = degrees * pi / 180.0f;
-            x = std::sin(radians);
-            y = -std::cos(radians);
-            first = 1;
-        }
-    } else if (str_starts_with_i(direction, "to ")) {
-        first = 1;
-        if (direction.find("right") != std::string::npos) { x = 1; y = 0; }
-        else if (direction.find("left") != std::string::npos) { x = -1; y = 0; }
-        else if (direction.find("top") != std::string::npos) { x = 0; y = -1; }
+static property_apply_result_s bi_apply_gradient(aether_computed_style_t* st, const std::string& value);
+
+static property_apply_result_s bi_apply_backdrop_filter(aether_computed_style_t* st, const std::string& value) {
+    aether_backdrop_filter_list replacement{};
+    aether_backdrop_filter_parse_error_e error{};
+    if (!aether_backdrop_filter_list_try_parse(value, &replacement, &error)) {
+        const char* message = error == aether_backdrop_filter_parse_error_e::unsupported_operation
+            ? "The backdrop-filter function is not supported by the current compositor model."
+            : error == aether_backdrop_filter_parse_error_e::unsupported_parameter
+                ? "The backdrop-filter function has an unsupported parameter."
+                : "The backdrop-filter value is syntactically invalid.";
+        return property_apply_result_s::failure("AETHER-CSS-BACKDROP-FILTER", message);
     }
-    if (parts.size() - first < 2) return;
-    auto count = static_cast<int32_t>(parts.size() - first);
-    auto* stops = static_cast<aether_gradient_stop*>(std::calloc(count, sizeof(aether_gradient_stop)));
-    if (!stops) return;
-    for (int32_t i = 0; i < count; ++i) {
-        auto token = str_trim(parts[first + i]);
-        auto space = token.find(' ');
-        auto color = space == std::string::npos ? token : token.substr(0, space);
-        if (!aether_color_rgba_try_parse(color.c_str(), &stops[i].color)) {
-            std::free(stops); return;
-        }
-        stops[i].offset = count == 1 ? 0 : static_cast<float>(i) / (count - 1);
-    }
-    st->background_gradient = {x, y, stops, count};
-    st->has_background_gradient = AETHER_TRUE;
+    aether_backdrop_filter_list_free(&st->backdrop_filters);
+    st->backdrop_filters = replacement;
+    return {};
 }
 
-static void bi_apply_shadow(aether_computed_style_t* st, const std::string& value) {
-    st->has_box_shadow = AETHER_FALSE;
-    st->box_shadow = {};
-    if (str_iequals(value, "none")) return;
-    auto tokens = bi_split_ws(value);
-    int length_index = 0;
-    for (const auto& token : tokens) {
-        if (str_iequals(token, "inset")) { st->box_shadow.inset = AETHER_TRUE; continue; }
-        aether_color_rgba color;
-        if (aether_color_rgba_try_parse(token.c_str(), &color)) { st->box_shadow.color = color; continue; }
-        aether_css_length length;
-        if (!aether_css_length_try_parse(token.c_str(), &length)) continue;
-        auto pixels = aether_css_length_resolve(length, 0, 16, 16, 1920, 1080);
-        if (length_index == 0) st->box_shadow.offset_x = pixels;
-        else if (length_index == 1) st->box_shadow.offset_y = pixels;
-        else if (length_index == 2) st->box_shadow.blur_radius = pixels;
-        else if (length_index == 3) st->box_shadow.spread_radius = pixels;
-        ++length_index;
+static bool bi_try_background_image(const char* src, std::string& out) {
+    const std::string value = str_trim(src ? src : "");
+    if (str_iequals(value, "none")) { out = "none"; return true; }
+    const auto layers = split_top_level(value, ',');
+    if (layers.empty()) return false;
+    for (const auto& layer : layers) {
+        const auto item = str_trim(layer);
+        // Let the checked applicator diagnose malformed functions with the property context.
+        if (!str_starts_with_i(item, "url(") && !str_starts_with_i(item, "linear-gradient")) return false;
     }
-    st->has_box_shadow = length_index >= 2 ? AETHER_TRUE : AETHER_FALSE;
+    out = value;
+    return true;
+}
+
+static property_apply_result_s bi_apply_background_image(aether_computed_style_t* st, const std::string& value) {
+    if (str_iequals(value, "none")) {
+        aether_background_layer_list_free(&st->background_layers);
+        return {};
+    }
+    if (str_starts_with_i(str_trim(value), "linear-gradient") && find_top_level(value, ',') < 0)
+        return bi_apply_gradient(st, value);
+
+    aether_background_layer_list replacement{};
+    if (!aether_background_image_list_try_parse(value, &replacement)) {
+        const auto parts = split_top_level(value, ',');
+        for (const auto& part : parts) {
+            if (str_starts_with_i(str_trim(part), "linear-gradient"))
+                return property_apply_result_s::failure("AETHER-CSS-GRADIENT", "The linear-gradient value cannot be represented by the current gradient model.");
+        }
+        return property_apply_result_s::failure("AETHER-CSS-BACKGROUND-IMAGE-URL", "The url() background-image source is syntactically invalid.");
+    }
+    aether_background_layer_list_free(&st->background_layers);
+    st->background_layers = replacement;
+    return {};
+}
+
+static property_apply_result_s bi_apply_gradient(aether_computed_style_t* st, const std::string& value) {
+    aether_linear_gradient gradient{};
+    aether_linear_gradient_parse_info_s parse_info{};
+    if (!aether_linear_gradient_try_parse(value.c_str(), &gradient, &parse_info)) {
+        return property_apply_result_s::failure(
+            "AETHER-CSS-GRADIENT",
+            "The linear-gradient value cannot be represented by the current gradient model.");
+    }
+    aether_background_layer_list replacement{};
+    replacement.items = static_cast<aether_background_layer*>(std::calloc(1, sizeof(aether_background_layer)));
+    if (!replacement.items) {
+        aether_linear_gradient_free(&gradient);
+        return property_apply_result_s::failure("AETHER-CSS-GRADIENT", "Out of memory while creating the background layer.");
+    }
+    replacement.count = 1;
+    auto& layer = replacement.items[0];
+    layer.kind = AETHER_BACKGROUND_LAYER_LINEAR_GRADIENT;
+    layer.gradient = gradient;
+    layer.position_x = aether_css_length_zero();
+    layer.position_y = aether_css_length_zero();
+    layer.size_kind = AETHER_BACKGROUND_SIZE_AUTO;
+    layer.size_x = aether_css_length_auto();
+    layer.size_y = aether_css_length_auto();
+    layer.repeat_x = AETHER_BACKGROUND_REPEAT;
+    layer.repeat_y = AETHER_BACKGROUND_REPEAT;
+    aether_background_layer_list_free(&st->background_layers);
+    st->background_layers = replacement;
+    if (parse_info.uses_fixed_corner_direction) {
+        return property_apply_result_s::warning(
+            "AETHER-CSS-GRADIENT-APPROXIMATION",
+            "Keyword corner directions use a fixed 45-degree vector until gradient direction can resolve against the final paint rectangle.");
+    }
+    return {};
+}
+
+static bool bi_split_shadow_top_level(const std::string& source, bool split_whitespace,
+                                      std::vector<std::string>& output) {
+    output.clear();
+    std::string token;
+    char quote = 0;
+    int depth = 0;
+    for (size_t index = 0; index < source.size(); ++index) {
+        const char character = source[index];
+        if (quote) {
+            token += character;
+            if (character == '\\' && index + 1 < source.size()) token += source[++index];
+            else if (character == quote) quote = 0;
+            continue;
+        }
+        if (character == '\'' || character == '"') { quote = character; token += character; continue; }
+        if (character == '(') { ++depth; token += character; continue; }
+        if (character == ')') {
+            if (depth == 0) return false;
+            --depth;
+            token += character;
+            continue;
+        }
+        const bool delimiter = depth == 0 &&
+            (split_whitespace ? std::isspace(static_cast<unsigned char>(character)) : character == ',');
+        if (!delimiter) { token += character; continue; }
+        const std::string value = str_trim(token);
+        if (value.empty()) return false;
+        output.push_back(value);
+        token.clear();
+    }
+    if (quote || depth != 0) return false;
+    const std::string value = str_trim(token);
+    if (value.empty()) return false;
+    output.push_back(value);
+    return true;
+}
+
+enum class shadow_parse_error_e {
+    none,
+    invalid,
+    inset_not_allowed,
+    spread_not_allowed,
+};
+
+static shadow_parse_error_e bi_parse_shadow_component(const std::string& source,
+                                                      bool allow_inset, bool allow_spread,
+                                                      aether_shadow& shadow,
+                                                      bool& uses_current_color) {
+    std::vector<std::string> tokens;
+    if (!bi_split_shadow_top_level(source, true, tokens)) return shadow_parse_error_e::invalid;
+
+    shadow = {};
+    uses_current_color = true; // CSS default: the element's final currentColor.
+    bool has_inset = false;
+    bool has_color = false;
+    int length_count = 0;
+    for (const auto& token : tokens) {
+        if (str_iequals(token, "inset")) {
+            if (!allow_inset) return shadow_parse_error_e::inset_not_allowed;
+            if (has_inset) return shadow_parse_error_e::invalid;
+            has_inset = true;
+            shadow.inset = AETHER_TRUE;
+            continue;
+        }
+        if (str_iequals(token, "currentColor")) {
+            if (has_color) return shadow_parse_error_e::invalid;
+            has_color = true;
+            uses_current_color = true;
+            continue;
+        }
+        aether_color_rgba color;
+        if (aether_color_rgba_try_parse(token.c_str(), &color)) {
+            if (has_color) return shadow_parse_error_e::invalid;
+            has_color = true;
+            uses_current_color = false;
+            shadow.color = color;
+            continue;
+        }
+        aether_css_length length;
+        if (!aether_css_length_try_parse(token.c_str(), &length) ||
+            length.unit == AETHER_CSS_UNIT_AUTO || length.unit == AETHER_CSS_UNIT_PERCENT ||
+            length_count == 4) return shadow_parse_error_e::invalid;
+        if (!allow_spread && length_count == 3) return shadow_parse_error_e::spread_not_allowed;
+        const float pixels = aether_css_length_resolve(length, 0, 16, 16, 1920, 1080);
+        if (!std::isfinite(pixels) || (length_count == 2 && pixels < 0)) return shadow_parse_error_e::invalid;
+        if (length_count == 0) shadow.offset_x = pixels;
+        else if (length_count == 1) shadow.offset_y = pixels;
+        else if (length_count == 2) shadow.blur_radius = pixels;
+        else shadow.spread_radius = pixels;
+        ++length_count;
+    }
+    return length_count >= 2 ? shadow_parse_error_e::none : shadow_parse_error_e::invalid;
+}
+
+static property_apply_result_s bi_apply_shadow_list(const std::string& value,
+                                                    aether_shadow_list& destination,
+                                                    std::vector<bool>& current_color_references,
+                                                    bool allow_inset, bool allow_spread,
+                                                    const char* code) {
+    aether_shadow_list_free(&destination);
+    current_color_references.clear();
+    if (str_iequals(value, "none")) return {};
+
+    std::vector<std::string> components;
+    if (!bi_split_shadow_top_level(value, false, components) || components.empty()) {
+        return property_apply_result_s::failure(code,
+            "The shadow list value is syntactically invalid.");
+    }
+
+    std::vector<aether_shadow> parsed;
+    std::vector<bool> references;
+    parsed.reserve(components.size());
+    references.reserve(components.size());
+    for (const auto& component : components) {
+        if (str_iequals(component, "none")) {
+            return property_apply_result_s::failure(code,
+                "The none keyword cannot be combined with another shadow.");
+        }
+        aether_shadow shadow{};
+        bool uses_current_color = false;
+        const auto error = bi_parse_shadow_component(component, allow_inset, allow_spread,
+                                                     shadow, uses_current_color);
+        if (error != shadow_parse_error_e::none) {
+            if (error == shadow_parse_error_e::inset_not_allowed) {
+                return property_apply_result_s::failure(code,
+                    "The inset keyword is not valid for text-shadow.");
+            }
+            if (error == shadow_parse_error_e::spread_not_allowed) {
+                return property_apply_result_s::failure(code,
+                    "A spread radius is not valid for text-shadow.");
+            }
+            return property_apply_result_s::failure(code,
+                allow_spread
+                    ? "Each box shadow requires two to four lengths and an optional color or inset keyword."
+                    : "Each text shadow requires two or three lengths and an optional color.");
+        }
+        parsed.push_back(shadow);
+        references.push_back(uses_current_color);
+    }
+
+    const size_t bytes = sizeof(aether_shadow) * parsed.size();
+    auto* items = static_cast<aether_shadow*>(std::malloc(bytes));
+    if (!items) return property_apply_result_s::failure(code,
+        "The shadow list could not be allocated.");
+    std::memcpy(items, parsed.data(), bytes);
+    destination = {items, static_cast<int32_t>(parsed.size())};
+    current_color_references = std::move(references);
+    return {};
+}
+
+static property_apply_result_s bi_apply_box_shadow(property_apply_context_s& context,
+                                                   const std::string& value) {
+    return bi_apply_shadow_list(value, context.style->box_shadows,
+        context.color_resolution->box_shadow_uses_current_color, true, true,
+        "AETHER-CSS-BOX-SHADOW");
+}
+
+static property_apply_result_s bi_apply_text_shadow(property_apply_context_s& context,
+                                                    const std::string& value) {
+    return bi_apply_shadow_list(value, context.style->text_shadows,
+        context.color_resolution->text_shadow_uses_current_color, false, false,
+        "AETHER-CSS-TEXT-SHADOW");
 }
 
 static bool bi_try_shadow(const char* src, std::string& out) {
@@ -745,8 +960,8 @@ void builtin_properties_register(style_property_registry_s* reg) {
     {
         static const char* kw[] = { "start","end","left","right","center","justify" };
         static const int32_t vals[] = {
-            AETHER_TEXT_ALIGN_START,AETHER_TEXT_ALIGN_END,AETHER_TEXT_ALIGN_START,
-            AETHER_TEXT_ALIGN_END,AETHER_TEXT_ALIGN_CENTER,AETHER_TEXT_ALIGN_START
+            AETHER_TEXT_ALIGN_START,AETHER_TEXT_ALIGN_END,AETHER_TEXT_ALIGN_LEFT,
+            AETHER_TEXT_ALIGN_RIGHT,AETHER_TEXT_ALIGN_CENTER,AETHER_TEXT_ALIGN_JUSTIFY
         };
         reg->register_property("text-align", true,
             STYLE_IMPACT_TEXT_LAYOUT | STYLE_IMPACT_PAINT,
@@ -759,6 +974,28 @@ void builtin_properties_register(style_property_registry_s* reg) {
                 return false;
             },
             [](aether_computed_style_t* st, const std::string& v) { st->text_align = std::atoi(v.c_str()); });
+    }
+
+    // text-transform
+    {
+        static const char* kw[] = { "none", "capitalize", "uppercase", "lowercase" };
+        static const int32_t vals[] = {
+            AETHER_TEXT_TRANSFORM_NONE, AETHER_TEXT_TRANSFORM_CAPITALIZE,
+            AETHER_TEXT_TRANSFORM_UPPERCASE, AETHER_TEXT_TRANSFORM_LOWERCASE
+        };
+        reg->register_property("text-transform", true,
+            STYLE_IMPACT_TEXT_LAYOUT | STYLE_IMPACT_PAINT,
+            "none",
+            [](const char* s, std::string& o) -> bool {
+                std::string v;
+                if (!bi_try_keyword(s, kw, 4, v)) return false;
+                for (int i = 0; i < 4; ++i)
+                    if (str_iequals(v, kw[i])) { o = std::to_string(vals[i]); return true; }
+                return false;
+            },
+            [](aether_computed_style_t* st, const std::string& v) {
+                st->text_transform = std::atoi(v.c_str());
+            });
     }
 
     // white-space
@@ -791,16 +1028,68 @@ void builtin_properties_register(style_property_registry_s* reg) {
             aether_color_rgba c; if (aether_color_rgba_try_parse(v.c_str(), &c)) st->background_color = c;
         });
 
+    // Backdrop-filter is a non-inherited ordered operation list. The compositor v1
+    // currently understands blur(); unsupported functions are diagnosed explicitly.
+    reg->register_property_checked("backdrop-filter", false, STYLE_IMPACT_PAINT | STYLE_IMPACT_COMPOSITE,
+        "none",
+        [](const char* source, std::string& out) { out = str_trim(source ? source : ""); return !out.empty(); },
+        [](aether_computed_style_t* st, const std::string& value) { return bi_apply_backdrop_filter(st, value); });
+    reg->register_property_checked("-webkit-backdrop-filter", false, STYLE_IMPACT_PAINT | STYLE_IMPACT_COMPOSITE,
+        "none",
+        [](const char* source, std::string& out) { out = str_trim(source ? source : ""); return !out.empty(); },
+        [](aether_computed_style_t* st, const std::string& value) { return bi_apply_backdrop_filter(st, value); });
+
     // background-image
-    reg->register_property("background-image", false, STYLE_IMPACT_PAINT,
-        "none", bi_try_gradient,
-        [](aether_computed_style_t* st, const std::string& v) {
-            if (str_iequals(v, "none")) {
-                aether_linear_gradient_free(&st->background_gradient);
-                st->has_background_gradient = AETHER_FALSE;
-            } else {
-                bi_apply_gradient(st, v);
+    reg->register_property_checked("background-image", false, STYLE_IMPACT_PAINT,
+        "none", bi_try_background_image,
+        [](aether_computed_style_t* st, const std::string& v) -> property_apply_result_s {
+            return bi_apply_background_image(st, v);
+        });
+
+    // These list-valued longhands deliberately apply after background-image.
+    // CSS repeats the final supplied value when there are fewer values than layers.
+    reg->register_property_checked("background-position", false, STYLE_IMPACT_PAINT,
+        "0% 0%",
+        [](const char* source, std::string& out) { out = str_trim(source ? source : ""); return !out.empty(); },
+        [](aether_computed_style_t* st, const std::string& value) -> property_apply_result_s {
+            std::vector<aether_background_position_s> positions;
+            if (!aether_background_position_list_try_parse(value, positions))
+                return property_apply_result_s::failure("AETHER-CSS-BACKGROUND-POSITION", "The background-position value is not supported by the current background layer model.");
+            for (int32_t i = 0; i < st->background_layers.count; ++i) {
+                const auto& position = positions[static_cast<size_t>(i) % positions.size()];
+                st->background_layers.items[i].position_x = position.x;
+                st->background_layers.items[i].position_y = position.y;
             }
+            return {};
+        });
+    reg->register_property_checked("background-size", false, STYLE_IMPACT_PAINT,
+        "auto auto",
+        [](const char* source, std::string& out) { out = str_trim(source ? source : ""); return !out.empty(); },
+        [](aether_computed_style_t* st, const std::string& value) -> property_apply_result_s {
+            std::vector<aether_background_size_s> sizes;
+            if (!aether_background_size_list_try_parse(value, sizes))
+                return property_apply_result_s::failure("AETHER-CSS-BACKGROUND-SIZE", "The background-size value is not supported by the current background layer model.");
+            for (int32_t i = 0; i < st->background_layers.count; ++i) {
+                const auto& size = sizes[static_cast<size_t>(i) % sizes.size()];
+                st->background_layers.items[i].size_kind = size.kind;
+                st->background_layers.items[i].size_x = size.x;
+                st->background_layers.items[i].size_y = size.y;
+            }
+            return {};
+        });
+    reg->register_property_checked("background-repeat", false, STYLE_IMPACT_PAINT,
+        "repeat repeat",
+        [](const char* source, std::string& out) { out = str_trim(source ? source : ""); return !out.empty(); },
+        [](aether_computed_style_t* st, const std::string& value) -> property_apply_result_s {
+            std::vector<aether_background_repeat_s> repeats;
+            if (!aether_background_repeat_list_try_parse(value, repeats))
+                return property_apply_result_s::failure("AETHER-CSS-BACKGROUND-REPEAT", "The background-repeat value is not supported by the current background layer model.");
+            for (int32_t i = 0; i < st->background_layers.count; ++i) {
+                const auto& repeat = repeats[static_cast<size_t>(i) % repeats.size()];
+                st->background_layers.items[i].repeat_x = repeat.x;
+                st->background_layers.items[i].repeat_y = repeat.y;
+            }
+            return {};
         });
 
     // opacity
@@ -817,12 +1106,14 @@ void builtin_properties_register(style_property_registry_s* reg) {
             return bi_try_keyword(s, kw, 4, o);
         };
         auto bgclip_apply = [](aether_computed_style_t* st, const std::string& v) {
-            if (str_iequals(v, "text") && st->has_background_gradient) {
+            if (str_iequals(v, "text") && st->background_layers.count == 1 &&
+                st->background_layers.items &&
+                st->background_layers.items[0].kind == AETHER_BACKGROUND_LAYER_LINEAR_GRADIENT) {
                 aether_linear_gradient_free(&st->text_gradient);
-                st->text_gradient = st->background_gradient;
-                st->background_gradient = {};
+                st->text_gradient = st->background_layers.items[0].gradient;
+                st->background_layers.items[0].gradient = {};
+                aether_background_layer_list_free(&st->background_layers);
                 st->has_text_gradient = AETHER_TRUE;
-                st->has_background_gradient = AETHER_FALSE;
                 st->background_color = {0, 0, 0, 0};
             }
         };
@@ -834,54 +1125,86 @@ void builtin_properties_register(style_property_registry_s* reg) {
 
     // border-width (top/right/bottom/left)
     {
-        auto bwa = [](int side) -> property_apply_fn {
+        auto bwa = [](aether_border_side_t side) -> property_apply_fn {
             return [side](aether_computed_style_t* st, const std::string& v) {
-                aether_css_length l; aether_css_length_try_parse(v.c_str(), &l);
-                switch (side) {
-                    case 0: st->border_width.top = l; break;
-                    case 1: st->border_width.right = l; break;
-                    case 2: st->border_width.bottom = l; break;
-                    case 3: st->border_width.left = l; break;
-                }
+                aether_css_length l = aether_css_length_zero();
+                if (!bi_parse_border_width(v, l)) return;
+                aether_border_width_for_side(st->border_width, side) = l;
             };
         };
-        reg->register_property("border-top-width",    false, STYLE_IMPACT_LAYOUT|STYLE_IMPACT_PAINT|STYLE_IMPACT_HITTEST, "0", bi_try_border_width, bwa(0));
-        reg->register_property("border-right-width",  false, STYLE_IMPACT_LAYOUT|STYLE_IMPACT_PAINT|STYLE_IMPACT_HITTEST, "0", bi_try_border_width, bwa(1));
-        reg->register_property("border-bottom-width", false, STYLE_IMPACT_LAYOUT|STYLE_IMPACT_PAINT|STYLE_IMPACT_HITTEST, "0", bi_try_border_width, bwa(2));
-        reg->register_property("border-left-width",   false, STYLE_IMPACT_LAYOUT|STYLE_IMPACT_PAINT|STYLE_IMPACT_HITTEST, "0", bi_try_border_width, bwa(3));
+        reg->register_property("border-top-width",    false, STYLE_IMPACT_LAYOUT|STYLE_IMPACT_PAINT|STYLE_IMPACT_HITTEST, "0", bi_try_border_width, bwa(aether_border_side_t::top));
+        reg->register_property("border-right-width",  false, STYLE_IMPACT_LAYOUT|STYLE_IMPACT_PAINT|STYLE_IMPACT_HITTEST, "0", bi_try_border_width, bwa(aether_border_side_t::right));
+        reg->register_property("border-bottom-width", false, STYLE_IMPACT_LAYOUT|STYLE_IMPACT_PAINT|STYLE_IMPACT_HITTEST, "0", bi_try_border_width, bwa(aether_border_side_t::bottom));
+        reg->register_property("border-left-width",   false, STYLE_IMPACT_LAYOUT|STYLE_IMPACT_PAINT|STYLE_IMPACT_HITTEST, "0", bi_try_border_width, bwa(aether_border_side_t::left));
     }
 
     // border-style (top/right/bottom/left)
     {
-        auto bsa = [](aether_computed_style_t* st, const std::string& v) { (void)st; (void)v; };
-        reg->register_property("border-top-style",    false, STYLE_IMPACT_LAYOUT|STYLE_IMPACT_PAINT, "none", bi_try_border_style, bsa);
-        reg->register_property("border-right-style",  false, STYLE_IMPACT_LAYOUT|STYLE_IMPACT_PAINT, "none", bi_try_border_style, bsa);
-        reg->register_property("border-bottom-style", false, STYLE_IMPACT_LAYOUT|STYLE_IMPACT_PAINT, "none", bi_try_border_style, bsa);
-        reg->register_property("border-left-style",   false, STYLE_IMPACT_LAYOUT|STYLE_IMPACT_PAINT, "none", bi_try_border_style, bsa);
+        auto border_style = [](const std::string& value) -> int32_t {
+            if (str_iequals(value, "hidden")) return AETHER_BORDER_STYLE_HIDDEN;
+            if (str_iequals(value, "dotted")) return AETHER_BORDER_STYLE_DOTTED;
+            if (str_iequals(value, "dashed")) return AETHER_BORDER_STYLE_DASHED;
+            if (str_iequals(value, "solid")) return AETHER_BORDER_STYLE_SOLID;
+            if (str_iequals(value, "double")) return AETHER_BORDER_STYLE_DOUBLE;
+            if (str_iequals(value, "groove")) return AETHER_BORDER_STYLE_GROOVE;
+            if (str_iequals(value, "ridge")) return AETHER_BORDER_STYLE_RIDGE;
+            if (str_iequals(value, "inset")) return AETHER_BORDER_STYLE_INSET;
+            if (str_iequals(value, "outset")) return AETHER_BORDER_STYLE_OUTSET;
+            return AETHER_BORDER_STYLE_NONE;
+        };
+        auto bsa = [border_style](aether_border_side_t side) -> property_apply_fn {
+            return [border_style, side](aether_computed_style_t* st, const std::string& v) {
+                aether_border_style_for_side(st->border_styles, side) = border_style(v);
+            };
+        };
+        reg->register_property("border-top-style",    false, STYLE_IMPACT_LAYOUT|STYLE_IMPACT_PAINT, "none", bi_try_border_style, bsa(aether_border_side_t::top));
+        reg->register_property("border-right-style",  false, STYLE_IMPACT_LAYOUT|STYLE_IMPACT_PAINT, "none", bi_try_border_style, bsa(aether_border_side_t::right));
+        reg->register_property("border-bottom-style", false, STYLE_IMPACT_LAYOUT|STYLE_IMPACT_PAINT, "none", bi_try_border_style, bsa(aether_border_side_t::bottom));
+        reg->register_property("border-left-style",   false, STYLE_IMPACT_LAYOUT|STYLE_IMPACT_PAINT, "none", bi_try_border_style, bsa(aether_border_side_t::left));
     }
 
     // border-color (top/right/bottom/left)
     {
-        auto bca = [](aether_computed_style_t* st, const std::string& v) {
-            aether_color_rgba c; if (aether_color_rgba_try_parse(v.c_str(), &c)) st->border_color = c;
+        auto bca = [](aether_border_side_t side) -> property_apply_context_fn {
+            return [side](property_apply_context_s& context, const std::string& v) {
+                if (str_iequals(v, "currentColor")) {
+                    context.color_resolution->border_uses_current_color[static_cast<int>(side)] = true;
+                    return;
+                }
+                aether_color_rgba color{};
+                if (!aether_color_rgba_try_parse(v.c_str(), &color)) return;
+                aether_border_color_for_side(context.style->border_colors, side) = color;
+                context.color_resolution->border_uses_current_color[static_cast<int>(side)] = false;
+            };
         };
-        reg->register_property("border-top-color",    false, STYLE_IMPACT_PAINT, "currentColor", bi_try_color, bca);
-        reg->register_property("border-right-color",  false, STYLE_IMPACT_PAINT, "currentColor", bi_try_color, bca);
-        reg->register_property("border-bottom-color", false, STYLE_IMPACT_PAINT, "currentColor", bi_try_color, bca);
-        reg->register_property("border-left-color",   false, STYLE_IMPACT_PAINT, "currentColor", bi_try_color, bca);
+        reg->register_property_with_context("border-top-color",    false, STYLE_IMPACT_PAINT, "currentColor", bi_try_color, bca(aether_border_side_t::top));
+        reg->register_property_with_context("border-right-color",  false, STYLE_IMPACT_PAINT, "currentColor", bi_try_color, bca(aether_border_side_t::right));
+        reg->register_property_with_context("border-bottom-color", false, STYLE_IMPACT_PAINT, "currentColor", bi_try_color, bca(aether_border_side_t::bottom));
+        reg->register_property_with_context("border-left-color",   false, STYLE_IMPACT_PAINT, "currentColor", bi_try_color, bca(aether_border_side_t::left));
     }
 
-    // border-radius
+    // CSS Backgrounds & Borders §4.1. The model retains all corner axes; resolution and
+    // overlap normalization live in css/border_radii, not the property registry.
     reg->register_property("border-radius", false, STYLE_IMPACT_PAINT | STYLE_IMPACT_HITTEST,
-        "0", bi_try_size,
-        [](aether_computed_style_t* st, const std::string& v) { apply_length_field(&st->border_radius, v); });
+        "0", bi_try_border_radii,
+        [](aether_computed_style_t* st, const std::string& v) { aether_border_radii_try_parse(v, &st->border_radii); });
+    auto register_corner_radius = [&reg](const char* name, aether_corner_radius aether_border_radii::* member) {
+        reg->register_property(name, false, STYLE_IMPACT_PAINT | STYLE_IMPACT_HITTEST, "0", bi_try_border_radii,
+            [member](aether_computed_style_t* st, const std::string& value) {
+                aether_border_radii parsed;
+                if (aether_border_radii_try_parse(value, &parsed)) st->border_radii.*member = parsed.top_left;
+            });
+    };
+    register_corner_radius("border-top-left-radius", &aether_border_radii::top_left);
+    register_corner_radius("border-top-right-radius", &aether_border_radii::top_right);
+    register_corner_radius("border-bottom-right-radius", &aether_border_radii::bottom_right);
+    register_corner_radius("border-bottom-left-radius", &aether_border_radii::bottom_left);
 
     // box-shadow
-    reg->register_property("box-shadow", false, STYLE_IMPACT_PAINT, "none",
-        bi_try_shadow,
-        [](aether_computed_style_t* st, const std::string& v) {
-            bi_apply_shadow(st, v);
-        });
+    reg->register_property_checked_with_context("box-shadow", false, STYLE_IMPACT_PAINT, "none",
+        bi_try_shadow, bi_apply_box_shadow);
+    reg->register_property_checked_with_context("text-shadow", true, STYLE_IMPACT_PAINT, "none",
+        bi_try_shadow, bi_apply_text_shadow);
 
     // ── Interaction ────────────────────────────────────────────
 
@@ -1059,6 +1382,19 @@ void builtin_properties_register(style_property_registry_s* reg) {
             std::string t = str_trim(source);
             if (bi_is_global_keyword(t)) {
                 writer.set("background-color", t.c_str());
+                writer.set("background-image", t.c_str());
+                writer.set("background-position", t.c_str());
+                writer.set("background-size", t.c_str());
+                writer.set("background-repeat", t.c_str());
+                return true;
+            }
+            aether_background_shorthand_s parsed{};
+            if (aether_background_shorthand_try_parse(t, parsed)) {
+                writer.set("background-image", parsed.image.c_str());
+                writer.set("background-position", parsed.position.c_str());
+                writer.set("background-size", parsed.size.c_str());
+                writer.set("background-repeat", parsed.repeat.c_str());
+                writer.set("background-color", parsed.has_color ? parsed.color.c_str() : "transparent");
                 return true;
             }
             {
@@ -1071,9 +1407,12 @@ void builtin_properties_register(style_property_registry_s* reg) {
                     // color — mirrors BuiltinStyleProperties.cs's "background" shorthand on the
                     // managed path exactly (see ExpandBackground there).
                     aether_computed_style_t temp{};
-                    bi_apply_gradient(&temp, g);
-                    if (temp.has_background_gradient && temp.background_gradient.stop_count > 0) {
-                        const auto& c = temp.background_gradient.stops[0].color;
+                    const auto gradient_result = bi_apply_gradient(&temp, g);
+                    if (gradient_result.success && temp.background_layers.count == 1 &&
+                        temp.background_layers.items &&
+                        temp.background_layers.items[0].kind == AETHER_BACKGROUND_LAYER_LINEAR_GRADIENT &&
+                        temp.background_layers.items[0].gradient.stop_count > 0) {
+                        const auto& c = temp.background_layers.items[0].gradient.stops[0].color;
                         char buf[64];
                         std::snprintf(buf, sizeof(buf), "rgba(%d, %d, %d, %g)",
                             static_cast<int>(std::lround(c.r * 255.0f)),
@@ -1084,7 +1423,7 @@ void builtin_properties_register(style_property_registry_s* reg) {
                     } else {
                         writer.set("background-color", "transparent");
                     }
-                    aether_linear_gradient_free(&temp.background_gradient);
+                    aether_background_layer_list_free(&temp.background_layers);
 
                     return true;
                 }
@@ -1092,6 +1431,10 @@ void builtin_properties_register(style_property_registry_s* reg) {
             std::string c;
             if (bi_try_color(source, c)) {
                 writer.set("background-color", c.c_str());
+                writer.set("background-image", "none");
+                writer.set("background-position", "0% 0%");
+                writer.set("background-size", "auto auto");
+                writer.set("background-repeat", "repeat repeat");
                 return true;
             }
             return false;
@@ -1133,6 +1476,37 @@ void builtin_properties_register(style_property_registry_s* reg) {
             }
             return true;
         });
+
+    // Per-side border shorthand. This is intentionally expanded through the same longhands as
+    // `border`, so cascade precedence and invalid-value handling stay identical for every edge.
+    for (const char* side : { "top", "right", "bottom", "left" }) {
+        const std::string shorthand = std::string("border-") + side;
+        reg->register_shorthand(shorthand.c_str(),
+            [side](const char* source, style_shorthand_writer_s& writer) -> bool {
+                std::string t = str_trim(source);
+                const std::string prefix = std::string("border-") + side + "-";
+                if (bi_is_global_keyword(t)) {
+                    writer.set((prefix + "width").c_str(), t.c_str());
+                    writer.set((prefix + "style").c_str(), t.c_str());
+                    writer.set((prefix + "color").c_str(), t.c_str());
+                    return true;
+                }
+                const auto parts = bi_split_ws(t);
+                if (parts.empty() || parts.size() > 3) return false;
+                std::string width = "medium", style = "none", color = "currentColor";
+                bool width_set = false, style_set = false, color_set = false;
+                for (const auto& part : parts) {
+                    if (!width_set && bi_try_border_width(part.c_str(), width)) width_set = true;
+                    else if (!style_set && bi_try_border_style(part.c_str(), style)) style_set = true;
+                    else if (!color_set && bi_try_color(part.c_str(), color)) color_set = true;
+                    else return false;
+                }
+                writer.set((prefix + "width").c_str(), width.c_str());
+                writer.set((prefix + "style").c_str(), style.c_str());
+                writer.set((prefix + "color").c_str(), color.c_str());
+                return true;
+            });
+    }
 
     // flex shorthand
     reg->register_shorthand("flex",

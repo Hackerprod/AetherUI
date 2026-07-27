@@ -5,6 +5,10 @@
 struct aether_display_list_builder_s {
     aether_text_measurer_fn text_measurer = nullptr;
     void*                   text_measurer_data = nullptr;
+    aether_image_dimensions_fn image_dimensions = nullptr;
+    void*                   image_dimensions_data = nullptr;
+    aether_sizef            viewport{};
+    float                   root_font_size = 16.f;
 };
 
 struct aether_display_list_s {

@@ -126,3 +126,17 @@ public readonly record struct CssEdges(CssLength Left, CssLength Top, CssLength 
 
     public static readonly CssEdges Zero = new(CssLength.Zero);
 }
+
+public readonly record struct CssCornerRadius(CssLength Horizontal, CssLength Vertical)
+{
+    public CssCornerRadius(CssLength uniform) : this(uniform, uniform) { }
+    public static readonly CssCornerRadius Zero = new(CssLength.Zero);
+}
+
+public readonly record struct CssBorderRadii(
+    CssCornerRadius TopLeft, CssCornerRadius TopRight,
+    CssCornerRadius BottomRight, CssCornerRadius BottomLeft)
+{
+    public static readonly CssBorderRadii Zero = new(CssCornerRadius.Zero, CssCornerRadius.Zero,
+        CssCornerRadius.Zero, CssCornerRadius.Zero);
+}

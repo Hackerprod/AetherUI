@@ -20,6 +20,15 @@ internal static unsafe partial class NativeMethods
 {
     private const string Lib = "aether_core";
 
+    [LibraryImport(Lib, EntryPoint = "aether_abi_version")]
+    internal static partial uint AbiVersion();
+
+    [LibraryImport(Lib, EntryPoint = "aether_abi_capabilities")]
+    internal static partial ulong AbiCapabilities();
+
+    [LibraryImport(Lib, EntryPoint = "aether_paint_command_size")]
+    internal static partial nuint PaintCommandSize();
+
     // ── Status & Lifecycle ──────────────────────────────────────────
 
     [LibraryImport(Lib, EntryPoint = "aether_status_message")]
@@ -182,6 +191,9 @@ internal static unsafe partial class NativeMethods
     [LibraryImport(Lib, EntryPoint = "aether_display_list_builder_destroy")]
     internal static partial void DisplayListBuilderDestroy(IntPtr builder);
 
+    [LibraryImport(Lib, EntryPoint = "aether_display_list_builder_set_image_dimensions_callback")]
+    internal static partial void DisplayListBuilderSetImageDimensionsCallback(IntPtr builder, IntPtr callback, IntPtr data);
+
     [LibraryImport(Lib, EntryPoint = "aether_display_list_build")]
     internal static partial int DisplayListBuild(IntPtr builder, IntPtr layout, IntPtr focusedElement, out IntPtr displayList);
 
@@ -250,6 +262,9 @@ internal static unsafe partial class NativeMethods
 
     [LibraryImport(Lib, EntryPoint = "aether_computed_style_copy")]
     internal static partial int ComputedStyleCopy(IntPtr handle, IntPtr destination);
+
+    [LibraryImport(Lib, EntryPoint = "aether_computed_style_free")]
+    internal static partial void ComputedStyleFree(IntPtr style);
 
     [LibraryImport(Lib, EntryPoint = "aether_computed_style_handle_destroy")]
     internal static partial void ComputedStyleHandleDestroy(IntPtr handle);

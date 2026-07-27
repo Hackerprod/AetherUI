@@ -1,0 +1,41 @@
+{
+  "name": "@aetherui/javascript",
+  "version": "0.1.0",
+  "description": "Node.js JavaScript/TypeScript binding for the AetherUI C ABI",
+  "type": "module",
+  "main": "./src/index.mjs",
+  "types": "./index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./index.d.ts",
+      "import": "./src/index.mjs",
+      "default": "./src/index.mjs"
+    },
+    "./desktop": {
+      "types": "./src/desktop/index.d.ts",
+      "import": "./src/desktop/index.mjs",
+      "default": "./src/desktop/index.mjs"
+    }
+  },
+  "files": [
+    "index.d.ts",
+    "src",
+    "scripts",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "koffi": "^2.15.1"
+  },
+  "scripts": {
+    "check": "node --check src/ffi.mjs && node --check src/index.mjs && node --check src/desktop/host.mjs && node --check src/desktop/windows.mjs && node --check src/desktop/renderer.mjs && node --check src/desktop/index.mjs",
+    "test": "node --test",
+    "package:win": "node scripts/package-win.mjs"
+  },
+  "devDependencies": {
+    "postject": "^1.0.0-alpha.6"
+  },
+  "license": "MIT"
+}

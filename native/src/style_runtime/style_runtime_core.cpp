@@ -1,5 +1,6 @@
 #include <aether/aether.h>
 #include "../abi/aether_abi.h"
+#include "../css/border_utils.h"
 #include "../css/style_map_types.h"
 #include "../dom/dom_types.h"
 #include "style_property_registry_internal.h"
@@ -60,10 +61,16 @@ static node_style_info_s get_node_info(aether_node_s* node) {
 static bool style_equal(const aether_computed_style_t& a, const aether_computed_style_t& b) {
     aether_computed_style_t left = a;
     aether_computed_style_t right = b;
-    left.background_gradient.stops = nullptr;
-    right.background_gradient.stops = nullptr;
+    left.background_layers.items = nullptr;
+    right.background_layers.items = nullptr;
+    left.backdrop_filters.items = nullptr;
+    right.backdrop_filters.items = nullptr;
     left.text_gradient.stops = nullptr;
     right.text_gradient.stops = nullptr;
+    left.text_shadows.items = nullptr;
+    right.text_shadows.items = nullptr;
+    left.box_shadows.items = nullptr;
+    right.box_shadows.items = nullptr;
     if (std::memcmp(&left, &right, sizeof(left)) != 0) return false;
     auto gradients_equal = [](const aether_linear_gradient& x, const aether_linear_gradient& y) {
         if (x.stop_count != y.stop_count) return false;
@@ -71,8 +78,11 @@ static bool style_equal(const aether_computed_style_t& a, const aether_computed_
         return x.stops && y.stops &&
             std::memcmp(x.stops, y.stops, sizeof(aether_gradient_stop) * x.stop_count) == 0;
     };
-    return gradients_equal(a.background_gradient, b.background_gradient) &&
-           gradients_equal(a.text_gradient, b.text_gradient);
+    return aether_background_layer_list_equal(&a.background_layers, &b.background_layers) == AETHER_TRUE &&
+           aether_backdrop_filter_list_equal(&a.backdrop_filters, &b.backdrop_filters) == AETHER_TRUE &&
+           gradients_equal(a.text_gradient, b.text_gradient) &&
+           aether_shadow_list_equal(&a.text_shadows, &b.text_shadows) == AETHER_TRUE &&
+           aether_shadow_list_equal(&a.box_shadows, &b.box_shadows) == AETHER_TRUE;
 }
 
 static void rebuild_index(aether_style_runtime_s* runtime) {
@@ -89,6 +99,43 @@ static void report(aether_style_runtime_s* runtime, const char* code,
                    const char* property, const char* value, const char* message) {
     if (runtime->diag_cb)
         runtime->diag_cb(code, property, value, message, runtime->diag_user_data);
+}
+
+static bool is_color_producer(const style_property_definition_s& definition) {
+    // The current model maps text-fill-color onto the same concrete text color.
+    // Resolve every such producer before references to currentColor are fixed.
+    return definition.name == "color" ||
+           definition.name == "-webkit-text-fill-color" ||
+           definition.name == "text-fill-color";
+}
+
+static void resolve_symbolic_colors(aether_computed_style_t& style,
+                                    const color_resolution_state_s& references) {
+    if (references.border_uses_current_color[static_cast<int>(aether_border_side_t::top)])
+        style.border_colors.top = style.color;
+    if (references.border_uses_current_color[static_cast<int>(aether_border_side_t::right)])
+        style.border_colors.right = style.color;
+    if (references.border_uses_current_color[static_cast<int>(aether_border_side_t::bottom)])
+        style.border_colors.bottom = style.color;
+    if (references.border_uses_current_color[static_cast<int>(aether_border_side_t::left)])
+        style.border_colors.left = style.color;
+
+    for (int32_t index = 0; index < style.box_shadows.count; ++index) {
+        if (index < static_cast<int32_t>(references.box_shadow_uses_current_color.size()) &&
+            references.box_shadow_uses_current_color[static_cast<size_t>(index)]) {
+            style.box_shadows.items[index].color = style.color;
+        }
+    }
+    for (int32_t index = 0; index < style.text_shadows.count; ++index) {
+        if (index < static_cast<int32_t>(references.text_shadow_uses_current_color.size()) &&
+            references.text_shadow_uses_current_color[static_cast<size_t>(index)]) {
+            style.text_shadows.items[index].color = style.color;
+        }
+    }
+
+    // Legacy bindings expose this representative in addition to the per-edge
+    // colors. Define it deterministically rather than leaking apply order.
+    style.border_color = style.border_colors.left;
 }
 
 static bool try_parse_generated_content(const std::string& source, std::string& output) {
@@ -158,7 +205,9 @@ static runtime_node_state_s* compute_node(aether_style_runtime_s* runtime, aethe
 
     std::vector<compiled_property_declaration_s> inline_properties;
     std::vector<custom_property_declaration_s> inline_custom;
-    if (auto it = node->attributes.find("style"); it != node->attributes.end()) {
+    // Generated pseudo-elements retain host attributes for selector matching, but
+    // the host's inline declaration block does not cascade onto ::before/::after.
+    if (!node->is_generated) if (auto it = node->attributes.find("style"); it != node->attributes.end()) {
         style_source_compile_inline(it->second.c_str(), inline_properties, inline_custom);
         for (const auto& declaration : inline_properties) {
             cascade_priority_t priority{
@@ -206,8 +255,10 @@ static runtime_node_state_s* compute_node(aether_style_runtime_s* runtime, aethe
         }
     }
 
-    for (size_t i = 0; i < cascade.size(); ++i) {
-        if (!cascade[i].is_set) continue;
+    color_resolution_state_s color_references;
+    property_apply_context_s apply_context{&next, &color_references};
+    auto apply_definition = [&](size_t i) {
+        if (!cascade[i].is_set) return;
         const auto& definition = registry->definitions[i];
         const auto& compiled = cascade[i].value;
         std::string value;
@@ -221,9 +272,9 @@ static runtime_node_state_s* compute_node(aether_style_runtime_s* runtime, aethe
         case compiled_value_mode::inherit:
             // The style starts with inherited values. Non-inherited explicit
             // inherit is uncommon in Aether markup and remains unchanged here.
-            continue;
+            return;
         case compiled_value_mode::unset:
-            if (definition.inherited && parent) continue;
+            if (definition.inherited && parent) return;
             value = definition.initial_value;
             break;
         case compiled_value_mode::deferred:
@@ -232,16 +283,53 @@ static runtime_node_state_s* compute_node(aether_style_runtime_s* runtime, aethe
                                   runtime->options.max_variable_expansion_length, value)) {
                 report(runtime, "AETHER-CSS-VAR", definition.name.c_str(),
                        compiled.deferred_source.c_str(), "Unable to resolve CSS variable.");
-                continue;
+                return;
             }
             if (!definition.parse(value.c_str(), value)) {
                 report(runtime, "AETHER-CSS-VALUE", definition.name.c_str(), value.c_str(),
                        "Resolved CSS value is invalid.");
-                continue;
+                return;
             }
             break;
         }
-        definition.apply(&next, value);
+        property_apply_result_s apply_result{};
+        if (definition.apply_with_context_checked) {
+            apply_result = definition.apply_with_context_checked(apply_context, value);
+        } else if (definition.apply_with_context) {
+            definition.apply_with_context(apply_context, value);
+        } else if (definition.apply_checked) {
+            apply_result = definition.apply_checked(&next, value);
+        } else if (definition.apply) {
+            definition.apply(&next, value);
+        }
+        if (!apply_result.success || apply_result.diagnostic_code) {
+            report(runtime,
+                   apply_result.diagnostic_code ? apply_result.diagnostic_code : "AETHER-CSS-APPLY",
+                   definition.name.c_str(), value.c_str(),
+                   apply_result.diagnostic_message ? apply_result.diagnostic_message : "CSS value could not be applied.");
+        }
+    };
+
+    // The cascade has already selected winners. Resolve the node's final
+    // concrete text color first, then apply properties that may carry symbolic
+    // currentColor references. This makes declaration/registry order immaterial.
+    for (size_t i = 0; i < cascade.size(); ++i) {
+        if (cascade[i].is_set && is_color_producer(registry->definitions[i]))
+            apply_definition(i);
+    }
+    for (size_t i = 0; i < cascade.size(); ++i) {
+        if (cascade[i].is_set && !is_color_producer(registry->definitions[i]))
+            apply_definition(i);
+    }
+    resolve_symbolic_colors(next, color_references);
+
+    // <br> has an HTML display semantic, not merely a managed bridge convention.
+    // Preserve an author-specified display value, but make an otherwise unstyled
+    // line break participate in native inline layout as a line-break item.
+    if (node->tag_name == "br") {
+        const auto* display = registry->try_get("display");
+        if (display && !cascade[static_cast<size_t>(display->id)].is_set)
+            next.display = AETHER_DISPLAY_LINE_BREAK;
     }
 
     auto found = runtime->states.find(node);

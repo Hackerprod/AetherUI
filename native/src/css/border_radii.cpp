@@ -1,0 +1,83 @@
+#include "border_radii.h"
+#include "css_types.h"
+
+#include <algorithm>
+#include <cctype>
+#include <sstream>
+#include <vector>
+
+static std::string trim(std::string value) {
+    const auto first = value.find_first_not_of(" \t\r\n");
+    if (first == std::string::npos) return {};
+    const auto last = value.find_last_not_of(" \t\r\n");
+    return value.substr(first, last - first + 1);
+}
+
+static std::vector<std::string> words(const std::string& value) {
+    std::istringstream stream(value);
+    std::vector<std::string> result;
+    for (std::string item; stream >> item;) result.push_back(item);
+    return result;
+}
+
+static bool parse_component(const std::vector<std::string>& values, aether_css_length output[4]) {
+    if (values.empty() || values.size() > 4) return false;
+    aether_css_length parsed[4];
+    for (size_t i = 0; i < values.size(); ++i)
+        if (!aether_css_length_try_parse(values[i].c_str(), &parsed[i])) return false;
+    output[0] = parsed[0];
+    output[1] = values.size() == 1 ? parsed[0] : parsed[1];
+    output[2] = values.size() <= 2 ? parsed[0] : parsed[2];
+    output[3] = values.size() == 1 ? parsed[0] : values.size() == 2 ? parsed[1] : values.size() == 3 ? parsed[1] : parsed[3];
+    return true;
+}
+
+bool aether_border_radii_try_parse(const std::string& source, aether_border_radii* out) {
+    if (!out) return false;
+    const auto slash = source.find('/');
+    if (slash != std::string::npos && source.find('/', slash + 1) != std::string::npos) return false;
+    aether_css_length horizontal[4], vertical[4];
+    if (!parse_component(words(trim(source.substr(0, slash))), horizontal)) return false;
+    if (slash == std::string::npos) std::copy(std::begin(horizontal), std::end(horizontal), std::begin(vertical));
+    else if (!parse_component(words(trim(source.substr(slash + 1))), vertical)) return false;
+    *out = {{horizontal[0], vertical[0]}, {horizontal[1], vertical[1]},
+            {horizontal[2], vertical[2]}, {horizontal[3], vertical[3]}};
+    return true;
+}
+
+static float resolve(aether_css_length value, float reference, float font_size) {
+    const float result = aether_css_length_resolve(value, reference, font_size, font_size, 0, 0);
+    return std::isfinite(result) ? std::max(0.f, result) : 0.f;
+}
+
+aether_corner_radii aether_border_radii_resolve(const aether_border_radii& value,
+                                                aether_rectf box, float font_size) {
+    aether_corner_radii result{
+        resolve(value.top_left.horizontal, box.width, font_size), resolve(value.top_left.vertical, box.height, font_size),
+        resolve(value.top_right.horizontal, box.width, font_size), resolve(value.top_right.vertical, box.height, font_size),
+        resolve(value.bottom_right.horizontal, box.width, font_size), resolve(value.bottom_right.vertical, box.height, font_size),
+        resolve(value.bottom_left.horizontal, box.width, font_size), resolve(value.bottom_left.vertical, box.height, font_size)};
+    const float factor = std::min({1.f,
+        box.width / std::max(.0001f, result.top_left_x + result.top_right_x),
+        box.width / std::max(.0001f, result.bottom_left_x + result.bottom_right_x),
+        box.height / std::max(.0001f, result.top_left_y + result.bottom_left_y),
+        box.height / std::max(.0001f, result.top_right_y + result.bottom_right_y)});
+    if (factor < 1.f) {
+        float* values = &result.top_left_x;
+        for (int i = 0; i < 8; ++i) values[i] *= factor;
+    }
+    return result;
+}
+
+aether_corner_radii aether_corner_radii_inset(aether_corner_radii r, float left, float top, float right, float bottom) {
+    r.top_left_x = std::max(0.f, r.top_left_x - left); r.top_left_y = std::max(0.f, r.top_left_y - top);
+    r.top_right_x = std::max(0.f, r.top_right_x - right); r.top_right_y = std::max(0.f, r.top_right_y - top);
+    r.bottom_right_x = std::max(0.f, r.bottom_right_x - right); r.bottom_right_y = std::max(0.f, r.bottom_right_y - bottom);
+    r.bottom_left_x = std::max(0.f, r.bottom_left_x - left); r.bottom_left_y = std::max(0.f, r.bottom_left_y - bottom);
+    return r;
+}
+
+bool aether_corner_radii_is_zero(aether_corner_radii r) {
+    return r.top_left_x <= .5f && r.top_left_y <= .5f && r.top_right_x <= .5f && r.top_right_y <= .5f &&
+           r.bottom_right_x <= .5f && r.bottom_right_y <= .5f && r.bottom_left_x <= .5f && r.bottom_left_y <= .5f;
+}

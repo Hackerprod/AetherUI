@@ -35,9 +35,9 @@ public sealed class UiDocumentHost : IDisposable
         input { min-width: 180px; padding: 6px 9px; border: 1px solid #9aa0a6; border-radius: 4px; background-color: white; color: #202124; cursor: text; }
         input:focus { border-color: #2563eb; }
         input:invalid { border-color: #dc2626; }
-        button { min-width: 84px; padding: 6px 14px; border: 1px solid #1d4ed8; border-radius: 4px; background-color: #2563eb; color: white; cursor: pointer; text-align: center; }
-        button:hover { background-color: #1d4ed8; }
-        button:active { background-color: #1e40af; }
+        button { min-width: 84px; padding: 6px 14px; border: 1px solid #9aa0a6; border-radius: 4px; background-color: white; cursor: pointer; text-align: center; }
+        button:hover { background-color: #f1f5f9; }
+        button:active { background-color: #e2e8f0; }
         button:disabled { opacity: .55; cursor: default; }
         """;
 
@@ -48,6 +48,8 @@ public sealed class UiDocumentHost : IDisposable
     private readonly RenderingInterop _renderingInterop;
     private readonly StyleRuntimeInterop _nativeStyleRuntime;
     private readonly Dictionary<string, string> _uncontrolledInputValues = new(StringComparer.Ordinal);
+    private readonly IImageResourceResolver? _imageResolver;
+    private readonly SynchronizationContext? _hostSynchronizationContext;
 
     /// <summary>
     /// Vertical scroll offset per scroll-container element. Most real markup scrolls a plain
@@ -88,11 +90,16 @@ public sealed class UiDocumentHost : IDisposable
         ArgumentNullException.ThrowIfNull(textMeasurer);
         _renderer = renderer ?? throw new ArgumentNullException(nameof(renderer));
         _options = options ?? new UiHostOptions();
+        _hostSynchronizationContext = SynchronizationContext.Current;
+        _imageResolver = _options.ImageResolver;
         _layoutInterop = new LayoutInterop(textMeasurer);
-        _renderingInterop = new RenderingInterop(textMeasurer);
+        _renderingInterop = new RenderingInterop(textMeasurer, source =>
+            _imageResolver?.TryGetDimensions(source, out var dimensions) == true
+                ? (dimensions.Width, dimensions.Height) : null);
         _viewport = new SizeF(_options.Width, _options.Height);
         _nativeStyleRuntime = new StyleRuntimeInterop(_viewport.Width, _viewport.Height, _dpiScale);
         _component.Invalidated += OnComponentInvalidated;
+        if (_imageResolver is not null) _imageResolver.Changed += OnImageResourceChanged;
     }
 
     public event EventHandler? RenderRequested;
@@ -122,6 +129,9 @@ public sealed class UiDocumentHost : IDisposable
     {
         ThrowIfDisposed();
         EnsureVisualTree();
+        if (_imageResolver is not null)
+            foreach (var image in _displayList!.Commands.OfType<DrawBackgroundImageCommand>())
+                _imageResolver.Request(image.Source);
         _renderer.Render(_displayList!, _options.ClearColor);
         _visualDirty = false;
     }
@@ -453,12 +463,21 @@ public sealed class UiDocumentHost : IDisposable
         using var nativeStyleMap = _nativeStyleRuntime.CreateResolvedStyleMap(_nativeDom!.Native);
         using var nativeLayout = _layoutInterop.CreateNativeLayout(_nativeDom, nativeStyleMap, _viewport, ScrollOffsetFor);
         _layout = _layoutInterop.Project(nativeLayout, _nativeDom, _styles, _viewport);
-        _displayList = _renderingInterop.Build(nativeLayout,
-            _focused is null ? IntPtr.Zero : _nativeDom.GetNativeHandle(_focused));
+        _displayList = AttachResolvedImages(_renderingInterop.Build(nativeLayout,
+            _focused is null ? IntPtr.Zero : _nativeDom.GetNativeHandle(_focused)));
     }
 
     private float ScrollOffsetFor(ElementNode element) =>
         _scrollOffsets.TryGetValue(element, out var offset) ? offset : 0f;
+
+    private DisplayList AttachResolvedImages(DisplayList displayList)
+    {
+        if (_imageResolver is null) return displayList;
+        return new DisplayList(displayList.Commands.Select(command => command is DrawBackgroundImageCommand image &&
+            _imageResolver.TryGetResource(image.Source, out var resource)
+                ? image with { Resource = resource }
+                : command).ToArray());
+    }
 
     /// <summary>
     /// Routes a mouse-wheel notch to the nearest scrollable ancestor of whatever's under the
@@ -577,6 +596,16 @@ public sealed class UiDocumentHost : IDisposable
         RenderRequested?.Invoke(this, EventArgs.Empty);
     }
 
+    private void OnImageResourceChanged(object? sender, ImageResourceChangedEventArgs e)
+    {
+        if (_hostSynchronizationContext is not null && SynchronizationContext.Current != _hostSynchronizationContext)
+        {
+            _hostSynchronizationContext.Post(static state => ((UiDocumentHost)state!).InvalidateVisual(), this);
+            return;
+        }
+        InvalidateVisual();
+    }
+
     private static int? ParsePositiveInt(string? value) =>
         int.TryParse(value, out var result) && result >= 0 ? result : null;
 
@@ -591,6 +620,7 @@ public sealed class UiDocumentHost : IDisposable
 
         _disposed = true;
         _component.Invalidated -= OnComponentInvalidated;
+        if (_imageResolver is not null) _imageResolver.Changed -= OnImageResourceChanged;
         try
         {
             _component.Dispose();

@@ -6,19 +6,30 @@ namespace AetherUI.Core.Native;
 public readonly record struct NativeLength(float Value, int Unit, float Percent, float Em, float Rem, float Vw, float Vh);
 public readonly record struct NativeEdges(NativeLength Left, NativeLength Top, NativeLength Right, NativeLength Bottom);
 public readonly record struct NativeColor(float R, float G, float B, float A);
+public readonly record struct NativeColorEdges(NativeColor Left, NativeColor Top, NativeColor Right, NativeColor Bottom);
+public readonly record struct NativeBorderStyleEdges(int Left, int Top, int Right, int Bottom);
+public readonly record struct NativeCornerRadius(NativeLength Horizontal, NativeLength Vertical);
+public readonly record struct NativeBorderRadii(NativeCornerRadius TopLeft, NativeCornerRadius TopRight, NativeCornerRadius BottomRight, NativeCornerRadius BottomLeft);
 public readonly record struct NativeGradientStop(NativeColor Color, float Offset);
 public sealed record NativeGradient(float DirectionX, float DirectionY, IReadOnlyList<NativeGradientStop> Stops);
 public readonly record struct NativeShadow(float X, float Y, float Blur, float Spread, NativeColor Color, bool Inset);
+public sealed record NativeBackgroundLayer(
+    int Kind, NativeGradient? Gradient, string? ImageSource,
+    NativeLength PositionX, NativeLength PositionY, int SizeKind,
+    NativeLength SizeX, NativeLength SizeY, int RepeatX, int RepeatY);
+public readonly record struct NativeBackdropFilter(int Kind, NativeLength LengthAmount, float ScalarAmount);
 
 public sealed record NativeComputedStyle(
     int Display, int FlexDirection, int JustifyContent, int AlignItems, float FlexGrow, bool FlexWrap, float Gap,
     int Position, NativeEdges Inset,
     NativeLength Width, NativeLength Height, NativeLength MinWidth, NativeLength MinHeight,
     NativeLength MaxWidth, NativeLength MaxHeight, NativeEdges Margin, NativeEdges Padding, NativeEdges BorderWidth,
-    int BoxSizing, NativeColor Color, NativeColor BackgroundColor, NativeGradient? BackgroundGradient,
-    NativeColor BorderColor, NativeGradient? TextGradient, NativeLength BorderRadius, float Opacity,
-    NativeShadow? BoxShadow,
-    string FontFamily, float FontSize, int FontWeight, float LineHeight, int TextAlign,
+    int BoxSizing, NativeColor Color, NativeColor BackgroundColor, IReadOnlyList<NativeBackgroundLayer> BackgroundLayers,
+    IReadOnlyList<NativeBackdropFilter> BackdropFilters,
+    NativeColor BorderColor, NativeColorEdges BorderColors, NativeBorderStyleEdges BorderStyles, NativeGradient? TextGradient,
+    IReadOnlyList<NativeShadow> TextShadows, NativeBorderRadii BorderRadii, float Opacity,
+    IReadOnlyList<NativeShadow> BoxShadows,
+    string FontFamily, float FontSize, int FontWeight, float LineHeight, int TextAlign, int TextTransform,
     int Overflow, int Cursor, bool Visible);
 
 public sealed unsafe class StyleRuntimeInterop : IDisposable
@@ -34,6 +45,7 @@ public sealed unsafe class StyleRuntimeInterop : IDisposable
 
     public StyleRuntimeInterop(float width, float height, float dpiScale)
     {
+        NativeAbiContract.EnsureCompatible();
         var options = new RuntimeOptions { MaxVariableDepth = 32, MaxVariableExpansionLength = 65536 };
         var environment = new RuntimeEnvironment(width, height, dpiScale, 16, 0, 0, 0);
         var optionsPtr = Marshal.AllocHGlobal(sizeof(RuntimeOptions));
@@ -134,13 +146,19 @@ public sealed unsafe class StyleRuntimeInterop : IDisposable
     internal static NativeComputedStyle ReadStyle(IntPtr handle)
     {
         var buffer = Marshal.AllocHGlobal(sizeof(ComputedStyleRaw));
+        var copied = false;
         try
         {
             Throw(NativeMethods.ComputedStyleCopy(handle, buffer));
+            copied = true;
             var raw = Marshal.PtrToStructure<ComputedStyleRaw>(buffer);
             return raw.ToPublic();
         }
-        finally { Marshal.FreeHGlobal(buffer); }
+        finally
+        {
+            if (copied) NativeMethods.ComputedStyleFree(buffer);
+            Marshal.FreeHGlobal(buffer);
+        }
     }
 
     internal static NativeComputedStyle ReadStylePointer(IntPtr pointer) =>
@@ -203,15 +221,67 @@ public sealed unsafe class StyleRuntimeInterop : IDisposable
     }
 
     [StructLayout(LayoutKind.Sequential)]
+    private readonly record struct ColorEdgesRaw(ColorRaw Left, ColorRaw Top, ColorRaw Right, ColorRaw Bottom)
+    {
+        public NativeColorEdges ToPublic() => new(Left.ToPublic(), Top.ToPublic(), Right.ToPublic(), Bottom.ToPublic());
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private readonly record struct BorderStyleEdgesRaw(int Left, int Top, int Right, int Bottom)
+    {
+        public NativeBorderStyleEdges ToPublic() => new(Left, Top, Right, Bottom);
+    }
+    [StructLayout(LayoutKind.Sequential)]
+    private readonly record struct CornerRadiusRaw(LengthRaw Horizontal, LengthRaw Vertical)
+    {
+        public NativeCornerRadius ToPublic() => new(Horizontal.ToPublic(), Vertical.ToPublic());
+    }
+    [StructLayout(LayoutKind.Sequential)]
+    private readonly record struct BorderRadiiRaw(CornerRadiusRaw TopLeft, CornerRadiusRaw TopRight, CornerRadiusRaw BottomRight, CornerRadiusRaw BottomLeft)
+    {
+        public NativeBorderRadii ToPublic() => new(TopLeft.ToPublic(), TopRight.ToPublic(), BottomRight.ToPublic(), BottomLeft.ToPublic());
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
     private struct GradientRaw { public float X, Y; public IntPtr Stops; public int Count; }
     [StructLayout(LayoutKind.Sequential)]
     private readonly record struct GradientStopRaw(ColorRaw Color, float Offset);
+    [StructLayout(LayoutKind.Sequential)]
+    private readonly record struct BackgroundLayerListRaw(IntPtr Items, int Count);
+    [StructLayout(LayoutKind.Sequential)]
+    private struct BackgroundLayerRaw
+    {
+        public int Kind;
+        public GradientRaw Gradient;
+        public IntPtr ImageSource;
+        public LengthRaw PositionX, PositionY;
+        public int SizeKind;
+        public LengthRaw SizeX, SizeY;
+        public int RepeatX, RepeatY;
+
+        public readonly NativeBackgroundLayer ToPublic() => new(
+            Kind,
+            Kind == 0 ? ReadGradient(1, Gradient) : null,
+            ImageSource == IntPtr.Zero ? null : Marshal.PtrToStringUTF8(ImageSource),
+            PositionX.ToPublic(), PositionY.ToPublic(), SizeKind,
+            SizeX.ToPublic(), SizeY.ToPublic(), RepeatX, RepeatY);
+    }
     [StructLayout(LayoutKind.Sequential)]
     private struct ShadowRaw
     {
         public float X, Y, Blur, Spread; public ColorRaw Color; public int Inset;
         public readonly NativeShadow ToPublic() => new(X, Y, Blur, Spread, Color.ToPublic(), Inset != 0);
     }
+    [StructLayout(LayoutKind.Sequential)]
+    private readonly record struct ShadowListRaw(IntPtr Items, int Count);
+    [StructLayout(LayoutKind.Sequential)]
+    private struct BackdropFilterRaw
+    {
+        public int Kind; public LengthRaw LengthAmount; public float ScalarAmount;
+        public readonly NativeBackdropFilter ToPublic() => new(Kind, LengthAmount.ToPublic(), ScalarAmount);
+    }
+    [StructLayout(LayoutKind.Sequential)]
+    private readonly record struct BackdropFilterListRaw(IntPtr Items, int Count);
 
     [StructLayout(LayoutKind.Sequential)]
     private unsafe struct ComputedStyleRaw
@@ -221,12 +291,14 @@ public sealed unsafe class StyleRuntimeInterop : IDisposable
         public int Position; public EdgesRaw Inset;
         public LengthRaw Width, Height, MinWidth, MinHeight, MaxWidth, MaxHeight;
         public EdgesRaw Margin, Padding, BorderWidth; public int BoxSizing;
-        public ColorRaw Color, BackgroundColor; public int HasBackgroundGradient; public GradientRaw BackgroundGradient;
-        public ColorRaw BorderColor; public int HasTextGradient; public GradientRaw TextGradient;
-        public int HasBoxShadow; public ShadowRaw BoxShadow;
-        public LengthRaw BorderRadius; public float Opacity;
+        public ColorRaw Color, BackgroundColor; public BackgroundLayerListRaw BackgroundLayers; public BackdropFilterListRaw BackdropFilters;
+        public ColorRaw BorderColor; public ColorEdgesRaw BorderColors; public BorderStyleEdgesRaw BorderStyles;
+        public int HasTextGradient; public GradientRaw TextGradient;
+        public ShadowListRaw TextShadows;
+        public ShadowListRaw BoxShadows;
+        public BorderRadiiRaw BorderRadii; public float Opacity;
         public fixed byte FontFamily[64];
-        public float FontSize; public int FontWeight; public float LineHeight; public int TextAlign;
+        public float FontSize; public int FontWeight; public float LineHeight; public int TextAlign, TextTransform;
         public int Overflow, Cursor, Visible;
 
         public NativeComputedStyle ToPublic()
@@ -238,10 +310,10 @@ public sealed unsafe class StyleRuntimeInterop : IDisposable
                 Width.ToPublic(), Height.ToPublic(), MinWidth.ToPublic(), MinHeight.ToPublic(),
                 MaxWidth.ToPublic(), MaxHeight.ToPublic(), Margin.ToPublic(), Padding.ToPublic(),
                 BorderWidth.ToPublic(), BoxSizing, Color.ToPublic(), BackgroundColor.ToPublic(),
-                ReadGradient(HasBackgroundGradient, BackgroundGradient), BorderColor.ToPublic(),
-                ReadGradient(HasTextGradient, TextGradient), BorderRadius.ToPublic(), Opacity,
-                HasBoxShadow != 0 ? BoxShadow.ToPublic() : null,
-                family, FontSize, FontWeight, LineHeight, TextAlign, Overflow, Cursor, Visible != 0);
+                ReadBackgroundLayers(BackgroundLayers), ReadBackdropFilters(BackdropFilters), BorderColor.ToPublic(), BorderColors.ToPublic(), BorderStyles.ToPublic(),
+                ReadGradient(HasTextGradient, TextGradient), ReadShadows(TextShadows), BorderRadii.ToPublic(), Opacity,
+                ReadShadows(BoxShadows),
+                family, FontSize, FontWeight, LineHeight, TextAlign, TextTransform, Overflow, Cursor, Visible != 0);
         }
     }
 
@@ -256,5 +328,39 @@ public sealed unsafe class StyleRuntimeInterop : IDisposable
             stops[i] = new NativeGradientStop(raw.Color.ToPublic(), raw.Offset);
         }
         return new NativeGradient(gradient.X, gradient.Y, stops);
+    }
+
+    private static NativeBackgroundLayer[] ReadBackgroundLayers(BackgroundLayerListRaw layers)
+    {
+        if (layers.Count <= 0 || layers.Items == IntPtr.Zero) return [];
+        var size = Marshal.SizeOf<BackgroundLayerRaw>();
+        var result = new NativeBackgroundLayer[layers.Count];
+        for (var index = 0; index < result.Length; index++)
+        {
+            result[index] = Marshal.PtrToStructure<BackgroundLayerRaw>(layers.Items + index * size).ToPublic();
+        }
+        return result;
+    }
+
+    private static NativeBackdropFilter[] ReadBackdropFilters(BackdropFilterListRaw filters)
+    {
+        if (filters.Count <= 0 || filters.Items == IntPtr.Zero) return [];
+        var size = Marshal.SizeOf<BackdropFilterRaw>();
+        var result = new NativeBackdropFilter[filters.Count];
+        for (var index = 0; index < result.Length; index++)
+            result[index] = Marshal.PtrToStructure<BackdropFilterRaw>(filters.Items + index * size).ToPublic();
+        return result;
+    }
+
+    private static NativeShadow[] ReadShadows(ShadowListRaw shadows)
+    {
+        if (shadows.Count <= 0 || shadows.Items == IntPtr.Zero) return [];
+        var size = Marshal.SizeOf<ShadowRaw>();
+        var result = new NativeShadow[shadows.Count];
+        for (var i = 0; i < result.Length; i++)
+        {
+            result[i] = Marshal.PtrToStructure<ShadowRaw>(shadows.Items + i * size).ToPublic();
+        }
+        return result;
     }
 }

@@ -20,14 +20,24 @@ add_library(aether_core SHARED
     src/css/css_length.cpp
     src/css/color_rgba.cpp
     src/css/computed_style.cpp
+    src/css/border_radii.cpp
+    src/css/background_layers.cpp
+    src/css/backdrop_filters.cpp
+    src/css/linear_gradient.cpp
+    src/css/text_transform.cpp
     src/css/css_parser.cpp
     src/css/selector.cpp
     src/css/style_resolver.cpp
     src/primitives/geometry.cpp
     src/layout/layout_box.cpp
+    src/layout/box_model.cpp
+    src/layout/margin_adjacency.cpp
+    src/layout/text_justify.cpp
     src/layout/layout_engine.cpp
     src/rendering/display_list.cpp
     src/rendering/display_list_builder.cpp
+    src/rendering/background_image_geometry.cpp
+    src/rendering/border_painter.cpp
     src/style_runtime/style_values.cpp
     src/style_runtime/style_computed.cpp
     src/style_runtime/style_property_registry.cpp
@@ -83,6 +93,57 @@ if(AETHERUI_BUILD_TESTS)
         C_STANDARD_REQUIRED YES
     )
     add_test(NAME aether.abi-c COMMAND aether_abi_c_smoke_test)
+
+    add_executable(aether_border_radii_test tests/test_border_radii.cpp src/css/border_radii.cpp src/rendering/border_painter.cpp)
+    target_link_libraries(aether_border_radii_test PRIVATE AetherUI::Core)
+    add_test(NAME aether.border-radii COMMAND aether_border_radii_test)
+
+    add_executable(aether_box_model_test tests/test_box_model.cpp src/layout/box_model.cpp)
+    target_link_libraries(aether_box_model_test PRIVATE AetherUI::Core)
+    add_test(NAME aether.box-model COMMAND aether_box_model_test)
+
+    add_executable(aether_margin_adjacency_test tests/test_margin_adjacency.cpp src/layout/margin_adjacency.cpp)
+    add_test(NAME aether.margin-adjacency COMMAND aether_margin_adjacency_test)
+
+    add_executable(aether_linear_gradient_test tests/test_linear_gradient.cpp src/css/linear_gradient.cpp)
+    target_link_libraries(aether_linear_gradient_test PRIVATE AetherUI::Core)
+    add_test(NAME aether.linear-gradient COMMAND aether_linear_gradient_test)
+
+    add_executable(aether_background_layers_test tests/test_background_layers.cpp src/css/background_layers.cpp src/css/linear_gradient.cpp)
+    target_link_libraries(aether_background_layers_test PRIVATE AetherUI::Core)
+    add_test(NAME aether.background-layers COMMAND aether_background_layers_test)
+
+    add_executable(aether_background_image_display_list_test tests/test_background_image_display_list.cpp)
+    target_link_libraries(aether_background_image_display_list_test PRIVATE AetherUI::Core)
+    add_test(NAME aether.background-image-display-list COMMAND aether_background_image_display_list_test)
+
+    add_executable(aether_background_image_geometry_test tests/test_background_image_geometry.cpp src/rendering/background_image_geometry.cpp)
+    target_link_libraries(aether_background_image_geometry_test PRIVATE AetherUI::Core)
+    add_test(NAME aether.background-image-geometry COMMAND aether_background_image_geometry_test)
+
+    add_executable(aether_backdrop_filters_test tests/test_backdrop_filters.cpp)
+    target_link_libraries(aether_backdrop_filters_test PRIVATE AetherUI::Core)
+    add_test(NAME aether.backdrop-filters COMMAND aether_backdrop_filters_test)
+
+    add_executable(aether_text_transform_test tests/test_text_transform.cpp src/css/text_transform.cpp)
+    target_link_libraries(aether_text_transform_test PRIVATE AetherUI::Core)
+    add_test(NAME aether.text-transform COMMAND aether_text_transform_test)
+
+    add_executable(aether_text_justify_test tests/test_text_justify.cpp src/layout/text_justify.cpp)
+    target_link_libraries(aether_text_justify_test PRIVATE AetherUI::Core)
+    add_test(NAME aether.text-justify COMMAND aether_text_justify_test)
+
+    add_executable(aether_text_alignment_test tests/test_text_alignment.cpp)
+    target_link_libraries(aether_text_alignment_test PRIVATE AetherUI::Core)
+    add_test(NAME aether.text-alignment COMMAND aether_text_alignment_test)
+
+    add_executable(aether_auto_margins_test tests/test_auto_margins.cpp)
+    target_link_libraries(aether_auto_margins_test PRIVATE AetherUI::Core)
+    add_test(NAME aether.auto-margins COMMAND aether_auto_margins_test)
+
+    add_executable(aether_current_color_test tests/test_current_color.cpp)
+    target_link_libraries(aether_current_color_test PRIVATE AetherUI::Core)
+    add_test(NAME aether.current-color COMMAND aether_current_color_test)
 endif()
 
 set(AETHERUI_INSTALL_CMAKEDIR

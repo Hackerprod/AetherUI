@@ -27,7 +27,7 @@ extern "C" {
  * ABI 1.0, a major-version change denotes an incompatible ABI.
  */
 #define AETHER_ABI_VERSION_MAJOR 0u
-#define AETHER_ABI_VERSION_MINOR 2u
+#define AETHER_ABI_VERSION_MINOR 14u
 #define AETHER_ABI_VERSION_PATCH 0u
 
 #define AETHER_ABI_VERSION_MAKE(major, minor, patch) \
@@ -84,6 +84,30 @@ AETHER_API float         aether_thicknessf_horizontal(aether_thicknessf t);
 AETHER_API float         aether_thicknessf_vertical(aether_thicknessf t);
 
 typedef struct { float r, g, b, a; }            aether_color_rgba;
+typedef struct { aether_color_rgba left, top, right, bottom; } aether_color_edges;
+
+/* Border styles are kept per edge, just like widths and colors.  The values
+   intentionally follow the CSS keyword family instead of exposing renderer
+   implementation details to bindings. */
+typedef enum {
+    AETHER_BORDER_STYLE_NONE = 0,
+    AETHER_BORDER_STYLE_HIDDEN,
+    AETHER_BORDER_STYLE_DOTTED,
+    AETHER_BORDER_STYLE_DASHED,
+    AETHER_BORDER_STYLE_SOLID,
+    AETHER_BORDER_STYLE_DOUBLE,
+    AETHER_BORDER_STYLE_GROOVE,
+    AETHER_BORDER_STYLE_RIDGE,
+    AETHER_BORDER_STYLE_INSET,
+    AETHER_BORDER_STYLE_OUTSET
+} aether_border_style_t;
+
+typedef struct { int32_t left, top, right, bottom; } aether_border_style_edges;
+
+typedef struct {
+    float top_left_x, top_left_y, top_right_x, top_right_y;
+    float bottom_right_x, bottom_right_y, bottom_left_x, bottom_left_y;
+} aether_corner_radii;
 
 typedef struct { aether_color_rgba color; float offset; } aether_gradient_stop;
 
@@ -96,6 +120,8 @@ typedef struct {
 
 AETHER_API void aether_linear_gradient_free(aether_linear_gradient* g);
 
+/* A single CSS shadow. A list owns its contiguous item storage; use the
+   shadow-list helpers below to copy, compare, or release it. */
 typedef struct {
     float offset_x;
     float offset_y;
@@ -103,7 +129,20 @@ typedef struct {
     float spread_radius;
     aether_color_rgba color;
     aether_bool_t     inset;
-} aether_box_shadow;
+} aether_shadow;
+
+typedef struct {
+    aether_shadow* items;
+    int32_t        count;
+} aether_shadow_list;
+
+/* A copy leaves its destination as a deep copy on success and as the canonical
+   empty list on failure. A list with count zero must have a null items pointer. */
+AETHER_API aether_bool_t aether_shadow_list_copy(const aether_shadow_list* source,
+                                                  aether_shadow_list* destination);
+AETHER_API aether_bool_t aether_shadow_list_equal(const aether_shadow_list* left,
+                                                   const aether_shadow_list* right);
+AETHER_API void          aether_shadow_list_free(aether_shadow_list* list);
 
 /* ── CSS Value Types ───────────────────────────────────────────────── */
 
@@ -128,6 +167,13 @@ typedef struct {
     float linear_vh;
 } aether_css_length;
 
+/* CSS Backgrounds & Borders §4.1: every corner has independent horizontal
+   and vertical radii. Keep symbolic lengths until the border box is known. */
+typedef struct { aether_css_length horizontal, vertical; } aether_corner_radius;
+typedef struct {
+    aether_corner_radius top_left, top_right, bottom_right, bottom_left;
+} aether_border_radii;
+
 AETHER_API aether_css_length aether_css_length_auto(void);
 AETHER_API aether_css_length aether_css_length_zero(void);
 AETHER_API aether_bool_t     aether_css_length_is_auto(aether_css_length l);
@@ -143,6 +189,79 @@ typedef struct {
 } aether_css_edges;
 
 AETHER_API aether_css_edges aether_css_edges_zero(void);
+
+/* CSS background layers are painted from the last declared layer to the first,
+   above background-color. Resource loading remains outside the core: an image
+   layer carries its normalized UTF-8 source for the binding to resolve. */
+typedef enum {
+    AETHER_BACKGROUND_LAYER_LINEAR_GRADIENT = 0,
+    AETHER_BACKGROUND_LAYER_IMAGE_URL
+} aether_background_layer_kind_t;
+
+typedef enum {
+    AETHER_BACKGROUND_SIZE_AUTO = 0,
+    AETHER_BACKGROUND_SIZE_EXPLICIT,
+    AETHER_BACKGROUND_SIZE_COVER,
+    AETHER_BACKGROUND_SIZE_CONTAIN
+} aether_background_size_kind_t;
+
+typedef enum {
+    AETHER_BACKGROUND_REPEAT = 0,
+    AETHER_BACKGROUND_NO_REPEAT,
+    AETHER_BACKGROUND_SPACE,
+    AETHER_BACKGROUND_ROUND
+} aether_background_repeat_t;
+
+typedef struct {
+    int32_t                kind;
+    aether_linear_gradient gradient;
+    char*                  image_source;
+    aether_css_length      position_x;
+    aether_css_length      position_y;
+    int32_t                size_kind;
+    aether_css_length      size_x;
+    aether_css_length      size_y;
+    int32_t                repeat_x;
+    int32_t                repeat_y;
+} aether_background_layer;
+
+typedef struct {
+    aether_background_layer* items;
+    int32_t                  count;
+} aether_background_layer_list;
+
+AETHER_API aether_bool_t aether_background_layer_list_copy(const aether_background_layer_list* source,
+                                                             aether_background_layer_list* destination);
+AETHER_API aether_bool_t aether_background_layer_list_equal(const aether_background_layer_list* left,
+                                                              const aether_background_layer_list* right);
+AETHER_API void          aether_background_layer_list_free(aether_background_layer_list* list);
+
+/* Backdrop filters preserve the complete ordered operation model even though v1
+   currently parses blur(). Future compositor operations use scalar_amount while
+   blur uses length_amount. */
+typedef enum {
+    AETHER_BACKDROP_FILTER_BLUR = 0,
+    AETHER_BACKDROP_FILTER_BRIGHTNESS,
+    AETHER_BACKDROP_FILTER_CONTRAST,
+    AETHER_BACKDROP_FILTER_SATURATE
+} aether_backdrop_filter_kind_t;
+
+typedef struct {
+    int32_t           kind;
+    aether_css_length length_amount;
+    float             scalar_amount;
+} aether_backdrop_filter;
+
+typedef struct {
+    aether_backdrop_filter* items;
+    int32_t                 count;
+} aether_backdrop_filter_list;
+
+AETHER_API aether_bool_t aether_backdrop_filter_list_copy(const aether_backdrop_filter_list* source,
+                                                            aether_backdrop_filter_list* destination);
+AETHER_API aether_bool_t aether_backdrop_filter_list_equal(const aether_backdrop_filter_list* left,
+                                                             const aether_backdrop_filter_list* right);
+AETHER_API void          aether_backdrop_filter_list_free(aether_backdrop_filter_list* list);
 
 /* ── CSS Enums (ComputedStyle) ─────────────────────────────────────── */
 
@@ -184,8 +303,20 @@ typedef enum {
 typedef enum {
     AETHER_TEXT_ALIGN_START = 0,
     AETHER_TEXT_ALIGN_CENTER,
-    AETHER_TEXT_ALIGN_END
+    AETHER_TEXT_ALIGN_END,
+    /* Physical values remain distinct from logical start/end so direction and
+       writing-mode can resolve them later without losing cascade semantics. */
+    AETHER_TEXT_ALIGN_LEFT,
+    AETHER_TEXT_ALIGN_RIGHT,
+    AETHER_TEXT_ALIGN_JUSTIFY
 } aether_text_align_t;
+
+typedef enum {
+    AETHER_TEXT_TRANSFORM_NONE = 0,
+    AETHER_TEXT_TRANSFORM_CAPITALIZE,
+    AETHER_TEXT_TRANSFORM_UPPERCASE,
+    AETHER_TEXT_TRANSFORM_LOWERCASE
+} aether_text_transform_t;
 
 typedef enum {
     AETHER_FONT_WEIGHT_THIN       = 100,
@@ -246,18 +377,21 @@ typedef struct {
     /* Paint */
     aether_color_rgba color;
     aether_color_rgba background_color;
-    aether_bool_t     has_background_gradient;
-    aether_linear_gradient background_gradient;
+    aether_background_layer_list background_layers;
+    aether_backdrop_filter_list backdrop_filters;
     aether_color_rgba border_color;
+    aether_color_edges border_colors;
+    aether_border_style_edges border_styles;
     aether_bool_t     has_text_gradient;
     aether_linear_gradient text_gradient;
 
-    /* Box shadow (single for now; C# has a list) */
-    aether_bool_t     has_box_shadow;
-    aether_box_shadow box_shadow;
+    /* CSS shadow lists, each in declaration order. text-shadow inherits;
+       box-shadow does not. */
+    aether_shadow_list text_shadows;
+    aether_shadow_list box_shadows;
 
     /* Border radius + opacity */
-    aether_css_length border_radius;
+    aether_border_radii border_radii;
     float             opacity;
 
     /* Typography */
@@ -266,6 +400,7 @@ typedef struct {
     int32_t           font_weight;
     float             line_height;
     int32_t           text_align;
+    int32_t           text_transform;
 
     /* Misc */
     int32_t           overflow;
@@ -431,18 +566,33 @@ typedef enum {
     AETHER_PAINT_DRAW_TEXT_GRADIENT,
     AETHER_PAINT_PUSH_CLIP,
     AETHER_PAINT_POP_CLIP,
+    AETHER_PAINT_FILL_BORDER_SIDE,
+    AETHER_PAINT_DRAW_TEXT_SHADOW,
+    AETHER_PAINT_DRAW_BACKGROUND_IMAGE,
+    AETHER_PAINT_APPLY_BACKDROP_FILTER,
 } aether_paint_command_tag_t;
 
 typedef struct {
     aether_paint_command_tag_t tag;
     union {
-        struct { aether_rectf rect; float radius; aether_color_rgba color; } fill_rounded_rect;
-        struct { aether_rectf rect; float radius; aether_box_shadow shadow; } draw_box_shadow;
-        struct { aether_rectf rect; float radius; aether_linear_gradient gradient; float opacity; } fill_rounded_rect_gradient;
-        struct { aether_rectf rect; float radius; float stroke_width; aether_color_rgba color; } stroke_rounded_rect;
+        struct { aether_rectf rect; aether_corner_radii radii; aether_color_rgba color; } fill_rounded_rect;
+        struct { aether_rectf rect; aether_corner_radii radii; aether_shadow shadow; } draw_box_shadow;
+        struct { aether_rectf rect; aether_corner_radii radii; aether_linear_gradient gradient; float opacity; } fill_rounded_rect_gradient;
+        struct { aether_rectf rect; aether_corner_radii radii; float stroke_width; aether_color_rgba color; } stroke_rounded_rect;
         struct { char* text; aether_rectf rect; char font_family[64]; float font_size; int32_t font_weight; int32_t text_align; aether_color_rgba color; aether_bool_t wrap; } draw_text;
         struct { char* text; aether_rectf rect; char font_family[64]; float font_size; int32_t font_weight; int32_t text_align; aether_linear_gradient gradient; float opacity; } draw_text_gradient;
-        struct { aether_rectf rect; float radius; } push_clip;
+        struct { char* text; aether_rectf rect; char font_family[64]; float font_size; int32_t font_weight; int32_t text_align; aether_shadow shadow; aether_bool_t wrap; } draw_text_shadow;
+        struct { aether_rectf rect; aether_corner_radii radii; } push_clip;
+        struct { aether_rectf outer_rect; aether_corner_radii outer_radii;
+                 aether_rectf inner_rect; aether_corner_radii inner_radii;
+                 int32_t side; int32_t style; aether_color_rgba color; } fill_border_side;
+        struct { char* source; aether_rectf paint_rect; aether_css_length position_x; aether_css_length position_y;
+                 int32_t size_kind; aether_css_length size_x; aether_css_length size_y;
+                 int32_t repeat_x; int32_t repeat_y; float opacity;
+                 aether_rectf source_rect; aether_rectf destination_rect;
+                 aether_bool_t has_resolved_geometry; } draw_background_image;
+        struct { aether_rectf rect; aether_corner_radii radii;
+                 aether_backdrop_filter_list filters; } apply_backdrop_filter;
     } data;
 } aether_paint_command_t;
 
@@ -453,12 +603,16 @@ AETHER_API size_t aether_paint_command_size(void);
 typedef struct aether_display_list_s*          aether_display_list_t;
 typedef struct aether_display_list_builder_s*  aether_display_list_builder_t;
 
+typedef aether_bool_t (*aether_image_dimensions_fn)(const char* source, aether_sizef* out_size, void* user_data);
+
 AETHER_API aether_status_t aether_display_list_builder_create(
     aether_text_measurer_fn text_measurer,
     void* text_measurer_data,
     aether_display_list_builder_t* out_builder);
 
 AETHER_API void aether_display_list_builder_destroy(aether_display_list_builder_t builder);
+AETHER_API void aether_display_list_builder_set_image_dimensions_callback(
+    aether_display_list_builder_t builder, aether_image_dimensions_fn callback, void* user_data);
 
 AETHER_API aether_status_t aether_display_list_build(
     aether_display_list_builder_t builder,

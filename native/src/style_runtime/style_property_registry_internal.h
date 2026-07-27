@@ -3,6 +3,7 @@
 #include "style_runtime_types.h"
 #include <functional>
 #include <string>
+#include <vector>
 
 // ═══ Style impact flags ════════════════════════════════════════
 
@@ -47,6 +48,44 @@ struct style_shorthand_writer_s {
 using property_parse_fn = std::function<bool(const char* source, std::string& out_value)>;
 using property_apply_fn = std::function<void(aether_computed_style_t* style, const std::string& value)>;
 
+/* Symbolic CSS colors deliberately live only while one node is being
+   computed. Published computed styles are fully concrete. */
+struct color_resolution_state_s {
+    bool border_uses_current_color[4] = { true, true, true, true };
+    std::vector<bool> text_shadow_uses_current_color;
+    std::vector<bool> box_shadow_uses_current_color;
+};
+
+struct property_apply_context_s {
+    aether_computed_style_t* style = nullptr;
+    color_resolution_state_s* color_resolution = nullptr;
+};
+
+using property_apply_context_fn = std::function<void(
+    property_apply_context_s& context, const std::string& value)>;
+
+// Legacy applicators are intentionally adapted without changing their call sites.
+// Fallible applicators return structured data; the runtime owns the policy of
+// reporting it because it has the declaration's property name and source value.
+struct property_apply_result_s {
+    bool success = true;
+    const char* diagnostic_code = nullptr;
+    const char* diagnostic_message = nullptr;
+
+    static property_apply_result_s failure(const char* code, const char* message) {
+        return {false, code, message};
+    }
+
+    static property_apply_result_s warning(const char* code, const char* message) {
+        return {true, code, message};
+    }
+};
+
+using property_apply_checked_fn = std::function<property_apply_result_s(
+    aether_computed_style_t* style, const std::string& value)>;
+using property_apply_context_checked_fn = std::function<property_apply_result_s(
+    property_apply_context_s& context, const std::string& value)>;
+
 struct style_property_definition_s {
     int32_t id = -1;
     std::string name;
@@ -55,6 +94,9 @@ struct style_property_definition_s {
     std::string initial_value;
     property_parse_fn parse;
     property_apply_fn apply;
+    property_apply_checked_fn apply_checked;
+    property_apply_context_fn apply_with_context;
+    property_apply_context_checked_fn apply_with_context_checked;
 };
 
 // ═══ Shorthand definition ══════════════════════════════════════
@@ -97,6 +139,87 @@ struct style_property_registry_s {
         def.initial_value = initial_value ? initial_value : "";
         def.parse = std::move(parse);
         def.apply = std::move(apply);
+
+        definitions.push_back(std::move(def));
+        by_name[normalized] = &definitions.back();
+    }
+
+    void register_property_checked(
+        const char* name,
+        bool inherited,
+        uint32_t impact,
+        const char* initial_value,
+        property_parse_fn parse,
+        property_apply_checked_fn apply)
+    {
+        if (sealed) return;
+        if (!name || !*name) return;
+
+        std::string normalized = str_trim(str_to_lower(name));
+        if (by_name.count(normalized)) return;
+
+        style_property_definition_s def;
+        def.id = static_cast<int32_t>(definitions.size());
+        def.name = normalized;
+        def.inherited = inherited;
+        def.impact = inherited ? (impact | STYLE_IMPACT_INHERITED) : impact;
+        def.initial_value = initial_value ? initial_value : "";
+        def.parse = std::move(parse);
+        def.apply_checked = std::move(apply);
+
+        definitions.push_back(std::move(def));
+        by_name[normalized] = &definitions.back();
+    }
+
+    void register_property_with_context(
+        const char* name,
+        bool inherited,
+        uint32_t impact,
+        const char* initial_value,
+        property_parse_fn parse,
+        property_apply_context_fn apply)
+    {
+        if (sealed) return;
+        if (!name || !*name) return;
+
+        std::string normalized = str_trim(str_to_lower(name));
+        if (by_name.count(normalized)) return;
+
+        style_property_definition_s def;
+        def.id = static_cast<int32_t>(definitions.size());
+        def.name = normalized;
+        def.inherited = inherited;
+        def.impact = inherited ? (impact | STYLE_IMPACT_INHERITED) : impact;
+        def.initial_value = initial_value ? initial_value : "";
+        def.parse = std::move(parse);
+        def.apply_with_context = std::move(apply);
+
+        definitions.push_back(std::move(def));
+        by_name[normalized] = &definitions.back();
+    }
+
+    void register_property_checked_with_context(
+        const char* name,
+        bool inherited,
+        uint32_t impact,
+        const char* initial_value,
+        property_parse_fn parse,
+        property_apply_context_checked_fn apply)
+    {
+        if (sealed) return;
+        if (!name || !*name) return;
+
+        std::string normalized = str_trim(str_to_lower(name));
+        if (by_name.count(normalized)) return;
+
+        style_property_definition_s def;
+        def.id = static_cast<int32_t>(definitions.size());
+        def.name = normalized;
+        def.inherited = inherited;
+        def.impact = inherited ? (impact | STYLE_IMPACT_INHERITED) : impact;
+        def.initial_value = initial_value ? initial_value : "";
+        def.parse = std::move(parse);
+        def.apply_with_context_checked = std::move(apply);
 
         definitions.push_back(std::move(def));
         by_name[normalized] = &definitions.back();

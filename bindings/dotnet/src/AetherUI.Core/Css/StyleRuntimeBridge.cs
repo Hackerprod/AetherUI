@@ -22,7 +22,8 @@ public static class StyleRuntimeBridge
 {
     public static ComputedStyle ToComputedStyle(NativeComputedStyle source, ElementNode element)
     {
-        var backgroundGradient = ToLinearGradient(source.BackgroundGradient);
+        var backgroundGradient = ToLinearGradient(source.BackgroundLayers
+            .FirstOrDefault(static layer => layer.Kind == 0)?.Gradient);
         var textGradient = ToLinearGradient(source.TextGradient);
         var style = new ComputedStyle
         {
@@ -49,22 +50,30 @@ public static class StyleRuntimeBridge
             BackgroundColor = ToColorRgba(source.BackgroundColor),
             BackgroundGradient = backgroundGradient,
             TextGradient = textGradient,
+            TextShadows = source.TextShadows.Select(static shadow => new BoxShadow(
+                shadow.X, shadow.Y, shadow.Blur, shadow.Spread, ToColorRgba(shadow.Color), shadow.Inset)).ToArray(),
             BorderColor = ToColorRgba(source.BorderColor),
-            BorderRadius = ToCssLength(source.BorderRadius),
+            BorderColors = ToColorEdges(source.BorderColors),
+            BorderStyles = ToBorderStyleEdges(source.BorderStyles),
+            BorderRadius = ToCssLength(source.BorderRadii.TopLeft.Horizontal),
+            BorderRadii = ToBorderRadii(source.BorderRadii),
             Opacity = source.Opacity,
-            BoxShadows = source.BoxShadow is { Inset: false } shadow
-                ? [new BoxShadow(shadow.X, shadow.Y, shadow.Blur, shadow.Spread, ToColorRgba(shadow.Color), false)]
-                : [],
+            BoxShadows = source.BoxShadows
+                .Where(static shadow => !shadow.Inset)
+                .Select(static shadow => new BoxShadow(
+                    shadow.X, shadow.Y, shadow.Blur, shadow.Spread, ToColorRgba(shadow.Color), false))
+                .ToArray(),
             FontFamily = source.FontFamily,
             FontSize = source.FontSize,
             FontWeight = (FontWeight)source.FontWeight,
             LineHeight = source.LineHeight,
             TextAlign = (TextAlign)source.TextAlign,
+            TextTransform = (TextTransform)source.TextTransform,
             Overflow = (OverflowKind)source.Overflow,
             Cursor = (CursorKind)source.Cursor,
             Visible = source.Visible,
         };
-        if (source.BoxShadow is { Inset: true })
+        if (source.BoxShadows.Any(static shadow => shadow.Inset))
         {
             CssDiagnostics.ReportUnknownProperty("box-shadow", "<inset, not yet painted>");
         }
@@ -73,8 +82,21 @@ public static class StyleRuntimeBridge
 
     private static ColorRgba ToColorRgba(NativeColor color) => new(color.R, color.G, color.B, color.A);
 
+    private static ColorEdges ToColorEdges(NativeColorEdges edges) => new(
+        ToColorRgba(edges.Left), ToColorRgba(edges.Top), ToColorRgba(edges.Right), ToColorRgba(edges.Bottom));
+
+    private static BorderStyleEdges ToBorderStyleEdges(NativeBorderStyleEdges edges) => new(
+        (BorderStyle)edges.Left, (BorderStyle)edges.Top, (BorderStyle)edges.Right, (BorderStyle)edges.Bottom);
+
     private static CssEdges ToCssEdges(NativeEdges edges) => new(
         ToCssLength(edges.Left), ToCssLength(edges.Top), ToCssLength(edges.Right), ToCssLength(edges.Bottom));
+
+    private static CssBorderRadii ToBorderRadii(NativeBorderRadii radii) => new(
+        ToCornerRadius(radii.TopLeft), ToCornerRadius(radii.TopRight),
+        ToCornerRadius(radii.BottomRight), ToCornerRadius(radii.BottomLeft));
+
+    private static CssCornerRadius ToCornerRadius(NativeCornerRadius radius) => new(
+        ToCssLength(radius.Horizontal), ToCssLength(radius.Vertical));
 
     private static CssLength ToCssLength(NativeLength length) => length.Unit switch
     {

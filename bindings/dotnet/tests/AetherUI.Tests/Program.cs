@@ -1,5 +1,6 @@
 using System.Net;
 using AetherUI.Css;
+using AetherUI.Core.Native;
 using AetherUI.Dom;
 using AetherUI.Events;
 using AetherUI.Generator;
@@ -26,15 +27,23 @@ internal static class Program
         ("Modern .view.html compiler", ModernViewCompilerGeneratesCSharp),
         ("StyleRuntime integration: negative margin + diagnostics", StyleRuntimeHandlesNegativeMarginAndReportsGaps),
         ("Gradient text via -webkit-background-clip", GradientTextClipAppliesToTextRun),
+        ("Native ABI contract rejects incompatible runtime metadata", NativeAbiContractRejectsIncompatibleMetadata),
         ("Native style runtime replaces DOM on markup rebuild", NativeStyleRuntimeRebuildReplacesDom),
         ("Native style runtime paints body shorthand gradients", NativeStyleRuntimePaintsBodyShorthandGradient),
         ("Native style runtime emits body solid background", NativeStyleRuntimeEmitsBodySolidBackground),
         ("Native style runtime emits nested element background", NativeStyleRuntimeEmitsNestedElementBackground),
+        ("Native box-shadow lists preserve declaration and paint order", NativeBoxShadowListsPreservePaintOrder),
+        ("Native text-shadow inherits and emits flat paint commands", NativeTextShadowInheritsAndEmitsPaintCommands),
+        ("Native backdrop-filter emits ordered declarative commands", NativeBackdropFilterEmitsOrderedDeclarativeCommands),
         ("Native pipeline renders dashboard fixture", NativePipelineRendersDashboardFixture),
         ("Native flex layout preserves nested content width", NativeFlexLayoutPreservesNestedContentWidth),
         ("Native layout positions absolute children and anonymous flex text", NativeLayoutPositionsAbsoluteChildrenAndAnonymousFlexText),
+        ("Native text alignment preserves CSS semantics and control overrides", NativeTextAlignmentPreservesSemanticsAndControlOverrides),
         ("Native runtime renders generated pseudo-elements", NativeRuntimeRendersGeneratedPseudoElements),
+        ("Native CSS typography, side borders, and column flex grow", NativeCssTypographySideBordersAndColumnFlexGrow),
         ("Native root scrolls overflowing content", NativeRootScrollsOverflowingContent),
+        ("Image resolver deduplicates resources and reports lifecycle", ImageResolverDeduplicatesResourcesAndReportsLifecycle),
+        ("Native image geometry rebuilds when a resource becomes ready", NativeImageGeometryRebuildsWhenResourceReady),
     ];
 
     public static int Main()
@@ -356,6 +365,24 @@ internal static class Program
         }
     }
 
+    private static void NativeAbiContractRejectsIncompatibleMetadata()
+    {
+        Assert.True(NativeAbiContract.EnsureCompatible() >= NativePaintCommandLayout.MinimumBufferSize);
+        Assert.Equal(NativePaintCommandLayout.MinimumBufferSize,
+            NativeAbiContract.Validate(NativeAbiContract.ExpectedVersion,
+                NativeAbiContract.RequiredCapabilities,
+                (nuint)NativePaintCommandLayout.MinimumBufferSize));
+        Assert.Throws<InvalidOperationException>(() => NativeAbiContract.Validate(
+            NativeAbiContract.ExpectedVersion + 1, NativeAbiContract.RequiredCapabilities,
+            (nuint)NativePaintCommandLayout.MinimumBufferSize));
+        Assert.Throws<InvalidOperationException>(() => NativeAbiContract.Validate(
+            NativeAbiContract.ExpectedVersion, NativeAbiContract.RequiredCapabilities & ~1UL,
+            (nuint)NativePaintCommandLayout.MinimumBufferSize));
+        Assert.Throws<InvalidOperationException>(() => NativeAbiContract.Validate(
+            NativeAbiContract.ExpectedVersion, NativeAbiContract.RequiredCapabilities,
+            (nuint)(NativePaintCommandLayout.MinimumBufferSize - 1)));
+    }
+
     private static void NativeStyleRuntimeRebuildReplacesDom()
     {
         var component = new RebuildComponent();
@@ -462,6 +489,105 @@ internal static class Program
             .Any(fill => fill.Rectangle == layoutBox.BorderBox && fill.Color.B > fill.Color.R && fill.Color.A >= .99f) == true);
     }
 
+    private static void NativeBoxShadowListsPreservePaintOrder()
+    {
+        const string markup = """
+            <style>
+              body { margin: 0; }
+              #window {
+                width: 180px; height: 100px; background: white;
+                box-shadow: 1px 2px 3px #ff0000, inset 4px 5px 6px #00ff00, 7px 8px 9px #0000ff;
+              }
+            </style>
+            <body><div id="window"></div></body>
+            """;
+        using var renderer = new RecordingRenderer();
+        using var host = new UiDocumentHost(new RawMarkupComponent(markup), new ApproximateTextMeasurer(), renderer, new UiHostOptions());
+        host.SetViewport(320, 200, 1);
+        host.Render();
+
+        var window = Assert.NotNull(host.Document?.GetElementById("window"));
+        var box = Assert.NotNull(host.Layout?.FindPrimaryBox(window));
+        Assert.Equal(2, box.Style.BoxShadows.Count);
+
+        var shadows = renderer.LastDisplayList?.Commands.OfType<DrawBoxShadowCommand>().ToArray()
+            ?? throw new InvalidOperationException("Native display list did not emit box shadows.");
+        Assert.Equal(2, shadows.Length);
+        // CSS's first declared shadow is closest to the box, so the painter must
+        // emit the last outer shadow first and the first one last.
+        Assert.Equal(7f, shadows[0].Shadow.OffsetX);
+        Assert.Equal(8f, shadows[0].Shadow.OffsetY);
+        Assert.Equal(1f, shadows[1].Shadow.OffsetX);
+        Assert.Equal(2f, shadows[1].Shadow.OffsetY);
+    }
+
+    private static void NativeBackdropFilterEmitsOrderedDeclarativeCommands()
+    {
+        const string markup = """
+            <style>
+              body { display:block; margin:0; background:#123456; }
+              #panel {
+                display:block; width:180px; height:100px;
+                background:rgba(255,255,255,.35); border-radius:12px;
+                backdrop-filter:blur(3px) blur(5px);
+              }
+            </style>
+            <body><div id="panel"></div></body>
+            """;
+        using var renderer = new RecordingRenderer();
+        using var host = new UiDocumentHost(new RawMarkupComponent(markup), new ApproximateTextMeasurer(), renderer, new UiHostOptions());
+        host.SetViewport(320, 200, 1);
+        host.Render();
+
+        var commands = renderer.LastDisplayList?.Commands.ToArray()
+            ?? throw new InvalidOperationException("Native renderer did not produce a display list.");
+        var index = Array.FindIndex(commands, command => command is ApplyBackdropFilterCommand);
+        Assert.True(index >= 0);
+        var filter = (ApplyBackdropFilterCommand)commands[index];
+        Assert.Equal(2, filter.Filters.Count);
+        Assert.Equal(BackdropFilterKind.Blur, filter.Filters[0].Kind);
+        Assert.Equal(3f, filter.Filters[0].LengthAmount.Value);
+        Assert.Equal(5f, filter.Filters[1].LengthAmount.Value);
+        Assert.True(filter.Radii.TopLeftX > 0);
+        Assert.True(index + 1 < commands.Length && commands[index + 1] is FillRoundedRectangleCommand);
+    }
+
+    private static void NativeTextShadowInheritsAndEmitsPaintCommands()
+    {
+        const string markup = """
+            <style>
+              body { margin: 0; }
+              #parent { color: #224466; text-shadow: 1px 2px 3px currentColor, 4px 5px #0000ff; }
+              #label { display: block; width: 200px; font-size: 20px; }
+            </style>
+            <body><div id="parent"><span id="label">ShadowText</span></div></body>
+            """;
+        using var renderer = new RecordingRenderer();
+        using var host = new UiDocumentHost(new RawMarkupComponent(markup), new ApproximateTextMeasurer(), renderer, new UiHostOptions());
+        host.SetViewport(320, 200, 1);
+        host.Render();
+
+        var label = Assert.NotNull(host.Document?.GetElementById("label"));
+        var box = Assert.NotNull(host.Layout?.FindPrimaryBox(label));
+        Assert.Equal(2, box.Style.TextShadows.Count);
+        Assert.Equal(1f, box.Style.TextShadows[0].OffsetX);
+        Assert.Equal(0x22 / 255f, box.Style.TextShadows[0].Color.R);
+
+        var commands = renderer.LastDisplayList?.Commands
+            ?? throw new InvalidOperationException("Native display list was not captured.");
+        var shadows = commands.OfType<DrawTextShadowCommand>()
+            .Where(static shadow => shadow.Text == "ShadowText").ToArray();
+        Assert.Equal(2, shadows.Length);
+        // The last declared shadow is painter's first; the first declared CSS
+        // shadow remains closest to the glyph and therefore paints on top.
+        Assert.Equal(4f, shadows[0].Shadow.OffsetX);
+        Assert.Equal(1f, shadows[1].Shadow.OffsetX);
+        var primaryTextIndex = commands.ToList().FindIndex(static command => command is DrawTextCommand text && text.Text == "ShadowText");
+        Assert.True(primaryTextIndex >= 2);
+        Assert.True(commands[primaryTextIndex - 1] is DrawTextShadowCommand);
+        Assert.True(commands[primaryTextIndex - 2] is DrawTextShadowCommand);
+    }
+
     private static void NativeFlexLayoutPreservesNestedContentWidth()
     {
         const string markup = """
@@ -551,6 +677,192 @@ internal static class Program
         Assert.True(degree.Rectangle.X >= temperature.Rectangle.Right - 1f);
     }
 
+    private static void NativeCssTypographySideBordersAndColumnFlexGrow()
+    {
+        const string markup = """
+            <style>
+              body { margin: 0; color: #1e293b; font-family: 'Segoe UI', sans-serif; }
+              #indicator { width: 100px; height: 30px; border-left: 4px solid #0ea5e9; }
+              #rounded-indicator { width: 100px; height: 30px; border-radius: 12px; border-left: 4px solid #0ea5e9; }
+              #alpha-gradient { width: 100px; height: 30px; background: linear-gradient(90deg, rgba(255, 215, 0, 0.1), transparent); }
+              #offset-gradient { width: 100px; height: 30px; background: linear-gradient(to bottom left, red 70%, #00ff00, green 20%, blue); }
+              #edge-matrix { width: 100px; height: 40px; border-top: 4px dotted #ff0000; border-right: 4px dashed #00ff00; border-bottom: 6px double #0000ff; border-left: 6px groove #ff00ff; }
+              #hidden-border { width: 30px; height: 20px; border: 8px hidden #ff00ff; }
+              #current-color-border { width: 30px; height: 20px; color: #123456; border: 2px solid; }
+              #metric { font-size: 28px; font-weight: 800; }
+              #metric .unit { font-size: 14px; font-weight: 400; }
+              #label { display: block; text-transform: uppercase; }
+              #transformed-input { text-transform: uppercase; }
+              #column { display: flex; flex-direction: column; height: 200px; gap: 10px; }
+              #header { height: 20px; }
+              #filler { flex: 1; }
+              #record { display: flex; flex-direction: column; height: 600px; padding: 40px; box-sizing: border-box; gap: 30px; }
+              #record-header { height: 83px; }
+              #record-grid { display: flex; gap: 20px; }
+              .record-card { flex: 1; padding: 25px; border: 1px solid white; }
+              #record-history { flex: 1; padding: 30px; }
+              #margin-collapse { padding: 10px; }
+              #margin-first { display: block; height: 20px; margin-bottom: 25px; }
+              #margin-second { display: block; height: 20px; margin-top: 20px; }
+              #collapse-parent { display: block; margin-top: 10px; margin-bottom: 15px; }
+              #collapse-child { display: block; height: 10px; margin-top: 30px; margin-bottom: 25px; }
+              #collapse-after { display: block; height: 10px; margin-top: 20px; }
+              #empty-collapse { display: block; margin-top: 20px; margin-bottom: 30px; }
+              #empty-collapse-after { display: block; height: 10px; margin-top: 10px; }
+              #whitespace-collapse-parent { display: block; margin-top: 10px; }
+              #whitespace-collapse-child { display: block; height: 10px; margin-top: 30px; }
+              #padded-collapse-parent { display: block; padding-top: 1px; margin-top: 10px; }
+              #padded-collapse-child { display: block; height: 10px; margin-top: 30px; }
+              #bfc-collapse-parent { display: block; overflow: hidden; margin-top: 10px; }
+              #bfc-collapse-child { display: block; height: 10px; margin-top: 30px; }
+              #grid { display: flex; gap: 20px; }
+              .card { flex: 1; padding: 25px; border: 1px solid white; }
+              .card-label { display: block; font-size: 13px; margin-bottom: 10px; }
+            </style>
+            <body>
+              <div id="indicator"></div>
+              <div id="rounded-indicator"></div>
+              <div id="alpha-gradient"></div>
+              <div id="offset-gradient"></div>
+              <div id="edge-matrix"></div><div id="hidden-border"></div><div id="current-color-border"></div>
+              <span id="label">Heart Rate</span>
+              <div id="metric">72 <span class="unit">bpm</span></div>
+              <button id="edit" style="background: white; border: 1px solid #e2e8f0;">Edit Profile</button>
+              <input id="transformed-input" value="find patient">
+              <div id="column"><div id="header"></div><div id="filler"></div></div>
+              <div id="record"><div id="record-header"></div><div id="record-grid"><div id="record-card-a" class="record-card">Heart Rate<div>72 bpm</div><div style="margin-top: 15px;">Normal</div></div><div class="record-card">Blood Pressure<div>120/80</div><div style="margin-top: 15px;">Optimal</div></div><div class="record-card">Body Temp<div>36.6 °C</div><div style="margin-top: 15px;">Normal</div></div></div><div id="record-history">Medical History</div></div>
+              <div id="margin-collapse"><div id="margin-first"></div><div id="margin-second"></div></div>
+              <div id="collapse-parent"><div id="collapse-child"></div></div><div id="collapse-after"></div>
+              <div id="empty-collapse"></div><div id="empty-collapse-after"></div>
+              <div id="whitespace-collapse-parent">
+                <div id="whitespace-collapse-child"></div>
+              </div>
+              <div id="padded-collapse-parent"><div id="padded-collapse-child"></div></div>
+              <div id="bfc-collapse-parent"><div id="bfc-collapse-child"></div></div>
+              <div id="grid">
+                <div id="card-a" class="card"><span class="card-label">One</span><div id="metric-a">72 <span class="unit">bpm</span></div><div style="margin-top: 15px;">Normal</div></div>
+                <div class="card"><span class="card-label">Two</span><div>120/80</div><div style="margin-top: 15px;">Optimal</div></div>
+                <div class="card"><span class="card-label">Three</span><div>36.6</div><div style="margin-top: 15px;">Normal</div></div>
+              </div>
+            </body>
+            """;
+
+        using var renderer = new RecordingRenderer();
+        using var host = new UiDocumentHost(new RawMarkupComponent(markup), new ApproximateTextMeasurer(), renderer, new UiHostOptions());
+        host.SetViewport(640, 480, 1);
+        host.Render();
+
+        var commands = renderer.LastDisplayList?.Commands ?? throw new InvalidOperationException("Native renderer did not produce a display list.");
+        var text = commands.OfType<DrawTextCommand>().ToArray();
+        var labelRuns = text.Where(command => command.Text is "HEART" or "RATE").ToArray();
+        Assert.Equal(2, labelRuns.Length);
+        Assert.True(labelRuns.All(command => command.FontFamily == "Segoe UI"));
+
+        var value = Assert.NotNull(text.FirstOrDefault(command => command.Text == "72"));
+        var unit = Assert.NotNull(text.FirstOrDefault(command => command.Text == "bpm"));
+        Assert.True(MathF.Abs((value.Rectangle.Y + value.FontSize * .8f) - (unit.Rectangle.Y + unit.FontSize * .8f)) < .01f);
+
+        var edit = Assert.NotNull(text.SingleOrDefault(command => command.Text == "Edit Profile"));
+        Assert.True(edit.Color.R < .2f && edit.Color.B < .3f);
+        Assert.NotNull(text.SingleOrDefault(command => command.Text == "FIND PATIENT"));
+
+        var borderSides = commands.OfType<FillBorderSideCommand>().ToArray();
+        Assert.True(borderSides.Any(command => command.Side == 3 && command.Color.B > command.Color.R), "left border side was not emitted");
+        Assert.True(borderSides.Any(command => command.Side == 3 && MathF.Abs(command.OuterRadii.TopLeftX - 12f) < .01f &&
+            MathF.Abs(command.InnerRadii.TopLeftX - 8f) < .01f), "rounded left border did not carry outer/inner radii");
+        var alphaGradient = Assert.NotNull(commands.OfType<FillRoundedRectangleGradientCommand>().FirstOrDefault(command =>
+            MathF.Abs(command.Rectangle.Width - 100f) < .01f && MathF.Abs(command.Rectangle.Height - 30f) < .01f));
+        Assert.Equal(2, alphaGradient.Gradient.Stops.Count);
+        Assert.True(MathF.Abs(alphaGradient.Gradient.Stops[0].Color.A - .1f) < .01f);
+        Assert.Equal(0f, alphaGradient.Gradient.Stops[1].Color.A);
+        var offsetGradient = Assert.NotNull(host.Document?.GetElementById("offset-gradient"));
+        var offsetGradientBox = Assert.NotNull(host.Layout?.FindPrimaryBox(offsetGradient));
+        Assert.True(offsetGradientBox.Style.BackgroundGradient is { }, "gradient shorthand must reach the computed style");
+        var offsetStops = offsetGradientBox.Style.BackgroundGradient!.Value.Stops;
+        Assert.Equal(4, offsetStops.Count);
+        Assert.Equal(.7f, offsetStops[0].Offset);
+        Assert.Equal(.7f, offsetStops[1].Offset);
+        Assert.Equal(.7f, offsetStops[2].Offset);
+        Assert.Equal(1f, offsetStops[3].Offset);
+
+        var edgeMatrix = Assert.NotNull(host.Document?.GetElementById("edge-matrix"));
+        var edgeMatrixBox = Assert.NotNull(host.Layout?.FindPrimaryBox(edgeMatrix));
+        Assert.Equal(110f, edgeMatrixBox.BorderBox.Width);
+        Assert.Equal(50f, edgeMatrixBox.BorderBox.Height);
+
+        Assert.True(borderSides.Any(command => command.Side == 0 && command.Style == (int)BorderStyle.Dotted && command.Color.R > .99f), "dotted border geometry must preserve its style and side color");
+        Assert.True(borderSides.Any(command => command.Side == 1 && command.Style == (int)BorderStyle.Dashed && command.Color.G > .99f), "dashed border geometry must preserve its style and side color");
+        Assert.True(borderSides.Any(command => command.Side == 2 && command.Style == (int)BorderStyle.Double && command.Color.B > .99f), "double border geometry must preserve its style and side color");
+        var currentColor = new ColorRgba(0x12 / 255f, 0x34 / 255f, 0x56 / 255f, 1);
+        Assert.True(commands.OfType<StrokeRoundedRectangleCommand>().Any(command => command.Color == currentColor),
+            "currentColor must resolve from the element color");
+
+        var hidden = Assert.NotNull(host.Document?.GetElementById("hidden-border"));
+        var hiddenBox = Assert.NotNull(host.Layout?.FindPrimaryBox(hidden));
+        Assert.Equal(30f, hiddenBox.BorderBox.Width);
+        Assert.Equal(20f, hiddenBox.BorderBox.Height);
+
+        var filler = Assert.NotNull(host.Document?.GetElementById("filler"));
+        var fillerBox = Assert.NotNull(host.Layout?.FindPrimaryBox(filler));
+        Assert.Equal(170f, fillerBox.BorderBox.Height);
+
+        var collapseParent = Assert.NotNull(host.Document?.GetElementById("collapse-parent"));
+        var collapseChild = Assert.NotNull(host.Document?.GetElementById("collapse-child"));
+        var collapseAfter = Assert.NotNull(host.Document?.GetElementById("collapse-after"));
+        var collapseParentBox = Assert.NotNull(host.Layout?.FindPrimaryBox(collapseParent));
+        var collapseChildBox = Assert.NotNull(host.Layout?.FindPrimaryBox(collapseChild));
+        var collapseAfterBox = Assert.NotNull(host.Layout?.FindPrimaryBox(collapseAfter));
+        Assert.Equal(collapseParentBox.BorderBox.Y, collapseChildBox.BorderBox.Y);
+        Assert.Equal(10f, collapseParentBox.BorderBox.Height);
+        Assert.Equal(collapseParentBox.BorderBox.Bottom + 25f, collapseAfterBox.BorderBox.Y);
+
+        var emptyCollapse = Assert.NotNull(host.Document?.GetElementById("empty-collapse"));
+        var emptyCollapseAfter = Assert.NotNull(host.Document?.GetElementById("empty-collapse-after"));
+        var emptyCollapseBox = Assert.NotNull(host.Layout?.FindPrimaryBox(emptyCollapse));
+        var emptyCollapseAfterBox = Assert.NotNull(host.Layout?.FindPrimaryBox(emptyCollapseAfter));
+        Assert.Equal(emptyCollapseBox.BorderBox.Y + 10f, emptyCollapseAfterBox.BorderBox.Y);
+
+        var whitespaceCollapseParent = Assert.NotNull(host.Document?.GetElementById("whitespace-collapse-parent"));
+        var whitespaceCollapseChild = Assert.NotNull(host.Document?.GetElementById("whitespace-collapse-child"));
+        var whitespaceCollapseParentBox = Assert.NotNull(host.Layout?.FindPrimaryBox(whitespaceCollapseParent));
+        var whitespaceCollapseChildBox = Assert.NotNull(host.Layout?.FindPrimaryBox(whitespaceCollapseChild));
+        Assert.Equal(whitespaceCollapseParentBox.BorderBox.Y, whitespaceCollapseChildBox.BorderBox.Y);
+
+        var paddedCollapseParent = Assert.NotNull(host.Document?.GetElementById("padded-collapse-parent"));
+        var paddedCollapseChild = Assert.NotNull(host.Document?.GetElementById("padded-collapse-child"));
+        var paddedCollapseParentBox = Assert.NotNull(host.Layout?.FindPrimaryBox(paddedCollapseParent));
+        var paddedCollapseChildBox = Assert.NotNull(host.Layout?.FindPrimaryBox(paddedCollapseChild));
+        Assert.Equal(31f, paddedCollapseChildBox.BorderBox.Y - paddedCollapseParentBox.BorderBox.Y);
+
+        var bfcCollapseParent = Assert.NotNull(host.Document?.GetElementById("bfc-collapse-parent"));
+        var bfcCollapseChild = Assert.NotNull(host.Document?.GetElementById("bfc-collapse-child"));
+        var bfcCollapseParentBox = Assert.NotNull(host.Layout?.FindPrimaryBox(bfcCollapseParent));
+        var bfcCollapseChildBox = Assert.NotNull(host.Layout?.FindPrimaryBox(bfcCollapseChild));
+        Assert.Equal(30f, bfcCollapseChildBox.BorderBox.Y - bfcCollapseParentBox.BorderBox.Y);
+
+        var recordGrid = Assert.NotNull(host.Document?.GetElementById("record-grid"));
+        var recordCard = Assert.NotNull(host.Document?.GetElementById("record-card-a"));
+        var recordHistory = Assert.NotNull(host.Document?.GetElementById("record-history"));
+        var recordGridBox = Assert.NotNull(host.Layout?.FindPrimaryBox(recordGrid));
+        var recordCardBox = Assert.NotNull(host.Layout?.FindPrimaryBox(recordCard));
+        var recordHistoryBox = Assert.NotNull(host.Layout?.FindPrimaryBox(recordHistory));
+        Assert.Equal(recordCardBox.BorderBox.Height, recordGridBox.BorderBox.Height);
+        Assert.Equal(30f, recordHistoryBox.BorderBox.Y - recordGridBox.BorderBox.Bottom);
+
+        var marginFirst = Assert.NotNull(host.Document?.GetElementById("margin-first"));
+        var marginSecond = Assert.NotNull(host.Document?.GetElementById("margin-second"));
+        var marginFirstBox = Assert.NotNull(host.Layout?.FindPrimaryBox(marginFirst));
+        var marginSecondBox = Assert.NotNull(host.Layout?.FindPrimaryBox(marginSecond));
+        Assert.Equal(25f, marginSecondBox.BorderBox.Y - marginFirstBox.BorderBox.Bottom);
+
+        var grid = Assert.NotNull(host.Document?.GetElementById("grid"));
+        var card = Assert.NotNull(host.Document?.GetElementById("card-a"));
+        var gridBox = Assert.NotNull(host.Layout?.FindPrimaryBox(grid));
+        var cardBox = Assert.NotNull(host.Layout?.FindPrimaryBox(card));
+        Assert.Equal(cardBox.BorderBox.Height, gridBox.BorderBox.Height);
+
+    }
+
     private static void NativeLayoutPositionsAbsoluteChildrenAndAnonymousFlexText()
     {
         const string markup = """
@@ -594,6 +906,138 @@ internal static class Program
             throw new InvalidOperationException(
                 $"Anonymous flex text was not centered: text={textCenter}, container={imageCenter}.");
         }
+    }
+
+    private static void NativeTextAlignmentPreservesSemanticsAndControlOverrides()
+    {
+        const string markup = """
+            <style>
+              body { margin: 0; }
+              .alignment { display: block; width: 120px; }
+              button { width: 120px; }
+              #button-right { text-align: right; }
+            </style>
+            <body>
+              <div id="align-start" class="alignment" style="text-align: start;">start</div>
+              <div id="align-end" class="alignment" style="text-align: end;">end</div>
+              <div id="align-left" class="alignment" style="text-align: left;">left</div>
+              <div id="align-right" class="alignment" style="text-align: right;">right</div>
+              <div id="align-center" class="alignment" style="text-align: center;">center</div>
+              <div id="align-justify" class="alignment" style="text-align: justify;">justify</div>
+              <button id="button-default">Default</button>
+              <button id="button-right">Right</button>
+            </body>
+            """;
+
+        using var renderer = new RecordingRenderer();
+        using var host = new UiDocumentHost(new RawMarkupComponent(markup), new ApproximateTextMeasurer(), renderer, new UiHostOptions());
+        host.SetViewport(640, 480, 1);
+        host.Render();
+
+        var expected = new Dictionary<string, TextAlign>
+        {
+            ["align-start"] = TextAlign.Start,
+            ["align-end"] = TextAlign.End,
+            ["align-left"] = TextAlign.Left,
+            ["align-right"] = TextAlign.Right,
+            ["align-center"] = TextAlign.Center,
+            ["align-justify"] = TextAlign.Justify,
+        };
+        foreach (var (id, alignment) in expected)
+        {
+            var element = Assert.NotNull(host.Document?.GetElementById(id));
+            var box = Assert.NotNull(host.Layout?.FindPrimaryBox(element));
+            Assert.Equal(alignment, box.Style.TextAlign);
+        }
+
+        var textCommands = renderer.LastDisplayList?.Commands.OfType<DrawTextCommand>().ToArray()
+            ?? throw new InvalidOperationException("Native renderer did not produce text commands.");
+        Assert.Equal(TextAlign.Center, Assert.NotNull(textCommands.SingleOrDefault(command => command.Text == "Default")).Alignment);
+        Assert.Equal(TextAlign.Right, Assert.NotNull(textCommands.SingleOrDefault(command => command.Text == "Right")).Alignment);
+    }
+
+    private static void ImageResolverDeduplicatesResourcesAndReportsLifecycle()
+    {
+        const string source = "https://example.test/assets/hero.png";
+        var loader = new ControlledImageResourceLoader();
+        using var resolver = new ImageResourceResolver(loader);
+        var ready = new TaskCompletionSource<ImageResourceChangedEventArgs>(TaskCreationOptions.RunContinuationsAsynchronously);
+        resolver.Changed += (_, change) => ready.TrySetResult(change);
+
+        resolver.Request(source);
+        resolver.Request(source);
+        Assert.Equal(1, loader.LoadCount);
+        Assert.False(resolver.TryGetDimensions(source, out _));
+
+        loader.Complete(new ImageResourceResult(new ImageDimensions(640, 360), new byte[] { 1, 2, 3 }));
+        var readyChange = WaitFor(ready.Task, "image resolver did not publish ready state");
+        Assert.Equal(source, readyChange.Source);
+        Assert.Equal(ImageResourceState.Ready, readyChange.State);
+        Assert.Equal<ImageResourceFailure?>(null, readyChange.Failure);
+        Assert.True(resolver.TryGetDimensions(source, out var dimensions));
+        Assert.Equal(new ImageDimensions(640, 360), dimensions);
+
+        AssertImageResolverFailure(new UnauthorizedAccessException(), ImageResourceFailure.Policy);
+        AssertImageResolverFailure(new InvalidDataException(), ImageResourceFailure.Decode);
+        AssertImageResolverFailure(new HttpRequestException(), ImageResourceFailure.Network);
+    }
+
+    private static void AssertImageResolverFailure(Exception exception, ImageResourceFailure expectedFailure)
+    {
+        const string source = "https://example.test/assets/failure.png";
+        var loader = new ControlledImageResourceLoader();
+        using var resolver = new ImageResourceResolver(loader);
+        var failed = new TaskCompletionSource<ImageResourceChangedEventArgs>(TaskCreationOptions.RunContinuationsAsynchronously);
+        resolver.Changed += (_, change) => failed.TrySetResult(change);
+
+        resolver.Request(source);
+        Assert.Equal(1, loader.LoadCount);
+        loader.Fail(exception);
+        var change = WaitFor(failed.Task, "image resolver did not publish failed state");
+        Assert.Equal(ImageResourceState.Failed, change.State);
+        Assert.Equal<ImageResourceFailure?>(expectedFailure, change.Failure);
+        Assert.False(resolver.TryGetDimensions(source, out _));
+
+        // Failure remains cached so a renderer cannot create an unbounded retry loop every frame.
+        resolver.Request(source);
+        Assert.Equal(1, loader.LoadCount);
+    }
+
+    private static void NativeImageGeometryRebuildsWhenResourceReady()
+    {
+        const string source = "https://example.test/assets/pattern.png";
+        var loader = new ControlledImageResourceLoader();
+        using var resolver = new ImageResourceResolver(loader);
+        using var renderer = new RecordingRenderer();
+        var markup = "<style>body { display:block; margin:0; } #image { display:block; width:200px; height:100px; " +
+            "background:url('" + source + "') center / cover no-repeat; }</style><body><div id=\"image\"></div></body>";
+        using var host = new UiDocumentHost(new RawMarkupComponent(markup), new ApproximateTextMeasurer(), renderer,
+            new UiHostOptions { ImageResolver = resolver });
+        host.SetViewport(320, 200, 1);
+        host.Render();
+        var pending = Assert.NotNull(renderer.LastDisplayList?.Commands.OfType<DrawBackgroundImageCommand>().SingleOrDefault());
+        Assert.False(pending.HasResolvedGeometry);
+        Assert.Equal(1, loader.LoadCount);
+
+        var ready = new TaskCompletionSource<ImageResourceChangedEventArgs>(TaskCreationOptions.RunContinuationsAsynchronously);
+        resolver.Changed += (_, change) => ready.TrySetResult(change);
+        loader.Complete(new ImageResourceResult(new ImageDimensions(100, 100), new byte[100 * 100 * 4]));
+        WaitFor(ready.Task, "image resource did not complete");
+        host.Render();
+        var resolved = Assert.NotNull(renderer.LastDisplayList?.Commands.OfType<DrawBackgroundImageCommand>().SingleOrDefault());
+        Assert.True(resolved.HasResolvedGeometry);
+        Assert.NotNull(resolved.Resource);
+        Assert.Equal(200f, resolved.DestinationRectangle.Width);
+        Assert.Equal(100f, resolved.DestinationRectangle.Height);
+    }
+
+    private static T WaitFor<T>(Task<T> task, string message)
+    {
+        if (!task.Wait(TimeSpan.FromSeconds(2)))
+        {
+            throw new InvalidOperationException(message);
+        }
+        return task.GetAwaiter().GetResult();
     }
 
     private sealed class NestedSolidBackgroundComponent : UiComponent
@@ -670,6 +1114,21 @@ internal static class Program
         protected override void BuildRenderTree(MarkupWriter writer) => writer.WriteLiteral(markup);
     }
 
+    private sealed class ControlledImageResourceLoader : IImageResourceLoader
+    {
+        private readonly TaskCompletionSource<ImageResourceResult> _completion = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public int LoadCount { get; private set; }
+
+        public ValueTask<ImageResourceResult> LoadAsync(string source, CancellationToken cancellationToken)
+        {
+            LoadCount++;
+            return new ValueTask<ImageResourceResult>(_completion.Task);
+        }
+
+        public void Complete(ImageResourceResult result) => _completion.TrySetResult(result);
+        public void Fail(Exception exception) => _completion.TrySetException(exception);
+    }
+
     private sealed class NegativeMarginComponent : UiComponent
     {
         protected override void BuildRenderTree(MarkupWriter writer)
@@ -738,11 +1197,11 @@ internal static class Program
 
     private static class Assert
     {
-        public static void True(bool condition)
+        public static void True(bool condition, string? message = null)
         {
             if (!condition)
             {
-                throw new InvalidOperationException("Se esperaba true.");
+                throw new InvalidOperationException(message ?? "Se esperaba true.");
             }
         }
 
@@ -765,6 +1224,13 @@ internal static class Program
             {
                 throw new InvalidOperationException("Se esperaba la misma referencia.");
             }
+        }
+
+        public static void Throws<TException>(Action action) where TException : Exception
+        {
+            try { action(); }
+            catch (TException) { return; }
+            throw new InvalidOperationException($"Se esperaba {typeof(TException).Name}.");
         }
     }
 }

@@ -104,6 +104,13 @@ jobs:
           --no-build
           -p:AetherNativeRuntimeIdentifier=win-x64
 
+      - name: Run Direct2D WARP pixel regression
+        run: >-
+          dotnet run
+          --project bindings/dotnet/tests/AetherUI.Windows.RegressionTests/AetherUI.Windows.RegressionTests.csproj
+          -c Release
+          -p:AetherNativeRuntimeIdentifier=win-x64
+
       - name: Pack .NET binding
         shell: pwsh
         run: |

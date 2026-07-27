@@ -23,6 +23,7 @@ public sealed unsafe class NativeDomDocument : IDisposable
     public static NativeDomDocument Parse(string markup)
     {
         ArgumentNullException.ThrowIfNull(markup);
+        NativeAbiContract.EnsureCompatible();
         Throw(NativeMethods.DocCreate(out var handle));
         var document = new NativeDomDocument(handle);
         try

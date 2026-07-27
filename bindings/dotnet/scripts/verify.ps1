@@ -25,6 +25,7 @@ $bindingRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 $repositoryRoot = (Resolve-Path (Join-Path $bindingRoot '../..')).Path
 $solution = Join-Path $bindingRoot 'AetherUI.DotNet.sln'
 $testProject = Join-Path $bindingRoot 'tests/AetherUI.Tests/AetherUI.Tests.csproj'
+$windowsRegressionProject = Join-Path $bindingRoot 'tests/AetherUI.Windows.RegressionTests/AetherUI.Windows.RegressionTests.csproj'
 $packages = Join-Path $repositoryRoot 'artifacts/packages'
 $projectsToPack = @(
     (Join-Path $bindingRoot 'src/AetherUI.Core.Native.Interop/AetherUI.Core.Native.Interop.csproj'),
@@ -52,6 +53,12 @@ try {
         --project $testProject `
         -c $Configuration `
         --no-build `
+        -p:AetherNativeRuntimeIdentifier=$RuntimeIdentifier
+
+    Write-Host '== Direct2D WARP pixel regression =='
+    dotnet run `
+        --project $windowsRegressionProject `
+        -c $Configuration `
         -p:AetherNativeRuntimeIdentifier=$RuntimeIdentifier
 
     if (-not $SkipPack) {
