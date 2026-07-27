@@ -10,6 +10,10 @@
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
     <NoWarn>$(NoWarn);CS1591;RS1036;RS2008</NoWarn>
     <IncludeBuildOutput>false</IncludeBuildOutput>
+    <!-- The analyzer package carries its compiled assembly under analyzers/ rather than the
+         normal lib/ layout. A symbol-only package would have no package content, so NuGet
+         correctly rejects it with NU5017; do not inherit the runtime packages' snupkg policy. -->
+    <IncludeSymbols>false</IncludeSymbols>
     <DevelopmentDependency>true</DevelopmentDependency>
     <SuppressDependenciesWhenPacking>true</SuppressDependenciesWhenPacking>
   </PropertyGroup>
