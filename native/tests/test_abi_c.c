@@ -29,6 +29,9 @@ int main(void) {
     if (aether_paint_command_size() != sizeof(aether_paint_command_t)) {
         return fail("runtime paint-command size differs from the C header");
     }
+    if (aether_computed_style_size() != sizeof(aether_computed_style_t)) {
+        return fail("runtime computed-style size differs from the C header");
+    }
 
     puts("OK: C ABI smoke test passed");
     return 0;

@@ -42,6 +42,15 @@ public enum AlignItems : byte
     End,
 }
 
+public enum AlignSelf : sbyte
+{
+    Auto = -1,
+    Stretch = 0,
+    Start = 1,
+    Center = 2,
+    End = 3,
+}
+
 public enum TextAlign : byte
 {
     Start,
@@ -120,13 +129,49 @@ public enum CursorKind : byte
     Text,
 }
 
+public enum FlexBasisKind : byte
+{
+    Auto,
+    Content,
+    Length,
+}
+
+public readonly record struct FlexBasis(FlexBasisKind Kind, CssLength Length)
+{
+    public static readonly FlexBasis Auto = new(FlexBasisKind.Auto, CssLength.Auto);
+    public static readonly FlexBasis Content = new(FlexBasisKind.Content, CssLength.Auto);
+}
+
+/// <summary>Typed CSS 2D transform operation retained until post-layout painting.</summary>
+public enum TransformOperationKind : byte
+{
+    Translate,
+    Scale,
+    Rotate,
+    SkewX,
+    SkewY,
+    Matrix,
+}
+
+public readonly record struct CssTransformOperation(
+    TransformOperationKind Kind, CssLength X, CssLength Y, float ScalarX, float ScalarY, float AngleRadians,
+    float MatrixA, float MatrixB, float MatrixC, float MatrixD, float MatrixE, float MatrixF);
+
+public readonly record struct CssTransformOrigin(CssLength X, CssLength Y)
+{
+    public static readonly CssTransformOrigin Center = new(new CssLength(50, CssUnit.Percent), new CssLength(50, CssUnit.Percent));
+}
+
 public sealed class ComputedStyle
 {
     public DisplayKind Display { get; set; } = DisplayKind.Inline;
     public FlexDirection FlexDirection { get; set; } = FlexDirection.Row;
     public JustifyContent JustifyContent { get; set; } = JustifyContent.Start;
     public AlignItems AlignItems { get; set; } = AlignItems.Stretch;
+    public AlignSelf AlignSelf { get; set; } = AlignSelf.Auto;
     public float FlexGrow { get; set; }
+    public float FlexShrink { get; set; } = 1f;
+    public FlexBasis FlexBasis { get; set; } = FlexBasis.Auto;
     public bool FlexWrap { get; set; }
     public float Gap { get; set; }
     public PositionKind Position { get; set; } = PositionKind.Static;
@@ -171,6 +216,13 @@ public sealed class ComputedStyle
     public CssBorderRadii BorderRadii { get; set; } = CssBorderRadii.Zero;
 
     public float Opacity { get; set; } = 1;
+
+    /// <summary>
+    /// Non-inherited CSS transforms. They affect post-layout painting and hit-testing only;
+    /// the Display List later scopes them around the element and its descendants.
+    /// </summary>
+    public IReadOnlyList<CssTransformOperation> Transforms { get; set; } = [];
+    public CssTransformOrigin TransformOrigin { get; set; } = CssTransformOrigin.Center;
 
     public string FontFamily { get; set; } = "Segoe UI";
     public float FontSize { get; set; } = 16;

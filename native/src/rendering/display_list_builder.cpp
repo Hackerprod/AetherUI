@@ -7,6 +7,7 @@
 #include "../css/text_transform.h"
 #include "border_painter.h"
 #include "background_image_geometry.h"
+#include "transform_matrix.h"
 
 #include <algorithm>
 #include <cctype>
@@ -222,6 +223,19 @@ static void emit_pop_clip(std::vector<aether_paint_command_t>& cmds) {
     cmds.push_back(cmd);
 }
 
+static void emit_push_transform(std::vector<aether_paint_command_t>& cmds, aether_transform_matrix matrix) {
+    aether_paint_command_t cmd{};
+    cmd.tag = AETHER_PAINT_PUSH_TRANSFORM;
+    cmd.data.push_transform = {matrix};
+    cmds.push_back(cmd);
+}
+
+static void emit_pop_transform(std::vector<aether_paint_command_t>& cmds) {
+    aether_paint_command_t cmd{};
+    cmd.tag = AETHER_PAINT_POP_TRANSFORM;
+    cmds.push_back(cmd);
+}
+
 /* ══════════════════════════════════════════════════════════════════════
    DisplayListBuilder — walks LayoutBox tree, emits paint commands
    ══════════════════════════════════════════════════════════════════════ */
@@ -257,6 +271,21 @@ static void paint_box(aether_display_list_builder_s* builder,
         return;
     }
 
+    // CSS transforms are post-layout and scope over the element's own paint
+    // plus every descendant. Keeping this as Display List structure avoids
+    // baking geometry into commands or duplicating matrix math in bindings.
+    // Anonymous text fragments borrow typographic style from their owner but
+    // are not independently transformable CSS elements. Their owning element
+    // already brackets them, so emitting another scope here would apply the
+    // same transform twice.
+    const bool has_transform = box->kind == LAYOUT_BOX_ELEMENT &&
+        style.transforms.count > 0 && style.transforms.items;
+    if (has_transform) {
+        emit_push_transform(cmds, aether_transform_matrix_resolve(
+            style.transforms, style.transform_origin, box->border_box,
+            style.font_size, builder->root_font_size, builder->viewport));
+    }
+
     // Text box → emit text command and return
     if (box->kind == LAYOUT_BOX_TEXT) {
         if (!box->text.empty()) {
@@ -273,6 +302,7 @@ static void paint_box(aether_display_list_builder_s* builder,
                                apply_opacity(style.color, style.opacity), false);
             }
         }
+        if (has_transform) emit_pop_transform(cmds);
         return;
     }
 
@@ -321,6 +351,8 @@ static void paint_box(aether_display_list_builder_s* builder,
         emit_stroke_rounded_rect(cmds, inflated, focus_radii, 1,
                                  {0.145f, 0.388f, 0.922f, 0.75f});
     }
+
+    if (has_transform) emit_pop_transform(cmds);
 }
 
 /* ── paint_box_shadows ────────────────────────────────────────────── */
@@ -612,7 +644,11 @@ AETHER_API aether_status_t aether_display_list_get_command(
             (void)aether_backdrop_filter_list_copy(&src.data.apply_backdrop_filter.filters,
                                                    &out_cmd->data.apply_backdrop_filter.filters);
             break;
+        case AETHER_PAINT_PUSH_TRANSFORM:
+            out_cmd->data.push_transform = src.data.push_transform;
+            break;
         case AETHER_PAINT_POP_CLIP:
+        case AETHER_PAINT_POP_TRANSFORM:
             break;
     }
     return AETHER_OK;

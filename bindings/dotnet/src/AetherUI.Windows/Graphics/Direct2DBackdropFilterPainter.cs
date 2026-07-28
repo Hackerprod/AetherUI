@@ -21,17 +21,29 @@ internal static class Direct2DBackdropFilterPainter
         ID2D1DeviceContext target,
         ID2D1Bitmap1 backdrop,
         ApplyBackdropFilterCommand command)
+        => Draw(target, backdrop, command.Filters, command.Rectangle);
+
+    /// <summary>
+    /// Draws a backdrop sample already expressed in scene/device coordinates. The backend uses
+    /// this overload for transformed elements because the snapshot is a screen-space image: it
+    /// must not be sampled again through the element's local transform.
+    /// </summary>
+    internal static void Draw(
+        ID2D1DeviceContext target,
+        ID2D1Bitmap1 backdrop,
+        IReadOnlyList<BackdropFilter> filters,
+        RectF sampleRectangle)
     {
         ArgumentNullException.ThrowIfNull(target);
         ArgumentNullException.ThrowIfNull(backdrop);
-        ArgumentNullException.ThrowIfNull(command);
+        ArgumentNullException.ThrowIfNull(filters);
 
         // CSS filter functions form a pipeline. Blur is the only v1 operation; successive
         // Gaussian convolutions compose to one Gaussian whose variance is the sum of theirs.
         // Retaining the operation list in the ABI keeps the dispatch extensible when the other
         // CSS filter functions gain render support.
         var variance = 0f;
-        foreach (var filter in command.Filters)
+        foreach (var filter in filters)
         {
             if (filter.Kind != BackdropFilterKind.Blur)
             {
@@ -49,7 +61,7 @@ internal static class Direct2DBackdropFilterPainter
 
         var standardDeviation = MathF.Sqrt(variance);
         var padding = MathF.Ceiling(3f * standardDeviation + 1f);
-        var sampleBounds = Inflate(command.Rectangle, padding);
+        var sampleBounds = Inflate(sampleRectangle, padding);
         using var effect = new ID2D1Effect(target.CreateEffect(EffectGuids.GaussianBlur));
         effect.SetInput(0, backdrop, true);
         effect.SetValue((uint)GaussianBlurProperties.StandardDeviation, standardDeviation);

@@ -23,6 +23,7 @@ add_library(aether_core SHARED
     src/css/border_radii.cpp
     src/css/background_layers.cpp
     src/css/backdrop_filters.cpp
+    src/css/transforms.cpp
     src/css/linear_gradient.cpp
     src/css/text_transform.cpp
     src/css/css_parser.cpp
@@ -31,12 +32,14 @@ add_library(aether_core SHARED
     src/primitives/geometry.cpp
     src/layout/layout_box.cpp
     src/layout/box_model.cpp
+    src/layout/flex_resolver.cpp
     src/layout/margin_adjacency.cpp
     src/layout/text_justify.cpp
     src/layout/layout_engine.cpp
     src/rendering/display_list.cpp
     src/rendering/display_list_builder.cpp
     src/rendering/background_image_geometry.cpp
+    src/rendering/transform_matrix.cpp
     src/rendering/border_painter.cpp
     src/style_runtime/style_values.cpp
     src/style_runtime/style_computed.cpp
@@ -102,6 +105,14 @@ if(AETHERUI_BUILD_TESTS)
     target_link_libraries(aether_box_model_test PRIVATE AetherUI::Core)
     add_test(NAME aether.box-model COMMAND aether_box_model_test)
 
+    add_executable(aether_css_calc_test tests/test_css_calc.cpp)
+    target_link_libraries(aether_css_calc_test PRIVATE AetherUI::Core)
+    add_test(NAME aether.css-calc COMMAND aether_css_calc_test)
+
+    add_executable(aether_flex_resolver_test tests/test_flex_resolver.cpp src/layout/flex_resolver.cpp)
+    target_link_libraries(aether_flex_resolver_test PRIVATE AetherUI::Core)
+    add_test(NAME aether.flex-resolver COMMAND aether_flex_resolver_test)
+
     add_executable(aether_margin_adjacency_test tests/test_margin_adjacency.cpp src/layout/margin_adjacency.cpp)
     add_test(NAME aether.margin-adjacency COMMAND aether_margin_adjacency_test)
 
@@ -139,11 +150,21 @@ if(AETHERUI_BUILD_TESTS)
 
     add_executable(aether_auto_margins_test tests/test_auto_margins.cpp)
     target_link_libraries(aether_auto_margins_test PRIVATE AetherUI::Core)
+    target_include_directories(aether_auto_margins_test PRIVATE src/layout)
     add_test(NAME aether.auto-margins COMMAND aether_auto_margins_test)
+
+    add_executable(aether_layout_ownership_test tests/test_layout_ownership.cpp src/layout/layout_box.cpp)
+    target_include_directories(aether_layout_ownership_test PRIVATE src/layout include)
+    add_test(NAME aether.layout-ownership COMMAND aether_layout_ownership_test)
 
     add_executable(aether_current_color_test tests/test_current_color.cpp)
     target_link_libraries(aether_current_color_test PRIVATE AetherUI::Core)
     add_test(NAME aether.current-color COMMAND aether_current_color_test)
+
+    add_executable(aether_transforms_test tests/test_transforms.cpp src/css/transforms.cpp src/rendering/transform_matrix.cpp)
+    target_link_libraries(aether_transforms_test PRIVATE AetherUI::Core)
+    target_include_directories(aether_transforms_test PRIVATE src/css src/rendering)
+    add_test(NAME aether.transforms COMMAND aether_transforms_test)
 endif()
 
 set(AETHERUI_INSTALL_CMAKEDIR

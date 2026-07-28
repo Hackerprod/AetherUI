@@ -35,6 +35,9 @@ internal static class Program
         ("Native box-shadow lists preserve declaration and paint order", NativeBoxShadowListsPreservePaintOrder),
         ("Native text-shadow inherits and emits flat paint commands", NativeTextShadowInheritsAndEmitsPaintCommands),
         ("Native backdrop-filter emits ordered declarative commands", NativeBackdropFilterEmitsOrderedDeclarativeCommands),
+        ("Native transform cascade preserves typed 2D operations", NativeTransformCascadePreservesTypedOperations),
+        ("Native rotated border transform matches its border-box origin", NativeRotatedBorderTransformMatchesBorderBoxOrigin),
+        ("Native absolute flex static positions center ring boxes", NativeAbsoluteFlexStaticPositionsCenterRingBoxes),
         ("Native pipeline renders dashboard fixture", NativePipelineRendersDashboardFixture),
         ("Native flex layout preserves nested content width", NativeFlexLayoutPreservesNestedContentWidth),
         ("Native layout positions absolute children and anonymous flex text", NativeLayoutPositionsAbsoluteChildrenAndAnonymousFlexText),
@@ -381,6 +384,8 @@ internal static class Program
         Assert.Throws<InvalidOperationException>(() => NativeAbiContract.Validate(
             NativeAbiContract.ExpectedVersion, NativeAbiContract.RequiredCapabilities,
             (nuint)(NativePaintCommandLayout.MinimumBufferSize - 1)));
+        NativeAbiContract.ValidateComputedStyleSize(512, 512);
+        Assert.Throws<InvalidOperationException>(() => NativeAbiContract.ValidateComputedStyleSize(512, 511));
     }
 
     private static void NativeStyleRuntimeRebuildReplacesDom()
@@ -586,6 +591,126 @@ internal static class Program
         Assert.True(primaryTextIndex >= 2);
         Assert.True(commands[primaryTextIndex - 1] is DrawTextShadowCommand);
         Assert.True(commands[primaryTextIndex - 2] is DrawTextShadowCommand);
+    }
+
+    private static void NativeTransformCascadePreservesTypedOperations()
+    {
+        const string markup = """
+            <style>
+              body { margin: 0; }
+              #item {
+                display: block; width: 120px; height: 80px;
+                transform: translate(25%, 10px) rotate(.25turn) scale(2, .5) skewX(45deg);
+                transform-origin: bottom left;
+              }
+            </style>
+            <body><div id="item">Typed transform</div></body>
+            """;
+        using var renderer = new RecordingRenderer();
+        using var host = new UiDocumentHost(new RawMarkupComponent(markup), new ApproximateTextMeasurer(), renderer, new UiHostOptions());
+        host.SetViewport(320, 200, 1);
+        host.Render();
+
+        var item = Assert.NotNull(host.Document?.GetElementById("item"));
+        var box = Assert.NotNull(host.Layout?.FindPrimaryBox(item));
+        Assert.Equal(4, box.Style.Transforms.Count);
+        Assert.Equal(TransformOperationKind.Translate, box.Style.Transforms[0].Kind);
+        Assert.Equal(CssUnit.Percent, box.Style.Transforms[0].X.Unit);
+        Assert.Equal(25f, box.Style.Transforms[0].X.Value);
+        Assert.Equal(CssUnit.Pixels, box.Style.Transforms[0].Y.Unit);
+        Assert.Equal(10f, box.Style.Transforms[0].Y.Value);
+        Assert.Equal(TransformOperationKind.Rotate, box.Style.Transforms[1].Kind);
+        Assert.True(MathF.Abs(box.Style.Transforms[1].AngleRadians - MathF.PI / 2f) < .001f);
+        Assert.Equal(TransformOperationKind.Scale, box.Style.Transforms[2].Kind);
+        Assert.Equal(2f, box.Style.Transforms[2].ScalarX);
+        Assert.Equal(.5f, box.Style.Transforms[2].ScalarY);
+        Assert.Equal(TransformOperationKind.SkewX, box.Style.Transforms[3].Kind);
+        Assert.Equal(0f, box.Style.TransformOrigin.X.Value);
+        Assert.Equal(100f, box.Style.TransformOrigin.Y.Value);
+
+        // Transform is deliberately post-layout. Until the next cut emits
+        // brackets, its data must not change the element's flow dimensions.
+        Assert.Equal(120f, box.BorderBox.Width);
+        Assert.Equal(80f, box.BorderBox.Height);
+
+        var commands = renderer.LastDisplayList?.Commands.ToArray()
+            ?? throw new InvalidOperationException("Native transform fixture did not produce a display list.");
+        var pushIndex = Array.FindIndex(commands, static command => command is PushTransformCommand);
+        var popIndex = Array.FindLastIndex(commands, static command => command is PopTransformCommand);
+        Assert.True(pushIndex >= 0 && popIndex > pushIndex, "Decoded display list must contain a balanced transform bracket.");
+        var push = (PushTransformCommand)commands[pushIndex];
+        // translate(25%, 10px) is resolved against the 120x80 border box;
+        // the non-identity matrix proves the native structural command was decoded.
+        Assert.True(MathF.Abs(push.Matrix.Dx) > .01f || MathF.Abs(push.Matrix.Dy) > .01f,
+            "Decoded transform matrix must retain the resolved translation/origin component.");
+    }
+
+    private static void NativeRotatedBorderTransformMatchesBorderBoxOrigin()
+    {
+        const string markup = """
+            <style>
+              body { margin: 0; }
+              #ring {
+                display: block; width: 180px; height: 180px;
+                border: 15px solid #222; border-top-color: #fa114f;
+                border-radius: 50%; transform: rotate(45deg);
+              }
+            </style>
+            <body><div id="ring"></div></body>
+            """;
+        using var renderer = new RecordingRenderer();
+        using var host = new UiDocumentHost(new RawMarkupComponent(markup), new ApproximateTextMeasurer(), renderer, new UiHostOptions());
+        host.SetViewport(400, 300, 1);
+        host.Render();
+
+        var ring = Assert.NotNull(host.Document?.GetElementById("ring"));
+        var box = Assert.NotNull(host.Layout?.FindPrimaryBox(ring));
+        var commands = renderer.LastDisplayList?.Commands.ToArray()
+            ?? throw new InvalidOperationException("Rotated border fixture did not produce a display list.");
+        var borderIndex = Array.FindIndex(commands, command => command is FillBorderSideCommand side && side.OuterRectangle == box.BorderBox);
+        Assert.True(borderIndex > 0 && commands[borderIndex - 1] is PushTransformCommand,
+            "The rotated border must be immediately scoped by its decoded transform command.");
+
+        var matrix = ((PushTransformCommand)commands[borderIndex - 1]).Matrix;
+        var cosine = MathF.Sqrt(.5f);
+        var centerX = box.BorderBox.X + box.BorderBox.Width / 2f;
+        var centerY = box.BorderBox.Y + box.BorderBox.Height / 2f;
+        Assert.True(MathF.Abs(matrix.M11 - cosine) < .001f && MathF.Abs(matrix.M12 - cosine) < .001f &&
+                    MathF.Abs(matrix.M21 + cosine) < .001f && MathF.Abs(matrix.M22 - cosine) < .001f &&
+                    MathF.Abs(matrix.Dx - (centerX - centerX * cosine + centerY * cosine)) < .001f &&
+                    MathF.Abs(matrix.Dy - (centerY - centerX * cosine - centerY * cosine)) < .001f,
+            $"The decoded rotation matrix must preserve the border-box center. Actual: {matrix}; box: {box.BorderBox}.");
+    }
+
+    private static void NativeAbsoluteFlexStaticPositionsCenterRingBoxes()
+    {
+        const string markup = """
+            <style>
+              body { margin: 0; }
+              #container { position: relative; width: 200px; height: 200px; display: flex; align-items: center; justify-content: center; }
+              .ring { position: absolute; border: 15px solid #222; border-radius: 50%; }
+              #outer { width: 180px; height: 180px; }
+              #middle { width: 140px; height: 140px; }
+              #inner { width: 100px; height: 100px; }
+            </style>
+            <body><div id="container"><div id="outer" class="ring"></div><div id="middle" class="ring"></div><div id="inner" class="ring"></div></div></body>
+            """;
+        using var renderer = new RecordingRenderer();
+        using var host = new UiDocumentHost(new RawMarkupComponent(markup), new ApproximateTextMeasurer(), renderer, new UiHostOptions());
+        host.SetViewport(400, 300, 1);
+        host.Render();
+
+        var container = Assert.NotNull(host.Layout?.FindPrimaryBox(Assert.NotNull(host.Document?.GetElementById("container"))));
+        var expectedCenterX = container.BorderBox.X + container.BorderBox.Width / 2f;
+        var expectedCenterY = container.BorderBox.Y + container.BorderBox.Height / 2f;
+        foreach (var id in new[] { "outer", "middle", "inner" })
+        {
+            var ring = Assert.NotNull(host.Layout?.FindPrimaryBox(Assert.NotNull(host.Document?.GetElementById(id))));
+            var centerX = ring.BorderBox.X + ring.BorderBox.Width / 2f;
+            var centerY = ring.BorderBox.Y + ring.BorderBox.Height / 2f;
+            Assert.True(MathF.Abs(centerX - expectedCenterX) < .01f && MathF.Abs(centerY - expectedCenterY) < .01f,
+                $"Absolute flex static positioning must center #{id}. Container center=({expectedCenterX}, {expectedCenterY}); ring center=({centerX}, {centerY}).");
+        }
     }
 
     private static void NativeFlexLayoutPreservesNestedContentWidth()

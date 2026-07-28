@@ -61,12 +61,26 @@ public sealed class Direct2DRenderBackend : IRenderBackend, ITextMeasurer
     // Direct2D exposes no query for it; every segment transition must use the helpers below.
     private bool _isDrawSegmentActive;
     private bool _disposed;
+    private int _lastTransformPushes;
+    private int _lastTransformPops;
+
+    // A clip is expressed in the coordinate space that was active when it was pushed. Keeping
+    // that matrix with the clip is essential when a text-shadow cache miss or backdrop snapshot
+    // temporarily closes and rebuilds the Direct2D draw segment: restoring the clip under the
+    // transform current at that later point would change its shape and position.
+    private readonly record struct ClipScope(
+        PushClipCommand Command,
+        Matrix3x2 Transform,
+        int TransformDepth,
+        bool UsesLayer);
 
     internal int LastTextShadowCacheHits => _textShadowMetrics.CacheHits;
     internal int LastTextShadowSceneSuspensions => _textShadowMetrics.SceneSuspensions;
     internal int LastBackdropAllocations => _backdropMetrics.Allocations;
     internal int LastBackdropCompositionPasses => _backdropMetrics.CompositionPasses;
     internal int LastBackdropSnapshotPasses => _backdropMetrics.SnapshotPasses;
+    internal int LastTransformPushes => _lastTransformPushes;
+    internal int LastTransformPops => _lastTransformPops;
 
     public Direct2DRenderBackend(nint windowHandle, int pixelWidth, int pixelHeight, float dpiScale)
     {
@@ -165,6 +179,8 @@ public sealed class Direct2DRenderBackend : IRenderBackend, ITextMeasurer
         ArgumentNullException.ThrowIfNull(displayList);
         _textShadowMetrics.Reset();
         _backdropMetrics.Reset();
+        _lastTransformPushes = 0;
+        _lastTransformPops = 0;
         RenderCore(displayList, clearColor, allowDeviceRetry: true);
     }
 
@@ -179,7 +195,8 @@ public sealed class Direct2DRenderBackend : IRenderBackend, ITextMeasurer
         target.Transform = Matrix3x2.Identity;
         target.Clear(ToColor4(clearColor));
 
-        var clipStack = new Stack<PushClipCommand>();
+        var clipStack = new Stack<ClipScope>();
+        var transformStack = new Stack<Matrix3x2>();
         foreach (var command in displayList.Commands)
         {
             switch (command)
@@ -197,7 +214,7 @@ public sealed class Direct2DRenderBackend : IRenderBackend, ITextMeasurer
                     StrokeRoundedGeometry(target, stroke.Rectangle, stroke.Radii, GetBrush(stroke.Color), MathF.Max(.25f, stroke.StrokeWidth));
                     break;
                 case FillBorderSideCommand borderSide:
-                    DrawBorderSide(target, borderSide);
+                    Direct2DBorderSidePainter.Draw(_d2dFactory, target, borderSide, GetBrush);
                     break;
                 case DrawTextCommand text:
                     DrawText(target, text);
@@ -276,13 +293,40 @@ public sealed class Direct2DRenderBackend : IRenderBackend, ITextMeasurer
                     DrawBackgroundImage(target, image);
                     break;
                 case PushClipCommand push:
-                    PushClip(target, push, clipStack);
+                    PushClip(target, push, clipStack, transformStack.Count);
                     break;
                 case PopClipCommand:
-                    if (clipStack.Count > 0)
+                    if (clipStack.Count == 0)
                     {
-                        PopClip(target, clipStack.Pop());
+                        throw new InvalidOperationException("The display list popped a clip that was not active.");
                     }
+                    PopClip(target, clipStack.Pop());
+                    break;
+                case PushTransformCommand pushTransform:
+                    transformStack.Push(target.Transform);
+                    // Direct2D and the native ABI both use row-vector affine matrices. A child
+                    // point must first pass through its local matrix and then through the
+                    // ancestor matrix that is already active on the target.
+                    target.Transform = ToDirect2DMatrix(pushTransform.Matrix) * target.Transform;
+                    _lastTransformPushes++;
+                    break;
+                case PopTransformCommand:
+                    if (transformStack.Count == 0)
+                    {
+                        throw new InvalidOperationException("The display list popped a transform that was not active.");
+                    }
+
+                    // Brackets cannot cross: a clip opened inside a transform must be closed
+                    // before restoring the parent transform. Native display lists obey this;
+                    // validating it here prevents a malformed foreign binding from leaking a
+                    // device-space clip into siblings.
+                    if (clipStack.Any(scope => scope.TransformDepth >= transformStack.Count))
+                    {
+                        throw new InvalidOperationException("The display list popped a transform while a nested clip was still active.");
+                    }
+
+                    target.Transform = transformStack.Pop();
+                    _lastTransformPops++;
                     break;
             }
         }
@@ -290,6 +334,11 @@ public sealed class Direct2DRenderBackend : IRenderBackend, ITextMeasurer
         while (clipStack.Count > 0)
         {
             PopClip(target, clipStack.Pop());
+        }
+
+        if (transformStack.Count != 0)
+        {
+            throw new InvalidOperationException("The display list ended with an active transform.");
         }
 
         var result = EndDrawSegment(target);
@@ -408,13 +457,14 @@ public sealed class Direct2DRenderBackend : IRenderBackend, ITextMeasurer
     private void ApplyBackdropFilter(
         ID2D1DeviceContext target,
         ApplyBackdropFilterCommand command,
-        Stack<PushClipCommand> clipStack)
+        Stack<ClipScope> clipStack)
     {
         if (_backdropSceneBitmap is null || _backdropSnapshotBitmap is null)
         {
             throw new InvalidOperationException("Backdrop composition surfaces were not initialized.");
         }
 
+        var activeTransform = target.Transform;
         // The source must contain precisely the scene painted before this command. Detach the
         // target and close the segment before CopyFromBitmap to avoid a read/write feedback loop.
         SuspendClips(target, clipStack);
@@ -425,16 +475,27 @@ public sealed class Direct2DRenderBackend : IRenderBackend, ITextMeasurer
         _backdropMetrics.RecordSnapshotPass();
         target.Target = _backdropSceneBitmap;
         BeginDrawSegment(target);
+        target.Transform = activeTransform;
         RestoreClips(target, clipStack);
 
-        var localClip = new PushClipCommand(command.Rectangle, command.Radii);
-        ApplyClip(target, localClip);
+        // The snapshot is an image in scene coordinates, while the filter rectangle is in the
+        // element's local CSS coordinate system. Keep the transformed geometric clip active but
+        // draw the snapshot with identity so its source pixels are neither translated nor rotated
+        // a second time. This is also why transformed backdrop-filter needs more than simply
+        // inheriting the ordinary target.Transform used by fills and text.
+        var localClip = ApplyClip(target, new PushClipCommand(command.Rectangle, command.Radii), activeTransform, transformDepth: 0);
         try
         {
-            Direct2DBackdropFilterPainter.Draw(target, _backdropSnapshotBitmap, command);
+            target.Transform = Matrix3x2.Identity;
+            Direct2DBackdropFilterPainter.Draw(
+                target,
+                _backdropSnapshotBitmap,
+                command.Filters,
+                TransformBounds(command.Rectangle, activeTransform));
         }
         finally
         {
+            target.Transform = activeTransform;
             PopClip(target, localClip);
         }
     }
@@ -731,41 +792,71 @@ public sealed class Direct2DRenderBackend : IRenderBackend, ITextMeasurer
     }
 
     /// <summary>
-    /// A plain rect uses the cheap axis-aligned clip; a rounded one needs a geometry-masked layer,
-    /// since Direct2D's axis-aligned clip has no notion of corner radius. <paramref name="clipStack"/>
-    /// records which kind was pushed so <see cref="PopClip"/> pairs it with the matching pop call.
+    /// A plain rect uses the cheap axis-aligned clip only while the current coordinate system is
+    /// axis-aligned. Any transformed clip uses a geometric layer: an axis-aligned Direct2D clip
+    /// cannot represent a rotated or skewed CSS overflow clip. The scope records the transform
+    /// that defined the geometry so an interrupted scene can rebuild it exactly.
     /// </summary>
-    private void PushClip(ID2D1RenderTarget target, PushClipCommand command, Stack<PushClipCommand> clipStack)
+    private void PushClip(
+        ID2D1RenderTarget target,
+        PushClipCommand command,
+        Stack<ClipScope> clipStack,
+        int transformDepth)
     {
-        ApplyClip(target, command);
-        clipStack.Push(command);
+        clipStack.Push(ApplyClip(target, command, target.Transform, transformDepth));
     }
 
-    private void ApplyClip(ID2D1RenderTarget target, PushClipCommand command)
+    private ClipScope ApplyClip(
+        ID2D1RenderTarget target,
+        PushClipCommand command,
+        Matrix3x2 transform,
+        int transformDepth)
     {
-        if (!command.Radii.IsZero)
+        var previousTransform = target.Transform;
+        target.Transform = transform;
+        try
         {
-            using var geometry = CreateRoundedGeometry(command.Rectangle, command.Radii);
-            var layerParameters = new LayerParameters
+            // PushAxisAlignedClip deliberately cannot encode rotation or skew. The geometric
+            // path also handles a zero-radius rectangle, preserving the full affine clip shape.
+            var usesLayer = !command.Radii.IsZero || transform != Matrix3x2.Identity;
+            if (usesLayer)
             {
-                ContentBounds = ToRawRect(command.Rectangle),
-                GeometricMask = geometry,
-                MaskAntialiasMode = AntialiasMode.PerPrimitive,
-                MaskTransform = Matrix3x2.Identity,
-                Opacity = 1f,
-                LayerOptions = LayerOptions.None,
-            };
-            target.PushLayer(layerParameters, null);
+                using var geometry = CreateRoundedGeometry(command.Rectangle, command.Radii);
+                var layerParameters = new LayerParameters
+                {
+                    // ContentBounds lives in the target's current coordinate space, just like
+                    // draw operations. ApplyClip installs the saved world transform above, so it
+                    // must remain local here; pre-transforming it would translate/rotate it a
+                    // second time and can discard the entire layer.
+                    ContentBounds = ToRawRect(command.Rectangle),
+                    GeometricMask = geometry,
+                    MaskAntialiasMode = AntialiasMode.PerPrimitive,
+                    // Direct2D applies MaskTransform relative to the target's world transform.
+                    // ApplyClip temporarily installs the saved world transform above, so an
+                    // identity mask matrix maps the local geometry exactly once. Supplying the
+                    // saved matrix here as well would transform the clip twice.
+                    MaskTransform = Matrix3x2.Identity,
+                    Opacity = 1f,
+                    LayerOptions = LayerOptions.None,
+                };
+                target.PushLayer(layerParameters, null);
+            }
+            else
+            {
+                target.PushAxisAlignedClip(ToRawRect(command.Rectangle), AntialiasMode.PerPrimitive);
+            }
+
+            return new ClipScope(command, transform, transformDepth, usesLayer);
         }
-        else
+        finally
         {
-            target.PushAxisAlignedClip(ToRawRect(command.Rectangle), AntialiasMode.PerPrimitive);
+            target.Transform = previousTransform;
         }
     }
 
-    private static void PopClip(ID2D1RenderTarget target, PushClipCommand command)
+    private static void PopClip(ID2D1RenderTarget target, ClipScope clip)
     {
-        if (!command.Radii.IsZero)
+        if (clip.UsesLayer)
         {
             target.PopLayer();
         }
@@ -775,7 +866,7 @@ public sealed class Direct2DRenderBackend : IRenderBackend, ITextMeasurer
         }
     }
 
-    private static void SuspendClips(ID2D1RenderTarget target, Stack<PushClipCommand> clipStack)
+    private static void SuspendClips(ID2D1RenderTarget target, Stack<ClipScope> clipStack)
     {
         foreach (var clip in clipStack)
         {
@@ -783,11 +874,15 @@ public sealed class Direct2DRenderBackend : IRenderBackend, ITextMeasurer
         }
     }
 
-    private void RestoreClips(ID2D1RenderTarget target, Stack<PushClipCommand> clipStack)
+    private void RestoreClips(ID2D1RenderTarget target, Stack<ClipScope> clipStack)
     {
         foreach (var clip in clipStack.Reverse())
         {
-            ApplyClip(target, clip);
+            var restored = ApplyClip(target, clip.Command, clip.Transform, clip.TransformDepth);
+            if (restored.UsesLayer != clip.UsesLayer)
+            {
+                throw new InvalidOperationException("A clip changed representation while restoring the Direct2D scene.");
+            }
         }
     }
 
@@ -1073,79 +1168,6 @@ public sealed class Direct2DRenderBackend : IRenderBackend, ITextMeasurer
         target.DrawGeometry(geometry, brush, width);
     }
 
-    private void DrawBorderSide(ID2D1RenderTarget target, FillBorderSideCommand command)
-    {
-        using var ring = CreateRingGeometry(command.OuterRectangle, command.OuterRadii, command.InnerRectangle, command.InnerRadii);
-        using var partition = CreateBorderSidePartition(command.OuterRectangle, command.InnerRectangle, command.Side);
-        var bounds = ToRawRect(command.OuterRectangle);
-        var layer = new LayerParameters { ContentBounds = bounds, MaskAntialiasMode = AntialiasMode.PerPrimitive, MaskTransform = Matrix3x2.Identity, Opacity = 1f, LayerOptions = LayerOptions.None };
-        layer.GeometricMask = ring;
-        target.PushLayer(layer, null);
-        layer.GeometricMask = partition;
-        target.PushLayer(layer, null);
-        try { FillBorderStyle(target, command); }
-        finally { target.PopLayer(); target.PopLayer(); }
-    }
-
-    private void FillBorderStyle(ID2D1RenderTarget target, FillBorderSideCommand command)
-    {
-        var outer = command.OuterRectangle; var inner = command.InnerRectangle;
-        var horizontal = command.Side is 0 or 2;
-        var thickness = horizontal ? MathF.Abs(inner.Top - outer.Top) : MathF.Abs(inner.Left - outer.Left);
-        if (command.Side == 2) thickness = MathF.Abs(outer.Bottom - inner.Bottom);
-        if (command.Side == 1) thickness = MathF.Abs(outer.Right - inner.Right);
-        var color = command.Color;
-        ColorRgba Shade(float factor) => new(Math.Clamp(color.R * factor, 0, 1), Math.Clamp(color.G * factor, 0, 1), Math.Clamp(color.B * factor, 0, 1), color.A);
-        if (command.Style is 5 or 6) { target.FillRectangle(ToRawRect(outer), GetBrush(Shade(command.Style == 5 ? (command.Side is 0 or 3 ? .65f : 1.35f) : (command.Side is 0 or 3 ? 1.35f : .65f)))); return; }
-        if (command.Style is 7 or 8 && thickness >= 2) {
-            var first = thickness / 2; var dark = command.Style == 7 ? command.Side is 0 or 3 : command.Side is 1 or 2;
-            if (horizontal) { target.FillRectangle(ToRawRect(new RectF(outer.X, outer.Y, outer.Width, first)), GetBrush(Shade(dark ? .65f : 1.35f))); target.FillRectangle(ToRawRect(new RectF(outer.X, outer.Y + first, outer.Width, outer.Height - first)), GetBrush(Shade(dark ? 1.35f : .65f))); }
-            else { target.FillRectangle(ToRawRect(new RectF(outer.X, outer.Y, first, outer.Height)), GetBrush(Shade(dark ? .65f : 1.35f))); target.FillRectangle(ToRawRect(new RectF(outer.X + first, outer.Y, outer.Width - first, outer.Height)), GetBrush(Shade(dark ? 1.35f : .65f))); }
-            return;
-        }
-        if (command.Style == 4 && thickness >= 3) {
-            var band = thickness / 3;
-            if (horizontal) { target.FillRectangle(ToRawRect(new RectF(outer.X, outer.Y, outer.Width, band)), GetBrush(color)); target.FillRectangle(ToRawRect(new RectF(outer.X, outer.Bottom - band, outer.Width, band)), GetBrush(color)); }
-            else { target.FillRectangle(ToRawRect(new RectF(outer.X, outer.Y, band, outer.Height)), GetBrush(color)); target.FillRectangle(ToRawRect(new RectF(outer.Right - band, outer.Y, band, outer.Height)), GetBrush(color)); }
-            return;
-        }
-        if (command.Style is 2 or 3) {
-            var length = horizontal ? outer.Width : outer.Height; var segment = command.Style == 2 ? thickness : MathF.Max(3 * thickness, 3); var step = segment + MathF.Max(thickness, 1);
-            for (var p = 0f; p < length; p += step) {
-                var part = horizontal ? new RectF(outer.X + p, outer.Y, MathF.Min(segment, length - p), outer.Height) : new RectF(outer.X, outer.Y + p, outer.Width, MathF.Min(segment, length - p));
-                target.FillRectangle(ToRawRect(part), GetBrush(color));
-            }
-            return;
-        }
-        target.FillRectangle(ToRawRect(outer), GetBrush(color));
-    }
-
-    private ID2D1PathGeometry CreateRingGeometry(RectF outer, CornerRadii outerRadii, RectF inner, CornerRadii innerRadii)
-    {
-        var geometry = _d2dFactory.CreatePathGeometry(); using var sink = geometry.Open(); sink.SetFillMode(Vortice.Direct2D1.FillMode.Alternate);
-        AddRoundedFigure(sink, outer, NormalizeRadii(outer, outerRadii));
-        AddRoundedFigure(sink, inner, NormalizeRadii(inner, innerRadii)); sink.Close(); return geometry;
-    }
-
-    private ID2D1PathGeometry CreateBorderSidePartition(RectF outer, RectF inner, int side)
-    {
-        var points = side switch {
-            0 => new[] { new Vector2(outer.Left, outer.Top), new Vector2(outer.Right, outer.Top), new Vector2(inner.Right, inner.Top), new Vector2(inner.Left, inner.Top) },
-            1 => new[] { new Vector2(outer.Right, outer.Top), new Vector2(outer.Right, outer.Bottom), new Vector2(inner.Right, inner.Bottom), new Vector2(inner.Right, inner.Top) },
-            2 => new[] { new Vector2(outer.Right, outer.Bottom), new Vector2(outer.Left, outer.Bottom), new Vector2(inner.Left, inner.Bottom), new Vector2(inner.Right, inner.Bottom) },
-            _ => new[] { new Vector2(outer.Left, outer.Bottom), new Vector2(outer.Left, outer.Top), new Vector2(inner.Left, inner.Top), new Vector2(inner.Left, inner.Bottom) }, };
-        var geometry = _d2dFactory.CreatePathGeometry(); using var sink = geometry.Open(); sink.BeginFigure(points[0], FigureBegin.Filled); sink.AddLines(points[1..]); sink.EndFigure(FigureEnd.Closed); sink.Close(); return geometry;
-    }
-
-    private static void AddRoundedFigure(ID2D1GeometrySink sink, RectF rectangle, CornerRadii r)
-    {
-        sink.BeginFigure(new Vector2(rectangle.Left + r.TopLeftX, rectangle.Top), FigureBegin.Filled);
-        sink.AddLine(new Vector2(rectangle.Right - r.TopRightX, rectangle.Top)); sink.AddArc(Arc(rectangle.Right, rectangle.Top + r.TopRightY, r.TopRightX, r.TopRightY));
-        sink.AddLine(new Vector2(rectangle.Right, rectangle.Bottom - r.BottomRightY)); sink.AddArc(Arc(rectangle.Right - r.BottomRightX, rectangle.Bottom, r.BottomRightX, r.BottomRightY));
-        sink.AddLine(new Vector2(rectangle.Left + r.BottomLeftX, rectangle.Bottom)); sink.AddArc(Arc(rectangle.Left, rectangle.Bottom - r.BottomLeftY, r.BottomLeftX, r.BottomLeftY));
-        sink.AddLine(new Vector2(rectangle.Left, rectangle.Top + r.TopLeftY)); sink.AddArc(Arc(rectangle.Left + r.TopLeftX, rectangle.Top, r.TopLeftX, r.TopLeftY)); sink.EndFigure(FigureEnd.Closed);
-    }
-
     private ID2D1PathGeometry CreateRoundedGeometry(RectF rectangle, CornerRadii input)
     {
         var r = NormalizeRadii(rectangle, input);
@@ -1178,6 +1200,28 @@ public sealed class Direct2DRenderBackend : IRenderBackend, ITextMeasurer
             MathF.Min(rectangle.Width / MathF.Max(.0001f, r.BottomLeftX + r.BottomRightX),
             MathF.Min(rectangle.Height / MathF.Max(.0001f, r.TopLeftY + r.BottomLeftY), rectangle.Height / MathF.Max(.0001f, r.TopRightY + r.BottomRightY)))));
         return scale < 1 ? new CornerRadii(r.TopLeftX * scale, r.TopLeftY * scale, r.TopRightX * scale, r.TopRightY * scale, r.BottomRightX * scale, r.BottomRightY * scale, r.BottomLeftX * scale, r.BottomLeftY * scale) : r;
+    }
+
+    private static Matrix3x2 ToDirect2DMatrix(TransformMatrix matrix) => new(
+        matrix.M11,
+        matrix.M12,
+        matrix.M21,
+        matrix.M22,
+        matrix.Dx,
+        matrix.Dy);
+
+    /// <summary>Returns the device-space bounding box of an affine-transformed CSS rectangle.</summary>
+    private static RectF TransformBounds(RectF rectangle, Matrix3x2 transform)
+    {
+        var topLeft = Vector2.Transform(new Vector2(rectangle.Left, rectangle.Top), transform);
+        var topRight = Vector2.Transform(new Vector2(rectangle.Right, rectangle.Top), transform);
+        var bottomLeft = Vector2.Transform(new Vector2(rectangle.Left, rectangle.Bottom), transform);
+        var bottomRight = Vector2.Transform(new Vector2(rectangle.Right, rectangle.Bottom), transform);
+        var left = MathF.Min(MathF.Min(topLeft.X, topRight.X), MathF.Min(bottomLeft.X, bottomRight.X));
+        var top = MathF.Min(MathF.Min(topLeft.Y, topRight.Y), MathF.Min(bottomLeft.Y, bottomRight.Y));
+        var right = MathF.Max(MathF.Max(topLeft.X, topRight.X), MathF.Max(bottomLeft.X, bottomRight.X));
+        var bottom = MathF.Max(MathF.Max(topLeft.Y, topRight.Y), MathF.Max(bottomLeft.Y, bottomRight.Y));
+        return new RectF(left, top, MathF.Max(0f, right - left), MathF.Max(0f, bottom - top));
     }
 
     private static RawRectF ToRawRect(RectF rectangle) =>

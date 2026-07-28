@@ -46,6 +46,8 @@ int main() {
         "runtime does not advertise all compiled core capabilities");
     require(aether_paint_command_size() == sizeof(aether_paint_command_t),
         "runtime paint-command size differs from the public header");
+    require(aether_computed_style_size() == sizeof(aether_computed_style_t),
+        "runtime computed-style size differs from the public header");
 
 
     const char* msg = aether_status_message(AETHER_OK);
@@ -231,6 +233,27 @@ int main() {
     aether_style_updates_free(updates, update_count);
     require(diagnostics.count == 1 && diagnostics.code == "AETHER-CSS-BACKGROUND-IMAGE-URL",
         "malformed url() must report its dedicated background-image diagnostic");
+
+    diagnostics = {};
+    int64_t invalid_calc_sheet = 0;
+    require(aether_style_runtime_add_stylesheet(
+        runtime, "#invalid-calc { width: calc(100% / 0); }", 2, "invalid-calc.css",
+        &invalid_calc_sheet, &rule_count) == AETHER_OK,
+        "invalid calc stylesheet compilation failed");
+    require(diagnostics.count == 1 && diagnostics.code == "AETHER-CSS-CALC" &&
+            diagnostics.property == "width" && diagnostics.value.find("/ 0") != std::string::npos,
+        "invalid stylesheet calc() must report a dedicated diagnostic without entering the cascade");
+
+    diagnostics = {};
+    require(aether_doc_parse_html(
+        doc, "<body><div style=\"width: calc(10px * 2px)\"></div></body>") == AETHER_OK,
+        "invalid inline calc fixture parsing failed");
+    updates = nullptr;
+    update_count = aether_style_runtime_resolve_subtree(runtime, aether_doc_get_body(doc), &updates);
+    aether_style_updates_free(updates, update_count);
+    require(diagnostics.count == 1 && diagnostics.code == "AETHER-CSS-CALC" &&
+            diagnostics.property == "width",
+        "invalid inline calc() must report a dedicated diagnostic without entering the cascade");
 
     diagnostics = {};
     require(aether_doc_parse_html(

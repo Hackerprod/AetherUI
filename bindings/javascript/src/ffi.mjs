@@ -3,8 +3,9 @@ import path from "node:path";
 import { existsSync } from "node:fs";
 
 // The command union and computed-style layout include background layers, backdrop filters,
-// and resolved image geometry through ABI 0.14; accepting an older minor would read invalid offsets.
-export const SUPPORTED_ABI = Object.freeze({ major: 0, minor: 14, patch: 0 });
+// resolved image geometry, typed 2D transforms, transform Display List brackets, and align-self through ABI 0.18;
+// accepting an older minor would read invalid offsets.
+export const SUPPORTED_ABI = Object.freeze({ major: 0, minor: 17, patch: 0 });
 
 export const CAPABILITIES = Object.freeze({
   DOM: 1n << 0n,
@@ -70,6 +71,20 @@ export function checkAbiCompatibility(version, capabilities, paintCommandSize, o
     capabilities: actualCapabilities,
     paintCommandSize: size,
   });
+}
+
+export function validateComputedStyleSize(nativeSize, bindingSize) {
+  const native = Number(nativeSize);
+  const binding = Number(bindingSize);
+  if (!Number.isSafeInteger(native) || native <= 0) {
+    throw new Error(`The loaded AetherUI library returned an invalid computed style size: ${nativeSize}.`);
+  }
+  if (native !== binding) {
+    throw new Error(
+      `The loaded AetherUI library reports computed style size ${native}, ` +
+      `but this binding requires exactly ${binding} bytes for its known ABI fields.`,
+    );
+  }
 }
 
 export function resolveNativeLibraryCandidates({
@@ -211,6 +226,10 @@ function createTypes(ffi) {
     linear_vw: "float",
     linear_vh: "float",
   });
+  const FlexBasis = ffi.struct("aether_flex_basis", {
+    kind: "int32_t",
+    length: CssLength,
+  });
   const CssEdges = ffi.struct("aether_css_edges", {
     left: CssLength,
     top: CssLength,
@@ -254,6 +273,26 @@ function createTypes(ffi) {
     items: BackdropFilterPointer,
     count: "int32_t",
   });
+  const TransformOperation = ffi.struct("aether_transform_operation", {
+    kind: "int32_t",
+    x: CssLength,
+    y: CssLength,
+    scalar_x: "float",
+    scalar_y: "float",
+    angle_radians: "float",
+    matrix_a: "float",
+    matrix_b: "float",
+    matrix_c: "float",
+    matrix_d: "float",
+    matrix_e: "float",
+    matrix_f: "float",
+  });
+  const TransformOperationPointer = ffi.pointer(TransformOperation);
+  const TransformList = ffi.struct("aether_transform_list", {
+    items: TransformOperationPointer,
+    count: "int32_t",
+  });
+  const TransformOrigin = ffi.struct("aether_transform_origin", { x: CssLength, y: CssLength });
   const StyleOptions = ffi.struct("aether_style_runtime_options", {
     throw_on_invalid: "int32_t",
     enforce_thread_affinity: "int32_t",
@@ -274,7 +313,10 @@ function createTypes(ffi) {
     flex_direction: "int32_t",
     justify_content: "int32_t",
     align_items: "int32_t",
+    align_self: "int32_t",
     flex_grow: "float",
+    flex_shrink: "float",
+    flex_basis: FlexBasis,
     flex_wrap: "int32_t",
     gap: "float",
     position: "int32_t",
@@ -298,6 +340,8 @@ function createTypes(ffi) {
     border_styles: BorderStyleEdges,
     has_text_gradient: "int32_t",
     text_gradient: LinearGradient,
+    transforms: TransformList,
+    transform_origin: TransformOrigin,
     text_shadows: ShadowList,
     box_shadows: ShadowList,
     border_radii: BorderRadii,
@@ -391,6 +435,10 @@ function createTypes(ffi) {
     wrap: "int32_t",
   });
   const PushClip = ffi.struct("aether_paint_push_clip", { rect: Rect, radii: CornerRadii });
+  const TransformMatrix = ffi.struct("aether_transform_matrix", {
+    m11: "float", m12: "float", m21: "float", m22: "float", dx: "float", dy: "float",
+  });
+  const PushTransform = ffi.struct("aether_paint_push_transform", { matrix: TransformMatrix });
   const FillBorderSide = ffi.struct("aether_paint_fill_border_side", {
     outer_rect: Rect,
     outer_radii: CornerRadii,
@@ -432,6 +480,7 @@ function createTypes(ffi) {
     fill_border_side: FillBorderSide,
     draw_background_image: DrawBackgroundImage,
     apply_backdrop_filter: ApplyBackdropFilter,
+    push_transform: PushTransform,
   });
   const PaintCommand = ffi.struct("aether_paint_command", {
     tag: "int32_t",
@@ -458,6 +507,7 @@ function createTypes(ffi) {
     BackgroundLayer,
     BackgroundLayerList,
     BackdropFilter,
+    TransformOperation,
     BackdropFilterList,
     StyleOptions,
     StyleEnvironment,
@@ -491,6 +541,7 @@ function createTypes(ffi) {
     DrawTextGradient,
     DrawTextShadow,
     PushClip,
+    PushTransform,
     FillBorderSide,
     DrawBackgroundImage,
     ApplyBackdropFilter,
@@ -518,6 +569,7 @@ export function createNativeApi({ ffi, library }) {
     abiVersion: f("aether_abi_version", "uint32_t", []),
     abiCapabilities: f("aether_abi_capabilities", "uint64_t", []),
     paintCommandSize: f("aether_paint_command_size", "size_t", []),
+    computedStyleSize: f("aether_computed_style_size", "size_t", []),
     statusMessage: f("aether_status_message", "str", ["int32_t"]),
     stringFree: f("aether_string_free", "void", [types.CharPointer]),
 

@@ -6,6 +6,7 @@ import {
   SUPPORTED_ABI,
   checkAbiCompatibility,
   createLoadedNativeApi,
+  validateComputedStyleSize,
 } from "./ffi.mjs";
 
 const packageRoot = path.resolve(fileURLToPath(new URL("..", import.meta.url)));
@@ -48,6 +49,8 @@ export const PaintCommandTag = Object.freeze({
   DRAW_TEXT_SHADOW: 9,
   DRAW_BACKGROUND_IMAGE: 10,
   APPLY_BACKDROP_FILTER: 11,
+  PUSH_TRANSFORM: 12,
+  POP_TRANSFORM: 13,
 });
 
 export class NativeStatusError extends Error {
@@ -201,6 +204,22 @@ function cloneBackdropFilters(api, filters) {
   }));
 }
 
+function cloneTransforms(api, transforms) {
+  const count = Math.max(0, Number(transforms?.count ?? 0));
+  if (count === 0 || isNullHandle(transforms.items)) return [];
+  return api.ffi.decode(transforms.items, api.types.TransformOperation, count).map((operation) => ({
+    kind: Number(operation.kind),
+    x: cloneLength(operation.x),
+    y: cloneLength(operation.y),
+    scalarX: Number(operation.scalar_x),
+    scalarY: Number(operation.scalar_y),
+    angleRadians: Number(operation.angle_radians),
+    matrixA: Number(operation.matrix_a), matrixB: Number(operation.matrix_b),
+    matrixC: Number(operation.matrix_c), matrixD: Number(operation.matrix_d),
+    matrixE: Number(operation.matrix_e), matrixF: Number(operation.matrix_f),
+  }));
+}
+
 function cloneComputedStyle(api, style) {
   if (!style) return null;
   const backgroundLayers = cloneBackgroundLayers(api, style.background_layers);
@@ -211,7 +230,13 @@ function cloneComputedStyle(api, style) {
     flexDirection: Number(style.flex_direction),
     justifyContent: Number(style.justify_content),
     alignItems: Number(style.align_items),
+    alignSelf: Number(style.align_self),
     flexGrow: Number(style.flex_grow),
+    flexShrink: Number(style.flex_shrink),
+    flexBasis: {
+      kind: Number(style.flex_basis.kind),
+      length: cloneLength(style.flex_basis.length),
+    },
     flexWrap: Boolean(style.flex_wrap),
     gap: Number(style.gap),
     position: Number(style.position),
@@ -242,6 +267,8 @@ function cloneComputedStyle(api, style) {
     },
     hasTextGradient: Boolean(style.has_text_gradient),
     textGradient: cloneGradient(api, style.text_gradient),
+    transforms: cloneTransforms(api, style.transforms),
+    transformOrigin: { x: cloneLength(style.transform_origin.x), y: cloneLength(style.transform_origin.y) },
     textShadows: cloneShadowList(api, style.text_shadows),
     boxShadows,
     hasBoxShadow: boxShadows.length > 0,
@@ -891,6 +918,10 @@ function decodePaintCommand(api, buffer) {
       { const data = readData(api.types.DrawBackgroundImage); return { ...command, kind: "drawBackgroundImage", source: readBorrowedString(api, data.source), paintRect: { ...data.paint_rect }, positionX: { ...data.position_x }, positionY: { ...data.position_y }, sizeKind: Number(data.size_kind), sizeX: { ...data.size_x }, sizeY: { ...data.size_y }, repeatX: Number(data.repeat_x), repeatY: Number(data.repeat_y), opacity: Number(data.opacity), sourceRect: { ...data.source_rect }, destinationRect: { ...data.destination_rect }, hasResolvedGeometry: Boolean(data.has_resolved_geometry) }; }
     case PaintCommandTag.APPLY_BACKDROP_FILTER:
       { const data = readData(api.types.ApplyBackdropFilter); return { ...command, kind: "applyBackdropFilter", rect: { ...data.rect }, radii: { ...data.radii }, filters: cloneBackdropFilters(api, data.filters) }; }
+    case PaintCommandTag.PUSH_TRANSFORM:
+      { const data = readData(api.types.PushTransform); return { ...command, kind: "pushTransform", matrix: { ...data.matrix } }; }
+    case PaintCommandTag.POP_TRANSFORM:
+      return { ...command, kind: "popTransform" };
     default:
       return { ...command, kind: "unknown" };
   }
@@ -1043,6 +1074,7 @@ export function createAether(options = {}) {
         `but this binding requires at least ${minimumCommandSize} bytes for the known ABI fields.`,
     );
   }
+  validateComputedStyleSize(api.functions.computedStyleSize(), api.ffi.sizeof(api.types.ComputedStyle));
   api.abi = abi;
   return new AetherBinding(api);
 }

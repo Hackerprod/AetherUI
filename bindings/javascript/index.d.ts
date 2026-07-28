@@ -22,6 +22,8 @@ export const PaintCommandTag: Readonly<{
   DRAW_TEXT_SHADOW: 9;
   DRAW_BACKGROUND_IMAGE: 10;
   APPLY_BACKDROP_FILTER: 11;
+  PUSH_TRANSFORM: 12;
+  POP_TRANSFORM: 13;
 }>;
 
 export interface AbiInfo {
@@ -88,6 +90,21 @@ export interface BackdropFilter {
   lengthAmount: CssLength;
   scalarAmount: number;
 }
+export interface FlexBasis {
+  kind: number;
+  length: CssLength;
+}
+export interface TransformOperation {
+  kind: number;
+  x: CssLength;
+  y: CssLength;
+  scalarX: number;
+  scalarY: number;
+  angleRadians: number;
+  matrixA: number; matrixB: number; matrixC: number;
+  matrixD: number; matrixE: number; matrixF: number;
+}
+export interface TransformOrigin { x: CssLength; y: CssLength }
 export interface ColorEdges { left: Color; top: Color; right: Color; bottom: Color }
 export interface BorderStyleEdges { left: number; top: number; right: number; bottom: number }
 export interface CornerRadius { horizontal: CssLength; vertical: CssLength }
@@ -102,7 +119,10 @@ export interface ComputedStyle {
   flexDirection: number;
   justifyContent: number;
   alignItems: number;
+  alignSelf: number;
   flexGrow: number;
+  flexShrink: number;
+  flexBasis: FlexBasis;
   flexWrap: boolean;
   gap: number;
   position: number;
@@ -128,6 +148,8 @@ export interface ComputedStyle {
   borderStyles: BorderStyleEdges;
   hasTextGradient: boolean;
   textGradient: LinearGradient | null;
+  transforms: TransformOperation[];
+  transformOrigin: TransformOrigin;
   textShadows: BoxShadow[];
   boxShadows: BoxShadow[];
   hasBoxShadow: boolean;

@@ -190,6 +190,11 @@ static int32_t find_top_level_colon(const std::string& s) {
     return find_top_level(s, ':');
 }
 
+static bool is_calc_expression(const std::string& value) {
+    const std::string trimmed = str_trim(value);
+    return trimmed.size() >= 5 && str_iequals(trimmed.substr(0, 5), "calc(");
+}
+
 // ═══ Compile longhand ══════════════════════════════════════════════════
 
 static void compile_longhand(
@@ -198,7 +203,9 @@ static void compile_longhand(
     bool important,
     int32_t declaration_order,
     style_property_registry_s* registry,
-    std::vector<compiled_property_declaration_s>& output)
+    std::vector<compiled_property_declaration_s>& output,
+    aether_style_diagnostic_fn diagnostics_callback,
+    void* diagnostics_user_data)
 {
     const auto* def = registry->try_get(name.c_str());
     if (!def) return;
@@ -218,6 +225,10 @@ static void compile_longhand(
     } else {
         std::string parsed;
         if (!def->parse(normalized.c_str(), parsed)) {
+            if (diagnostics_callback && is_calc_expression(normalized)) {
+                diagnostics_callback("AETHER-CSS-CALC", def->name.c_str(), normalized.c_str(),
+                    "The calc() expression is syntactically or dimensionally invalid.", diagnostics_user_data);
+            }
             return;
         }
         compiled.mode = compiled_value_mode::value;
@@ -236,7 +247,9 @@ static void compile_longhand(
 
 static declaration_compilation_result compile_declarations(
     const std::string& source,
-    style_property_registry_s* registry)
+    style_property_registry_s* registry,
+    aether_style_diagnostic_fn diagnostics_callback,
+    void* diagnostics_user_data)
 {
     declaration_compilation_result result;
     int32_t declaration_order = 0;
@@ -287,7 +300,8 @@ static declaration_compilation_result compile_declarations(
             for (auto& item : writer.items) {
                 compile_longhand(
                     item.name, item.value, important,
-                    declaration_order++, registry, result.properties);
+                    declaration_order++, registry, result.properties,
+                    diagnostics_callback, diagnostics_user_data);
             }
             continue;
         }
@@ -298,7 +312,8 @@ static declaration_compilation_result compile_declarations(
 
         compile_longhand(
             name, value, important,
-            declaration_order++, registry, result.properties);
+            declaration_order++, registry, result.properties,
+            diagnostics_callback, diagnostics_user_data);
     }
 
     return result;
@@ -315,7 +330,9 @@ static void compile_range(
     style_sheet_layer layer,
     style_property_registry_s* registry,
     int32_t& rule_id_counter,
-    std::vector<compiled_rule_s>& out_rules)
+    std::vector<compiled_rule_s>& out_rules,
+    aether_style_diagnostic_fn diagnostics_callback,
+    void* diagnostics_user_data)
 {
     int32_t index = start;
     while (index < end) {
@@ -360,7 +377,8 @@ static void compile_range(
                 media_condition_s* combined = media_condition_and(inherited_condition, media);
                 compile_range(
                     source, delimiter + 1, closing, combined,
-                    sheet_handle, layer, registry, rule_id_counter, out_rules);
+                    sheet_handle, layer, registry, rule_id_counter, out_rules,
+                    diagnostics_callback, diagnostics_user_data);
             }
 
             index = closing + 1;
@@ -387,7 +405,7 @@ static void compile_range(
             selector_parse_list(selector_text.c_str(), selectors);
         }
 
-        auto declarations = compile_declarations(declaration_text, registry);
+        auto declarations = compile_declarations(declaration_text, registry, diagnostics_callback, diagnostics_user_data);
 
         if (!selectors.empty() &&
             (!declarations.properties.empty() || !declarations.custom.empty() || !declarations.content.empty()))
@@ -419,7 +437,9 @@ aether_status_t style_source_compile(
     int64_t sheet_handle,
     int32_t layer,
     std::vector<compiled_rule_s>& out_rules,
-    int32_t& out_rule_id_counter)
+    int32_t& out_rule_id_counter,
+    aether_style_diagnostic_fn diagnostics_callback,
+    void* diagnostics_user_data)
 {
     if (!source) return AETHER_ERROR_NULL_ARG;
 
@@ -440,7 +460,9 @@ aether_status_t style_source_compile(
         sheet_layer,
         registry,
         out_rule_id_counter,
-        out_rules);
+        out_rules,
+        diagnostics_callback,
+        diagnostics_user_data);
 
     return AETHER_OK;
 }
@@ -450,7 +472,9 @@ aether_status_t style_source_compile(
 aether_status_t style_source_compile_inline(
     const char* source,
     std::vector<compiled_property_declaration_s>& out_properties,
-    std::vector<custom_property_declaration_s>& out_custom)
+    std::vector<custom_property_declaration_s>& out_custom,
+    aether_style_diagnostic_fn diagnostics_callback,
+    void* diagnostics_user_data)
 {
     if (!source) return AETHER_ERROR_NULL_ARG;
 
@@ -458,7 +482,7 @@ aether_status_t style_source_compile_inline(
     if (!registry) return AETHER_ERROR_INVALID_STATE;
 
     std::string cleaned = text_splitter_remove_comments(source);
-    auto result = compile_declarations(cleaned, registry);
+    auto result = compile_declarations(cleaned, registry, diagnostics_callback, diagnostics_user_data);
 
     out_properties = std::move(result.properties);
     out_custom = std::move(result.custom);

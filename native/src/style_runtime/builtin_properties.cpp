@@ -4,6 +4,7 @@
 #include "../css/background_layers.h"
 #include "../css/backdrop_filters.h"
 #include "../css/linear_gradient.h"
+#include "../css/transforms.h"
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -79,6 +80,12 @@ static bool bi_try_size(const char* src, std::string& out) {
         out = t; return true;
     }
     return false;
+}
+
+static bool bi_try_flex_basis(const char* source, std::string& output) {
+    const std::string value = str_trim(source ? source : "");
+    if (str_iequals(value, "content")) { output = "content"; return true; }
+    return bi_try_size(source, output);
 }
 
 static bool bi_try_max_size(const char* src, std::string& out) {
@@ -509,25 +516,39 @@ static bool bi_try_shadow(const char* src, std::string& out) {
 
 static bool bi_try_transform(const char* src, std::string& out) {
     std::string t = str_trim(src);
-    if (str_iequals(t, "none")) { out = "none"; return true; }
-    if (str_starts_with_i(t, "matrix") || str_starts_with_i(t, "translate") ||
-        str_starts_with_i(t, "rotate")  || str_starts_with_i(t, "scale") ||
-        str_starts_with_i(t, "skew")) { out = t; return true; }
-    return false;
+    if (t.empty()) return false;
+    // The checked applicator owns complete grammar validation so malformed
+    // deferred var() values receive an explicit AETHER-CSS-TRANSFORM report.
+    out = t;
+    return true;
 }
 
 static bool bi_try_transform_origin(const char* src, std::string& out) {
     std::string t = str_trim(src);
-    static const char* kw[] = {
-        "top left","top center","top right",
-        "center left","center center","center right",
-        "bottom left","bottom center","bottom right",
-        "left","center","right","top","bottom"
-    };
-    for (auto& k : kw) { if (str_iequals(t, k)) { out = t; return true; } }
-    auto parts = bi_split_ws(t);
-    if (parts.size() >= 1 && parts.size() <= 2) { out = t; return true; }
-    return false;
+    if (t.empty()) return false;
+    out = t;
+    return true;
+}
+
+static property_apply_result_s bi_apply_transform(aether_computed_style_t* style, const std::string& value) {
+    aether_transform_list parsed{};
+    if (!aether_transform_list_try_parse(value.c_str(), &parsed)) {
+        return property_apply_result_s::failure("AETHER-CSS-TRANSFORM",
+            "The transform value is not a supported 2D transform list.");
+    }
+    aether_transform_list_free(&style->transforms);
+    style->transforms = parsed;
+    return {};
+}
+
+static property_apply_result_s bi_apply_transform_origin(aether_computed_style_t* style, const std::string& value) {
+    aether_transform_origin parsed{};
+    if (!aether_transform_origin_try_parse(value.c_str(), &parsed)) {
+        return property_apply_result_s::failure("AETHER-CSS-TRANSFORM-ORIGIN",
+            "transform-origin accepts one or two 2D position components.");
+    }
+    style->transform_origin = parsed;
+    return {};
 }
 
 // ═══ Install apply helpers ═════════════════════════════════════
@@ -803,12 +824,23 @@ void builtin_properties_register(style_property_registry_s* reg) {
     // flex-shrink
     reg->register_property("flex-shrink", false, STYLE_IMPACT_LAYOUT, "1",
         bi_try_non_negative_number,
-        [](aether_computed_style_t* st, const std::string& v) { (void)st; (void)v; });
+        [](aether_computed_style_t* st, const std::string& v) { st->flex_shrink = std::strtof(v.c_str(), nullptr); });
 
     // flex-basis
     reg->register_property("flex-basis", false, STYLE_IMPACT_LAYOUT, "auto",
-        bi_try_size,
-        [](aether_computed_style_t* st, const std::string& v) { (void)st; (void)v; });
+        bi_try_flex_basis,
+        [](aether_computed_style_t* st, const std::string& v) {
+            if (str_iequals(v, "content")) {
+                st->flex_basis = { AETHER_FLEX_BASIS_CONTENT, aether_css_length_auto() };
+                return;
+            }
+            aether_css_length length{};
+            if (aether_css_length_try_parse(v.c_str(), &length) != AETHER_TRUE) return;
+            st->flex_basis = {
+                length.unit == AETHER_CSS_UNIT_AUTO ? AETHER_FLEX_BASIS_AUTO : AETHER_FLEX_BASIS_LENGTH,
+                length
+            };
+        });
 
     // justify-content
     {
@@ -851,9 +883,20 @@ void builtin_properties_register(style_property_registry_s* reg) {
     // align-self
     {
         static const char* kw[] = { "auto","stretch","start","flex-start","end","flex-end","center","baseline" };
+        static const int32_t vals[] = {
+            AETHER_ALIGN_SELF_AUTO, AETHER_ALIGN_SELF_STRETCH, AETHER_ALIGN_SELF_START,
+            AETHER_ALIGN_SELF_START, AETHER_ALIGN_SELF_END, AETHER_ALIGN_SELF_END,
+            AETHER_ALIGN_SELF_CENTER, AETHER_ALIGN_SELF_START
+        };
         reg->register_property("align-self", false, STYLE_IMPACT_LAYOUT, "auto",
-            [](const char* s, std::string& o) -> bool { return bi_try_keyword(s, kw, 8, o); },
-            [](aether_computed_style_t* st, const std::string& v) { (void)st; (void)v; });
+            [](const char* s, std::string& o) -> bool {
+                std::string v;
+                if (!bi_try_keyword(s, kw, 8, v)) return false;
+                for (int i = 0; i < 8; ++i)
+                    if (str_iequals(v, kw[i])) { o = std::to_string(vals[i]); return true; }
+                return false;
+            },
+            [](aether_computed_style_t* st, const std::string& v) { st->align_self = std::atoi(v.c_str()); });
     }
 
     // align-content
@@ -1241,13 +1284,13 @@ void builtin_properties_register(style_property_registry_s* reg) {
 
     // ── Transforms ─────────────────────────────────────────────
 
-    reg->register_property("transform", false,
+    reg->register_property_checked("transform", false,
         STYLE_IMPACT_COMPOSITE | STYLE_IMPACT_HITTEST, "none", bi_try_transform,
-        [](aether_computed_style_t* st, const std::string& v) { (void)st; (void)v; });
+        bi_apply_transform);
 
-    reg->register_property("transform-origin", false,
+    reg->register_property_checked("transform-origin", false,
         STYLE_IMPACT_COMPOSITE | STYLE_IMPACT_HITTEST, "50% 50%", bi_try_transform_origin,
-        [](aether_computed_style_t* st, const std::string& v) { (void)st; (void)v; });
+        bi_apply_transform_origin);
 
     // ── Shorthands ─────────────────────────────────────────────
 
@@ -1534,7 +1577,7 @@ void builtin_properties_register(style_property_registry_s* reg) {
             if (parts.size() < 1 || parts.size() > 3) return false;
             std::string grow_test;
             if (!bi_try_non_negative_number(parts[0].c_str(), grow_test)) return false;
-            std::string grow = parts[0], shrink = "1", basis = "0px";
+            std::string grow = parts[0], shrink = "1", basis = "0%";
             if (parts.size() >= 2) {
                 std::string shrink_test;
                 if (bi_try_non_negative_number(parts[1].c_str(), shrink_test)) {
@@ -1546,7 +1589,7 @@ void builtin_properties_register(style_property_registry_s* reg) {
                 }
             }
             std::string basis_test;
-            if (!bi_try_size(basis.c_str(), basis_test)) return false;
+            if (!bi_try_flex_basis(basis.c_str(), basis_test)) return false;
             writer.set("flex-grow", grow.c_str());
             writer.set("flex-shrink", shrink.c_str());
             writer.set("flex-basis", basis.c_str());

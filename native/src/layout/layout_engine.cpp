@@ -6,6 +6,7 @@
 #include "../css/border_utils.h"
 #include "../css/text_transform.h"
 #include "box_model.h"
+#include "flex_resolver.h"
 #include "margin_adjacency.h"
 #include "text_justify.h"
 
@@ -369,6 +370,14 @@ static float measure_intrinsic_width(
     float maximum,
     aether_layout_result_s* result);
 
+static float measure_intrinsic_height(
+    const aether_layout_engine_s* engine,
+    aether_style_map_s* styles,
+    aether_node_s* element,
+    const aether_computed_style_t& style,
+    aether_thicknessf padding, aether_thicknessf border,
+    float available_width);
+
 static float measure_intrinsic_flex_width(
     const aether_layout_engine_s* engine,
     aether_style_map_s* styles,
@@ -387,9 +396,34 @@ static float measure_child_natural_width(
 /* ── Register ──────────────────────────────────────────────────────── */
 
 static void register_box(aether_layout_result_s* result, aether_layout_box_s* box) {
-    result->primary_boxes.try_emplace(box->element, box);
+    if (!result->records_boxes) return;
+    auto existing = result->primary_boxes.find(box->element);
+    if (existing != result->primary_boxes.end()) {
+        auto previous = std::find(result->paint_order.begin(), result->paint_order.end(), existing->second);
+        if (previous != result->paint_order.end()) result->paint_order.erase(previous);
+        existing->second = box;
+    } else {
+        result->primary_boxes.emplace(box->element, box);
+    }
     result->paint_order.push_back(box);
 }
+
+class detached_layout_scope_s {
+public:
+    explicit detached_layout_scope_s(aether_layout_result_s* result)
+        : result_(result), previous_(result->records_boxes) {
+        result_->records_boxes = false;
+    }
+
+    ~detached_layout_scope_s() { result_->records_boxes = previous_; }
+
+    detached_layout_scope_s(const detached_layout_scope_s&) = delete;
+    detached_layout_scope_s& operator=(const detached_layout_scope_s&) = delete;
+
+private:
+    aether_layout_result_s* result_;
+    bool previous_;
+};
 
 /* ── LayoutElement ─────────────────────────────────────────────────── */
 
@@ -406,7 +440,7 @@ static aether_layout_box_s* layout_element(
     aether_layout_result_s* result)
 {
     auto style = get_style(styles, element);
-    auto* box = new aether_layout_box_s();
+    auto* box = result->create_box();
     box->kind = LAYOUT_BOX_ELEMENT;
     box->element = element;
     box->style = style;
@@ -453,8 +487,13 @@ static aether_layout_box_s* layout_element(
         border_width = std::min(border_width, max_border);
     }
 
+    // A definite CSS width is not limited by the containing block.  It may
+    // legitimately overflow in either normal flow or out-of-flow positioning;
+    // only auto/forced widths above are resolved from the available space.
+    // Keep the decoration floor so a content-box cannot become smaller than its
+    // own padding and border.
     border_width = std::max(aether_thicknessf_horizontal(border) + aether_thicknessf_horizontal(padding),
-                            std::min(border_width, available_border_width));
+                            border_width);
 
     // In block flow, auto horizontal margins consume the remaining inline space
     // after a definite used width is known. Flex items defer this decision until
@@ -641,6 +680,41 @@ static void layout_positioned_children(
     aether_rectf positioning_block,
     aether_layout_result_s* result)
 {
+    auto flex_static_position = [&](const aether_computed_style_t& child_style,
+                                    const aether_rectf& containing,
+                                    const aether_rectf& child_margin_box) {
+        const auto& flex = parent_box->style;
+        const bool horizontal = flex.flex_direction == AETHER_FLEX_DIRECTION_ROW;
+        const float main_extent = horizontal ? containing.width : containing.height;
+        const float cross_extent = horizontal ? containing.height : containing.width;
+        const float child_main = horizontal ? child_margin_box.width : child_margin_box.height;
+        const float child_cross = horizontal ? child_margin_box.height : child_margin_box.width;
+
+        // Absolutely positioned flex children are not flex items and must never influence one
+        // another's anchor. CSS Flexbox §4.1 aligns each child independently inside the flex
+        // container's content box as though it were the sole item.
+        const float main_free = main_extent - child_main;
+        float main_offset = 0.f;
+        if (flex.justify_content == AETHER_JUSTIFY_CENTER) main_offset = main_free / 2.f;
+        else if (flex.justify_content == AETHER_JUSTIFY_END) main_offset = main_free;
+        // space-between has no distributable gap for a sole hypothetical item, so it is start.
+
+        const int32_t cross_alignment = child_style.align_self == AETHER_ALIGN_SELF_AUTO
+            ? flex.align_items
+            : child_style.align_self;
+        const float cross_free = cross_extent - child_cross;
+        float cross_offset = 0.f;
+        if (cross_alignment == AETHER_ALIGN_CENTER) cross_offset = cross_free / 2.f;
+        else if (cross_alignment == AETHER_ALIGN_END) cross_offset = cross_free;
+        // A fixed-size absolutely positioned child with stretch has no free sizing decision at
+        // this stage; its static start edge is the correct alignment anchor. Auto cross-size
+        // stretch is handled by the positioned sizing algorithm before this placement.
+
+        return horizontal
+            ? aether_rectf{containing.x + main_offset, containing.y + cross_offset, 0.f, 0.f}
+            : aether_rectf{containing.x + cross_offset, containing.y + main_offset, 0.f, 0.f};
+    };
+
     auto static_position = [&](aether_node_s* node) {
         // A positioned box with an auto inset keeps the position it would have occupied in
         // normal flow. The laid-out in-flow children give us that anchor without putting the
@@ -709,7 +783,9 @@ static void layout_positioned_children(
                                          false, forced_width, constrain_width,
                                          forced_height, constrain_height, true, result);
 
-        const auto static_anchor = static_position(node);
+        const auto static_anchor = parent_box->style.display == AETHER_DISPLAY_FLEX
+            ? flex_static_position(style, containing, child_box->margin_box)
+            : static_position(node);
         float x = static_anchor.x;
         if (std::isfinite(left)) {
             x = containing.x + left;
@@ -753,6 +829,186 @@ static float layout_atomic_control(
         }
     }
     return std::max(natural_height, style.font_size * 1.1f);
+}
+
+struct resolved_flex_children_s {
+    std::vector<aether_layout_box_s*> boxes;
+    aether_flex_resolve_result_s resolution;
+};
+
+static bool flex_length_is_definite(aether_css_length length, bool main_size_is_definite) {
+    if (length.unit == AETHER_CSS_UNIT_PERCENT) return main_size_is_definite;
+    if (length.unit == AETHER_CSS_UNIT_LINEAR && std::fabs(length.linear_percent) > .0001f) {
+        return main_size_is_definite;
+    }
+    return length.unit != AETHER_CSS_UNIT_AUTO;
+}
+
+static float resolve_flex_main_border_size(const aether_layout_engine_s* engine,
+                                           const aether_computed_style_t& style,
+                                           const aether_rectf& content,
+                                           bool horizontal, bool main_size_is_definite,
+                                           aether_css_length length) {
+    if (!flex_length_is_definite(length, main_size_is_definite)) return NAN;
+    const float reference = horizontal ? content.width : content.height;
+    const float value = resolve(engine, length, reference, style);
+    if (!std::isfinite(value)) return NAN;
+    const auto padding = resolve_padding_edges(engine, style.padding, content.width, style);
+    const auto border = resolve_border_edges(engine, style, content.width);
+    const float decorations = horizontal
+        ? aether_thicknessf_horizontal(padding) + aether_thicknessf_horizontal(border)
+        : aether_thicknessf_vertical(padding) + aether_thicknessf_vertical(border);
+    return style.box_sizing == AETHER_BOX_SIZING_CONTENT_BOX
+        ? std::max(0.f, value) + decorations
+        : std::max(0.f, value);
+}
+
+static float flex_box_main_size(const aether_layout_box_s* box, bool horizontal) {
+    return horizontal ? box->border_box.width : box->border_box.height;
+}
+
+static float flex_box_outer_main_size(const aether_layout_box_s* box, bool horizontal) {
+    return horizontal ? box->margin_box.width : box->margin_box.height;
+}
+
+static float flex_box_cross_size(const aether_layout_box_s* box, bool horizontal) {
+    return horizontal ? box->margin_box.height : box->margin_box.width;
+}
+
+static resolved_flex_children_s resolve_flex_children(
+    const aether_layout_engine_s* engine,
+    aether_style_map_s* styles,
+    const std::vector<aether_node_s*>& children,
+    const aether_rectf& content,
+    const aether_computed_style_t& parent_style,
+    bool horizontal, bool main_size_is_definite, bool cross_size_is_definite,
+    aether_layout_result_s* result) {
+    resolved_flex_children_s output{};
+    output.boxes.reserve(children.size());
+    std::vector<aether_layout_box_s*> base_boxes;
+    base_boxes.reserve(children.size());
+
+    const bool stretch_cross = parent_style.align_items == AETHER_ALIGN_STRETCH &&
+        (!horizontal || !parent_style.flex_wrap) && cross_size_is_definite;
+    {
+        // Base-size measurement is an implementation detail of flex resolution.
+        // Its boxes must neither be visible through the final result nor outlive
+        // this function.
+        detached_layout_scope_s detached(result);
+        for (auto* child : children) {
+            const auto child_style = get_style(styles, child);
+            const float stretch_cross_size = horizontal && stretch_cross &&
+                child_style.height.unit == AETHER_CSS_UNIT_AUTO ? content.height : NAN;
+            base_boxes.push_back(layout_element(engine, styles, child,
+                {content.x, content.y, content.width, content.height}, content.y,
+                !horizontal && stretch_cross,
+                0.f, false,
+                stretch_cross_size, std::isfinite(stretch_cross_size), true, result));
+        }
+    }
+
+    std::vector<aether_flex_item_input_s> inputs;
+    inputs.reserve(children.size());
+    for (size_t index = 0; index < children.size(); ++index) {
+        const auto child_style = get_style(styles, children[index]);
+        const auto* base_box = base_boxes[index];
+        aether_flex_item_input_s item{};
+        item.basis.kind = child_style.flex_basis.kind;
+        item.basis.content_main_size = flex_box_main_size(base_box, horizontal);
+        item.basis.specified_main_size = resolve_flex_main_border_size(
+            engine, child_style, content, horizontal, main_size_is_definite,
+            horizontal ? child_style.width : child_style.height);
+        item.basis.resolved_length = resolve_flex_main_border_size(
+            engine, child_style, content, horizontal, main_size_is_definite,
+            child_style.flex_basis.length);
+        item.basis.length_is_definite = child_style.flex_basis.kind == AETHER_FLEX_BASIS_LENGTH &&
+            flex_length_is_definite(child_style.flex_basis.length, main_size_is_definite);
+        item.min_main_size = resolve_flex_main_border_size(
+            engine, child_style, content, horizontal, main_size_is_definite,
+            horizontal ? child_style.min_width : child_style.min_height);
+        item.max_main_size = resolve_flex_main_border_size(
+            engine, child_style, content, horizontal, main_size_is_definite,
+            horizontal ? child_style.max_width : child_style.max_height);
+        const auto child_padding = resolve_padding_edges(engine, child_style.padding, content.width, child_style);
+        const auto child_border = resolve_border_edges(engine, child_style, content.width);
+        const float content_size_suggestion = horizontal
+            ? measure_intrinsic_width(engine, styles, children[index], child_style,
+                                      child_padding, child_border, content.width, result)
+            : measure_intrinsic_height(engine, styles, children[index], child_style,
+                                       child_padding, child_border, content.width);
+        item.automatic_minimum = {
+            child_style.overflow == AETHER_OVERFLOW_AUTO || child_style.overflow == AETHER_OVERFLOW_SCROLL,
+            content_size_suggestion, item.basis.specified_main_size, NAN, item.max_main_size
+        };
+        item.outer_main_size = std::max(0.f,
+            flex_box_outer_main_size(base_box, horizontal) - flex_box_main_size(base_box, horizontal));
+        item.flex_grow = child_style.flex_grow;
+        item.flex_shrink = child_style.flex_shrink;
+        inputs.push_back(item);
+    }
+
+    const float available_main_size = main_size_is_definite
+        ? (horizontal ? content.width : content.height)
+        : NAN;
+    output.resolution = aether_resolve_flexible_lengths({
+        &inputs, available_main_size, std::max(0.f, parent_style.gap),
+        parent_style.flex_wrap && main_size_is_definite
+    });
+
+    for (auto* base_box : base_boxes) delete base_box;
+    base_boxes.clear();
+
+    for (size_t index = 0; index < children.size(); ++index) {
+        const auto child_style = get_style(styles, children[index]);
+        const float stretch_cross_size = horizontal && stretch_cross &&
+            child_style.height.unit == AETHER_CSS_UNIT_AUTO ? content.height : NAN;
+        const float target_main_size = output.resolution.items[index].target_main_size;
+        output.boxes.push_back(layout_element(engine, styles, children[index],
+            {content.x, content.y, content.width, content.height}, content.y,
+            !horizontal && stretch_cross,
+            horizontal ? target_main_size : 0.f, horizontal,
+            horizontal ? stretch_cross_size : target_main_size,
+            horizontal ? std::isfinite(stretch_cross_size) : true,
+            true, result));
+    }
+    return output;
+}
+
+static float flex_line_used_main_size(const std::vector<aether_layout_box_s*>& boxes,
+                                      const aether_flex_line_s& line,
+                                      bool horizontal, float gap) {
+    float used = gap * static_cast<float>(line.item_indices.empty() ? 0 : line.item_indices.size() - 1);
+    for (const size_t index : line.item_indices) used += flex_box_outer_main_size(boxes[index], horizontal);
+    return used;
+}
+
+static void consume_flex_main_auto_margins(const std::vector<aether_layout_box_s*>& boxes,
+                                           const std::vector<aether_node_s*>& children,
+                                           aether_style_map_s* styles,
+                                           const aether_flex_line_s& line,
+                                           bool horizontal, float available_main_size,
+                                           float& used_main_size) {
+    const float free = available_main_size - used_main_size;
+    if (free <= 0.f) return;
+    int auto_sides = 0;
+    for (const size_t index : line.item_indices) {
+        auto_sides += auto_margin_count(get_style(styles, children[index]), horizontal);
+    }
+    if (auto_sides == 0) return;
+    const float share = free / static_cast<float>(auto_sides);
+    for (const size_t index : line.item_indices) {
+        const auto child_style = get_style(styles, children[index]);
+        if (horizontal) {
+            add_auto_margin_space(boxes[index],
+                is_auto_margin(child_style.margin.left) ? share : 0.f, 0.f,
+                is_auto_margin(child_style.margin.right) ? share : 0.f, 0.f);
+        } else {
+            add_auto_margin_space(boxes[index], 0.f,
+                is_auto_margin(child_style.margin.top) ? share : 0.f, 0.f,
+                is_auto_margin(child_style.margin.bottom) ? share : 0.f);
+        }
+    }
+    used_main_size += free;
 }
 
 /* ── LayoutFlowChildren ────────────────────────────────────────────── */
@@ -941,7 +1197,7 @@ static float layout_inline_items(
                 finish_line(false);
             }
 
-            auto* fragment = new aether_layout_box_s();
+            auto* fragment = result->create_box();
             fragment->kind = LAYOUT_BOX_TEXT;
             fragment->element = item.element;
             fragment->style = item.style;
@@ -951,7 +1207,7 @@ static float layout_inline_items(
             fragment->border_box  = fragment->content_box;
             fragment->margin_box  = fragment->content_box;
             parent_box->add_child(fragment);
-            result->paint_order.push_back(fragment);
+            if (result->records_boxes) result->paint_order.push_back(fragment);
             cursor_x += metrics.width;
             line_height = std::max(line_height, metrics.height);
         }
@@ -1031,224 +1287,97 @@ static float layout_flex_children(
         return used_height;
     }
 
-    // ── flex-direction: column ──
-    if (style.flex_direction == AETHER_FLEX_DIRECTION_COLUMN) {
-        std::vector<aether_layout_box_s*> boxes;
-        float total_height = 0.f;
-        for (auto* child : children) {
-            auto* child_box = layout_element(engine, styles, child,
-                                             {content.x, content.y, content.width, content.height},
-                                             content.y, style.align_items == AETHER_ALIGN_STRETCH,
-                                             0, false, 0, false, true, result);
-            boxes.push_back(child_box);
-            total_height += child_box->margin_box.height;
-        }
-        total_height += style.gap * std::max(0, static_cast<int>(boxes.size()) - 1);
-        // Flex-grow is a main-axis operation. Apply it in columns as well as rows so a flexible
-        // panel fills the remaining vertical space instead of leaving an arbitrary dead region.
-        if (has_definite_height) {
-            float grow_total = 0.f;
-            for (auto* child : children) {
-                const auto child_style = get_style(styles, child);
-                if (child_style.flex_grow > 0.f && child_style.height.unit == AETHER_CSS_UNIT_AUTO)
-                    grow_total += child_style.flex_grow;
+    const bool horizontal = style.flex_direction != AETHER_FLEX_DIRECTION_COLUMN;
+    const bool main_size_is_definite = horizontal || has_definite_height;
+    const bool cross_size_is_definite = horizontal ? has_definite_height : true;
+    auto resolved = resolve_flex_children(engine, styles, children, content, style,
+                                          horizontal, main_size_is_definite,
+                                          cross_size_is_definite, result);
+    const float gap = std::max(0.f, style.gap);
+
+    if (!horizontal) {
+        float cross_cursor = content.x;
+        float total_main_size = 0.f;
+        for (const auto& line : resolved.resolution.lines) {
+            float used_main_size = flex_line_used_main_size(resolved.boxes, line, false, gap);
+            if (main_size_is_definite) {
+                consume_flex_main_auto_margins(resolved.boxes, children, styles, line, false,
+                                               content.height, used_main_size);
             }
-            const float free = std::max(0.f, content.height - total_height);
-            if (grow_total > 0.f && free > 0.f) {
-                for (size_t index = 0; index < boxes.size(); ++index) {
-                    const auto child_style = get_style(styles, children[index]);
-                    if (child_style.flex_grow <= 0.f || child_style.height.unit != AETHER_CSS_UNIT_AUTO)
-                        continue;
-                    const float extra = free * (child_style.flex_grow / grow_total);
-                    boxes[index] = layout_element(engine, styles, children[index],
-                                                  {content.x, content.y, content.width, content.height},
-                                                  content.y, style.align_items == AETHER_ALIGN_STRETCH,
-                                                  0, false,
-                                                  boxes[index]->border_box.height + extra, true, true, result);
+            const float free = main_size_is_definite ? std::max(0.f, content.height - used_main_size) : 0.f;
+            float spacing = gap;
+            float cursor_y = content.y;
+            if (style.justify_content == AETHER_JUSTIFY_CENTER) cursor_y += free / 2.f;
+            else if (style.justify_content == AETHER_JUSTIFY_END) cursor_y += free;
+            if (style.justify_content == AETHER_JUSTIFY_SPACE_BETWEEN && line.item_indices.size() > 1) {
+                spacing += free / static_cast<float>(line.item_indices.size() - 1);
+            }
+
+            float line_cross_size = 0.f;
+            for (const size_t index : line.item_indices) {
+                line_cross_size = std::max(line_cross_size, flex_box_cross_size(resolved.boxes[index], false));
+            }
+            const float cross_extent = resolved.resolution.lines.size() == 1 ? content.width : line_cross_size;
+            for (const size_t index : line.item_indices) {
+                auto* child_box = resolved.boxes[index];
+                const auto child_style = get_style(styles, children[index]);
+                const bool consumed_cross_auto = consume_flex_cross_auto_margins(
+                    child_box, child_style, true, cross_extent);
+                float x = cross_cursor;
+                if (!consumed_cross_auto) {
+                    if (style.align_items == AETHER_ALIGN_CENTER) x += (cross_extent - child_box->margin_box.width) / 2.f;
+                    else if (style.align_items == AETHER_ALIGN_END) x += cross_extent - child_box->margin_box.width;
                 }
-                total_height = content.height;
+                offset_box(child_box, x - child_box->margin_box.x, cursor_y - child_box->margin_box.y);
+                parent_box->add_child(child_box);
+                cursor_y += child_box->margin_box.height + spacing;
             }
+            total_main_size = std::max(total_main_size, used_main_size);
+            cross_cursor += line_cross_size + gap;
+        }
+        return has_definite_height ? std::max(total_main_size, content.height) : total_main_size;
+    }
+
+    float cross_cursor = content.y;
+    float total_cross_size = 0.f;
+    for (const auto& line : resolved.resolution.lines) {
+        float used_main_size = flex_line_used_main_size(resolved.boxes, line, true, gap);
+        consume_flex_main_auto_margins(resolved.boxes, children, styles, line, true,
+                                       content.width, used_main_size);
+        const float free = std::max(0.f, content.width - used_main_size);
+        float spacing = gap;
+        float cursor_x = content.x;
+        if (style.justify_content == AETHER_JUSTIFY_CENTER) cursor_x += free / 2.f;
+        else if (style.justify_content == AETHER_JUSTIFY_END) cursor_x += free;
+        if (style.justify_content == AETHER_JUSTIFY_SPACE_BETWEEN && line.item_indices.size() > 1) {
+            spacing += free / static_cast<float>(line.item_indices.size() - 1);
         }
 
-        // Auto margins are resolved before justify-content. Each auto side on
-        // the main axis participates independently, matching Flexbox §8.1.
-        if (has_definite_height) {
-            const float main_free = content.height - total_height;
-            int main_auto_sides = 0;
-            for (auto* child : children) main_auto_sides += auto_margin_count(get_style(styles, child), false);
-            if (main_free > 0.f && main_auto_sides > 0) {
-                const float share = main_free / static_cast<float>(main_auto_sides);
-                for (size_t index = 0; index < boxes.size(); ++index) {
-                    const auto child_style = get_style(styles, children[index]);
-                    add_auto_margin_space(boxes[index], 0.f,
-                                          is_auto_margin(child_style.margin.top) ? share : 0.f,
-                                          0.f,
-                                          is_auto_margin(child_style.margin.bottom) ? share : 0.f);
-                }
-                total_height += main_free;
-            }
+        float line_cross_size = 0.f;
+        for (const size_t index : line.item_indices) {
+            line_cross_size = std::max(line_cross_size, flex_box_cross_size(resolved.boxes[index], true));
         }
-        float column_free = has_definite_height ? std::max(0.f, content.height - total_height) : 0.f;
-        float column_spacing = style.gap;
-        float cursor_y = content.y;
-        if (style.justify_content == AETHER_JUSTIFY_CENTER) cursor_y = content.y + column_free / 2;
-        else if (style.justify_content == AETHER_JUSTIFY_END) cursor_y = content.y + column_free;
-        if (style.justify_content == AETHER_JUSTIFY_SPACE_BETWEEN && boxes.size() > 1) {
-            column_spacing += column_free / static_cast<float>(boxes.size() - 1);
-        }
-        for (size_t index = 0; index < boxes.size(); ++index) {
-            auto* child_box = boxes[index];
+        const float cross_extent = resolved.resolution.lines.size() == 1 && has_definite_height
+            ? content.height : line_cross_size;
+        for (const size_t index : line.item_indices) {
+            auto* child_box = resolved.boxes[index];
             const auto child_style = get_style(styles, children[index]);
             const bool consumed_cross_auto = consume_flex_cross_auto_margins(
-                child_box, child_style, true, content.width);
-            float x = content.x;
-            if (!consumed_cross_auto) {
-                if (style.align_items == AETHER_ALIGN_CENTER) x = content.x + (content.width - child_box->margin_box.width) / 2;
-                else if (style.align_items == AETHER_ALIGN_END) x = content.x + content.width - child_box->margin_box.width;
-            }
-            offset_box(child_box, x - child_box->margin_box.x, cursor_y - child_box->margin_box.y);
-            parent_box->add_child(child_box);
-            cursor_y += child_box->margin_box.height + column_spacing;
-        }
-        return total_height;
-    }
-
-    // ── flex-direction: row (with optional wrap) ──
-    bool stretch_row = !style.flex_wrap && has_definite_height && style.align_items == AETHER_ALIGN_STRETCH;
-
-    // Base pass: measure every child at natural (pre-grow) size
-    std::vector<aether_layout_box_s*> base_boxes;
-    for (auto* child : children) {
-        auto cs = get_style(styles, child);
-        float stretch_h = (stretch_row && cs.height.unit == AETHER_CSS_UNIT_AUTO) ? content.height : NAN;
-        auto* b = layout_element(engine, styles, child,
-                                 {content.x, content.y, content.width, content.height},
-                                 content.y, false, 0, false,
-                                 stretch_h, std::isfinite(stretch_h), true, result);
-        base_boxes.push_back(b);
-    }
-
-    // Split into lines (wrap)
-    std::vector<std::vector<int>> lines;
-    if (style.flex_wrap) {
-        std::vector<int> current;
-        float running_width = 0.f;
-        for (int i = 0; i < static_cast<int>(children.size()); i++) {
-            float item_w = base_boxes[i]->margin_box.width;
-            if (!current.empty() && running_width + style.gap + item_w > content.width) {
-                lines.push_back(current);
-                current.clear();
-                running_width = 0.f;
-            }
-            current.push_back(i);
-            running_width += (current.size() > 1 ? style.gap : 0) + item_w;
-        }
-        if (!current.empty()) lines.push_back(current);
-    } else {
-        std::vector<int> all;
-        for (int i = 0; i < static_cast<int>(children.size()); i++) all.push_back(i);
-        lines.push_back(all);
-    }
-
-    float row_cursor_y = content.y;
-    float row_total_height = 0.f;
-
-    for (auto& line : lines) {
-        std::vector<aether_layout_box_s*> line_boxes;
-        float line_width = 0.f;
-        float line_max_height = 0.f;
-        for (int i : line) {
-            line_boxes.push_back(base_boxes[i]);
-            line_width += base_boxes[i]->margin_box.width;
-            line_max_height = std::max(line_max_height, base_boxes[i]->margin_box.height);
-        }
-        line_width += style.gap * std::max(0, static_cast<int>(line.size()) - 1);
-
-        // flex-grow pass
-        float grow_total = 0.f;
-        for (int i : line) {
-            auto cs = get_style(styles, children[i]);
-            if (cs.flex_grow > 0 && cs.width.unit == AETHER_CSS_UNIT_AUTO) {
-                grow_total += cs.flex_grow;
-            }
-        }
-        if (grow_total > 0) {
-            float growable = std::max(0.f, content.width - line_width);
-            if (growable > 0) {
-                for (int li = 0; li < static_cast<int>(line.size()); li++) {
-                    int i = line[li];
-                    auto cs = get_style(styles, children[i]);
-                    if (cs.flex_grow <= 0 || cs.width.unit != AETHER_CSS_UNIT_AUTO) continue;
-                    float extra = growable * (cs.flex_grow / grow_total);
-                    float stretch_h = (stretch_row && cs.height.unit == AETHER_CSS_UNIT_AUTO) ? content.height : NAN;
-                    auto* grown = layout_element(engine, styles, children[i],
-                                                 {content.x, content.y, content.width, content.height},
-                                                 content.y, false,
-                                                 line_boxes[li]->border_box.width + extra, true,
-                                                 stretch_h, std::isfinite(stretch_h), true, result);
-                    line_boxes[li] = grown;
-                }
-                line_width = content.width;
-                // Growing a row item changes its available text width. A card that wrapped in
-                // the base pass can become shorter after that reflow, so the line's cross size
-                // must be recomputed from the final boxes rather than retaining the stale,
-                // pre-grow maximum. Otherwise flex columns reserve an invisible vertical gap.
-                line_max_height = 0.f;
-                for (const auto* grown : line_boxes) {
-                    line_max_height = std::max(line_max_height, grown->margin_box.height);
-                }
-            }
-        }
-
-        // Auto margins on a flex line absorb positive main-axis free space
-        // before justify-content can distribute what remains.
-        const float main_free = content.width - line_width;
-        int main_auto_sides = 0;
-        for (int item_index : line) main_auto_sides += auto_margin_count(get_style(styles, children[item_index]), true);
-        if (main_free > 0.f && main_auto_sides > 0) {
-            const float share = main_free / static_cast<float>(main_auto_sides);
-            for (int line_index = 0; line_index < static_cast<int>(line_boxes.size()); ++line_index) {
-                const auto child_style = get_style(styles, children[line[line_index]]);
-                add_auto_margin_space(line_boxes[line_index],
-                                      is_auto_margin(child_style.margin.left) ? share : 0.f,
-                                      0.f,
-                                      is_auto_margin(child_style.margin.right) ? share : 0.f,
-                                      0.f);
-            }
-            line_width += main_free;
-        }
-
-        float free = std::max(0.f, content.width - line_width);
-        float spacing = style.gap;
-        float cursor_x = content.x;
-        if (style.justify_content == AETHER_JUSTIFY_CENTER) cursor_x = content.x + free / 2;
-        else if (style.justify_content == AETHER_JUSTIFY_END) cursor_x = content.x + free;
-        if (style.justify_content == AETHER_JUSTIFY_SPACE_BETWEEN && line_boxes.size() > 1) {
-            spacing += free / static_cast<float>(line_boxes.size() - 1);
-        }
-
-        float cross_extent = (lines.size() == 1 && has_definite_height) ? content.height : line_max_height;
-        for (int line_index = 0; line_index < static_cast<int>(line_boxes.size()); ++line_index) {
-            auto* child_box = line_boxes[line_index];
-            const auto child_style = get_style(styles, children[line[line_index]]);
-            const bool consumed_cross_auto = consume_flex_cross_auto_margins(
                 child_box, child_style, false, cross_extent);
-            float y = row_cursor_y;
+            float y = cross_cursor;
             if (!consumed_cross_auto) {
-                if (style.align_items == AETHER_ALIGN_CENTER) y = row_cursor_y + (cross_extent - child_box->margin_box.height) / 2;
-                else if (style.align_items == AETHER_ALIGN_END) y = row_cursor_y + cross_extent - child_box->margin_box.height;
+                if (style.align_items == AETHER_ALIGN_CENTER) y += (cross_extent - child_box->margin_box.height) / 2.f;
+                else if (style.align_items == AETHER_ALIGN_END) y += cross_extent - child_box->margin_box.height;
             }
             offset_box(child_box, cursor_x - child_box->margin_box.x, y - child_box->margin_box.y);
             parent_box->add_child(child_box);
             cursor_x += child_box->margin_box.width + spacing;
         }
-
-        row_cursor_y += line_max_height + style.gap;
-        row_total_height += line_max_height;
+        total_cross_size += line_cross_size;
+        cross_cursor += line_cross_size + gap;
     }
-
-    row_total_height += style.gap * std::max(0, static_cast<int>(lines.size()) - 1);
-    return has_definite_height ? std::max(row_total_height, content.height) : row_total_height;
+    total_cross_size += gap * static_cast<float>(resolved.resolution.lines.empty() ? 0 : resolved.resolution.lines.size() - 1);
+    return has_definite_height ? std::max(total_cross_size, content.height) : total_cross_size;
 }
 
 /* ── CollectInlineElement ──────────────────────────────────────────── */
@@ -1329,6 +1458,67 @@ static float measure_intrinsic_width(
     return metrics.width + aether_thicknessf_horizontal(padding) + aether_thicknessf_horizontal(border);
 }
 
+static float measure_intrinsic_height(
+    const aether_layout_engine_s* engine,
+    aether_style_map_s* styles,
+    aether_node_s* element,
+    const aether_computed_style_t& style,
+    aether_thicknessf padding, aether_thicknessf border,
+    float available_width)
+{
+    const float content_width = std::max(0.f, available_width -
+        aether_thicknessf_horizontal(padding) - aether_thicknessf_horizontal(border));
+    if (is_atomic_control(element)) {
+        return layout_atomic_control(engine, element, style, content_width, NAN, false, padding, border) +
+            aether_thicknessf_vertical(padding) + aether_thicknessf_vertical(border);
+    }
+
+    float content_height = 0.f;
+    bool has_element_children = false;
+    for (auto* child : element->children) {
+        if (child->type != AETHER_NODE_ELEMENT) continue;
+        const auto child_style = get_style(styles, child);
+        if (child_style.display == AETHER_DISPLAY_NONE || !child_style.visible || is_out_of_flow(child_style)) continue;
+        has_element_children = true;
+        const auto child_padding = resolve_padding_edges(engine, child_style.padding, content_width, child_style);
+        const auto child_border = resolve_border_edges(engine, child_style, content_width);
+        const auto child_margin = resolve_margin_edges(engine, child_style.margin, content_width, child_style);
+        const bool percentage_height = child_style.height.unit == AETHER_CSS_UNIT_PERCENT ||
+            (child_style.height.unit == AETHER_CSS_UNIT_LINEAR &&
+             std::fabs(child_style.height.linear_percent) > .0001f);
+        float child_height = percentage_height ? NAN : resolve(engine, child_style.height, 0.f, child_style);
+        if (std::isfinite(child_height)) {
+            if (child_style.box_sizing == AETHER_BOX_SIZING_CONTENT_BOX) {
+                child_height += aether_thicknessf_vertical(child_padding) + aether_thicknessf_vertical(child_border);
+            }
+        } else {
+            child_height = measure_intrinsic_height(engine, styles, child, child_style,
+                                                    child_padding, child_border, content_width);
+        }
+        child_height += aether_thicknessf_vertical(child_margin);
+        if (style.display == AETHER_DISPLAY_FLEX && style.flex_direction == AETHER_FLEX_DIRECTION_ROW) {
+            content_height = std::max(content_height, child_height);
+        } else {
+            content_height += child_height;
+        }
+    }
+    if (has_element_children && style.display == AETHER_DISPLAY_FLEX &&
+        style.flex_direction == AETHER_FLEX_DIRECTION_COLUMN) {
+        int child_count = 0;
+        for (auto* child : element->children) {
+            if (child->type != AETHER_NODE_ELEMENT) continue;
+            const auto child_style = get_style(styles, child);
+            child_count += child_style.display != AETHER_DISPLAY_NONE && child_style.visible && !is_out_of_flow(child_style);
+        }
+        content_height += std::max(0, child_count - 1) * std::max(0.f, style.gap);
+    }
+    if (!has_element_children) {
+        const std::string text = aether_apply_text_transform(normalize_whitespace(text_content(element)), style.text_transform);
+        content_height = engine_measure_text(engine, text.c_str(), &style, content_width).height;
+    }
+    return content_height + aether_thicknessf_vertical(padding) + aether_thicknessf_vertical(border);
+}
+
 static float measure_intrinsic_flex_width(
     const aether_layout_engine_s* engine,
     aether_style_map_s* styles,
@@ -1356,6 +1546,11 @@ static float measure_intrinsic_flex_width(
     }
     float content = 0.f;
     if (style.flex_direction == AETHER_FLEX_DIRECTION_COLUMN) {
+        content = *std::max_element(child_widths.begin(), child_widths.end());
+    } else if (style.flex_wrap) {
+        // CSS Flexbox §9.9: a multi-line row flex container's min-content
+        // contribution is its widest item, because subsequent items may wrap
+        // onto later lines. Gaps only exist between items sharing a line.
         content = *std::max_element(child_widths.begin(), child_widths.end());
     } else {
         content = 0.f;

@@ -1,5 +1,7 @@
 #pragma once
 #include <aether/aether.h>
+#include <cassert>
+#include <cstddef>
 #include <string>
 #include <vector>
 #include <unordered_map>
@@ -12,7 +14,10 @@ enum layout_box_kind_t : int32_t {
     LAYOUT_BOX_TEXT,
 };
 
+struct aether_layout_result_s;
+
 struct aether_layout_box_s {
+    aether_layout_result_s* owner = nullptr;
     layout_box_kind_t kind = LAYOUT_BOX_ELEMENT;
     aether_node_s*    element = nullptr;
     aether_computed_style_t style{};
@@ -30,6 +35,8 @@ struct aether_layout_box_s {
     aether_rectf border_box{};
     aether_rectf padding_box{};
     aether_rectf content_box{};
+
+    ~aether_layout_box_s();
 
     void add_child(aether_layout_box_s* child) { children.push_back(child); }
 
@@ -77,8 +84,21 @@ struct aether_layout_result_s {
     std::unordered_map<aether_node_s*, aether_layout_box_s*> primary_boxes;
     std::vector<aether_layout_box_s*> paint_order;
     aether_sizef viewport{};
+    // Measurement passes can build detached trees. Only final-layout boxes are
+    // published through the query and paint indexes.
+    bool records_boxes = true;
+    size_t live_box_count = 0;
 
-    ~aether_layout_result_s() { delete root; }
+    ~aether_layout_result_s() {
+        delete root;
+        assert(live_box_count == 0 && "all layout boxes must be owned by the final tree or released explicitly");
+    }
+
+    aether_layout_box_s* create_box();
+    void release_box() {
+        assert(live_box_count > 0);
+        --live_box_count;
+    }
 
     aether_layout_box_s* find_primary_box(aether_node_s* element) const {
         auto it = primary_boxes.find(element);

@@ -27,7 +27,7 @@ extern "C" {
  * ABI 1.0, a major-version change denotes an incompatible ABI.
  */
 #define AETHER_ABI_VERSION_MAJOR 0u
-#define AETHER_ABI_VERSION_MINOR 14u
+#define AETHER_ABI_VERSION_MINOR 18u
 #define AETHER_ABI_VERSION_PATCH 0u
 
 #define AETHER_ABI_VERSION_MAKE(major, minor, patch) \
@@ -52,6 +52,7 @@ typedef uint64_t aether_capabilities_t;
 
 AETHER_API uint32_t              aether_abi_version(void);
 AETHER_API aether_capabilities_t aether_abi_capabilities(void);
+AETHER_API size_t                aether_computed_style_size(void);
 
 typedef int32_t aether_status_t;
 #define AETHER_OK                   0
@@ -167,6 +168,20 @@ typedef struct {
     float linear_vh;
 } aether_css_length;
 
+/* flex-basis needs to distinguish auto (use the main-size property), content
+   (intrinsic content size), and a concrete CSS length. A plain length cannot
+   preserve that distinction because both auto and content defer resolution. */
+typedef enum {
+    AETHER_FLEX_BASIS_AUTO = 0,
+    AETHER_FLEX_BASIS_CONTENT,
+    AETHER_FLEX_BASIS_LENGTH
+} aether_flex_basis_kind_t;
+
+typedef struct {
+    int32_t           kind;
+    aether_css_length length;
+} aether_flex_basis;
+
 /* CSS Backgrounds & Borders §4.1: every corner has independent horizontal
    and vertical radii. Keep symbolic lengths until the border box is known. */
 typedef struct { aether_css_length horizontal, vertical; } aether_corner_radius;
@@ -263,6 +278,59 @@ AETHER_API aether_bool_t aether_backdrop_filter_list_equal(const aether_backdrop
                                                              const aether_backdrop_filter_list* right);
 AETHER_API void          aether_backdrop_filter_list_free(aether_backdrop_filter_list* list);
 
+/* CSS transforms retain their authored operations until paint time: percentage
+   translations and transform-origin both need the element border-box, which is
+   deliberately unavailable during cascade.  The values are normalized into a
+   small 2D operation set rather than preserving parser strings. */
+typedef enum {
+    AETHER_TRANSFORM_TRANSLATE = 0,
+    AETHER_TRANSFORM_SCALE,
+    AETHER_TRANSFORM_ROTATE,
+    AETHER_TRANSFORM_SKEW_X,
+    AETHER_TRANSFORM_SKEW_Y,
+    AETHER_TRANSFORM_MATRIX
+} aether_transform_operation_kind_t;
+
+typedef struct {
+    int32_t           kind;
+    aether_css_length x;
+    aether_css_length y;
+    float             scalar_x;
+    float             scalar_y;
+    float             angle_radians;
+    float             matrix_a;
+    float             matrix_b;
+    float             matrix_c;
+    float             matrix_d;
+    float             matrix_e;
+    float             matrix_f;
+} aether_transform_operation;
+
+typedef struct {
+    aether_transform_operation* items;
+    int32_t                     count;
+} aether_transform_list;
+
+typedef struct {
+    aether_css_length x;
+    aether_css_length y;
+} aether_transform_origin;
+
+/* Row-vector affine matrix matching the native transform primitives used by
+   Direct2D, Skia and CoreGraphics adapters: x' = x*m11 + y*m21 + dx and
+   y' = x*m12 + y*m22 + dy. */
+typedef struct {
+    float m11, m12;
+    float m21, m22;
+    float dx, dy;
+} aether_transform_matrix;
+
+AETHER_API aether_bool_t aether_transform_list_copy(const aether_transform_list* source,
+                                                      aether_transform_list* destination);
+AETHER_API aether_bool_t aether_transform_list_equal(const aether_transform_list* left,
+                                                       const aether_transform_list* right);
+AETHER_API void          aether_transform_list_free(aether_transform_list* list);
+
 /* ── CSS Enums (ComputedStyle) ─────────────────────────────────────── */
 
 typedef enum {
@@ -299,6 +367,17 @@ typedef enum {
     AETHER_ALIGN_CENTER,
     AETHER_ALIGN_END
 } aether_align_items_t;
+
+/* align-self has the same resolved values as align-items, plus auto to inherit the
+   flex container's cross-axis alignment. Keeping it distinct prevents auto from
+   being conflated with stretch in the computed-style ABI. */
+typedef enum {
+    AETHER_ALIGN_SELF_AUTO = -1,
+    AETHER_ALIGN_SELF_STRETCH = AETHER_ALIGN_STRETCH,
+    AETHER_ALIGN_SELF_START = AETHER_ALIGN_START,
+    AETHER_ALIGN_SELF_CENTER = AETHER_ALIGN_CENTER,
+    AETHER_ALIGN_SELF_END = AETHER_ALIGN_END
+} aether_align_self_t;
 
 typedef enum {
     AETHER_TEXT_ALIGN_START = 0,
@@ -356,7 +435,10 @@ typedef struct {
     int32_t           flex_direction;
     int32_t           justify_content;
     int32_t           align_items;
+    int32_t           align_self;
     float             flex_grow;
+    float             flex_shrink;
+    aether_flex_basis flex_basis;
     aether_bool_t     flex_wrap;
     float             gap;
     int32_t           position;
@@ -384,6 +466,11 @@ typedef struct {
     aether_border_style_edges border_styles;
     aether_bool_t     has_text_gradient;
     aether_linear_gradient text_gradient;
+
+    /* Post-layout paint/hit-test transforms. They are not inherited, but their
+       Display List brackets scope over the element's entire descendant subtree. */
+    aether_transform_list   transforms;
+    aether_transform_origin transform_origin;
 
     /* CSS shadow lists, each in declaration order. text-shadow inherits;
        box-shadow does not. */
@@ -570,6 +657,8 @@ typedef enum {
     AETHER_PAINT_DRAW_TEXT_SHADOW,
     AETHER_PAINT_DRAW_BACKGROUND_IMAGE,
     AETHER_PAINT_APPLY_BACKDROP_FILTER,
+    AETHER_PAINT_PUSH_TRANSFORM,
+    AETHER_PAINT_POP_TRANSFORM,
 } aether_paint_command_tag_t;
 
 typedef struct {
@@ -593,6 +682,7 @@ typedef struct {
                  aether_bool_t has_resolved_geometry; } draw_background_image;
         struct { aether_rectf rect; aether_corner_radii radii;
                  aether_backdrop_filter_list filters; } apply_backdrop_filter;
+        struct { aether_transform_matrix matrix; } push_transform;
     } data;
 } aether_paint_command_t;
 

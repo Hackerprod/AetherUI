@@ -7,6 +7,7 @@ import {
   checkAbiCompatibility,
   parseAbiVersion,
   resolveNativeLibraryCandidates,
+  validateComputedStyleSize,
 } from "../src/ffi.mjs";
 
 test("decodes the packed ABI version", () => {
@@ -30,6 +31,11 @@ test("rejects a missing required capability", () => {
     () => checkAbiCompatibility((SUPPORTED_ABI.major << 24) | (SUPPORTED_ABI.minor << 16), CAPABILITIES.DOM, 256),
     /missing required capability bits/,
   );
+});
+
+test("rejects a computed-style layout mismatch", () => {
+  validateComputedStyleSize(512, 512);
+  assert.throws(() => validateComputedStyleSize(511, 512), /computed style size 511/);
 });
 
 test("resolves the installed-prefix layout without touching the build tree", () => {

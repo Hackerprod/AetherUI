@@ -46,6 +46,8 @@ AETHER_API aether_status_t aether_computed_style_copy(aether_computed_style_hand
     copy.background_layers.count = 0;
     copy.backdrop_filters.items = nullptr;
     copy.backdrop_filters.count = 0;
+    copy.transforms.items = nullptr;
+    copy.transforms.count = 0;
     copy.text_gradient.stops = nullptr;
     copy.text_shadows.items = nullptr;
     copy.text_shadows.count = 0;
@@ -53,6 +55,7 @@ AETHER_API aether_status_t aether_computed_style_copy(aether_computed_style_hand
     copy.box_shadows.count = 0;
     if (aether_background_layer_list_copy(&handle->style.background_layers, &copy.background_layers) != AETHER_TRUE ||
         aether_backdrop_filter_list_copy(&handle->style.backdrop_filters, &copy.backdrop_filters) != AETHER_TRUE ||
+        aether_transform_list_copy(&handle->style.transforms, &copy.transforms) != AETHER_TRUE ||
         !copy_gradient(handle->style.text_gradient, copy.text_gradient) ||
         aether_shadow_list_copy(&handle->style.text_shadows, &copy.text_shadows) != AETHER_TRUE ||
         aether_shadow_list_copy(&handle->style.box_shadows, &copy.box_shadows) != AETHER_TRUE) {

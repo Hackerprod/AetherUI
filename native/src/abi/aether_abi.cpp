@@ -89,6 +89,10 @@ AETHER_API aether_capabilities_t aether_abi_capabilities(void) {
            AETHER_CAPABILITY_DISPLAY_LIST;
 }
 
+AETHER_API size_t aether_computed_style_size(void) {
+    return sizeof(aether_computed_style_t);
+}
+
 AETHER_API size_t aether_paint_command_size(void) {
     return sizeof(aether_paint_command_t);
 }
@@ -139,6 +143,52 @@ AETHER_API void aether_backdrop_filter_list_free(aether_backdrop_filter_list* li
     std::free(list->items);
     list->items = nullptr;
     list->count = 0;
+}
+
+AETHER_API void aether_transform_list_free(aether_transform_list* list) {
+    if (!list) return;
+    std::free(list->items);
+    list->items = nullptr;
+    list->count = 0;
+}
+
+AETHER_API aether_bool_t aether_transform_list_copy(const aether_transform_list* source,
+                                                      aether_transform_list* destination) {
+    if (!destination) return AETHER_FALSE;
+    if (source == destination) return AETHER_TRUE;
+    if (!source || source->count < 0 || (source->count > 0 && !source->items)) {
+        aether_transform_list_free(destination);
+        return AETHER_FALSE;
+    }
+    aether_transform_list replacement{};
+    if (source->count > 0) {
+        const size_t count = static_cast<size_t>(source->count);
+        if (count > (std::numeric_limits<size_t>::max)() / sizeof(aether_transform_operation)) {
+            aether_transform_list_free(destination);
+            return AETHER_FALSE;
+        }
+        replacement.items = static_cast<aether_transform_operation*>(
+            std::malloc(sizeof(aether_transform_operation) * count));
+        if (!replacement.items) {
+            aether_transform_list_free(destination);
+            return AETHER_FALSE;
+        }
+        std::memcpy(replacement.items, source->items, sizeof(aether_transform_operation) * count);
+        replacement.count = source->count;
+    }
+    aether_transform_list_free(destination);
+    *destination = replacement;
+    return AETHER_TRUE;
+}
+
+AETHER_API aether_bool_t aether_transform_list_equal(const aether_transform_list* left,
+                                                       const aether_transform_list* right) {
+    if (!left || !right || left->count < 0 || right->count < 0 || left->count != right->count)
+        return AETHER_FALSE;
+    if (left->count == 0) return AETHER_TRUE;
+    if (!left->items || !right->items) return AETHER_FALSE;
+    return std::memcmp(left->items, right->items,
+        sizeof(aether_transform_operation) * static_cast<size_t>(left->count)) == 0 ? AETHER_TRUE : AETHER_FALSE;
 }
 
 AETHER_API aether_bool_t aether_backdrop_filter_list_copy(const aether_backdrop_filter_list* source,

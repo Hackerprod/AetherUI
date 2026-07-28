@@ -71,6 +71,11 @@ internal sealed class RenderingInterop : IDisposable
                         filter.LengthAmount.Percent, filter.LengthAmount.Em, filter.LengthAmount.Rem,
                         filter.LengthAmount.Vw, filter.LengthAmount.Vh),
                     filter.ScalarAmount)).ToArray() ?? []),
+            12 => new PushTransformCommand(new TransformMatrix(
+                Float(bytes, NativePaintCommandLayout.TransformMatrix), Float(bytes, NativePaintCommandLayout.TransformMatrix + 4),
+                Float(bytes, NativePaintCommandLayout.TransformMatrix + 8), Float(bytes, NativePaintCommandLayout.TransformMatrix + 12),
+                Float(bytes, NativePaintCommandLayout.TransformMatrix + 16), Float(bytes, NativePaintCommandLayout.TransformMatrix + 20))),
+            13 => new PopTransformCommand(),
             _ => throw new InvalidOperationException($"Unknown native paint command tag {command.Tag}."),
         };
     }

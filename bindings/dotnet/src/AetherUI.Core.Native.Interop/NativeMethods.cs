@@ -26,6 +26,9 @@ internal static unsafe partial class NativeMethods
     [LibraryImport(Lib, EntryPoint = "aether_abi_capabilities")]
     internal static partial ulong AbiCapabilities();
 
+    [LibraryImport(Lib, EntryPoint = "aether_computed_style_size")]
+    internal static partial nuint ComputedStyleSize();
+
     [LibraryImport(Lib, EntryPoint = "aether_paint_command_size")]
     internal static partial nuint PaintCommandSize();
 

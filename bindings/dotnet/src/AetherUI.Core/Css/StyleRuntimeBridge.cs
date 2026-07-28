@@ -31,7 +31,10 @@ public static class StyleRuntimeBridge
             FlexDirection = (FlexDirection)source.FlexDirection,
             JustifyContent = (JustifyContent)source.JustifyContent,
             AlignItems = (AlignItems)source.AlignItems,
+            AlignSelf = (AlignSelf)source.AlignSelf,
             FlexGrow = source.FlexGrow,
+            FlexShrink = source.FlexShrink,
+            FlexBasis = new FlexBasis((FlexBasisKind)source.FlexBasis.Kind, ToCssLength(source.FlexBasis.Length)),
             FlexWrap = source.FlexWrap,
             Gap = source.Gap,
             Position = (PositionKind)source.Position,
@@ -50,6 +53,12 @@ public static class StyleRuntimeBridge
             BackgroundColor = ToColorRgba(source.BackgroundColor),
             BackgroundGradient = backgroundGradient,
             TextGradient = textGradient,
+            Transforms = source.Transforms.Select(static transform => new CssTransformOperation(
+                (TransformOperationKind)transform.Kind, ToCssLength(transform.X), ToCssLength(transform.Y),
+                transform.ScalarX, transform.ScalarY, transform.AngleRadians,
+                transform.MatrixA, transform.MatrixB, transform.MatrixC, transform.MatrixD, transform.MatrixE, transform.MatrixF)).ToArray(),
+            TransformOrigin = new CssTransformOrigin(
+                ToCssLength(source.TransformOrigin.X), ToCssLength(source.TransformOrigin.Y)),
             TextShadows = source.TextShadows.Select(static shadow => new BoxShadow(
                 shadow.X, shadow.Y, shadow.Blur, shadow.Spread, ToColorRgba(shadow.Color), shadow.Inset)).ToArray(),
             BorderColor = ToColorRgba(source.BorderColor),

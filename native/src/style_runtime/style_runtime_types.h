@@ -476,9 +476,13 @@ aether_status_t style_source_compile(
     int64_t sheet_handle,
     int32_t layer,
     std::vector<compiled_rule_s>& out_rules,
-    int32_t& out_rule_id_counter);
+    int32_t& out_rule_id_counter,
+    aether_style_diagnostic_fn diagnostics_callback,
+    void* diagnostics_user_data);
 
 aether_status_t style_source_compile_inline(
     const char* source,
     std::vector<compiled_property_declaration_s>& out_properties,
-    std::vector<custom_property_declaration_s>& out_custom);
+    std::vector<custom_property_declaration_s>& out_custom,
+    aether_style_diagnostic_fn diagnostics_callback,
+    void* diagnostics_user_data);

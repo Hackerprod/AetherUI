@@ -7,6 +7,9 @@ AETHER_API aether_computed_style_t aether_computed_style_default(void) {
     s.flex_direction = AETHER_FLEX_DIRECTION_ROW;
     s.justify_content = AETHER_JUSTIFY_START;
     s.align_items = AETHER_ALIGN_STRETCH;
+    s.align_self = AETHER_ALIGN_SELF_AUTO;
+    s.flex_shrink = 1.0f;
+    s.flex_basis = { AETHER_FLEX_BASIS_AUTO, aether_css_length_auto() };
     s.position = AETHER_POSITION_STATIC;
     s.inset = { aether_css_length_auto(), aether_css_length_auto(),
                 aether_css_length_auto(), aether_css_length_auto() };
@@ -24,6 +27,8 @@ AETHER_API aether_computed_style_t aether_computed_style_default(void) {
     s.border_styles = {AETHER_BORDER_STYLE_NONE, AETHER_BORDER_STYLE_NONE,
                        AETHER_BORDER_STYLE_NONE, AETHER_BORDER_STYLE_NONE};
     s.opacity = 1.0f;
+    s.transform_origin = {aether_css_length{50.0f, AETHER_CSS_UNIT_PERCENT},
+                          aether_css_length{50.0f, AETHER_CSS_UNIT_PERCENT}};
     s.font_size = 16.0f;
     s.font_weight = AETHER_FONT_WEIGHT_NORMAL;
     s.line_height = 1.25f;
@@ -57,6 +62,7 @@ AETHER_API void aether_computed_style_free(aether_computed_style_t* s) {
     if (s) {
         aether_background_layer_list_free(&s->background_layers);
         aether_backdrop_filter_list_free(&s->backdrop_filters);
+        aether_transform_list_free(&s->transforms);
         aether_linear_gradient_free(&s->text_gradient);
         aether_shadow_list_free(&s->text_shadows);
         aether_shadow_list_free(&s->box_shadows);

@@ -7,6 +7,7 @@
 #include "style_runtime_types.h"
 
 #include <algorithm>
+#include <cctype>
 #include <cstring>
 #include <memory>
 #include <optional>
@@ -41,6 +42,20 @@ struct aether_style_runtime_s {
     rule_index_s index;
 };
 
+static bool is_calc_expression(const char* value) {
+    if (!value) return false;
+    while (*value && std::isspace(static_cast<unsigned char>(*value))) ++value;
+    static constexpr char prefix[] = "calc(";
+    for (size_t index = 0; index < sizeof(prefix) - 1; ++index) {
+        const char current = value[index];
+        if (!current) return false;
+        const char lowered = current >= 'A' && current <= 'Z'
+            ? static_cast<char>(current - 'A' + 'a') : current;
+        if (lowered != prefix[index]) return false;
+    }
+    return true;
+}
+
 static node_style_info_s get_node_info(aether_node_s* node) {
     node_style_info_s info;
     info.type_name = node->tag_name;
@@ -65,6 +80,8 @@ static bool style_equal(const aether_computed_style_t& a, const aether_computed_
     right.background_layers.items = nullptr;
     left.backdrop_filters.items = nullptr;
     right.backdrop_filters.items = nullptr;
+    left.transforms.items = nullptr;
+    right.transforms.items = nullptr;
     left.text_gradient.stops = nullptr;
     right.text_gradient.stops = nullptr;
     left.text_shadows.items = nullptr;
@@ -80,6 +97,7 @@ static bool style_equal(const aether_computed_style_t& a, const aether_computed_
     };
     return aether_background_layer_list_equal(&a.background_layers, &b.background_layers) == AETHER_TRUE &&
            aether_backdrop_filter_list_equal(&a.backdrop_filters, &b.backdrop_filters) == AETHER_TRUE &&
+           aether_transform_list_equal(&a.transforms, &b.transforms) == AETHER_TRUE &&
            gradients_equal(a.text_gradient, b.text_gradient) &&
            aether_shadow_list_equal(&a.text_shadows, &b.text_shadows) == AETHER_TRUE &&
            aether_shadow_list_equal(&a.box_shadows, &b.box_shadows) == AETHER_TRUE;
@@ -208,7 +226,8 @@ static runtime_node_state_s* compute_node(aether_style_runtime_s* runtime, aethe
     // Generated pseudo-elements retain host attributes for selector matching, but
     // the host's inline declaration block does not cascade onto ::before/::after.
     if (!node->is_generated) if (auto it = node->attributes.find("style"); it != node->attributes.end()) {
-        style_source_compile_inline(it->second.c_str(), inline_properties, inline_custom);
+        style_source_compile_inline(it->second.c_str(), inline_properties, inline_custom,
+                                    runtime->diag_cb, runtime->diag_user_data);
         for (const auto& declaration : inline_properties) {
             cascade_priority_t priority{
                 declaration.important, true, style_sheet_layer::author,
@@ -286,8 +305,12 @@ static runtime_node_state_s* compute_node(aether_style_runtime_s* runtime, aethe
                 return;
             }
             if (!definition.parse(value.c_str(), value)) {
-                report(runtime, "AETHER-CSS-VALUE", definition.name.c_str(), value.c_str(),
-                       "Resolved CSS value is invalid.");
+                report(runtime,
+                       is_calc_expression(value.c_str()) ? "AETHER-CSS-CALC" : "AETHER-CSS-VALUE",
+                       definition.name.c_str(), value.c_str(),
+                       is_calc_expression(value.c_str())
+                           ? "The calc() expression is syntactically or dimensionally invalid."
+                           : "Resolved CSS value is invalid.");
                 return;
             }
             break;
@@ -456,7 +479,8 @@ AETHER_API aether_status_t aether_style_runtime_add_stylesheet(
     sheet->handle = handle;
     sheet->layer = static_cast<style_sheet_layer>(layer);
     sheet->source_name = source_name ? source_name : "";
-    auto status = style_source_compile(source, handle, layer, sheet->rules, runtime->next_rule_id);
+    auto status = style_source_compile(source, handle, layer, sheet->rules, runtime->next_rule_id,
+                                       runtime->diag_cb, runtime->diag_user_data);
     if (status != AETHER_OK) return status;
     for (size_t i = 0; i < sheet->rules.size(); ++i)
         sheet->rules[i].source_order = static_cast<int32_t>(i);

@@ -18,15 +18,21 @@ public sealed record NativeBackgroundLayer(
     NativeLength PositionX, NativeLength PositionY, int SizeKind,
     NativeLength SizeX, NativeLength SizeY, int RepeatX, int RepeatY);
 public readonly record struct NativeBackdropFilter(int Kind, NativeLength LengthAmount, float ScalarAmount);
+public readonly record struct NativeFlexBasis(int Kind, NativeLength Length);
+public readonly record struct NativeTransformOperation(
+    int Kind, NativeLength X, NativeLength Y, float ScalarX, float ScalarY, float AngleRadians,
+    float MatrixA, float MatrixB, float MatrixC, float MatrixD, float MatrixE, float MatrixF);
+public readonly record struct NativeTransformOrigin(NativeLength X, NativeLength Y);
 
 public sealed record NativeComputedStyle(
-    int Display, int FlexDirection, int JustifyContent, int AlignItems, float FlexGrow, bool FlexWrap, float Gap,
+    int Display, int FlexDirection, int JustifyContent, int AlignItems, int AlignSelf, float FlexGrow, float FlexShrink, NativeFlexBasis FlexBasis, bool FlexWrap, float Gap,
     int Position, NativeEdges Inset,
     NativeLength Width, NativeLength Height, NativeLength MinWidth, NativeLength MinHeight,
     NativeLength MaxWidth, NativeLength MaxHeight, NativeEdges Margin, NativeEdges Padding, NativeEdges BorderWidth,
     int BoxSizing, NativeColor Color, NativeColor BackgroundColor, IReadOnlyList<NativeBackgroundLayer> BackgroundLayers,
     IReadOnlyList<NativeBackdropFilter> BackdropFilters,
     NativeColor BorderColor, NativeColorEdges BorderColors, NativeBorderStyleEdges BorderStyles, NativeGradient? TextGradient,
+    IReadOnlyList<NativeTransformOperation> Transforms, NativeTransformOrigin TransformOrigin,
     IReadOnlyList<NativeShadow> TextShadows, NativeBorderRadii BorderRadii, float Opacity,
     IReadOnlyList<NativeShadow> BoxShadows,
     string FontFamily, float FontSize, int FontWeight, float LineHeight, int TextAlign, int TextTransform,
@@ -34,6 +40,8 @@ public sealed record NativeComputedStyle(
 
 public sealed unsafe class StyleRuntimeInterop : IDisposable
 {
+    internal static int ComputedStyleSize => Marshal.SizeOf<ComputedStyleRaw>();
+
     private IntPtr _runtime;
     private NativeDomDocument? _ownedDocument;
     private IntPtr _document;
@@ -282,18 +290,40 @@ public sealed unsafe class StyleRuntimeInterop : IDisposable
     }
     [StructLayout(LayoutKind.Sequential)]
     private readonly record struct BackdropFilterListRaw(IntPtr Items, int Count);
+    [StructLayout(LayoutKind.Sequential)]
+    private readonly record struct FlexBasisRaw(int Kind, LengthRaw Length)
+    {
+        public NativeFlexBasis ToPublic() => new(Kind, Length.ToPublic());
+    }
+    [StructLayout(LayoutKind.Sequential)]
+    private readonly record struct TransformOperationRaw(
+        int Kind, LengthRaw X, LengthRaw Y, float ScalarX, float ScalarY, float AngleRadians,
+        float MatrixA, float MatrixB, float MatrixC, float MatrixD, float MatrixE, float MatrixF)
+    {
+        public NativeTransformOperation ToPublic() => new(
+            Kind, X.ToPublic(), Y.ToPublic(), ScalarX, ScalarY, AngleRadians,
+            MatrixA, MatrixB, MatrixC, MatrixD, MatrixE, MatrixF);
+    }
+    [StructLayout(LayoutKind.Sequential)]
+    private readonly record struct TransformListRaw(IntPtr Items, int Count);
+    [StructLayout(LayoutKind.Sequential)]
+    private readonly record struct TransformOriginRaw(LengthRaw X, LengthRaw Y)
+    {
+        public NativeTransformOrigin ToPublic() => new(X.ToPublic(), Y.ToPublic());
+    }
 
     [StructLayout(LayoutKind.Sequential)]
     private unsafe struct ComputedStyleRaw
     {
-        public int Display, FlexDirection, JustifyContent, AlignItems;
-        public float FlexGrow; public int FlexWrap; public float Gap;
+        public int Display, FlexDirection, JustifyContent, AlignItems, AlignSelf;
+        public float FlexGrow, FlexShrink; public FlexBasisRaw FlexBasis; public int FlexWrap; public float Gap;
         public int Position; public EdgesRaw Inset;
         public LengthRaw Width, Height, MinWidth, MinHeight, MaxWidth, MaxHeight;
         public EdgesRaw Margin, Padding, BorderWidth; public int BoxSizing;
         public ColorRaw Color, BackgroundColor; public BackgroundLayerListRaw BackgroundLayers; public BackdropFilterListRaw BackdropFilters;
         public ColorRaw BorderColor; public ColorEdgesRaw BorderColors; public BorderStyleEdgesRaw BorderStyles;
         public int HasTextGradient; public GradientRaw TextGradient;
+        public TransformListRaw Transforms; public TransformOriginRaw TransformOrigin;
         public ShadowListRaw TextShadows;
         public ShadowListRaw BoxShadows;
         public BorderRadiiRaw BorderRadii; public float Opacity;
@@ -305,16 +335,27 @@ public sealed unsafe class StyleRuntimeInterop : IDisposable
         {
             string family;
             fixed (byte* p = FontFamily) family = Marshal.PtrToStringUTF8((IntPtr)p) ?? "Segoe UI";
-            return new(Display, FlexDirection, JustifyContent, AlignItems, FlexGrow, FlexWrap != 0, Gap,
+            return new(Display, FlexDirection, JustifyContent, AlignItems, AlignSelf, FlexGrow, FlexShrink, FlexBasis.ToPublic(), FlexWrap != 0, Gap,
                 Position, Inset.ToPublic(),
                 Width.ToPublic(), Height.ToPublic(), MinWidth.ToPublic(), MinHeight.ToPublic(),
                 MaxWidth.ToPublic(), MaxHeight.ToPublic(), Margin.ToPublic(), Padding.ToPublic(),
                 BorderWidth.ToPublic(), BoxSizing, Color.ToPublic(), BackgroundColor.ToPublic(),
                 ReadBackgroundLayers(BackgroundLayers), ReadBackdropFilters(BackdropFilters), BorderColor.ToPublic(), BorderColors.ToPublic(), BorderStyles.ToPublic(),
-                ReadGradient(HasTextGradient, TextGradient), ReadShadows(TextShadows), BorderRadii.ToPublic(), Opacity,
+                ReadGradient(HasTextGradient, TextGradient), ReadTransforms(Transforms), TransformOrigin.ToPublic(),
+                ReadShadows(TextShadows), BorderRadii.ToPublic(), Opacity,
                 ReadShadows(BoxShadows),
                 family, FontSize, FontWeight, LineHeight, TextAlign, TextTransform, Overflow, Cursor, Visible != 0);
         }
+    }
+
+    private static NativeTransformOperation[] ReadTransforms(TransformListRaw transforms)
+    {
+        if (transforms.Count <= 0 || transforms.Items == IntPtr.Zero) return [];
+        var size = Marshal.SizeOf<TransformOperationRaw>();
+        var result = new NativeTransformOperation[transforms.Count];
+        for (var index = 0; index < result.Length; ++index)
+            result[index] = Marshal.PtrToStructure<TransformOperationRaw>(transforms.Items + index * size).ToPublic();
+        return result;
     }
 
     private static NativeGradient? ReadGradient(int present, GradientRaw gradient)

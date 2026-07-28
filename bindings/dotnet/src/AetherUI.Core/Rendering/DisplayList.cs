@@ -73,6 +73,10 @@ public sealed record DrawBackgroundImageCommand(
     AetherUI.Runtime.ImageResourceResult? Resource = null) : PaintCommand;
 public sealed record PushClipCommand(RectF Rectangle, CornerRadii Radii) : PaintCommand;
 public sealed record PopClipCommand : PaintCommand;
+/// <summary>Post-layout affine transform bracket. Nested brackets preserve CSS ancestor scope.</summary>
+public readonly record struct TransformMatrix(float M11, float M12, float M21, float M22, float Dx, float Dy);
+public sealed record PushTransformCommand(TransformMatrix Matrix) : PaintCommand;
+public sealed record PopTransformCommand : PaintCommand;
 
 public sealed class DisplayList
 {
