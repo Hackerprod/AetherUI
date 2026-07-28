@@ -2,6 +2,8 @@
 #include <aether/aether.h>
 #include <cassert>
 #include <cstddef>
+#include <algorithm>
+#include <memory>
 #include <string>
 #include <vector>
 #include <unordered_map>
@@ -15,6 +17,7 @@ enum layout_box_kind_t : int32_t {
 };
 
 struct aether_layout_result_s;
+struct aether_style_map_s;
 
 struct aether_layout_box_s {
     aether_layout_result_s* owner = nullptr;
@@ -83,18 +86,34 @@ struct aether_layout_result_s {
     aether_layout_box_s* root = nullptr;
     std::unordered_map<aether_node_s*, aether_layout_box_s*> primary_boxes;
     std::vector<aether_layout_box_s*> paint_order;
+    // Anonymous flex items are layout-only nodes.  They must outlive their
+    // boxes and display-list construction, but never become DOM-observable.
+    aether_style_map_s* layout_only_style_map = nullptr;
+    std::vector<aether_node_s*> layout_only_nodes;
+    std::vector<aether_node_s*> layout_only_style_nodes;
+    // One anonymous-item sequence per flex container.  Intrinsic measurement
+    // and final layout reuse these exact nodes, avoiding duplicate synthetic
+    // DOM ownership during provisional passes.
+    std::unordered_map<aether_node_s*, std::vector<aether_node_s*>> anonymous_flex_items;
     aether_sizef viewport{};
     // Measurement passes can build detached trees. Only final-layout boxes are
     // published through the query and paint indexes.
     bool records_boxes = true;
     size_t live_box_count = 0;
 
-    ~aether_layout_result_s() {
-        delete root;
-        assert(live_box_count == 0 && "all layout boxes must be owned by the final tree or released explicitly");
-    }
+    ~aether_layout_result_s();
 
     aether_layout_box_s* create_box();
+    // Published boxes may be replaced by a later layout pass. Destruction must
+    // remove the exact instance, including text fragments that have no primary
+    // box entry, before its storage can be reused.
+    void unregister_box(aether_layout_box_s* box) {
+        paint_order.erase(std::remove(paint_order.begin(), paint_order.end(), box), paint_order.end());
+        if (box->element) {
+            const auto it = primary_boxes.find(box->element);
+            if (it != primary_boxes.end() && it->second == box) primary_boxes.erase(it);
+        }
+    }
     void release_box() {
         assert(live_box_count > 0);
         --live_box_count;

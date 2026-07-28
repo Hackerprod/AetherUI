@@ -286,7 +286,8 @@ function cloneComputedStyle(api, style) {
     lineHeight: Number(style.line_height),
     textAlign: Number(style.text_align),
     textTransform: Number(style.text_transform),
-    overflow: Number(style.overflow),
+    overflowX: Number(style.overflow_x),
+    overflowY: Number(style.overflow_y),
     cursor: Number(style.cursor),
     visible: Boolean(style.visible),
   };

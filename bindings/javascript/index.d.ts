@@ -162,7 +162,10 @@ export interface ComputedStyle {
   lineHeight: number;
   textAlign: number;
   textTransform: number;
-  overflow: number;
+  /** Computed horizontal overflow behavior. */
+  overflowX: number;
+  /** Computed vertical overflow behavior. */
+  overflowY: number;
   cursor: number;
   visible: boolean;
 }

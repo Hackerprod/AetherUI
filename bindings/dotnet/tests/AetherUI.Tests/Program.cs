@@ -47,6 +47,7 @@ internal static class Program
         ("Native root scrolls overflowing content", NativeRootScrollsOverflowingContent),
         ("Image resolver deduplicates resources and reports lifecycle", ImageResolverDeduplicatesResourcesAndReportsLifecycle),
         ("Native image geometry rebuilds when a resource becomes ready", NativeImageGeometryRebuildsWhenResourceReady),
+        ("Native table layout shares automatic column widths across rows", NativeTableLayoutSharesAutomaticColumns),
     ];
 
     public static int Main()
@@ -109,6 +110,41 @@ internal static class Program
         var box = Assert.NotNull(host.Layout?.FindPrimaryBox(button));
         var center = new PointF(box.BorderBox.X + box.BorderBox.Width / 2, box.BorderBox.Y + box.BorderBox.Height / 2);
         Assert.Same(button, host.Layout!.HitTest(center));
+    }
+
+    private static void NativeTableLayoutSharesAutomaticColumns()
+    {
+        const string markup = """
+            <style>
+              body { margin:0; width:300px; box-sizing:border-box; }
+              table { width:300px; box-sizing:border-box; }
+              td, th { padding:5px; border:1px solid #000; box-sizing:border-box; }
+            </style>
+            <body><table id="table"><thead><tr id="header"><th id="h1">Invoice</th><th id="h2">Customer</th></tr></thead>
+            <tbody><tr id="detail"><td id="d1">Alexander</td><td id="d2">Date</td></tr></tbody></table></body>
+            """;
+        using var renderer = new RecordingRenderer();
+        using var host = new UiDocumentHost(new RawMarkupComponent(markup), new ApproximateTextMeasurer(), renderer, new UiHostOptions());
+        host.SetViewport(300, 200, 1);
+        host.Render();
+
+        LayoutBox Box(string id) => Assert.NotNull(host.Layout?.FindPrimaryBox(
+            Assert.NotNull(host.Document?.GetElementById(id))));
+        var table = Box("table");
+        var h1 = Box("h1");
+        var h2 = Box("h2");
+        var d1 = Box("d1");
+        var d2 = Box("d2");
+
+        Assert.Equal(h1.BorderBox.X, table.ContentBox.X);
+        Assert.Equal(d1.BorderBox.X, table.ContentBox.X);
+        Assert.Equal(h2.BorderBox.X, h1.BorderBox.Right);
+        Assert.Equal(d2.BorderBox.X, d1.BorderBox.Right);
+        Assert.Equal(h1.BorderBox.Width, d1.BorderBox.Width);
+        Assert.Equal(h2.BorderBox.Width, d2.BorderBox.Width);
+        Assert.Equal(table.ContentBox.Width, h1.BorderBox.Width + h2.BorderBox.Width);
+        Assert.True(h1.BorderBox.Width > h2.BorderBox.Width,
+            "The longer first-column contribution should receive more of an automatic table's width.");
     }
 
     private static void MarkupIsEncodedAndEventsDispatch()
@@ -887,8 +923,10 @@ internal static class Program
         var unit = Assert.NotNull(text.FirstOrDefault(command => command.Text == "bpm"));
         Assert.True(MathF.Abs((value.Rectangle.Y + value.FontSize * .8f) - (unit.Rectangle.Y + unit.FontSize * .8f)) < .01f);
 
-        var edit = Assert.NotNull(text.SingleOrDefault(command => command.Text == "Edit Profile"));
+        var edit = Assert.NotNull(text.SingleOrDefault(command => command.Text == "Edit"));
+        var profile = Assert.NotNull(text.SingleOrDefault(command => command.Text == "Profile"));
         Assert.True(edit.Color.R < .2f && edit.Color.B < .3f);
+        Assert.Equal(edit.Color, profile.Color);
         Assert.NotNull(text.SingleOrDefault(command => command.Text == "FIND PATIENT"));
 
         var borderSides = commands.OfType<FillBorderSideCommand>().ToArray();
@@ -1077,8 +1115,15 @@ internal static class Program
 
         var textCommands = renderer.LastDisplayList?.Commands.OfType<DrawTextCommand>().ToArray()
             ?? throw new InvalidOperationException("Native renderer did not produce text commands.");
-        Assert.Equal(TextAlign.Center, Assert.NotNull(textCommands.SingleOrDefault(command => command.Text == "Default")).Alignment);
-        Assert.Equal(TextAlign.Right, Assert.NotNull(textCommands.SingleOrDefault(command => command.Text == "Right")).Alignment);
+        var defaultButton = Assert.NotNull(host.Layout?.FindPrimaryBox(Assert.NotNull(host.Document?.GetElementById("button-default"))));
+        var rightButton = Assert.NotNull(host.Layout?.FindPrimaryBox(Assert.NotNull(host.Document?.GetElementById("button-right"))));
+        var defaultText = Assert.NotNull(textCommands.SingleOrDefault(command => command.Text == "Default"));
+        var rightText = Assert.NotNull(textCommands.SingleOrDefault(command => command.Text == "Right"));
+        Assert.True(MathF.Abs((defaultText.Rectangle.X + defaultText.Rectangle.Width / 2f) -
+            (defaultButton.ContentBox.X + defaultButton.ContentBox.Width / 2f)) < .01f,
+            "flow-backed button text must be positioned by the centered fragment line, not a control-only painter override");
+        Assert.True(MathF.Abs(rightText.Rectangle.Right - rightButton.ContentBox.Right) < .01f,
+            "right-aligned flow-backed button text must use the fragment line position selected by layout");
     }
 
     private static void ImageResolverDeduplicatesResourcesAndReportsLifecycle()

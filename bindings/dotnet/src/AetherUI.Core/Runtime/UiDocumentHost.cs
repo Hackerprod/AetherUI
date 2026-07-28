@@ -25,6 +25,9 @@ public sealed class UiDocumentHost : IDisposable
         body { margin: 8px; color: #202124; font-family: "Segoe UI"; font-size: 16px; line-height: 1.25; }
         head, title, meta, link, style, script { display: none; }
         div, form, p, section, article, header, footer, main, nav, h1, h2, h3, h4, h5, h6 { display: block; }
+        table { display: table; }
+        tr { display: table-row; }
+        td, th { display: table-cell; }
         span, label, strong, em, a { display: inline; }
         h1 { font-size: 2em; font-weight: 700; margin: .67em 0; }
         h2 { font-size: 1.5em; font-weight: 700; margin: .83em 0; }

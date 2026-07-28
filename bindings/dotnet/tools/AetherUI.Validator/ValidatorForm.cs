@@ -78,7 +78,7 @@ public sealed class ValidatorForm : Form
     private async void OnLoad(object? sender, EventArgs e)
     {
         DockToRightHalf();
-        StartAetherWindow();
+        StartAetherWindow(GetAetherWindowBounds());
 
         await _webView.EnsureCoreWebView2Async();
         NavigateWebView();
@@ -93,7 +93,7 @@ public sealed class ValidatorForm : Form
         Bounds = new Rectangle(bounds.X + half, bounds.Y, bounds.Width - half, bounds.Height);
     }
 
-    private void StartAetherWindow()
+    private void StartAetherWindow(Rectangle initialBounds)
     {
         var thread = new Thread(() =>
         {
@@ -103,8 +103,11 @@ public sealed class ValidatorForm : Form
             var options = new UiHostOptions
             {
                 Title = _aetherWindowTitle,
-                Width = 900,
-                Height = 900,
+                InitialWindowBounds = new WindowBounds(
+                    initialBounds.X,
+                    initialBounds.Y,
+                    initialBounds.Width,
+                    initialBounds.Height),
                 // Neutral mid-gray: content that expects a dark or light page background (which we
                 // may not be able to paint yet, e.g. an unsupported gradient) stays legible either
                 // way instead of white-on-white or black-on-black hiding it.
@@ -142,14 +145,9 @@ public sealed class ValidatorForm : Form
         timer.Start();
     }
 
-    /// <summary>Resizes the AetherUI native window to fill everything left of this form's current bounds.</summary>
-    private void SyncAetherWindow()
+    /// <summary>Computes the native pane's physical outer bounds from the current split geometry.</summary>
+    private Rectangle GetAetherWindowBounds()
     {
-        if (_aetherWindowHandle == nint.Zero)
-        {
-            return;
-        }
-
         var screen = Screen.FromControl(this).WorkingArea;
         // Both this Form and the AetherUI window use a resizable (WS_THICKFRAME) frame, which on
         // Windows 10/11 carries an invisible hit-test border outside the visible edge (accounted for
@@ -159,7 +157,19 @@ public sealed class ValidatorForm : Form
         // dead hit-test space, never real content.
         var framePadding = GetSystemMetrics(SmCxSizeFrame) + GetSystemMetrics(SmCxPaddedBorder);
         var width = Math.Max(100, Left - screen.X) + framePadding * 2;
-        SetWindowPos(_aetherWindowHandle, nint.Zero, screen.X, screen.Y, width, screen.Height, SwpShowWindow | SwpNoZOrder);
+        return new Rectangle(screen.X, screen.Y, width, screen.Height);
+    }
+
+    /// <summary>Resizes the AetherUI native window to fill everything left of this form's current bounds.</summary>
+    private void SyncAetherWindow()
+    {
+        if (_aetherWindowHandle == nint.Zero)
+        {
+            return;
+        }
+
+        var bounds = GetAetherWindowBounds();
+        SetWindowPos(_aetherWindowHandle, nint.Zero, bounds.X, bounds.Y, bounds.Width, bounds.Height, SwpShowWindow | SwpNoZOrder);
     }
 
     private void CloseAetherWindow()

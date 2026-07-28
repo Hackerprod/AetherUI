@@ -27,7 +27,7 @@ extern "C" {
  * ABI 1.0, a major-version change denotes an incompatible ABI.
  */
 #define AETHER_ABI_VERSION_MAJOR 0u
-#define AETHER_ABI_VERSION_MINOR 18u
+#define AETHER_ABI_VERSION_MINOR 21u
 #define AETHER_ABI_VERSION_PATCH 0u
 
 #define AETHER_ABI_VERSION_MAKE(major, minor, patch) \
@@ -339,7 +339,10 @@ typedef enum {
     AETHER_DISPLAY_INLINE,
     AETHER_DISPLAY_INLINE_BLOCK,
     AETHER_DISPLAY_FLEX,
-    AETHER_DISPLAY_LINE_BREAK
+    AETHER_DISPLAY_LINE_BREAK,
+    AETHER_DISPLAY_TABLE,
+    AETHER_DISPLAY_TABLE_ROW,
+    AETHER_DISPLAY_TABLE_CELL
 } aether_display_kind_t;
 
 typedef enum {
@@ -396,6 +399,17 @@ typedef enum {
     AETHER_TEXT_TRANSFORM_UPPERCASE,
     AETHER_TEXT_TRANSFORM_LOWERCASE
 } aether_text_transform_t;
+
+/* CSS Text Level 3 white-space processing.  This remains a computed-style
+   value because inline layout, intrinsic sizing, and display-list text runs
+   must all consume the same preservation and line-break semantics. */
+typedef enum {
+    AETHER_WHITE_SPACE_NORMAL = 0,
+    AETHER_WHITE_SPACE_NOWRAP,
+    AETHER_WHITE_SPACE_PRE,
+    AETHER_WHITE_SPACE_PRE_WRAP,
+    AETHER_WHITE_SPACE_PRE_LINE
+} aether_white_space_t;
 
 typedef enum {
     AETHER_FONT_WEIGHT_THIN       = 100,
@@ -488,9 +502,11 @@ typedef struct {
     float             line_height;
     int32_t           text_align;
     int32_t           text_transform;
+    int32_t           white_space;
 
     /* Misc */
-    int32_t           overflow;
+    int32_t           overflow_x;
+    int32_t           overflow_y;
     int32_t           cursor;
     aether_bool_t     visible;
 } aether_computed_style_t;

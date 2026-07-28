@@ -32,7 +32,9 @@ AETHER_API aether_computed_style_t aether_computed_style_default(void) {
     s.font_size = 16.0f;
     s.font_weight = AETHER_FONT_WEIGHT_NORMAL;
     s.line_height = 1.25f;
-    s.overflow = AETHER_OVERFLOW_VISIBLE;
+    s.white_space = AETHER_WHITE_SPACE_NORMAL;
+    s.overflow_x = AETHER_OVERFLOW_VISIBLE;
+    s.overflow_y = AETHER_OVERFLOW_VISIBLE;
     s.visible = AETHER_TRUE;
     const auto zero_radius = aether_corner_radius{aether_css_length_zero(), aether_css_length_zero()};
     s.border_radii = {zero_radius, zero_radius, zero_radius, zero_radius};
@@ -50,6 +52,7 @@ AETHER_API aether_computed_style_t aether_computed_style_inherit_from(const aeth
         s.line_height = parent->line_height;
         s.text_align = parent->text_align;
         s.text_transform = parent->text_transform;
+        s.white_space = parent->white_space;
         s.cursor = parent->cursor;
         // text-shadow is inherited. Keep an owned copy so parent and child
         // style handles never alias list storage.

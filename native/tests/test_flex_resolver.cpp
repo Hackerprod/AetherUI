@@ -68,6 +68,16 @@ int main() {
             "negative free space must use flex-shrink weighted by flex base size");
     }
     {
+        auto first = item(0.f, 1.f, 1.f, std::numeric_limits<float>::quiet_NaN());
+        auto second = item(0.f, 1.f, 1.f, std::numeric_limits<float>::quiet_NaN());
+        first.automatic_minimum.content_size_suggestion = 100.f;
+        second.automatic_minimum.content_size_suggestion = 70.f;
+        auto items = std::vector<aether_flex_item_input_s>{ first, second };
+        const auto result = resolve(items, 150.f);
+        require(same(result.items[0].target_main_size, 100.f) && same(result.items[1].target_main_size, 70.f),
+            "zero-basis flex items must freeze at their automatic minimum rather than collapse to zero under shrink");
+    }
+    {
         auto items = std::vector<aether_flex_item_input_s>{ item(100.f, 0.f, 1.f, 80.f), item(100.f) };
         const auto result = resolve(items, 100.f);
         require(same(result.items[0].target_main_size, 80.f) && same(result.items[1].target_main_size, 20.f),

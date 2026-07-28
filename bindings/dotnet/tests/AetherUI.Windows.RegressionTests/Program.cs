@@ -2,9 +2,13 @@ using System.Runtime.InteropServices;
 using System.ComponentModel;
 using System.Numerics;
 using AetherUI.Css;
+using AetherUI.Dom;
+using AetherUI.Layout;
 using AetherUI.Primitives;
 using AetherUI.Rendering;
+using AetherUI.Runtime;
 using AetherUI.Windows.Graphics;
+using AetherUI.Windows.Hosting;
 using Vortice;
 using Vortice.DCommon;
 using Vortice.Direct2D1;
@@ -43,7 +47,103 @@ VerifyTransformPainter();
 VerifyTransformedBorderSideLayerIsolation();
 VerifyBackendTransformStack();
 Console.WriteLine("OK: Direct2D transform stack and transformed clips passed");
+VerifyVitalisNestedFlexReflowAtValidatorWidth();
+Console.WriteLine("OK: DirectWrite Vitalis nested-flex reflow invariants passed");
+VerifyViewportResizeCoalescing();
+Console.WriteLine("OK: viewport resize coalescing passed");
 return 0;
+
+static void VerifyViewportResizeCoalescing()
+{
+    var coalescer = new ViewportUpdateCoalescer();
+    coalescer.Queue(900, 600, 1);
+    coalescer.Queue(901, 600, 1);
+    coalescer.Queue(1172, 712, 1.25f);
+
+    if (!coalescer.TryTake(out var final) || final != new ViewportUpdate(1172, 712, 1.25f) || coalescer.TryTake(out _))
+    {
+        throw new InvalidOperationException("Viewport resize coalescing did not retain exactly the final notification.");
+    }
+
+    coalescer.Queue(0, 712, 1);
+    coalescer.Queue(1172, 0, 1);
+    coalescer.Queue(1172, 712, 0);
+    if (coalescer.TryTake(out _))
+    {
+        throw new InvalidOperationException("Viewport resize coalescing accepted an invalid client size or DPI.");
+    }
+}
+
+static void VerifyVitalisNestedFlexReflowAtValidatorWidth()
+{
+    // This mirrors the production tree at the 770px client width captured by the Validator.
+    // DirectWrite is deliberate: the native CTest measurer is synthetic and cannot exercise a
+    // real line-break boundary produced by the host font stack.
+    const string markup = """
+        <style>
+        * { box-sizing: border-box; }
+        body, html { margin: 0; padding: 0; height: 100vh; font-family: 'Segoe UI', sans-serif; color: #1e293b; overflow: hidden; }
+        .vitalis-container { display: flex; height: 100vh; }
+        .sidebar { width: 100px; display: flex; flex-direction: column; align-items: center; padding: 30px 0; gap: 40px; }
+        .patient-panel { width: 350px; display: flex; flex-direction: column; }
+        .panel-header { padding: 30px; }
+        .search-box { width: 100%; padding: 12px 15px; font-size: 14px; }
+        .patient-list { flex: 1; overflow-y: auto; }
+        .record-area { flex: 1; padding: 40px; overflow-y: auto; display: flex; flex-direction: column; gap: 30px; }
+        .patient-header { display: flex; justify-content: space-between; align-items: flex-start; }
+        .vital-grid { display: flex; gap: 20px; }
+        .vital-card { flex: 1; background: white; border-radius: 24px; padding: 25px; border: 1px solid white; }
+        .vital-label { font-size: 13px; color: #64748b; font-weight: 600; text-transform: uppercase; margin-bottom: 10px; display: block; }
+        .vital-value { font-size: 28px; font-weight: 800; color: #0f172a; }
+        .vital-unit { font-size: 14px; color: #94a3b8; font-weight: 400; }
+        .history-card { background: white; border-radius: 24px; padding: 30px; flex: 1; }
+        .timeline { margin-top: 20px; }
+        .timeline-item { border-left: 2px solid #e0f2fe; padding-left: 30px; padding-bottom: 30px; }
+        </style>
+        <body><div class="vitalis-container">
+          <div class="sidebar"><div>V</div></div>
+          <div class="patient-panel"><div class="panel-header"><input class="search-box" placeholder="Search patients..."></div><div class="patient-list"></div></div>
+          <div id="record" class="record-area">
+            <div id="header" class="patient-header">
+              <div id="copy"><h1 style="font-size: 32px; font-weight: 800; margin: 0;">James Wilson</h1><p id="note" style="color: #64748b; margin-top: 5px;">Last visit: July 20, 2026 &#8226; Dr. Aether</p></div>
+              <div style="display: flex; gap: 10px;"><button style="padding: 12px 20px; background: white; border: 1px solid #e2e8f0; border-radius: 12px; font-weight: 600;">Edit Profile</button><button style="padding: 12px 20px; background: #0ea5e9; color: white; border: none; border-radius: 12px; font-weight: 600;">New Appointment</button></div>
+            </div>
+            <div id="grid" class="vital-grid">
+              <div class="vital-card"><span class="vital-label">Heart Rate</span><div class="vital-value">72 <span class="vital-unit">bpm</span></div><div style="margin-top: 15px; color: #10b981; font-size: 12px; font-weight: 600;">Normal Range</div></div>
+              <div class="vital-card"><span class="vital-label">Blood Pressure</span><div class="vital-value">120/80 <span class="vital-unit">mmHg</span></div><div style="margin-top: 15px; color: #10b981; font-size: 12px; font-weight: 600;">Optimal</div></div>
+              <div class="vital-card"><span class="vital-label">Body Temp</span><div class="vital-value">36.6 <span class="vital-unit">&#176;C</span></div><div style="margin-top: 15px; color: #10b981; font-size: 12px; font-weight: 600;">Normal</div></div>
+            </div>
+            <div class="history-card"><h3 style="margin: 0 0 25px 0; font-size: 18px;">Medical History</h3><div class="timeline"><div class="timeline-item"><div style="font-weight: 700; font-size: 15px;">General Checkup</div><div style="font-size: 13px; color: #64748b; margin-top: 4px;">Patient reported mild fatigue. All vitals normal. Recommended Vitamin D.</div><div style="font-size: 11px; font-weight: 700; color: #0ea5e9; margin-top: 10px;">JUL 20, 2026</div></div><div class="timeline-item"><div style="font-weight: 700; font-size: 15px;">Cardiology Consultation</div><div style="font-size: 13px; color: #64748b; margin-top: 4px;">Routine stress test performed. Cardiac output within expected parameters.</div><div style="font-size: 11px; font-weight: 700; color: #0ea5e9; margin-top: 10px;">MAR 15, 2026</div></div></div></div>
+          </div>
+        </div></body>
+        """;
+
+    using var window = HiddenWindow.Create(770, 870);
+    var renderer = new Direct2DRenderBackend(window.Handle, 770, 870, 1);
+    using var host = new UiDocumentHost(new RawMarkupComponent(markup), renderer, renderer, new UiHostOptions());
+    host.SetViewport(770, 870, 1);
+    host.Render();
+
+    var layout = host.Layout ?? throw new InvalidOperationException("Vitalis layout was not produced.");
+    LayoutBox Box(string id) => layout.FindPrimaryBox(host.Document?.GetElementById(id)
+        ?? throw new InvalidOperationException($"Vitalis fixture element '{id}' was not found."))
+        ?? throw new InvalidOperationException($"Vitalis fixture box '{id}' was not found.");
+
+    var header = Box("header");
+    var copy = Box("copy");
+    var note = Box("note");
+    var grid = Box("grid");
+    var headerBottom = header.BorderBox.Bottom;
+    var noteMarginBottom = note.MarginBox.Bottom;
+    if (headerBottom + .01f < noteMarginBottom || grid.MarginBox.Top + .01f < headerBottom + 30)
+    {
+        throw new InvalidOperationException(
+            $"Vitalis nested flex reflow diverged at 770px: record={Box("record").ContentBox.Width:F2}, " +
+            $"header=[{header.BorderBox.X:F2},{header.BorderBox.Y:F2},{header.BorderBox.Width:F2},{header.BorderBox.Height:F2}], " +
+            $"copy=[{copy.BorderBox.X:F2},{copy.BorderBox.Y:F2},{copy.BorderBox.Width:F2},{copy.BorderBox.Height:F2}], " +
+            $"noteMarginBottom={noteMarginBottom:F2}, gridTop={grid.MarginBox.Top:F2}.");
+    }
+}
 
 static byte[] RenderWindowShadow()
 {
@@ -930,9 +1030,9 @@ sealed class HiddenWindow : IDisposable
     private HiddenWindow(nint handle) => Handle = handle;
     public nint Handle { get; }
 
-    public static HiddenWindow Create()
+    public static HiddenWindow Create(int width = 96, int height = 64)
     {
-        var handle = CreateWindowExW(0, "STATIC", "", 0, 0, 0, 96, 64,
+        var handle = CreateWindowExW(0, "STATIC", "", 0, 0, 0, width, height,
             nint.Zero, nint.Zero, nint.Zero, nint.Zero);
         if (handle == nint.Zero)
         {
@@ -956,4 +1056,9 @@ sealed class HiddenWindow : IDisposable
     [DllImport("user32.dll")]
     [return: MarshalAs(UnmanagedType.Bool)]
     private static extern bool DestroyWindow(nint window);
+}
+
+sealed class RawMarkupComponent(string markup) : UiComponent
+{
+    protected override void BuildRenderTree(MarkupWriter writer) => writer.WriteLiteral(markup);
 }

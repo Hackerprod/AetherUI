@@ -32,9 +32,13 @@ add_library(aether_core SHARED
     src/primitives/geometry.cpp
     src/layout/layout_box.cpp
     src/layout/box_model.cpp
+    src/layout/form_controls.cpp
+    src/layout/inline_text.cpp
     src/layout/flex_resolver.cpp
+    src/layout/intrinsic_sizing.cpp
     src/layout/margin_adjacency.cpp
     src/layout/text_justify.cpp
+    src/layout/table_layout.cpp
     src/layout/layout_engine.cpp
     src/rendering/display_list.cpp
     src/rendering/display_list_builder.cpp
@@ -113,6 +117,16 @@ if(AETHERUI_BUILD_TESTS)
     target_link_libraries(aether_flex_resolver_test PRIVATE AetherUI::Core)
     add_test(NAME aether.flex-resolver COMMAND aether_flex_resolver_test)
 
+    add_executable(aether_intrinsic_sizing_test tests/test_intrinsic_sizing.cpp src/layout/intrinsic_sizing.cpp)
+    target_include_directories(aether_intrinsic_sizing_test PRIVATE src/layout)
+    target_link_libraries(aether_intrinsic_sizing_test PRIVATE AetherUI::Core)
+    add_test(NAME aether.intrinsic-sizing COMMAND aether_intrinsic_sizing_test)
+
+    add_executable(aether_inline_text_test tests/test_inline_text.cpp src/layout/inline_text.cpp)
+    target_include_directories(aether_inline_text_test PRIVATE src/layout)
+    target_link_libraries(aether_inline_text_test PRIVATE AetherUI::Core)
+    add_test(NAME aether.inline-text COMMAND aether_inline_text_test)
+
     add_executable(aether_margin_adjacency_test tests/test_margin_adjacency.cpp src/layout/margin_adjacency.cpp)
     add_test(NAME aether.margin-adjacency COMMAND aether_margin_adjacency_test)
 
@@ -155,6 +169,7 @@ if(AETHERUI_BUILD_TESTS)
 
     add_executable(aether_layout_ownership_test tests/test_layout_ownership.cpp src/layout/layout_box.cpp)
     target_include_directories(aether_layout_ownership_test PRIVATE src/layout include)
+    target_link_libraries(aether_layout_ownership_test PRIVATE AetherUI::Core)
     add_test(NAME aether.layout-ownership COMMAND aether_layout_ownership_test)
 
     add_executable(aether_current_color_test tests/test_current_color.cpp)
@@ -165,6 +180,14 @@ if(AETHERUI_BUILD_TESTS)
     target_link_libraries(aether_transforms_test PRIVATE AetherUI::Core)
     target_include_directories(aether_transforms_test PRIVATE src/css src/rendering)
     add_test(NAME aether.transforms COMMAND aether_transforms_test)
+
+    add_executable(aether_table_layout_test tests/test_table_layout.cpp src/layout/table_layout.cpp)
+    target_include_directories(aether_table_layout_test PRIVATE src/layout)
+    add_test(NAME aether.table-layout COMMAND aether_table_layout_test)
+
+    add_executable(aether_table_layout_integration_test tests/test_table_layout_integration.cpp)
+    target_link_libraries(aether_table_layout_integration_test PRIVATE AetherUI::Core)
+    add_test(NAME aether.table-layout-integration COMMAND aether_table_layout_integration_test)
 endif()
 
 set(AETHERUI_INSTALL_CMAKEDIR

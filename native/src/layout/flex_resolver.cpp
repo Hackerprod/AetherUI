@@ -48,7 +48,15 @@ void resolve_line(const std::vector<aether_flex_item_input_s>& items,
         result.target_main_size = result.flex_base_size;
         const float factor = using_grow ? items[index].flex_grow
                                         : items[index].flex_shrink * result.flex_base_size;
-        result.frozen = factor <= epsilon;
+        // Flexbox §9.7's initial freeze applies the hypothetical size, not the
+        // flex base. This matters for flex:1 (0% base) whose automatic minimum
+        // is positive: in a negative-free-space line it is inflexible because
+        // scaled shrink is zero, but it must retain that minimum.
+        const bool violates_hypothetical = using_grow
+            ? result.flex_base_size > result.hypothetical_main_size + epsilon
+            : result.flex_base_size < result.hypothetical_main_size - epsilon;
+        result.frozen = factor <= epsilon || violates_hypothetical;
+        if (result.frozen) result.target_main_size = result.hypothetical_main_size;
     }
 
     const float initial_free_space = available_main_size -

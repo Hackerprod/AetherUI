@@ -571,18 +571,20 @@ void builtin_properties_register(style_property_registry_s* reg) {
 
     // display
     {
-        static const char* kw[] = { "none", "block", "inline", "inline-block", "flex", "line-break" };
+        static const char* kw[] = { "none", "block", "inline", "inline-block", "flex", "line-break",
+                                    "table", "table-row", "table-cell" };
         static const int32_t vals[] = {
             AETHER_DISPLAY_NONE, AETHER_DISPLAY_BLOCK, AETHER_DISPLAY_INLINE,
-            AETHER_DISPLAY_INLINE_BLOCK, AETHER_DISPLAY_FLEX, AETHER_DISPLAY_LINE_BREAK
+            AETHER_DISPLAY_INLINE_BLOCK, AETHER_DISPLAY_FLEX, AETHER_DISPLAY_LINE_BREAK,
+            AETHER_DISPLAY_TABLE, AETHER_DISPLAY_TABLE_ROW, AETHER_DISPLAY_TABLE_CELL
         };
         reg->register_property("display", false,
             STYLE_IMPACT_LAYOUT | STYLE_IMPACT_PAINT | STYLE_IMPACT_HITTEST,
             "inline",
             [](const char* s, std::string& o) -> bool {
                 std::string v;
-                if (!bi_try_keyword(s, kw, 6, v)) return false;
-                for (int i = 0; i < 6; ++i)
+                if (!bi_try_keyword(s, kw, 9, v)) return false;
+                for (int i = 0; i < 9; ++i)
                     if (str_iequals(v, kw[i])) { o = std::to_string(vals[i]); return true; }
                 return false;
             },
@@ -659,7 +661,7 @@ void builtin_properties_register(style_property_registry_s* reg) {
                 return false;
             },
             [](aether_computed_style_t* st, const std::string& v) {
-                st->overflow = std::atoi(v.c_str());
+                st->overflow_x = std::atoi(v.c_str());
             });
     }
 
@@ -680,7 +682,7 @@ void builtin_properties_register(style_property_registry_s* reg) {
                 return false;
             },
             [](aether_computed_style_t* st, const std::string& v) {
-                st->overflow = std::atoi(v.c_str());
+                st->overflow_y = std::atoi(v.c_str());
             });
     }
 
@@ -1044,11 +1046,25 @@ void builtin_properties_register(style_property_registry_s* reg) {
     // white-space
     {
         static const char* kw[] = { "normal", "nowrap", "pre", "pre-wrap", "pre-line" };
+        static const int32_t vals[] = {
+            AETHER_WHITE_SPACE_NORMAL, AETHER_WHITE_SPACE_NOWRAP,
+            AETHER_WHITE_SPACE_PRE, AETHER_WHITE_SPACE_PRE_WRAP,
+            AETHER_WHITE_SPACE_PRE_LINE};
         reg->register_property("white-space", true,
             STYLE_IMPACT_TEXT_LAYOUT | STYLE_IMPACT_LAYOUT,
             "normal",
-            [](const char* s, std::string& o) -> bool { return bi_try_keyword(s, kw, 5, o); },
-            [](aether_computed_style_t* st, const std::string& v) { (void)st; (void)v; });
+            [=](const char* s, std::string& o) -> bool {
+                std::string keyword;
+                if (!bi_try_keyword(s, kw, 5, keyword)) return false;
+                for (int index = 0; index < 5; ++index) {
+                    if (str_iequals(keyword, kw[index])) {
+                        o = std::to_string(vals[index]);
+                        return true;
+                    }
+                }
+                return false;
+            },
+            [](aether_computed_style_t* st, const std::string& v) { st->white_space = std::atoi(v.c_str()); });
     }
 
     // letter-spacing

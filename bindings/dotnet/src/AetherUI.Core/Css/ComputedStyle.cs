@@ -10,6 +10,9 @@ public enum DisplayKind : byte
     InlineBlock,
     Flex,
     LineBreak,
+    Table,
+    TableRow,
+    TableCell,
 }
 
 public enum PositionKind : byte
@@ -231,7 +234,8 @@ public sealed class ComputedStyle
     public TextAlign TextAlign { get; set; } = TextAlign.Start;
     public TextTransform TextTransform { get; set; } = TextTransform.None;
 
-    public OverflowKind Overflow { get; set; } = OverflowKind.Visible;
+    public OverflowKind OverflowX { get; set; } = OverflowKind.Visible;
+    public OverflowKind OverflowY { get; set; } = OverflowKind.Visible;
     public CursorKind Cursor { get; set; } = CursorKind.Default;
     public bool Visible { get; set; } = true;
 

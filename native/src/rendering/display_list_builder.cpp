@@ -1,16 +1,15 @@
 /* ── DisplayListBuilder — faithful port from DisplayListBuilder.cs ── */
 #include "display_list_types.h"
 #include "../layout/layout_types.h"
+#include "../layout/form_controls.h"
 #include "../abi/aether_abi.h"
 #include "../dom/dom_types.h"
 #include "../css/border_radii.h"
-#include "../css/text_transform.h"
 #include "border_painter.h"
 #include "background_image_geometry.h"
 #include "transform_matrix.h"
 
 #include <algorithm>
-#include <cctype>
 #include <cmath>
 #include <cstring>
 #include <string>
@@ -28,38 +27,6 @@ static void emit_fill_rounded_rect(std::vector<aether_paint_command_t>& cmds,
 static aether_color_rgba apply_opacity(aether_color_rgba color, float opacity) {
     color.a = std::clamp(color.a * std::clamp(opacity, 0.f, 1.f), 0.f, 1.f);
     return color;
-}
-
-static std::string normalize_whitespace(const std::string& value) {
-    std::string result;
-    bool prev_space = true;
-    for (char c : value) {
-        if (std::isspace(static_cast<unsigned char>(c))) {
-            if (!prev_space) { result += ' '; prev_space = true; }
-        } else {
-            result += c;
-            prev_space = false;
-        }
-    }
-    if (!result.empty() && result.back() == ' ') result.pop_back();
-    return result;
-}
-
-static void append_text_content(const aether_node_s* node, std::string& output) {
-    if (!node) return;
-    for (auto* child : node->children) {
-        if (child->type == AETHER_NODE_TEXT) {
-            output += child->text;
-        } else if (child->type == AETHER_NODE_ELEMENT) {
-            append_text_content(child, output);
-        }
-    }
-}
-
-static std::string text_content(const aether_node_s* element) {
-    std::string result;
-    append_text_content(element, result);
-    return result;
 }
 
 /* ── gradient/shadow copy helpers ─────────────────────────────────── */
@@ -313,8 +280,8 @@ static void paint_box(aether_display_list_builder_s* builder,
     paint_background_and_border(builder, box, cmds);
 
     // Clip for overflow:hidden/scroll
-    bool is_scroll_container = (style.overflow == AETHER_OVERFLOW_AUTO || style.overflow == AETHER_OVERFLOW_SCROLL);
-    bool clips = (style.overflow == AETHER_OVERFLOW_HIDDEN) || is_scroll_container;
+    bool is_scroll_container = style.overflow_y == AETHER_OVERFLOW_AUTO || style.overflow_y == AETHER_OVERFLOW_SCROLL;
+    bool clips = style.overflow_x != AETHER_OVERFLOW_VISIBLE || style.overflow_y != AETHER_OVERFLOW_VISIBLE;
     if (clips) {
         const auto outer = aether_border_radii_resolve(style.border_radii, box->border_box, style.font_size);
         const auto clip = aether_corner_radii_inset(outer,
@@ -458,7 +425,7 @@ static void paint_scrollbar(aether_layout_box_s* box,
     emit_fill_rounded_rect(cmds, thumb_rect, {radius, radius, radius, radius, radius, radius, radius, radius}, {0.5f, 0.5f, 0.5f, 0.55f});
 }
 
-/* ── paint_control (button text / input text + caret) ─────────────── */
+/* ── paint_control (opaque input text + caret) ────────────────────── */
 
 static void paint_control(aether_display_list_builder_s* builder,
                            aether_layout_box_s* box,
@@ -468,23 +435,13 @@ static void paint_control(aether_display_list_builder_s* builder,
     auto* element = box->element;
     auto& style = box->style;
 
-    if (element->tag_name == "button") {
-        std::string text = aether_apply_text_transform(normalize_whitespace(text_content(element)), style.text_transform);
-        emit_text_shadows(cmds, style, text.c_str(), box->content_box, style.text_align, false);
-        emit_draw_text(cmds, text.c_str(), box->content_box,
-                       style.font_family, style.font_size, style.font_weight,
-                       style.text_align,
-                       apply_opacity(style.color, style.opacity), false);
-        return;
-    }
-
-    // Input / textarea
+    const std::string displayed = aether_opaque_control_display_text(element, style);
+    // Buttons are painted through the child fragments that layout created, so
+    // sizing and paint use the exact same line breaks.
     auto val_it = element->attributes.find("value");
     std::string value = (val_it != element->attributes.end()) ? val_it->second : std::string();
-    auto ph_it = element->attributes.find("placeholder");
-    std::string placeholder = (ph_it != element->attributes.end()) ? ph_it->second : std::string();
-    std::string displayed = aether_apply_text_transform(!value.empty() ? value : placeholder, style.text_transform);
-    aether_color_rgba color = !value.empty()
+    const bool shows_placeholder = value.empty();
+    aether_color_rgba color = !shows_placeholder
         ? style.color
         : aether_color_rgba{0.42f, 0.45f, 0.5f, 1.0f};
 

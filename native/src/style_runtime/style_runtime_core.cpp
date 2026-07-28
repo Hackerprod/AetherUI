@@ -156,6 +156,20 @@ static void resolve_symbolic_colors(aether_computed_style_t& style,
     style.border_color = style.border_colors.left;
 }
 
+static bool overflow_is_visible(int32_t value) {
+    return value == AETHER_OVERFLOW_VISIBLE;
+}
+
+static void normalize_overflow_axes(aether_computed_style_t& style) {
+    // CSS Overflow: a visible axis becomes auto when the opposite axis clips
+    // or scrolls. Normalizing after the cascade keeps all layout and paint
+    // consumers on the same computed values.
+    if (overflow_is_visible(style.overflow_x) && !overflow_is_visible(style.overflow_y))
+        style.overflow_x = AETHER_OVERFLOW_AUTO;
+    if (overflow_is_visible(style.overflow_y) && !overflow_is_visible(style.overflow_x))
+        style.overflow_y = AETHER_OVERFLOW_AUTO;
+}
+
 static bool try_parse_generated_content(const std::string& source, std::string& output) {
     std::string value = str_trim(source);
     if (value.empty() || str_iequals(value, "none") || str_iequals(value, "normal")) return false;
@@ -345,6 +359,7 @@ static runtime_node_state_s* compute_node(aether_style_runtime_s* runtime, aethe
             apply_definition(i);
     }
     resolve_symbolic_colors(next, color_references);
+    normalize_overflow_axes(next);
 
     // <br> has an HTML display semantic, not merely a managed bridge convention.
     // Preserve an author-specified display value, but make an otherwise unstyled

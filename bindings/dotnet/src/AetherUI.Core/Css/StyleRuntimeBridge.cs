@@ -78,7 +78,8 @@ public static class StyleRuntimeBridge
             LineHeight = source.LineHeight,
             TextAlign = (TextAlign)source.TextAlign,
             TextTransform = (TextTransform)source.TextTransform,
-            Overflow = (OverflowKind)source.Overflow,
+            OverflowX = (OverflowKind)source.OverflowX,
+            OverflowY = (OverflowKind)source.OverflowY,
             Cursor = (CursorKind)source.Cursor,
             Visible = source.Visible,
         };

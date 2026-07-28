@@ -3,7 +3,7 @@ import path from "node:path";
 import { existsSync } from "node:fs";
 
 // The command union and computed-style layout include background layers, backdrop filters,
-// resolved image geometry, typed 2D transforms, transform Display List brackets, and align-self through ABI 0.18;
+// resolved image geometry, typed 2D transforms, transform Display List brackets, align-self, and overflow axes through ABI 0.19;
 // accepting an older minor would read invalid offsets.
 export const SUPPORTED_ABI = Object.freeze({ major: 0, minor: 17, patch: 0 });
 
@@ -352,7 +352,8 @@ function createTypes(ffi) {
     line_height: "float",
     text_align: "int32_t",
     text_transform: "int32_t",
-    overflow: "int32_t",
+    overflow_x: "int32_t",
+    overflow_y: "int32_t",
     cursor: "int32_t",
     visible: "int32_t",
   });

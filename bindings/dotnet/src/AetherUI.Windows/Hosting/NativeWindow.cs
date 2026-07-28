@@ -19,11 +19,13 @@ internal sealed class NativeWindow : IDisposable
     private static nint _moduleHandle;
 
     private readonly UiHostOptions _options;
+    private readonly ViewportUpdateCoalescer _viewportUpdates = new();
     private GCHandle _selfHandle;
     private nint _windowHandle;
     private UiDocumentHost? _host;
     private Exception? _fatalException;
     private float _dpiScale = 1f;
+    private ViewportUpdate? _appliedViewport;
     private bool _trackingMouse;
     private bool _disposed;
     private CursorKind _cursor = CursorKind.Default;
@@ -44,19 +46,32 @@ internal sealed class NativeWindow : IDisposable
         _ = NativeMethods.SetProcessDpiAwarenessContext(NativeMethods.DpiAwarenessContextPerMonitorAwareV2);
         EnsureWindowClass();
         const uint initialDpi = 96;
-        var outer = new NativeMethods.Rect
+        var initialBounds = _options.InitialWindowBounds;
+        var outer = new NativeMethods.Rect();
+        var x = unchecked((int)NativeMethods.CwUseDefault);
+        var y = unchecked((int)NativeMethods.CwUseDefault);
+        if (initialBounds is { IsUsable: true } placement)
         {
-            Left = 0,
-            Top = 0,
-            Right = Math.Max(1, _options.Width),
-            Bottom = Math.Max(1, _options.Height),
-        };
-        _ = NativeMethods.AdjustWindowRectExForDpi(
-            ref outer,
-            NativeMethods.WsOverlappedWindow,
-            false,
-            0,
-            initialDpi);
+            outer.Left = placement.X;
+            outer.Top = placement.Y;
+            outer.Right = placement.X + placement.Width;
+            outer.Bottom = placement.Y + placement.Height;
+            x = placement.X;
+            y = placement.Y;
+        }
+        else
+        {
+            outer.Left = 0;
+            outer.Top = 0;
+            outer.Right = Math.Max(1, _options.Width);
+            outer.Bottom = Math.Max(1, _options.Height);
+            _ = NativeMethods.AdjustWindowRectExForDpi(
+                ref outer,
+                NativeMethods.WsOverlappedWindow,
+                false,
+                0,
+                initialDpi);
+        }
 
         _selfHandle = GCHandle.Alloc(this, GCHandleType.Normal);
         _windowHandle = NativeMethods.CreateWindowExW(
@@ -64,8 +79,8 @@ internal sealed class NativeWindow : IDisposable
             WindowClassName,
             _options.Title,
             NativeMethods.WsOverlappedWindow,
-            unchecked((int)NativeMethods.CwUseDefault),
-            unchecked((int)NativeMethods.CwUseDefault),
+            x,
+            y,
             Math.Max(1, outer.Width),
             Math.Max(1, outer.Height),
             nint.Zero,
@@ -79,7 +94,7 @@ internal sealed class NativeWindow : IDisposable
             throw new Win32Exception(error, "No se pudo crear la ventana nativa de AetherUI.");
         }
 
-        UpdateDpiAndViewport();
+        QueueDpiAndViewport();
     }
 
     public void Attach(UiComponent component)
@@ -108,10 +123,11 @@ internal sealed class NativeWindow : IDisposable
                 _dpiScale);
             host = new UiDocumentHost(component, renderer, renderer, _options);
             host.RenderRequested += OnRenderRequested;
-            host.SetViewport(Math.Max(1, client.Width), Math.Max(1, client.Height), _dpiScale);
             _host = host;
             host = null;
             renderer = null; // UiDocumentHost owns the backend after a successful construction.
+            QueueDpiAndViewport();
+            ApplyPendingViewport();
             RequestRender();
         }
         catch
@@ -254,7 +270,8 @@ internal sealed class NativeWindow : IDisposable
                 Paint();
                 return nint.Zero;
             case NativeMethods.WmSize:
-                UpdateDpiAndViewport();
+                QueueDpiAndViewport();
+                RequestRender();
                 return nint.Zero;
             case NativeMethods.WmDpiChanged:
                 ApplyDpiChange(wParam, lParam);
@@ -327,6 +344,7 @@ internal sealed class NativeWindow : IDisposable
         _ = NativeMethods.BeginPaint(_windowHandle, out var paint);
         try
         {
+            ApplyPendingViewport();
             _host?.Render();
         }
         finally
@@ -337,6 +355,7 @@ internal sealed class NativeWindow : IDisposable
 
     private void MouseMoved(nint lParam)
     {
+        ApplyPendingViewport();
         if (!_trackingMouse)
         {
             var tracking = new NativeMethods.TrackMouseEventData
@@ -356,6 +375,7 @@ internal sealed class NativeWindow : IDisposable
 
     private void MouseWheel(nuint wParam, nint lParam)
     {
+        ApplyPendingViewport();
         // High word of wParam is the signed wheel delta in multiples of WHEEL_DELTA (120).
         var rawDelta = unchecked((short)((wParam >> 16) & 0xffff));
         var notches = rawDelta / 120f;
@@ -372,7 +392,7 @@ internal sealed class NativeWindow : IDisposable
         _host?.MouseWheelScrolled(point, notches);
     }
 
-    private void UpdateDpiAndViewport()
+    private void QueueDpiAndViewport()
     {
         if (_windowHandle == nint.Zero)
         {
@@ -383,8 +403,24 @@ internal sealed class NativeWindow : IDisposable
         _dpiScale = dpi == 0 ? 1f : dpi / 96f;
         if (NativeMethods.GetClientRect(_windowHandle, out var client) && client.Width > 0 && client.Height > 0)
         {
-            _host?.SetViewport(client.Width, client.Height, _dpiScale);
+            _viewportUpdates.Queue(client.Width, client.Height, _dpiScale);
         }
+    }
+
+    private void ApplyPendingViewport()
+    {
+        if (_host is null || !_viewportUpdates.TryTake(out var viewport))
+        {
+            return;
+        }
+
+        if (_appliedViewport == viewport)
+        {
+            return;
+        }
+
+        _host.SetViewport(viewport.PixelWidth, viewport.PixelHeight, viewport.DpiScale);
+        _appliedViewport = viewport;
     }
 
     private void ApplyDpiChange(nuint wParam, nint lParam)
@@ -400,7 +436,7 @@ internal sealed class NativeWindow : IDisposable
             Math.Max(1, suggested.Width),
             Math.Max(1, suggested.Height),
             NativeMethods.SwpNoActivate | NativeMethods.SwpNoZOrder);
-        UpdateDpiAndViewport();
+        QueueDpiAndViewport();
     }
 
     private void ApplyMinimumSize(nint lParam)

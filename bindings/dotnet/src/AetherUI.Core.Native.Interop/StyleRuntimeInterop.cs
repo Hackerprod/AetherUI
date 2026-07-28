@@ -35,8 +35,8 @@ public sealed record NativeComputedStyle(
     IReadOnlyList<NativeTransformOperation> Transforms, NativeTransformOrigin TransformOrigin,
     IReadOnlyList<NativeShadow> TextShadows, NativeBorderRadii BorderRadii, float Opacity,
     IReadOnlyList<NativeShadow> BoxShadows,
-    string FontFamily, float FontSize, int FontWeight, float LineHeight, int TextAlign, int TextTransform,
-    int Overflow, int Cursor, bool Visible);
+    string FontFamily, float FontSize, int FontWeight, float LineHeight, int TextAlign, int TextTransform, int WhiteSpace,
+    int OverflowX, int OverflowY, int Cursor, bool Visible);
 
 public sealed unsafe class StyleRuntimeInterop : IDisposable
 {
@@ -328,8 +328,8 @@ public sealed unsafe class StyleRuntimeInterop : IDisposable
         public ShadowListRaw BoxShadows;
         public BorderRadiiRaw BorderRadii; public float Opacity;
         public fixed byte FontFamily[64];
-        public float FontSize; public int FontWeight; public float LineHeight; public int TextAlign, TextTransform;
-        public int Overflow, Cursor, Visible;
+        public float FontSize; public int FontWeight; public float LineHeight; public int TextAlign, TextTransform, WhiteSpace;
+        public int OverflowX, OverflowY, Cursor, Visible;
 
         public NativeComputedStyle ToPublic()
         {
@@ -344,7 +344,7 @@ public sealed unsafe class StyleRuntimeInterop : IDisposable
                 ReadGradient(HasTextGradient, TextGradient), ReadTransforms(Transforms), TransformOrigin.ToPublic(),
                 ReadShadows(TextShadows), BorderRadii.ToPublic(), Opacity,
                 ReadShadows(BoxShadows),
-                family, FontSize, FontWeight, LineHeight, TextAlign, TextTransform, Overflow, Cursor, Visible != 0);
+                family, FontSize, FontWeight, LineHeight, TextAlign, TextTransform, WhiteSpace, OverflowX, OverflowY, Cursor, Visible != 0);
         }
     }
 
