@@ -280,7 +280,10 @@ internal sealed class NativeWindow : IDisposable
                 MouseMoved(lParam);
                 return nint.Zero;
             case NativeMethods.WmMouseWheel:
-                MouseWheel(wParam, lParam);
+                MouseWheel(wParam, lParam, horizontal: (wParam & 0xffffu & NativeMethods.MkShift) != 0);
+                return nint.Zero;
+            case NativeMethods.WmMouseHWheel:
+                MouseWheel(wParam, lParam, horizontal: true);
                 return nint.Zero;
             case NativeMethods.WmMouseLeave:
                 _trackingMouse = false;
@@ -373,7 +376,7 @@ internal sealed class NativeWindow : IDisposable
         SetCursor(_cursor);
     }
 
-    private void MouseWheel(nuint wParam, nint lParam)
+    private void MouseWheel(nuint wParam, nint lParam, bool horizontal)
     {
         ApplyPendingViewport();
         // High word of wParam is the signed wheel delta in multiples of WHEEL_DELTA (120).
@@ -389,7 +392,14 @@ internal sealed class NativeWindow : IDisposable
         };
         _ = NativeMethods.ScreenToClient(_windowHandle, ref screenPoint);
         var point = new PointF(screenPoint.X / _dpiScale, screenPoint.Y / _dpiScale);
-        _host?.MouseWheelScrolled(point, notches);
+        if (horizontal)
+        {
+            _host?.MouseHorizontalWheelScrolled(point, notches);
+        }
+        else
+        {
+            _host?.MouseWheelScrolled(point, notches);
+        }
     }
 
     private void QueueDpiAndViewport()

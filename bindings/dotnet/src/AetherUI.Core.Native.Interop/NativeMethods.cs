@@ -16,6 +16,26 @@ public readonly record struct NativeTextMetrics(float Width, float Height, float
 [StructLayout(LayoutKind.Sequential)]
 public readonly record struct NativeRect(float X, float Y, float Width, float Height);
 
+[StructLayout(LayoutKind.Sequential)]
+public readonly record struct NativeScrollOffset(float X, float Y);
+
+[StructLayout(LayoutKind.Sequential)]
+public readonly record struct NativeScrollMetrics(
+    float ScrollableOverflowX,
+    float ScrollableOverflowY,
+    float ScrollOffsetX,
+    float ScrollOffsetY);
+
+[StructLayout(LayoutKind.Sequential)]
+public readonly record struct NativeScrollbarGeometry(
+    int HorizontalVisible,
+    int VerticalVisible,
+    NativeRect HorizontalTrack,
+    NativeRect HorizontalThumb,
+    NativeRect VerticalTrack,
+    NativeRect VerticalThumb,
+    NativeRect Corner);
+
 internal static unsafe partial class NativeMethods
 {
     private const string Lib = "aether_core";
@@ -79,6 +99,8 @@ internal static unsafe partial class NativeMethods
 
     [LibraryImport(Lib, EntryPoint = "aether_node_get_text_content")]
     internal static partial IntPtr NodeGetTextContent(IntPtr node);
+    [LibraryImport(Lib, EntryPoint = "aether_node_get_style_node_id")]
+    internal static partial long NodeGetStyleNodeId(IntPtr node);
 
     // ── Element ─────────────────────────────────────────────────────
 
@@ -152,6 +174,10 @@ internal static unsafe partial class NativeMethods
     [LibraryImport(Lib, EntryPoint = "aether_layout_result_get_paint_order_box")]
     internal static partial IntPtr LayoutResultGetPaintOrderBox(IntPtr result, int index);
 
+    [LibraryImport(Lib, EntryPoint = "aether_layout_result_hit_test_with_scroll_offsets")]
+    internal static partial IntPtr LayoutResultHitTestWithScrollOffsets(
+        IntPtr result, float x, float y, IntPtr scrollCallback, IntPtr scrollData);
+
     [LibraryImport(Lib, EntryPoint = "aether_layout_box_get_kind")]
     internal static partial int LayoutBoxGetKind(IntPtr box);
 
@@ -173,8 +199,24 @@ internal static unsafe partial class NativeMethods
     [LibraryImport(Lib, EntryPoint = "aether_layout_box_get_text")]
     internal static partial IntPtr LayoutBoxGetText(IntPtr box);
 
+    [LibraryImport(Lib, EntryPoint = "aether_layout_box_get_scroll_metrics")]
+    internal static partial NativeScrollMetrics LayoutBoxGetScrollMetrics(IntPtr box);
+
+    [LibraryImport(Lib, EntryPoint = "aether_layout_box_get_scrollbar_geometry")]
+    internal static partial NativeScrollbarGeometry LayoutBoxGetScrollbarGeometry(IntPtr box);
+
+    [LibraryImport(Lib, EntryPoint = "aether_layout_box_get_scrollbar_geometry_at_offset")]
+    internal static partial NativeScrollbarGeometry LayoutBoxGetScrollbarGeometryAtOffset(
+        IntPtr box, NativeScrollOffset offset);
+
+    [LibraryImport(Lib, EntryPoint = "aether_layout_box_get_scrollable_overflow_x")]
+    internal static partial float LayoutBoxGetScrollableOverflowX(IntPtr box);
+
     [LibraryImport(Lib, EntryPoint = "aether_layout_box_get_scrollable_overflow_y")]
     internal static partial float LayoutBoxGetScrollableOverflowY(IntPtr box);
+
+    [LibraryImport(Lib, EntryPoint = "aether_layout_box_get_scroll_offset_x")]
+    internal static partial float LayoutBoxGetScrollOffsetX(IntPtr box);
 
     [LibraryImport(Lib, EntryPoint = "aether_layout_box_get_scroll_offset_y")]
     internal static partial float LayoutBoxGetScrollOffsetY(IntPtr box);

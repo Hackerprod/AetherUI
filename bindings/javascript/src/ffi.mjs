@@ -2,10 +2,10 @@ import { createRequire } from "node:module";
 import path from "node:path";
 import { existsSync } from "node:fs";
 
-// The command union and computed-style layout include background layers, backdrop filters,
-// resolved image geometry, typed 2D transforms, transform Display List brackets, align-self, and overflow axes through ABI 0.19;
-// accepting an older minor would read invalid offsets.
-export const SUPPORTED_ABI = Object.freeze({ major: 0, minor: 22, patch: 0 });
+// The command union and computed-style layout include retained scroll commands
+// and typed two-axis scroll metrics through ABI 0.25; accepting an older minor
+// would read invalid offsets or miss command tags.
+export const SUPPORTED_ABI = Object.freeze({ major: 0, minor: 25, patch: 0 });
 
 export const CAPABILITIES = Object.freeze({
   DOM: 1n << 0n,
@@ -364,6 +364,25 @@ function createTypes(ffi) {
     height: "float",
     baseline: "float",
   });
+  const ScrollOffsetValue = ffi.struct("aether_scroll_offset", {
+    x: "float",
+    y: "float",
+  });
+  const ScrollMetrics = ffi.struct("aether_scroll_metrics", {
+    scrollable_overflow_x: "float",
+    scrollable_overflow_y: "float",
+    scroll_offset_x: "float",
+    scroll_offset_y: "float",
+  });
+  const ScrollbarGeometry = ffi.struct("aether_scrollbar_geometry", {
+    horizontal_visible: "int32_t",
+    vertical_visible: "int32_t",
+    horizontal_track: Rect,
+    horizontal_thumb: Rect,
+    vertical_track: Rect,
+    vertical_thumb: Rect,
+    corner: Rect,
+  });
 
   const Doc = pointer("aether_doc_t");
   const Node = pointer("aether_node_t");
@@ -380,7 +399,7 @@ function createTypes(ffi) {
 
   const TextMeasurer = ffi.proto(TextMetrics, ["str", ffi.pointer(ComputedStyle), "float", voidPointer]);
   const TextMeasurerPointer = ffi.pointer(TextMeasurer);
-  const ScrollOffset = ffi.proto("float", [Node, voidPointer]);
+  const ScrollOffset = ffi.proto(ScrollOffsetValue, [Node, voidPointer]);
   const ScrollOffsetPointer = ffi.pointer(ScrollOffset);
   const StyleDiagnostic = ffi.proto("void", ["str", "str", "str", "str", voidPointer]);
   const StyleDiagnosticPointer = ffi.pointer(StyleDiagnostic);
@@ -517,6 +536,9 @@ function createTypes(ffi) {
     StyleEnvironment,
     ComputedStyle,
     TextMetrics,
+    ScrollOffsetValue,
+    ScrollMetrics,
+    ScrollbarGeometry,
     Doc,
     Node,
     Stylesheet,
@@ -634,6 +656,8 @@ export function createNativeApi({ ffi, library }) {
     layoutBoxGetContentBox: f("aether_layout_box_get_content_box", types.Rect, [types.LayoutBox]),
     layoutBoxIsAtomic: f("aether_layout_box_is_atomic", "int32_t", [types.LayoutBox]),
     layoutBoxGetText: f("aether_layout_box_get_text", types.CharPointer, [types.LayoutBox]),
+    layoutBoxGetScrollMetrics: f("aether_layout_box_get_scroll_metrics", types.ScrollMetrics, [types.LayoutBox]),
+    layoutBoxGetScrollbarGeometry: f("aether_layout_box_get_scrollbar_geometry", types.ScrollbarGeometry, [types.LayoutBox]),
     layoutBoxGetScrollableOverflowY: f("aether_layout_box_get_scrollable_overflow_y", "float", [types.LayoutBox]),
     layoutBoxGetScrollOffsetY: f("aether_layout_box_get_scroll_offset_y", "float", [types.LayoutBox]),
     layoutBoxGetElement: f("aether_layout_box_get_element", types.Node, [types.LayoutBox]),

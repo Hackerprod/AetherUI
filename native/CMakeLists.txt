@@ -39,6 +39,7 @@ add_library(aether_core SHARED
     src/layout/margin_adjacency.cpp
     src/layout/text_justify.cpp
     src/layout/table_layout.cpp
+    src/layout/scrollbar_geometry.cpp
     src/layout/layout_engine.cpp
     src/rendering/display_list.cpp
     src/rendering/display_list_builder.cpp
@@ -180,6 +181,10 @@ if(AETHERUI_BUILD_TESTS)
     target_link_libraries(aether_auto_margins_test PRIVATE AetherUI::Core)
     target_include_directories(aether_auto_margins_test PRIVATE src/layout)
     add_test(NAME aether.auto-margins COMMAND aether_auto_margins_test)
+
+    add_executable(aether_scroll_metrics_test tests/test_scroll_metrics.cpp)
+    target_link_libraries(aether_scroll_metrics_test PRIVATE AetherUI::Core)
+    add_test(NAME aether.scroll-metrics COMMAND aether_scroll_metrics_test)
 
     add_executable(aether_selector_structure_test tests/test_selector_structure.cpp)
     target_link_libraries(aether_selector_structure_test PRIVATE AetherUI::Core)

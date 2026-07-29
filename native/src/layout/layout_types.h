@@ -27,8 +27,7 @@ struct aether_layout_box_s {
     std::vector<aether_layout_box_s*> children;
     std::string text;
     bool  is_atomic_control = false;
-    float scrollable_overflow_y = 0.f;
-    float scroll_offset_y = 0.f;
+    aether_scroll_metrics_t scroll{};
     // Used vertical margins visible to the enclosing block formatting context.
     // They begin as the specified margins and may be collapsed through children.
     float collapsed_margin_before = 0.f;
@@ -133,6 +132,11 @@ struct aether_layout_result_s {
         return hit_test_recursive(root, x, y);
     }
 
+    aether_node_s* hit_test(float x, float y, aether_scroll_offset_fn offsets, void* data) const {
+        if (!root) return nullptr;
+        return hit_test_recursive(root, x, y, offsets, data);
+    }
+
 private:
     static aether_node_s* hit_test_recursive(aether_layout_box_s* box, float x, float y) {
         for (int i = static_cast<int>(box->children.size()) - 1; i >= 0; --i) {
@@ -142,6 +146,32 @@ private:
         if (aether_rectf_contains(box->margin_box, {x, y})) {
             return box->element;
         }
+        return nullptr;
+    }
+
+    static aether_node_s* hit_test_recursive(aether_layout_box_s* box, float x, float y,
+                                              aether_scroll_offset_fn offsets, void* data) {
+        // A scroll offset moves only descendants; the scroll container's own
+        // border/padding box remains in viewport coordinates.
+        float child_x = x;
+        float child_y = y;
+        const bool scroll_container = box->element &&
+            (box->scroll.scrollable_overflow_x > 0.f || box->scroll.scrollable_overflow_y > 0.f);
+        if (scroll_container && offsets) {
+            const auto requested = offsets(box->element, data);
+            child_x += std::clamp(requested.x, 0.f, box->scroll.scrollable_overflow_x);
+            child_y += std::clamp(requested.y, 0.f, box->scroll.scrollable_overflow_y);
+        }
+        const bool clips_children =
+            box->style.overflow_x != AETHER_OVERFLOW_VISIBLE ||
+            box->style.overflow_y != AETHER_OVERFLOW_VISIBLE;
+        if (!clips_children || aether_rectf_contains(box->padding_box, {x, y})) {
+            for (int i = static_cast<int>(box->children.size()) - 1; i >= 0; --i) {
+                auto* found = hit_test_recursive(box->children[i], child_x, child_y, offsets, data);
+                if (found) return found;
+            }
+        }
+        if (aether_rectf_contains(box->margin_box, {x, y})) return box->element;
         return nullptr;
     }
 };

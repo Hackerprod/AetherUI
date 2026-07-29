@@ -17,10 +17,9 @@ internal sealed class LayoutInterop : IDisposable
         _native = new NativeLayoutInterop(Measure);
     }
 
-    public NativeLayoutResult CreateNativeLayout(DomInterop dom, NativeStyleMap nativeStyles, SizeF viewport,
-        Func<ElementNode, float> scrollOffsetFor) =>
+    public NativeLayoutResult CreateNativeLayout(DomInterop dom, NativeStyleMap nativeStyles, SizeF viewport) =>
         _native.Layout(dom.Native, nativeStyles, viewport.Width, viewport.Height,
-            handle => dom.GetManagedElement(handle) is { } element ? scrollOffsetFor(element) : 0);
+            _ => default);
 
     public LayoutResult Project(NativeLayoutResult nativeResult, DomInterop dom, StyleMap styles, SizeF viewport)
     {
@@ -37,6 +36,21 @@ internal sealed class LayoutInterop : IDisposable
 
         return new LayoutResult(root, primary, paintOrder, viewport);
     }
+
+    public ElementNode? HitTest(NativeLayoutResult nativeResult, DomInterop dom, PointF point,
+        Func<ElementNode, ScrollOffset> scrollOffsetFor)
+    {
+        var handle = _native.HitTest(nativeResult, point.X, point.Y,
+            nativeElement => dom.GetManagedElement(nativeElement) is { } element
+                ? new NativeScrollOffset(scrollOffsetFor(element).X, scrollOffsetFor(element).Y)
+                : default);
+        return handle == IntPtr.Zero ? null : dom.GetManagedElement(handle);
+    }
+
+    public ScrollbarGeometry GetScrollbarGeometryAtOffset(LayoutBox box, ScrollOffset offset) =>
+        ToScrollbarGeometry(_native.GetScrollbarGeometryAtOffset(
+            box.NativeHandle,
+            new NativeScrollOffset(offset.X, offset.Y)));
 
     public void Dispose() => _native.Dispose();
 
@@ -57,14 +71,25 @@ internal sealed class LayoutInterop : IDisposable
         var kind = nativeBox.Kind == 2 ? LayoutBoxKind.Text : LayoutBoxKind.Element;
         var box = new LayoutBox(kind, element, styles[element])
         {
+            NativeHandle = nativeBox.Handle,
+            StyleNodeId = nativeBox.Element == IntPtr.Zero ? 0 : dom.Native.GetStyleNodeId(nativeBox.Element),
             Text = nativeBox.Text,
             MarginBox = ToRect(nativeBox.MarginBox),
             BorderBox = ToRect(nativeBox.BorderBox),
             PaddingBox = ToRect(nativeBox.PaddingBox),
             ContentBox = ToRect(nativeBox.ContentBox),
             IsAtomicControl = nativeBox.IsAtomicControl,
-            ScrollableOverflowY = nativeBox.ScrollableOverflowY,
-            ScrollOffsetY = nativeBox.ScrollOffsetY,
+            Scroll = new ScrollMetrics(nativeBox.ScrollMetrics.ScrollableOverflowX,
+                nativeBox.ScrollMetrics.ScrollableOverflowY,
+                nativeBox.ScrollMetrics.ScrollOffsetX,
+                nativeBox.ScrollMetrics.ScrollOffsetY),
+            Scrollbar = new ScrollbarGeometry(nativeBox.ScrollbarGeometry.HorizontalVisible != 0,
+                nativeBox.ScrollbarGeometry.VerticalVisible != 0,
+                ToRect(nativeBox.ScrollbarGeometry.HorizontalTrack),
+                ToRect(nativeBox.ScrollbarGeometry.HorizontalThumb),
+                ToRect(nativeBox.ScrollbarGeometry.VerticalTrack),
+                ToRect(nativeBox.ScrollbarGeometry.VerticalThumb),
+                ToRect(nativeBox.ScrollbarGeometry.Corner)),
         };
         boxes.Add(nativeBox.Handle, box);
         if (kind == LayoutBoxKind.Element) primary.TryAdd(element, box);
@@ -90,4 +115,13 @@ internal sealed class LayoutInterop : IDisposable
     }
 
     private static RectF ToRect(NativeRect rect) => new(rect.X, rect.Y, rect.Width, rect.Height);
+
+    private static ScrollbarGeometry ToScrollbarGeometry(NativeScrollbarGeometry geometry) => new(
+        geometry.HorizontalVisible != 0,
+        geometry.VerticalVisible != 0,
+        ToRect(geometry.HorizontalTrack),
+        ToRect(geometry.HorizontalThumb),
+        ToRect(geometry.VerticalTrack),
+        ToRect(geometry.VerticalThumb),
+        ToRect(geometry.Corner));
 }

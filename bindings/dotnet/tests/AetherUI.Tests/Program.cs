@@ -45,6 +45,9 @@ internal static class Program
         ("Native runtime renders generated pseudo-elements", NativeRuntimeRendersGeneratedPseudoElements),
         ("Native CSS typography, side borders, and column flex grow", NativeCssTypographySideBordersAndColumnFlexGrow),
         ("Native root scrolls overflowing content", NativeRootScrollsOverflowingContent),
+        ("Native scroll metrics are bidirectional and resize-aware", NativeScrollMetricsAreBidirectionalAndResizeAware),
+        ("Native scrollbar chrome supports two-axis pointer interaction and chaining", NativeScrollbarChromeSupportsTwoAxisInteractionAndChaining),
+        ("Native layout disposes before borrowed style map", NativeLayoutDisposesBeforeBorrowedStyleMap),
         ("Image resolver deduplicates resources and reports lifecycle", ImageResolverDeduplicatesResourcesAndReportsLifecycle),
         ("Native image geometry rebuilds when a resource becomes ready", NativeImageGeometryRebuildsWhenResourceReady),
         ("Native table layout shares automatic column widths across rows", NativeTableLayoutSharesAutomaticColumns),
@@ -803,11 +806,133 @@ internal static class Program
         var initial = Assert.NotNull(host.Layout?.FindPrimaryBox(body));
         Assert.True(initial.ScrollableOverflowY > 0);
 
+        host.ResetMetrics();
         host.MouseWheelScrolled(new PointF(12, 12), -2);
         host.Render();
 
-        var scrolled = Assert.NotNull(host.Layout?.FindPrimaryBox(body));
-        Assert.True(scrolled.ScrollOffsetY > 0);
+        var scrolled = host.GetScrollOffset(body);
+        Assert.True(scrolled.Y > 0);
+        var metrics = host.Metrics;
+        Assert.Equal(0L, metrics.StyleResolutions);
+        Assert.Equal(0L, metrics.LayoutBuilds);
+        Assert.Equal(0L, metrics.DisplayListBuilds);
+        Assert.Equal(1L, metrics.ScrollCompositions);
+        Assert.True(renderer.LastDisplayList?.Commands.OfType<PushScrollOffsetCommand>().Any() == true);
+        Assert.True(renderer.LastDisplayList?.Commands.OfType<DrawScrollbarChromeCommand>().Any() == true);
+    }
+
+    private static void NativeScrollMetricsAreBidirectionalAndResizeAware()
+    {
+        const string markup = """
+            <style>
+              body { margin: 0; }
+              .scroller { height: 100px; overflow: auto; }
+              .content { width: 600px; height: 240px; }
+            </style>
+            <body><div id="scroller" class="scroller"><div class="content"></div></div></body>
+            """;
+
+        using var renderer = new RecordingRenderer();
+        using var host = new UiDocumentHost(new RawMarkupComponent(markup), new ApproximateTextMeasurer(), renderer, new UiHostOptions());
+        host.SetViewport(300, 160, 1);
+        host.Render();
+        var narrow = Assert.NotNull(host.Layout?.FindPrimaryBox(Assert.NotNull(host.Document?.GetElementById("scroller"))));
+        Assert.True(narrow.ScrollableOverflowX > 0);
+        Assert.True(narrow.ScrollableOverflowY > 0);
+        Assert.Equal(0f, narrow.ScrollOffsetX);
+        Assert.Equal(0f, narrow.ScrollOffsetY);
+
+        host.SetViewport(480, 160, 1);
+        host.Render();
+        var wide = Assert.NotNull(host.Layout?.FindPrimaryBox(Assert.NotNull(host.Document?.GetElementById("scroller"))));
+        Assert.True(wide.ScrollableOverflowX < narrow.ScrollableOverflowX);
+        Assert.Equal(narrow.ScrollableOverflowY, wide.ScrollableOverflowY);
+
+        // 480 physical pixels at 1.5 DPI remains the same 320 logical-pixel viewport.
+        host.SetViewport(480, 240, 1.5f);
+        host.Render();
+        var dpiAdjusted = Assert.NotNull(host.Layout?.FindPrimaryBox(Assert.NotNull(host.Document?.GetElementById("scroller"))));
+        Assert.True(dpiAdjusted.ScrollableOverflowX > wide.ScrollableOverflowX);
+        Assert.Equal(wide.ScrollableOverflowY, dpiAdjusted.ScrollableOverflowY);
+    }
+
+    private static void NativeScrollbarChromeSupportsTwoAxisInteractionAndChaining()
+    {
+        var component = new ScrollbarInteractionComponent();
+        using var renderer = new RecordingRenderer();
+        using var host = new UiDocumentHost(component, new ApproximateTextMeasurer(), renderer, new UiHostOptions());
+        host.SetViewport(360, 220, 1);
+        host.Render();
+
+        LayoutBox Box(string id) => Assert.NotNull(host.Layout?.FindPrimaryBox(
+            Assert.NotNull(host.Document?.GetElementById(id))));
+        var inner = Box("inner");
+        var outer = Box("outer");
+        Assert.True(inner.Scrollbar.HorizontalVisible && inner.Scrollbar.VerticalVisible,
+            "A two-axis scroll container must expose interactive thumb geometry.");
+        Assert.True(outer.Scrollbar.HorizontalVisible,
+            "The nested ancestor must retain an independent horizontal range for chaining.");
+
+        var thumb = inner.Scrollbar.HorizontalThumb;
+        host.PointerPressed(new PointF(thumb.X + thumb.Width / 2, thumb.Y + thumb.Height / 2));
+        host.PointerMoved(new PointF(inner.Scrollbar.HorizontalTrack.Right - 1, thumb.Y + thumb.Height / 2));
+        host.PointerReleased(new PointF(inner.Scrollbar.HorizontalTrack.Right - 1, thumb.Y + thumb.Height / 2));
+        host.Render();
+        Assert.True(host.GetScrollOffset(inner.Element).X > 0, "Dragging a horizontal thumb must update only its horizontal offset.");
+        Assert.Equal(0, component.ClickCount);
+
+        var verticalTrack = inner.Scrollbar.VerticalTrack;
+        var verticalThumb = inner.Scrollbar.VerticalThumb;
+        host.PointerPressed(new PointF(verticalTrack.X + verticalTrack.Width / 2, verticalThumb.Bottom + 1));
+        host.PointerReleased(new PointF(verticalTrack.X + verticalTrack.Width / 2, verticalThumb.Bottom + 1));
+        host.Render();
+        Assert.True(host.GetScrollOffset(inner.Element).Y > 0, "Clicking a vertical track must move by one viewport page.");
+        Assert.Equal(0, component.ClickCount);
+
+        var contentPoint = new PointF(inner.BorderBox.X + 10, inner.BorderBox.Y + 10);
+        host.MouseHorizontalWheelScrolled(contentPoint, 100);
+        host.Render();
+        outer = Box("outer");
+        Assert.True(host.GetScrollOffset(outer.Element).X > 0,
+            "When the nested scroller reaches its horizontal limit, wheel input must chain to its ancestor.");
+
+        inner = Box("inner");
+        thumb = inner.Scrollbar.HorizontalThumb;
+        host.PointerPressed(new PointF(thumb.X + 1, thumb.Y + 1));
+        host.SetViewport(360, 220, 1);
+        host.PointerReleased(new PointF(thumb.X + 1, thumb.Y + 1));
+        Assert.Equal(0, component.ClickCount);
+    }
+
+    private static void NativeLayoutDisposesBeforeBorrowedStyleMap()
+    {
+        const string markup = """
+            <style>
+              body { margin: 0; }
+              #tabs { display: flex; gap: 8px; width: 220px; overflow: hidden; }
+              .tab { display: flex; align-items: center; gap: 4px; padding: 8px; }
+              .close { width: 12px; height: 12px; }
+            </style>
+            <body>
+              <div id="tabs">
+                <div class="tab">Renderer.cs <span class="close">x</span></div>
+                <div class="tab">Engine.cs <span class="close">x</span></div>
+              </div>
+            </body>
+            """;
+
+        using var renderer = new RecordingRenderer();
+        using var host = new UiDocumentHost(new RawMarkupComponent(markup), new ApproximateTextMeasurer(), renderer, new UiHostOptions());
+        host.SetViewport(300, 160, 1);
+        host.Render();
+
+        // A viewport change invalidates layout while reusing the resolved native style map.
+        // The previous layout owns anonymous flex item cleanup that borrows that map, so it
+        // must be destroyed before the map is replaced.
+        host.SetViewport(360, 160, 1);
+        host.Render();
+
+        Assert.True(host.Layout?.Root.DescendantsAndSelf().Count() > 1);
     }
 
     private static void NativeRuntimeRendersGeneratedPseudoElements()
@@ -1281,6 +1406,26 @@ internal static class Program
     private sealed class RawMarkupComponent(string markup) : UiComponent
     {
         protected override void BuildRenderTree(MarkupWriter writer) => writer.WriteLiteral(markup);
+    }
+
+    private sealed class ScrollbarInteractionComponent : UiComponent
+    {
+        public int ClickCount { get; private set; }
+
+        protected override void BuildRenderTree(MarkupWriter writer)
+        {
+            writer.WriteLiteral("""
+                <style>
+                  body { margin: 0; }
+                  #outer { width: 120px; height: 120px; overflow: auto; }
+                  #inner { width: 300px; height: 100px; overflow: auto; }
+                  #content { width: 600px; height: 300px; }
+                </style>
+                <body><div id="outer"><div id="inner"
+                """);
+            writer.WriteEventAttribute("onclick", _ => ClickCount++);
+            writer.WriteLiteral("><div id=\"content\"></div></div></div></body>");
+        }
     }
 
     private sealed class ControlledImageResourceLoader : IImageResourceLoader

@@ -42,6 +42,8 @@ internal sealed class DomInterop : IDisposable
             ? handle
             : throw new InvalidOperationException("The element does not belong to this native document.");
 
+    public long GetStyleNodeId(ElementNode element) => Native.GetStyleNodeId(GetNativeHandle(element));
+
     public ElementNode? GetManagedElement(IntPtr handle) =>
         _elementsByHandle.GetValueOrDefault(handle);
 

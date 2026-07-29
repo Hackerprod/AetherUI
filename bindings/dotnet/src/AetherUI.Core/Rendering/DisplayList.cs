@@ -82,6 +82,22 @@ public sealed record PopClipCommand : PaintCommand;
 public readonly record struct TransformMatrix(float M11, float M12, float M21, float M22, float Dx, float Dy);
 public sealed record PushTransformCommand(TransformMatrix Matrix) : PaintCommand;
 public sealed record PopTransformCommand : PaintCommand;
+/// <summary>Applies a live two-axis offset for the retained scroll container.</summary>
+public sealed record PushScrollOffsetCommand(long ScrollContainerId) : PaintCommand;
+public sealed record PopScrollOffsetCommand : PaintCommand;
+/// <summary>Delegates dynamic thumb geometry to the renderer's scroll-state provider.</summary>
+public sealed record DrawScrollbarChromeCommand(long ScrollContainerId) : PaintCommand;
+
+public readonly record struct ScrollVisualOffset(float X, float Y);
+public readonly record struct ScrollbarChrome(
+    bool HorizontalVisible,
+    bool VerticalVisible,
+    RectF HorizontalTrack,
+    RectF HorizontalThumb,
+    RectF VerticalTrack,
+    RectF VerticalThumb,
+    RectF Corner);
+public readonly record struct ScrollVisualState(ScrollVisualOffset Offset, ScrollbarChrome Chrome);
 
 public sealed class DisplayList
 {
@@ -98,4 +114,9 @@ public interface IRenderBackend : IDisposable
 {
     void Resize(int pixelWidth, int pixelHeight, float dpiScale);
     void Render(DisplayList displayList, ColorRgba clearColor);
+    void SetScrollOffsetProvider(Func<long, ScrollVisualOffset>? provider) { }
+    void SetScrollVisualStateProvider(Func<long, ScrollVisualState>? provider)
+    {
+        SetScrollOffsetProvider(provider is null ? null : id => provider(id).Offset);
+    }
 }

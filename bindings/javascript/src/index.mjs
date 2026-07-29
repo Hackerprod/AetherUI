@@ -756,8 +756,32 @@ export class LayoutBox {
   get contentBox() { return { ...this._result._api.functions.layoutBoxGetContentBox(this._assertAlive()) }; }
   get isAtomic() { return Boolean(this._result._api.functions.layoutBoxIsAtomic(this._assertAlive())); }
   get text() { return readOwnedString(this._result._api, this._result._api.functions.layoutBoxGetText(this._assertAlive())); }
-  get scrollableOverflowY() { return Number(this._result._api.functions.layoutBoxGetScrollableOverflowY(this._assertAlive())); }
-  get scrollOffsetY() { return Number(this._result._api.functions.layoutBoxGetScrollOffsetY(this._assertAlive())); }
+  get scrollMetrics() {
+    const metrics = this._result._api.functions.layoutBoxGetScrollMetrics(this._assertAlive());
+    return {
+      scrollableOverflowX: Number(metrics.scrollable_overflow_x),
+      scrollableOverflowY: Number(metrics.scrollable_overflow_y),
+      scrollOffsetX: Number(metrics.scroll_offset_x),
+      scrollOffsetY: Number(metrics.scroll_offset_y),
+    };
+  }
+  get scrollbarGeometry() {
+    const geometry = this._result._api.functions.layoutBoxGetScrollbarGeometry(this._assertAlive());
+    const rect = (value) => ({ x: Number(value.x), y: Number(value.y), width: Number(value.width), height: Number(value.height) });
+    return {
+      horizontalVisible: Boolean(geometry.horizontal_visible),
+      verticalVisible: Boolean(geometry.vertical_visible),
+      horizontalTrack: rect(geometry.horizontal_track),
+      horizontalThumb: rect(geometry.horizontal_thumb),
+      verticalTrack: rect(geometry.vertical_track),
+      verticalThumb: rect(geometry.vertical_thumb),
+      corner: rect(geometry.corner),
+    };
+  }
+  get scrollableOverflowX() { return this.scrollMetrics.scrollableOverflowX; }
+  get scrollableOverflowY() { return this.scrollMetrics.scrollableOverflowY; }
+  get scrollOffsetX() { return this.scrollMetrics.scrollOffsetX; }
+  get scrollOffsetY() { return this.scrollMetrics.scrollOffsetY; }
   get element() { return this._result.document._wrapNode(this._result._api.functions.layoutBoxGetElement(this._assertAlive())); }
   get childCount() { return Number(this._result._api.functions.layoutBoxGetChildCount(this._assertAlive())); }
   child(index) {
@@ -853,16 +877,20 @@ export class LayoutEngine extends OwnedHandle {
     super.dispose();
   }
 
-  layout(document, styles, width, height, scrollOffset = () => 0) {
+  layout(document, styles, width, height, scrollOffset = () => ({ x: 0, y: 0 })) {
     if (!(document instanceof Document)) throw new TypeError("document must be a Document.");
     if (!(styles instanceof StyleMap)) throw new TypeError("styles must be a StyleMap.");
     if (styles._document !== document) throw new TypeError("styles must belong to document.");
     if (typeof scrollOffset !== "function") throw new TypeError("scrollOffset must be a function.");
     const scrollCallback = (element) => {
       try {
-        return Number(scrollOffset(document._wrapNode(element)) ?? 0);
+        const value = scrollOffset(document._wrapNode(element));
+        // A numeric callback value remains a vertical offset for source
+        // compatibility; new callers supply { x, y }.
+        if (typeof value === "number") return { x: 0, y: Number(value) || 0 };
+        return { x: Number(value?.x ?? 0), y: Number(value?.y ?? 0) };
       } catch {
-        return 0;
+        return { x: 0, y: 0 };
       }
     };
     const out = [null];

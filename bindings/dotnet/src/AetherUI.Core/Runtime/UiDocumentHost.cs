@@ -55,13 +55,20 @@ public sealed class UiDocumentHost : IDisposable
     private readonly SynchronizationContext? _hostSynchronizationContext;
 
     /// <summary>
-    /// Vertical scroll offset per scroll-container element. Most real markup scrolls a plain
+    /// Two-axis scroll offset per scroll-container element. Most real markup scrolls a plain
     /// <c>&lt;div class="..."&gt;</c> with no id, so this is keyed by <see cref="ElementNode"/>
     /// instance (like <see cref="_computedStyles"/>) rather than by id — which means, like every
     /// other node-identity-dependent piece of state here, it resets on a markup rebuild instead of
     /// surviving it. Cleared alongside <see cref="_computedStyles"/> in RebuildDocument.
     /// </summary>
-    private readonly Dictionary<ElementNode, float> _scrollOffsets = new();
+    private readonly Dictionary<ElementNode, ScrollOffset> _scrollOffsets = new();
+    private readonly Dictionary<long, ScrollVisualOffset> _scrollOffsetsByStyleNode = new();
+    private readonly Dictionary<long, LayoutBox> _scrollBoxesByStyleNode = new();
+
+    private ScrollbarDrag? _scrollbarDrag;
+    // A scrollbar press belongs to user-agent chrome, not DOM content. Keep this
+    // state until release even if a resize/rebuild cancels the live drag.
+    private bool _scrollbarPointerCaptured;
 
     /// <summary>
     /// Cleared only when the tree itself is rebuilt; repopulated in full from the native style
@@ -71,6 +78,8 @@ public sealed class UiDocumentHost : IDisposable
 
     private DocumentNode? _document;
     private DomInterop? _nativeDom;
+    private NativeStyleMap? _nativeStyleMap;
+    private NativeLayoutResult? _nativeLayout;
     private LayoutResult? _layout;
     private DisplayList? _displayList;
     private StyleMap? _styles;
@@ -80,8 +89,37 @@ public sealed class UiDocumentHost : IDisposable
     private SizeF _viewport;
     private float _dpiScale = 1;
     private bool _markupDirty = true;
-    private bool _visualDirty = true;
+    private VisualInvalidation _invalidation = VisualInvalidation.Style;
+    private long _styleResolutionCount;
+    private long _layoutBuildCount;
+    private long _displayListBuildCount;
+    private long _scrollCompositionCount;
     private bool _disposed;
+
+    [Flags]
+    private enum VisualInvalidation : byte
+    {
+        None = 0,
+        // A style change is the strongest ordinary invalidation: it necessarily
+        // produces a new layout and paint command stream.
+        Style = 1 << 0,
+        // A viewport/metric change reuses computed styles but needs fresh boxes.
+        Layout = 1 << 1,
+        // A paint-only change (for example an image becoming ready) retains layout.
+        DisplayList = 1 << 2,
+        // Scroll is intentionally independent. It is not consumed until the retained
+        // scroll-composition path is installed; keeping it distinct now prevents a
+        // future input path from accidentally escalating to cascade again.
+        Scroll = 1 << 3,
+    }
+
+    private enum ScrollAxis : byte
+    {
+        Horizontal,
+        Vertical,
+    }
+
+    private sealed record ScrollbarDrag(ElementNode Container, ScrollAxis Axis, float GrabOffset);
 
     public UiDocumentHost(
         UiComponent component,
@@ -111,8 +149,22 @@ public sealed class UiDocumentHost : IDisposable
     public DocumentNode? Document => _document;
     public LayoutResult? Layout => _layout;
     public ElementNode? FocusedElement => _focused;
-    public bool NeedsRender => _markupDirty || _visualDirty;
+    public bool NeedsRender => _markupDirty || _invalidation != VisualInvalidation.None;
     public float DpiScale => _dpiScale;
+    /// <summary>Pipeline counters for deterministic performance regression tests.</summary>
+    public UiDocumentHostMetrics Metrics => new(
+        Interlocked.Read(ref _styleResolutionCount),
+        Interlocked.Read(ref _layoutBuildCount),
+        Interlocked.Read(ref _displayListBuildCount),
+        Interlocked.Read(ref _scrollCompositionCount));
+
+    public void ResetMetrics()
+    {
+        Interlocked.Exchange(ref _styleResolutionCount, 0);
+        Interlocked.Exchange(ref _layoutBuildCount, 0);
+        Interlocked.Exchange(ref _displayListBuildCount, 0);
+        Interlocked.Exchange(ref _scrollCompositionCount, 0);
+    }
 
     public void SetViewport(int pixelWidth, int pixelHeight, float dpiScale)
     {
@@ -122,28 +174,36 @@ public sealed class UiDocumentHost : IDisposable
             return;
         }
 
+        CancelScrollbarDrag();
         _dpiScale = dpiScale;
         _viewport = new SizeF(pixelWidth / dpiScale, pixelHeight / dpiScale);
         _renderer.Resize(pixelWidth, pixelHeight, dpiScale);
-        InvalidateVisual();
+        InvalidateLayout();
     }
 
     public void Render()
     {
         ThrowIfDisposed();
+        var scrollOnly = !_markupDirty && _invalidation == VisualInvalidation.Scroll;
         EnsureVisualTree();
         if (_imageResolver is not null)
             foreach (var image in _displayList!.Commands.OfType<DrawBackgroundImageCommand>())
                 _imageResolver.Request(image.Source);
+        _renderer.SetScrollVisualStateProvider(ScrollVisualStateFor);
         _renderer.Render(_displayList!, _options.ClearColor);
-        _visualDirty = false;
+        if (scrollOnly) Interlocked.Increment(ref _scrollCompositionCount);
     }
 
     public void PointerMoved(PointF point)
     {
         ThrowIfDisposed();
         EnsureVisualTree();
-        var target = _layout!.HitTest(point);
+        if (_scrollbarDrag is not null)
+        {
+            UpdateScrollbarDrag(point);
+            return;
+        }
+        var target = HitTest(point);
         if (ReferenceEquals(target, _hovered))
         {
             return;
@@ -185,7 +245,11 @@ public sealed class UiDocumentHost : IDisposable
     {
         ThrowIfDisposed();
         EnsureVisualTree();
-        var target = _layout!.HitTest(point);
+        if (TryBeginScrollbarInteraction(point))
+        {
+            return;
+        }
+        var target = HitTest(point);
         if (target is null || target.IsDisabled)
         {
             Focus(null);
@@ -208,7 +272,14 @@ public sealed class UiDocumentHost : IDisposable
     {
         ThrowIfDisposed();
         EnsureVisualTree();
-        var target = _layout!.HitTest(point);
+        if (_scrollbarPointerCaptured)
+        {
+            _scrollbarDrag = null;
+            _scrollbarPointerCaptured = false;
+            InvalidateScroll();
+            return;
+        }
+        var target = HitTest(point);
         var pressed = _active;
         if (pressed is not null)
         {
@@ -313,7 +384,7 @@ public sealed class UiDocumentHost : IDisposable
     {
         ThrowIfDisposed();
         EnsureVisualTree();
-        var target = _layout!.HitTest(point);
+        var target = HitTest(point);
         return target is not null && _styles!.TryGetValue(target, out var style)
             ? style.Cursor
             : CursorKind.Default;
@@ -447,31 +518,136 @@ public sealed class UiDocumentHost : IDisposable
             RebuildDocument();
         }
 
-        if (!_visualDirty && _displayList is not null)
+        if (_invalidation == VisualInvalidation.None && _displayList is not null)
         {
             return;
         }
 
-        _nativeDom!.SyncRuntimeValues();
-        var elements = EnumerateElements(_document!).ToArray();
-        var nativeStyles = _nativeStyleRuntime.Resolve(
-            elements.Select(static element => (int)element.State).ToArray(),
-            _viewport.Width, _viewport.Height, _dpiScale);
-        for (var i = 0; i < elements.Length; i++)
+        if ((_invalidation & VisualInvalidation.Style) != 0)
         {
-            _computedStyles[elements[i]] = StyleRuntimeBridge.ToComputedStyle(nativeStyles[i], elements[i]);
+            _nativeDom!.SyncRuntimeValues();
+            var elements = EnumerateElements(_document!).ToArray();
+            var nativeStyles = _nativeStyleRuntime.Resolve(
+                elements.Select(static element => (int)element.State).ToArray(),
+                _viewport.Width, _viewport.Height, _dpiScale);
+            for (var i = 0; i < elements.Length; i++)
+            {
+                _computedStyles[elements[i]] = StyleRuntimeBridge.ToComputedStyle(nativeStyles[i], elements[i]);
+            }
+
+            _styles = new StyleMap(_computedStyles);
+            Interlocked.Increment(ref _styleResolutionCount);
+            _invalidation &= ~VisualInvalidation.Style;
+            _invalidation |= VisualInvalidation.Layout;
         }
 
-        _styles = new StyleMap(_computedStyles);
-        using var nativeStyleMap = _nativeStyleRuntime.CreateResolvedStyleMap(_nativeDom!.Native);
-        using var nativeLayout = _layoutInterop.CreateNativeLayout(_nativeDom, nativeStyleMap, _viewport, ScrollOffsetFor);
-        _layout = _layoutInterop.Project(nativeLayout, _nativeDom, _styles, _viewport);
-        _displayList = AttachResolvedImages(_renderingInterop.Build(nativeLayout,
-            _focused is null ? IntPtr.Zero : _nativeDom.GetNativeHandle(_focused)));
+        if ((_invalidation & VisualInvalidation.Layout) != 0)
+        {
+            // Native layout results borrow their resolved style map for layout-only
+            // nodes such as anonymous flex items. Destroy the dependent layout
+            // before replacing the style map; reversing this order leaves the
+            // layout destructor holding a dangling native style-map pointer.
+            _nativeLayout?.Dispose();
+            _nativeLayout = null;
+            _nativeStyleMap?.Dispose();
+            _nativeStyleMap = _nativeStyleRuntime.CreateResolvedStyleMap(_nativeDom!.Native);
+            _nativeLayout = _layoutInterop.CreateNativeLayout(_nativeDom, _nativeStyleMap, _viewport);
+            Interlocked.Increment(ref _layoutBuildCount);
+            _layout = _layoutInterop.Project(_nativeLayout, _nativeDom, _styles!, _viewport);
+            RebuildScrollBoxIndex();
+            _invalidation &= ~VisualInvalidation.Layout;
+            _invalidation |= VisualInvalidation.DisplayList;
+        }
+
+        if ((_invalidation & VisualInvalidation.DisplayList) != 0)
+        {
+            if (_nativeLayout is null)
+            {
+                _invalidation |= VisualInvalidation.Layout;
+                EnsureVisualTree();
+                return;
+            }
+
+            _displayList = AttachResolvedImages(_renderingInterop.Build(_nativeLayout,
+                _focused is null ? IntPtr.Zero : _nativeDom!.GetNativeHandle(_focused)));
+            Interlocked.Increment(ref _displayListBuildCount);
+            _invalidation &= ~VisualInvalidation.DisplayList;
+        }
+
+        // Scroll currently remains backed by layout coordinates. The retained scroll command
+        // cut consumes this bit without entering either branch above.
+        _invalidation &= ~VisualInvalidation.Scroll;
     }
 
-    private float ScrollOffsetFor(ElementNode element) =>
-        _scrollOffsets.TryGetValue(element, out var offset) ? offset : 0f;
+    private ScrollOffset ScrollOffsetFor(ElementNode element) =>
+        _scrollOffsets.TryGetValue(element, out var offset) ? offset : default;
+
+    public ScrollOffset GetScrollOffset(ElementNode element)
+    {
+        ArgumentNullException.ThrowIfNull(element);
+        return ScrollOffsetFor(element);
+    }
+
+    private ElementNode? HitTest(PointF point)
+    {
+        if (_nativeLayout is not null && _nativeDom is not null)
+        {
+            return _layoutInterop.HitTest(_nativeLayout, _nativeDom, point, ScrollOffsetFor);
+        }
+
+        return _layout?.HitTest(point);
+    }
+
+    private ScrollVisualState ScrollVisualStateFor(long styleNodeId)
+    {
+        var offset = _scrollOffsetsByStyleNode.GetValueOrDefault(styleNodeId);
+        var chrome = _scrollBoxesByStyleNode.TryGetValue(styleNodeId, out var box)
+            ? ToScrollbarChrome(_layoutInterop.GetScrollbarGeometryAtOffset(
+                box,
+                new ScrollOffset(offset.X, offset.Y)))
+            : default;
+        return new ScrollVisualState(offset, chrome);
+    }
+
+    private void RebuildScrollBoxIndex()
+    {
+        _scrollBoxesByStyleNode.Clear();
+        var liveScrollElements = new HashSet<ElementNode>();
+        if (_layout is null) return;
+        foreach (var box in _layout.Root.DescendantsAndSelf())
+        {
+            if (box.StyleNodeId == 0) continue;
+            if (box.ScrollableOverflowX > 0 || box.ScrollableOverflowY > 0 ||
+                box.Scrollbar.HorizontalVisible || box.Scrollbar.VerticalVisible)
+            {
+                _scrollBoxesByStyleNode[box.StyleNodeId] = box;
+                liveScrollElements.Add(box.Element);
+                if (_scrollOffsets.TryGetValue(box.Element, out var offset))
+                {
+                    offset = new ScrollOffset(
+                        Math.Clamp(offset.X, 0f, box.ScrollableOverflowX),
+                        Math.Clamp(offset.Y, 0f, box.ScrollableOverflowY));
+                    _scrollOffsets[box.Element] = offset;
+                    _scrollOffsetsByStyleNode[box.StyleNodeId] = new ScrollVisualOffset(offset.X, offset.Y);
+                }
+            }
+        }
+
+        foreach (var element in _scrollOffsets.Keys.Where(element => !liveScrollElements.Contains(element)).ToArray())
+        {
+            _scrollOffsets.Remove(element);
+            if (_nativeDom is not null) _scrollOffsetsByStyleNode.Remove(_nativeDom.GetStyleNodeId(element));
+        }
+    }
+
+    private static ScrollbarChrome ToScrollbarChrome(ScrollbarGeometry geometry) => new(
+        geometry.HorizontalVisible,
+        geometry.VerticalVisible,
+        geometry.HorizontalTrack,
+        geometry.HorizontalThumb,
+        geometry.VerticalTrack,
+        geometry.VerticalThumb,
+        geometry.Corner);
 
     private DisplayList AttachResolvedImages(DisplayList displayList)
     {
@@ -489,32 +665,19 @@ public sealed class UiDocumentHost : IDisposable
     /// </summary>
     public void MouseWheelScrolled(PointF point, float notches)
     {
-        ThrowIfDisposed();
-        EnsureVisualTree();
-        const float pixelsPerNotch = 48f;
-        var offsetDelta = -notches * pixelsPerNotch;
+        ScrollByWheel(point, ScrollAxis.Vertical, -notches * 48f);
+    }
 
-        for (var current = _layout!.HitTest(point); current is not null; current = current.Parent as ElementNode)
-        {
-            var box = _layout.FindPrimaryBox(current);
-            if (box is null || box.ScrollableOverflowY <= 0)
-            {
-                continue;
-            }
-
-            var next = Math.Clamp(box.ScrollOffsetY + offsetDelta, 0f, box.ScrollableOverflowY);
-            if (next != box.ScrollOffsetY)
-            {
-                _scrollOffsets[current] = next;
-                InvalidateVisual();
-            }
-
-            return;
-        }
+    /// <summary>Routes a horizontal wheel gesture, including Shift+wheel, through nested overflow.</summary>
+    public void MouseHorizontalWheelScrolled(PointF point, float notches)
+    {
+        // WM_MOUSEHWHEEL reports positive deltas for motion towards the right.
+        ScrollByWheel(point, ScrollAxis.Horizontal, notches * 48f);
     }
 
     private void RebuildDocument()
     {
+        CancelScrollbarDrag();
         var focusedId = _focused?.Id;
         var hoveredId = _hovered?.Id;
         var activeId = _active?.Id;
@@ -524,6 +687,10 @@ public sealed class UiDocumentHost : IDisposable
         _nativeDom = nativeDom;
         _document = nativeDom.Document;
         _styles = null;
+        _nativeLayout?.Dispose();
+        _nativeLayout = null;
+        _nativeStyleMap?.Dispose();
+        _nativeStyleMap = null;
         _layout = null;
         _displayList = null;
 
@@ -532,6 +699,8 @@ public sealed class UiDocumentHost : IDisposable
         // entries for nodes that no longer exist.
         _computedStyles.Clear();
         _scrollOffsets.Clear();
+        _scrollOffsetsByStyleNode.Clear();
+        _scrollBoxesByStyleNode.Clear();
 
         var authorCss = string.Join('\n', _document.GetElementsByTagName("style").Select(static element => element.TextContent));
         _nativeStyleRuntime.Load(nativeDom.Native, EngineDefaultsCss, authorCss);
@@ -557,8 +726,159 @@ public sealed class UiDocumentHost : IDisposable
         _hovered = RestoreElement(hoveredId, ElementState.Hover);
         _active = RestoreElement(activeId, ElementState.Active);
         _markupDirty = false;
-        _visualDirty = true;
+        _invalidation |= VisualInvalidation.Style;
     }
+
+    private void ScrollByWheel(PointF point, ScrollAxis axis, float delta)
+    {
+        ThrowIfDisposed();
+        EnsureVisualTree();
+        for (var current = HitTest(point); current is not null; current = current.Parent as ElementNode)
+        {
+            var box = _layout!.FindPrimaryBox(current);
+            if (box is null) continue;
+
+            var range = ScrollRange(box, axis);
+            if (range <= 0) continue;
+            var currentOffset = ScrollOffsetOnAxis(current, axis);
+            var next = Math.Clamp(currentOffset + delta, 0f, range);
+            // At a limit this container cannot consume the gesture: chain it to
+            // the nearest ancestor rather than swallowing it.
+            if (MathF.Abs(next - currentOffset) < .001f) continue;
+
+            SetScrollOffset(current, box, axis, next);
+            InvalidateScroll();
+            return;
+        }
+    }
+
+    private bool TryBeginScrollbarInteraction(PointF point)
+    {
+        foreach (var box in _layout!.PaintOrder.Reverse())
+        {
+            var scrollbar = ScrollbarGeometryForPointer(box);
+            if (scrollbar.HorizontalVisible && scrollbar.HorizontalThumb.Contains(point))
+            {
+                BeginScrollbarDrag(box, ScrollAxis.Horizontal, point.X - scrollbar.HorizontalThumb.X);
+                return true;
+            }
+            if (scrollbar.VerticalVisible && scrollbar.VerticalThumb.Contains(point))
+            {
+                BeginScrollbarDrag(box, ScrollAxis.Vertical, point.Y - scrollbar.VerticalThumb.Y);
+                return true;
+            }
+            if (scrollbar.HorizontalVisible && scrollbar.HorizontalTrack.Contains(point))
+            {
+                PageScroll(box, ScrollAxis.Horizontal, point.X);
+                return true;
+            }
+            if (scrollbar.VerticalVisible && scrollbar.VerticalTrack.Contains(point))
+            {
+                PageScroll(box, ScrollAxis.Vertical, point.Y);
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private void BeginScrollbarDrag(LayoutBox box, ScrollAxis axis, float grabOffset)
+    {
+        _scrollbarDrag = new ScrollbarDrag(box.Element, axis, grabOffset);
+        _scrollbarPointerCaptured = true;
+    }
+
+    private void UpdateScrollbarDrag(PointF point)
+    {
+        var drag = _scrollbarDrag;
+        if (drag is null || _layout?.FindPrimaryBox(drag.Container) is not { } box)
+        {
+            CancelScrollbarDrag();
+            return;
+        }
+
+        var scrollbar = ScrollbarGeometryForPointer(box);
+        var track = drag.Axis == ScrollAxis.Horizontal ? scrollbar.HorizontalTrack : scrollbar.VerticalTrack;
+        var thumb = drag.Axis == ScrollAxis.Horizontal ? scrollbar.HorizontalThumb : scrollbar.VerticalThumb;
+        var trackStart = drag.Axis == ScrollAxis.Horizontal ? track.X : track.Y;
+        var trackLength = drag.Axis == ScrollAxis.Horizontal ? track.Width : track.Height;
+        var thumbLength = drag.Axis == ScrollAxis.Horizontal ? thumb.Width : thumb.Height;
+        var pointer = drag.Axis == ScrollAxis.Horizontal ? point.X : point.Y;
+        var available = Math.Max(0f, trackLength - thumbLength);
+        var thumbStart = Math.Clamp(pointer - drag.GrabOffset, trackStart, trackStart + available);
+        var progress = available > 0 ? (thumbStart - trackStart) / available : 0;
+        SetScrollOffset(drag.Container, box, drag.Axis, progress * ScrollRange(box, drag.Axis));
+        InvalidateScroll();
+    }
+
+    private void PageScroll(LayoutBox box, ScrollAxis axis, float pointer)
+    {
+        var scrollbar = ScrollbarGeometryForPointer(box);
+        var thumb = axis == ScrollAxis.Horizontal ? scrollbar.HorizontalThumb : scrollbar.VerticalThumb;
+        var thumbStart = axis == ScrollAxis.Horizontal ? thumb.X : thumb.Y;
+        var thumbEnd = axis == ScrollAxis.Horizontal ? thumb.Right : thumb.Bottom;
+        var direction = pointer < thumbStart ? -1f : pointer > thumbEnd ? 1f : 0f;
+        if (direction == 0) return;
+
+        var page = axis == ScrollAxis.Horizontal ? box.ContentBox.Width : box.ContentBox.Height;
+        var current = ScrollOffsetOnAxis(box.Element, axis);
+        var next = Math.Clamp(current + direction * page, 0f, ScrollRange(box, axis));
+        if (MathF.Abs(next - current) < .001f) return;
+        _scrollbarPointerCaptured = true;
+        SetScrollOffset(box.Element, box, axis, next);
+        InvalidateScroll();
+    }
+
+    private void SetScrollOffset(ElementNode element, LayoutBox box, ScrollAxis axis, float value)
+    {
+        var current = ScrollOffsetFor(element);
+        _scrollOffsets[element] = axis == ScrollAxis.Horizontal
+            ? new ScrollOffset(value, current.Y)
+            : new ScrollOffset(current.X, value);
+        var offset = _scrollOffsets[element];
+        _scrollOffsetsByStyleNode[_nativeDom!.GetStyleNodeId(element)] = new ScrollVisualOffset(offset.X, offset.Y);
+    }
+
+    private static float ScrollRange(LayoutBox box, ScrollAxis axis) =>
+        axis == ScrollAxis.Horizontal ? box.ScrollableOverflowX : box.ScrollableOverflowY;
+
+    private float ScrollOffsetOnAxis(ElementNode element, ScrollAxis axis)
+    {
+        var offset = ScrollOffsetFor(element);
+        return axis == ScrollAxis.Horizontal ? offset.X : offset.Y;
+    }
+
+    private ScrollbarGeometry ScrollbarGeometryForPointer(LayoutBox box) =>
+        TranslateScrollbarGeometry(
+            _layoutInterop.GetScrollbarGeometryAtOffset(box, ScrollOffsetFor(box.Element)),
+            AncestorScrollTranslation(box.Element));
+
+    private PointF AncestorScrollTranslation(ElementNode element)
+    {
+        var x = 0f;
+        var y = 0f;
+        for (var ancestor = element.Parent as ElementNode; ancestor is not null; ancestor = ancestor.Parent as ElementNode)
+        {
+            var offset = ScrollOffsetFor(ancestor);
+            x -= offset.X;
+            y -= offset.Y;
+        }
+
+        return new PointF(x, y);
+    }
+
+    private static ScrollbarGeometry TranslateScrollbarGeometry(ScrollbarGeometry geometry, PointF delta) => new(
+        geometry.HorizontalVisible,
+        geometry.VerticalVisible,
+        Translate(geometry.HorizontalTrack, delta),
+        Translate(geometry.HorizontalThumb, delta),
+        Translate(geometry.VerticalTrack, delta),
+        Translate(geometry.VerticalThumb, delta),
+        Translate(geometry.Corner, delta));
+
+    private static RectF Translate(RectF rect, PointF delta) =>
+        rect.IsEmpty ? rect : new RectF(rect.X + delta.X, rect.Y + delta.Y, rect.Width, rect.Height);
+
+    private void CancelScrollbarDrag() => _scrollbarDrag = null;
 
     private ElementNode? RestoreElement(string? id, ElementState state)
     {
@@ -589,13 +909,33 @@ public sealed class UiDocumentHost : IDisposable
     private void OnComponentInvalidated(object? sender, EventArgs e)
     {
         _markupDirty = true;
-        _visualDirty = true;
+        _invalidation |= VisualInvalidation.Style;
         RenderRequested?.Invoke(this, EventArgs.Empty);
     }
 
     private void InvalidateVisual()
     {
-        _visualDirty = true;
+        // Existing callers represent state that can affect selectors, layout, or both.
+        // Scroll is deliberately not routed here: retained scroll composition has its own bit.
+        _invalidation |= VisualInvalidation.Style;
+        RenderRequested?.Invoke(this, EventArgs.Empty);
+    }
+
+    private void InvalidateLayout()
+    {
+        _invalidation |= VisualInvalidation.Layout;
+        RenderRequested?.Invoke(this, EventArgs.Empty);
+    }
+
+    private void InvalidateDisplayList()
+    {
+        _invalidation |= VisualInvalidation.DisplayList;
+        RenderRequested?.Invoke(this, EventArgs.Empty);
+    }
+
+    private void InvalidateScroll()
+    {
+        _invalidation |= VisualInvalidation.Scroll;
         RenderRequested?.Invoke(this, EventArgs.Empty);
     }
 
@@ -603,10 +943,10 @@ public sealed class UiDocumentHost : IDisposable
     {
         if (_hostSynchronizationContext is not null && SynchronizationContext.Current != _hostSynchronizationContext)
         {
-            _hostSynchronizationContext.Post(static state => ((UiDocumentHost)state!).InvalidateVisual(), this);
+            _hostSynchronizationContext.Post(static state => ((UiDocumentHost)state!).InvalidateDisplayList(), this);
             return;
         }
-        InvalidateVisual();
+        InvalidateDisplayList();
     }
 
     private static int? ParsePositiveInt(string? value) =>
@@ -630,6 +970,8 @@ public sealed class UiDocumentHost : IDisposable
         }
         finally
         {
+            _nativeLayout?.Dispose();
+            _nativeStyleMap?.Dispose();
             _nativeStyleRuntime.Dispose();
             _layoutInterop.Dispose();
             _renderingInterop.Dispose();

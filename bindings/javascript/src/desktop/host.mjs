@@ -181,6 +181,11 @@ function handleKey(handle) {
   return handle == null ? "" : String(handle);
 }
 
+function rectContains(rect, point) {
+  return point.x >= rect.x && point.x <= rect.x + rect.width &&
+    point.y >= rect.y && point.y <= rect.y + rect.height;
+}
+
 function disposeResources(resources) {
   let firstError = null;
   for (const resource of resources) {
@@ -232,6 +237,8 @@ export class DesktopHost {
     this._hovered = null;
     this._active = null;
     this._scrollOffsets = new Map();
+    this._scrollbarDrag = null;
+    this._scrollbarPointerCaptured = false;
     this._inputValues = new Map();
     this._unsubscribeInvalidated = null;
     this._renderedHandlers = null;
@@ -300,6 +307,7 @@ export class DesktopHost {
     this._assertAlive();
     if (!Number.isFinite(pixelWidth) || !Number.isFinite(pixelHeight) || pixelWidth <= 0 || pixelHeight <= 0) return;
     if (!Number.isFinite(dpiScale) || dpiScale <= 0) return;
+    this._cancelScrollbarDrag();
     this._dpiScale = dpiScale;
     this._viewport = { width: pixelWidth / dpiScale, height: pixelHeight / dpiScale };
     this.renderer.resize?.(pixelWidth, pixelHeight, dpiScale);
@@ -395,6 +403,7 @@ export class DesktopHost {
   }
 
   _rebuildDocument() {
+    this._cancelScrollbarDrag();
     const state = this._captureState();
     const markup = this._renderMarkup();
     const nextDocument = this.aether.document.parse(markup);
@@ -447,7 +456,7 @@ export class DesktopHost {
         nextStyles,
         this._viewport.width,
         this._viewport.height,
-        (element) => this._scrollOffsets.get(handleKey(element.handle)) ?? 0,
+        (element) => this._scrollOffsets.get(handleKey(element.handle)) ?? { x: 0, y: 0 },
       );
       nextDisplayList = this._displayBuilder.build(nextLayout, this._focused);
     } catch (error) {
@@ -507,6 +516,10 @@ export class DesktopHost {
   pointerMoved(point) {
     this._assertAlive();
     this._ensureVisualTree();
+    if (this._scrollbarDrag) {
+      this._updateScrollbarDrag(point);
+      return;
+    }
     const target = nearestElement(this._layout.hitTest(point.x, point.y));
     if (target === this._hovered) return;
     if (this._hovered) {
@@ -534,6 +547,7 @@ export class DesktopHost {
   pointerPressed(point) {
     this._assertAlive();
     this._ensureVisualTree();
+    if (this._beginScrollbarInteraction(point)) return;
     const target = nearestElement(this._layout.hitTest(point.x, point.y));
     if (!target || target.disabled) {
       this._focus(null);
@@ -550,6 +564,12 @@ export class DesktopHost {
   pointerReleased(point) {
     this._assertAlive();
     this._ensureVisualTree();
+    if (this._scrollbarPointerCaptured) {
+      this._scrollbarDrag = null;
+      this._scrollbarPointerCaptured = false;
+      this.invalidate();
+      return;
+    }
     const target = nearestElement(this._layout.hitTest(point.x, point.y));
     const pressed = this._active;
     if (pressed) {
@@ -638,19 +658,92 @@ export class DesktopHost {
   }
 
   mouseWheelScrolled(point, notches) {
+    this._scrollByWheel(point, "y", -notches * 48);
+  }
+
+  mouseHorizontalWheelScrolled(point, notches) {
+    this._scrollByWheel(point, "x", notches * 48);
+  }
+
+  _scrollByWheel(point, axis, delta) {
     this._assertAlive();
     this._ensureVisualTree();
-    const pixelsPerNotch = 48;
     for (let current = nearestElement(this._layout.hitTest(point.x, point.y)); current; current = nearestElement(current.parent)) {
       const box = this._layout.findPrimaryBox(current);
-      if (!box || box.scrollableOverflowY <= 0) continue;
-      const next = Math.max(0, Math.min(box.scrollableOverflowY, box.scrollOffsetY - notches * pixelsPerNotch));
-      if (next !== box.scrollOffsetY) {
-        this._scrollOffsets.set(handleKey(current.handle), next);
-        this.invalidate();
-      }
+      if (!box) continue;
+      const range = axis === "x" ? box.scrollableOverflowX : box.scrollableOverflowY;
+      const offset = axis === "x" ? box.scrollOffsetX : box.scrollOffsetY;
+      if (range <= 0) continue;
+      const next = Math.max(0, Math.min(range, offset + delta));
+      if (next === offset) continue;
+      this._setScrollOffset(current, box, axis, next);
+      this.invalidate();
       return;
     }
+  }
+
+  _beginScrollbarInteraction(point) {
+    for (const box of [...this._layout.paintOrder].reverse()) {
+      const geometry = box.scrollbarGeometry;
+      if (geometry.horizontalVisible && rectContains(geometry.horizontalThumb, point)) {
+        this._scrollbarDrag = { element: box.element, axis: "x", grabOffset: point.x - geometry.horizontalThumb.x };
+        this._scrollbarPointerCaptured = true;
+        return true;
+      }
+      if (geometry.verticalVisible && rectContains(geometry.verticalThumb, point)) {
+        this._scrollbarDrag = { element: box.element, axis: "y", grabOffset: point.y - geometry.verticalThumb.y };
+        this._scrollbarPointerCaptured = true;
+        return true;
+      }
+      if (geometry.horizontalVisible && rectContains(geometry.horizontalTrack, point)) return this._pageScroll(box, "x", point.x);
+      if (geometry.verticalVisible && rectContains(geometry.verticalTrack, point)) return this._pageScroll(box, "y", point.y);
+    }
+    return false;
+  }
+
+  _updateScrollbarDrag(point) {
+    const drag = this._scrollbarDrag;
+    const box = drag && this._layout.findPrimaryBox(drag.element);
+    if (!drag || !box) return this._cancelScrollbarDrag();
+    const geometry = box.scrollbarGeometry;
+    const track = drag.axis === "x" ? geometry.horizontalTrack : geometry.verticalTrack;
+    const thumb = drag.axis === "x" ? geometry.horizontalThumb : geometry.verticalThumb;
+    const start = drag.axis === "x" ? track.x : track.y;
+    const trackLength = drag.axis === "x" ? track.width : track.height;
+    const thumbLength = drag.axis === "x" ? thumb.width : thumb.height;
+    const pointer = drag.axis === "x" ? point.x : point.y;
+    const available = Math.max(0, trackLength - thumbLength);
+    const thumbStart = Math.max(start, Math.min(start + available, pointer - drag.grabOffset));
+    const range = drag.axis === "x" ? box.scrollableOverflowX : box.scrollableOverflowY;
+    this._setScrollOffset(drag.element, box, drag.axis, available > 0 ? (thumbStart - start) / available * range : 0);
+    this.invalidate();
+  }
+
+  _pageScroll(box, axis, pointer) {
+    const geometry = box.scrollbarGeometry;
+    const thumb = axis === "x" ? geometry.horizontalThumb : geometry.verticalThumb;
+    const start = axis === "x" ? thumb.x : thumb.y;
+    const end = axis === "x" ? thumb.x + thumb.width : thumb.y + thumb.height;
+    const direction = pointer < start ? -1 : pointer > end ? 1 : 0;
+    if (!direction) return true;
+    const range = axis === "x" ? box.scrollableOverflowX : box.scrollableOverflowY;
+    const offset = axis === "x" ? box.scrollOffsetX : box.scrollOffsetY;
+    const page = axis === "x" ? box.contentBox.width : box.contentBox.height;
+    const next = Math.max(0, Math.min(range, offset + direction * page));
+    if (next !== offset) this._setScrollOffset(box.element, box, axis, next);
+    this._scrollbarPointerCaptured = true;
+    this.invalidate();
+    return true;
+  }
+
+  _setScrollOffset(element, box, axis, value) {
+    this._scrollOffsets.set(handleKey(element.handle), axis === "x"
+      ? { x: value, y: box.scrollOffsetY }
+      : { x: box.scrollOffsetX, y: value });
+  }
+
+  _cancelScrollbarDrag() {
+    this._scrollbarDrag = null;
   }
 
   cursorAt(point) {

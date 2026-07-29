@@ -255,7 +255,8 @@ export class StyleRuntime {
 
 export interface TextMetrics { width: number; height: number; baseline: number }
 export type TextMeasurer = (text: string, style: ComputedStyle, maxWidth: number) => TextMetrics;
-export type ScrollOffset = (element: NodeView | null) => number;
+export interface ScrollOffsetValue { x: number; y: number }
+export type ScrollOffset = (element: NodeView | null) => ScrollOffsetValue;
 
 export class LayoutBox {
   readonly handle: bigint;
@@ -270,7 +271,18 @@ export class LayoutBox {
   readonly contentBox: { x: number; y: number; width: number; height: number };
   readonly isAtomic: boolean;
   readonly text: string | null;
+  readonly scrollMetrics: { scrollableOverflowX: number; scrollableOverflowY: number; scrollOffsetX: number; scrollOffsetY: number };
+  readonly scrollbarGeometry: {
+    horizontalVisible: boolean; verticalVisible: boolean;
+    horizontalTrack: { x: number; y: number; width: number; height: number };
+    horizontalThumb: { x: number; y: number; width: number; height: number };
+    verticalTrack: { x: number; y: number; width: number; height: number };
+    verticalThumb: { x: number; y: number; width: number; height: number };
+    corner: { x: number; y: number; width: number; height: number };
+  };
+  readonly scrollableOverflowX: number;
   readonly scrollableOverflowY: number;
+  readonly scrollOffsetX: number;
   readonly scrollOffsetY: number;
   readonly element: NodeView | null;
   readonly childCount: number;

@@ -62,7 +62,14 @@ public sealed class Direct2DRenderBackend : IRenderBackend, ITextMeasurer
     // This is the sole BeginDraw/EndDraw state for both the scene and text-shadow mask passes.
     // Direct2D exposes no query for it; every segment transition must use the helpers below.
     private bool _isDrawSegmentActive;
+    private Func<long, ScrollVisualState>? _scrollStateProvider;
     private bool _disposed;
+
+    public void SetScrollOffsetProvider(Func<long, ScrollVisualOffset>? provider) =>
+        _scrollStateProvider = provider is null ? null : id => new ScrollVisualState(provider(id), default);
+
+    public void SetScrollVisualStateProvider(Func<long, ScrollVisualState>? provider) =>
+        _scrollStateProvider = provider;
     private int _lastTransformPushes;
     private int _lastTransformPops;
     private bool _diagnosticCaptureRequested;
@@ -288,6 +295,7 @@ public sealed class Direct2DRenderBackend : IRenderBackend, ITextMeasurer
 
         var clipStack = new Stack<ClipScope>();
         var transformStack = new Stack<Matrix3x2>();
+        var scrollStack = new Stack<Matrix3x2>();
         foreach (var command in displayList.Commands)
         {
             switch (command)
@@ -419,6 +427,19 @@ public sealed class Direct2DRenderBackend : IRenderBackend, ITextMeasurer
                     target.Transform = transformStack.Pop();
                     _lastTransformPops++;
                     break;
+                case PushScrollOffsetCommand scroll:
+                    scrollStack.Push(target.Transform);
+                    var offset = _scrollStateProvider?.Invoke(scroll.ScrollContainerId).Offset ?? default;
+                    target.Transform = Matrix3x2.CreateTranslation(-offset.X, -offset.Y) * target.Transform;
+                    break;
+                case PopScrollOffsetCommand:
+                    if (scrollStack.Count == 0)
+                        throw new InvalidOperationException("The display list popped a scroll offset that was not active.");
+                    target.Transform = scrollStack.Pop();
+                    break;
+                case DrawScrollbarChromeCommand chrome:
+                    DrawScrollbarChrome(target, _scrollStateProvider?.Invoke(chrome.ScrollContainerId).Chrome ?? default);
+                    break;
             }
         }
 
@@ -431,6 +452,8 @@ public sealed class Direct2DRenderBackend : IRenderBackend, ITextMeasurer
         {
             throw new InvalidOperationException("The display list ended with an active transform.");
         }
+        if (scrollStack.Count != 0)
+            throw new InvalidOperationException("The display list ended with an active scroll offset.");
 
         var result = EndDrawSegment(target);
         if (result.Failure)
@@ -671,6 +694,25 @@ public sealed class Direct2DRenderBackend : IRenderBackend, ITextMeasurer
         }
 
         Direct2DBackgroundImagePainter.Draw(target, bitmap, command);
+    }
+
+    private void DrawScrollbarChrome(ID2D1DeviceContext target, ScrollbarChrome chrome)
+    {
+        var thumbBrush = GetBrush(new ColorRgba(.5f, .5f, .5f, .55f));
+        var cornerBrush = GetBrush(new ColorRgba(.5f, .5f, .5f, .28f));
+        if (chrome.VerticalVisible) DrawScrollbarThumb(target, chrome.VerticalThumb, thumbBrush);
+        if (chrome.HorizontalVisible) DrawScrollbarThumb(target, chrome.HorizontalThumb, thumbBrush);
+        if (chrome.VerticalVisible && chrome.HorizontalVisible && !chrome.Corner.IsEmpty)
+        {
+            target.FillRectangle(ToRawRect(chrome.Corner), cornerBrush);
+        }
+    }
+
+    private static void DrawScrollbarThumb(ID2D1DeviceContext target, RectF thumb, ID2D1Brush brush)
+    {
+        if (thumb.IsEmpty) return;
+        var radius = MathF.Min(thumb.Width, thumb.Height) / 2f;
+        target.FillRoundedRectangle(ToRoundedRectangle(thumb, radius), brush);
     }
 
     private unsafe ID2D1Bitmap1? GetImageBitmap(ID2D1DeviceContext target, AetherUI.Runtime.ImageResourceResult resource)

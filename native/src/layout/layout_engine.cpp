@@ -1,5 +1,6 @@
 /* ── Layout Engine — faithful port from LayoutEngine.cs (868 lines) ─ */
 #include "layout_types.h"
+#include "scrollbar_geometry.h"
 #include "../abi/aether_abi.h"
 #include "../dom/dom_types.h"
 #include "../css/css_types.h"
@@ -219,6 +220,30 @@ static void offset_box(aether_layout_box_s* box, float dx, float dy) {
     offset_rect(box->content_box, dx, dy);
     for (auto* child : box->children) {
         offset_box(child, dx, dy);
+    }
+}
+
+static bool overflow_allows_user_scroll(int32_t overflow) {
+    return overflow == AETHER_OVERFLOW_AUTO || overflow == AETHER_OVERFLOW_SCROLL;
+}
+
+// A scroll container owns the overflow of descendants whose corresponding
+// axis remains visible. A nested clipping/scrolling container terminates that
+// axis' contribution, while its own border/margin box still contributes.
+static void accumulate_scrollable_descendant_extent(const aether_layout_box_s* parent,
+                                                    bool include_x,
+                                                    bool include_y,
+                                                    float& right,
+                                                    float& bottom) {
+    for (const auto* child : parent->children) {
+        if (include_x) right = std::max(right, child->margin_box.x + child->margin_box.width);
+        if (include_y) bottom = std::max(bottom, child->margin_box.y + child->margin_box.height);
+
+        const bool descend_x = include_x && child->style.overflow_x == AETHER_OVERFLOW_VISIBLE;
+        const bool descend_y = include_y && child->style.overflow_y == AETHER_OVERFLOW_VISIBLE;
+        if (descend_x || descend_y) {
+            accumulate_scrollable_descendant_extent(child, descend_x, descend_y, right, bottom);
+        }
     }
 }
 
@@ -726,25 +751,25 @@ static aether_layout_box_s* layout_element(
                                 std::max(0.f, positioning_height)},
                                result);
 
-    // Scroll container
-    if ((style.overflow_y == AETHER_OVERFLOW_AUTO || style.overflow_y == AETHER_OVERFLOW_SCROLL)
-        && std::isfinite(definite_content_height))
-    {
-        float scrollable = std::max(0.f, content_height - definite_content_height);
-        box->scrollable_overflow_y = scrollable;
-        if (scrollable > 0) {
-            float scroll_offset_y = 0.f;
-            if (engine->scroll_offset_fn) {
-                scroll_offset_y = engine->scroll_offset_fn(element, engine->scroll_offset_data);
-            }
-            scroll_offset_y = std::clamp(scroll_offset_y, 0.f, scrollable);
-            box->scroll_offset_y = scroll_offset_y;
-            if (scroll_offset_y != 0.f) {
-                for (auto* child : box->children) {
-                    offset_box(child, 0, -scroll_offset_y);
-                }
-            }
+    // Scroll metrics are calculated once for both axes from the same
+    // descendant-overflow walk.  This deliberately avoids separate X/Y
+    // implementations drifting apart as the layout model grows.
+    const bool scrolls_x = overflow_allows_user_scroll(style.overflow_x);
+    const bool scrolls_y = overflow_allows_user_scroll(style.overflow_y);
+    if (scrolls_x || (scrolls_y && std::isfinite(definite_content_height))) {
+        float right = content_x + content_width;
+        float bottom = content_y + std::max(0.f, content_height);
+        accumulate_scrollable_descendant_extent(box, scrolls_x, scrolls_y, right, bottom);
+
+        if (scrolls_x) {
+            const float content_extent = std::max(content_width, right - content_x);
+            box->scroll.scrollable_overflow_x = std::max(0.f, content_extent - content_width);
         }
+        if (scrolls_y && std::isfinite(definite_content_height)) {
+            const float content_extent = std::max(content_height, bottom - content_y);
+            box->scroll.scrollable_overflow_y = std::max(0.f, content_extent - definite_content_height);
+        }
+
     }
 
     float border_height = has_explicit_height
@@ -2149,6 +2174,13 @@ AETHER_API aether_node_t aether_layout_result_hit_test(aether_layout_result_t re
     return result->hit_test(x, y);
 }
 
+AETHER_API aether_node_t aether_layout_result_hit_test_with_scroll_offsets(
+    aether_layout_result_t result, float x, float y,
+    aether_scroll_offset_fn offsets, void* user_data) {
+    if (!result) return nullptr;
+    return result->hit_test(x, y, offsets, user_data);
+}
+
 AETHER_API int32_t aether_layout_result_get_paint_order_count(aether_layout_result_t result) {
     return result ? static_cast<int32_t>(result->paint_order.size()) : 0;
 }
@@ -2197,11 +2229,28 @@ AETHER_API char* aether_layout_box_get_text(aether_layout_box_t box) {
     return aether::strdup(box->text.c_str());
 }
 
+AETHER_API aether_scroll_metrics_t aether_layout_box_get_scroll_metrics(aether_layout_box_t box) {
+    return box ? box->scroll : aether_scroll_metrics_t{};
+}
+AETHER_API aether_scrollbar_geometry_t aether_layout_box_get_scrollbar_geometry(aether_layout_box_t box) {
+    return box ? aether_resolve_scrollbar_geometry(*box) : aether_scrollbar_geometry_t{};
+}
+AETHER_API aether_scrollbar_geometry_t aether_layout_box_get_scrollbar_geometry_at_offset(
+    aether_layout_box_t box,
+    aether_scroll_offset_t offset) {
+    return box ? aether_resolve_scrollbar_geometry(*box, offset) : aether_scrollbar_geometry_t{};
+}
+AETHER_API float aether_layout_box_get_scrollable_overflow_x(aether_layout_box_t box) {
+    return box ? box->scroll.scrollable_overflow_x : 0;
+}
 AETHER_API float aether_layout_box_get_scrollable_overflow_y(aether_layout_box_t box) {
-    return box ? box->scrollable_overflow_y : 0;
+    return box ? box->scroll.scrollable_overflow_y : 0;
+}
+AETHER_API float aether_layout_box_get_scroll_offset_x(aether_layout_box_t box) {
+    return box ? box->scroll.scroll_offset_x : 0;
 }
 AETHER_API float aether_layout_box_get_scroll_offset_y(aether_layout_box_t box) {
-    return box ? box->scroll_offset_y : 0;
+    return box ? box->scroll.scroll_offset_y : 0;
 }
 AETHER_API aether_node_t aether_layout_box_get_element(aether_layout_box_t box) {
     return box ? box->element : nullptr;

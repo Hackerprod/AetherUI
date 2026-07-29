@@ -80,9 +80,14 @@ internal sealed class RenderingInterop : IDisposable
                 Float(bytes, NativePaintCommandLayout.TransformMatrix + 8), Float(bytes, NativePaintCommandLayout.TransformMatrix + 12),
                 Float(bytes, NativePaintCommandLayout.TransformMatrix + 16), Float(bytes, NativePaintCommandLayout.TransformMatrix + 20))),
             13 => new PopTransformCommand(),
+            14 => new PushScrollOffsetCommand(Long(bytes, NativePaintCommandLayout.ScrollContainerId)),
+            15 => new PopScrollOffsetCommand(),
+            16 => new DrawScrollbarChromeCommand(Long(bytes, NativePaintCommandLayout.ScrollContainerId)),
             _ => throw new InvalidOperationException($"Unknown native paint command tag {command.Tag}."),
         };
     }
+
+    private static long Long(byte[] bytes, int offset) => BitConverter.ToInt64(bytes, offset);
 
     private NativeTextMetrics Measure(string text, NativeComputedStyle style, float maxWidth)
     {

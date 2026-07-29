@@ -55,6 +55,7 @@ public sealed unsafe class NativeDomDocument : IDisposable
     public int GetChildCount(IntPtr node) => NativeMethods.NodeGetChildCount(node);
     public IntPtr GetChild(IntPtr node, int index) => NativeMethods.NodeGetChild(node, index);
     public string? GetTextContent(IntPtr node) => NativeStrings.MarshalToStringAndFree(NativeMethods.NodeGetTextContent(node));
+    public long GetStyleNodeId(IntPtr node) => NativeMethods.NodeGetStyleNodeId(node);
     public string? GetTagName(IntPtr element) => NativeStrings.MarshalToStringAndFree(NativeMethods.ElementGetTagName(element));
     public int GetState(IntPtr element) => NativeMethods.ElementGetState(element);
     public void SetState(IntPtr element, int state) => NativeMethods.ElementSetState(element, state);

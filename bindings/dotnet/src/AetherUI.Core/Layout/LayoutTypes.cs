@@ -10,6 +10,26 @@ public enum LayoutBoxKind : byte
     Text,
 }
 
+/// <summary>Independent scroll ranges and offsets for a layout box.</summary>
+public readonly record struct ScrollMetrics(
+    float ScrollableOverflowX,
+    float ScrollableOverflowY,
+    float ScrollOffsetX,
+    float ScrollOffsetY);
+
+/// <summary>Host-owned offsets supplied to native layout for one scroll container.</summary>
+public readonly record struct ScrollOffset(float X, float Y);
+
+/// <summary>Resolved native scrollbar chrome geometry for one layout box.</summary>
+public readonly record struct ScrollbarGeometry(
+    bool HorizontalVisible,
+    bool VerticalVisible,
+    RectF HorizontalTrack,
+    RectF HorizontalThumb,
+    RectF VerticalTrack,
+    RectF VerticalThumb,
+    RectF Corner);
+
 /// <summary>Host-facing projection of a native layout box.</summary>
 public sealed class LayoutBox
 {
@@ -32,8 +52,14 @@ public sealed class LayoutBox
     public RectF PaddingBox { get; internal set; }
     public RectF ContentBox { get; internal set; }
     public bool IsAtomicControl { get; internal set; }
-    public float ScrollableOverflowY { get; internal set; }
-    public float ScrollOffsetY { get; internal set; }
+    public ScrollMetrics Scroll { get; internal set; }
+    public ScrollbarGeometry Scrollbar { get; internal set; }
+    public float ScrollableOverflowX => Scroll.ScrollableOverflowX;
+    public float ScrollableOverflowY => Scroll.ScrollableOverflowY;
+    public float ScrollOffsetX => Scroll.ScrollOffsetX;
+    public float ScrollOffsetY => Scroll.ScrollOffsetY;
+    internal IntPtr NativeHandle { get; init; }
+    internal long StyleNodeId { get; init; }
 
     internal void AddChild(LayoutBox child) => _children.Add(child);
 
@@ -80,6 +106,22 @@ public sealed class LayoutResult
             }
         }
 
+        return null;
+    }
+
+    public ElementNode? HitTest(PointF point, Func<ElementNode, ScrollOffset> offsetFor)
+    {
+        for (var index = _paintOrder.Count - 1; index >= 0; index--)
+        {
+            var box = _paintOrder[index];
+            var local = point;
+            for (var ancestor = box.Element.Parent as ElementNode; ancestor is not null; ancestor = ancestor.Parent as ElementNode)
+            {
+                var offset = offsetFor(ancestor);
+                local = new PointF(local.X + offset.X, local.Y + offset.Y);
+            }
+            if (box.Style.Visible && box.Style.Display != DisplayKind.None && box.BorderBox.Contains(local)) return box.Element;
+        }
         return null;
     }
 }

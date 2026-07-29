@@ -1,6 +1,7 @@
 /* ── DisplayListBuilder — faithful port from DisplayListBuilder.cs ── */
 #include "display_list_types.h"
 #include "../layout/layout_types.h"
+#include "../layout/scrollbar_geometry.h"
 #include "../layout/form_controls.h"
 #include "../css/style_map_types.h"
 #include "../dom/dom_types.h"
@@ -220,6 +221,9 @@ static void emit_pop_transform(std::vector<aether_paint_command_t>& cmds) {
     cmd.tag = AETHER_PAINT_POP_TRANSFORM;
     cmds.push_back(cmd);
 }
+static void emit_push_scroll_offset(std::vector<aether_paint_command_t>& cmds, int64_t id) { aether_paint_command_t c{}; c.tag=AETHER_PAINT_PUSH_SCROLL_OFFSET; c.data.push_scroll_offset={id}; cmds.push_back(c); }
+static void emit_pop_scroll_offset(std::vector<aether_paint_command_t>& cmds) { aether_paint_command_t c{}; c.tag=AETHER_PAINT_POP_SCROLL_OFFSET; cmds.push_back(c); }
+static void emit_draw_scrollbar_chrome(std::vector<aether_paint_command_t>& cmds, int64_t id) { aether_paint_command_t c{}; c.tag=AETHER_PAINT_DRAW_SCROLLBAR_CHROME; c.data.draw_scrollbar_chrome={id}; cmds.push_back(c); }
 
 /* ══════════════════════════════════════════════════════════════════════
    DisplayListBuilder — walks LayoutBox tree, emits paint commands
@@ -236,8 +240,7 @@ static void paint_box_shadows(aether_layout_box_s* box,
 static void paint_background_and_border(aether_display_list_builder_s* builder, aether_layout_box_s* box,
                                          bool suppress_background, std::vector<aether_paint_command_t>& cmds);
 
-static void paint_scrollbar(aether_layout_box_s* box,
-                             std::vector<aether_paint_command_t>& cmds);
+static bool box_has_scrollbar_chrome(aether_layout_box_s* box);
 
 static void paint_control(aether_display_list_builder_s* builder,
                            aether_layout_box_s* box,
@@ -302,8 +305,6 @@ static void paint_box(aether_display_list_builder_s* builder,
     // Background fill + border stroke
     paint_background_and_border(builder, box, box->element == builder->canvas_background_source, cmds);
 
-    // Clip for overflow:hidden/scroll
-    bool is_scroll_container = style.overflow_y == AETHER_OVERFLOW_AUTO || style.overflow_y == AETHER_OVERFLOW_SCROLL;
     bool clips = style.overflow_x != AETHER_OVERFLOW_VISIBLE || style.overflow_y != AETHER_OVERFLOW_VISIBLE;
     if (clips) {
         const auto outer = aether_border_radii_resolve(style.border_radii, box->border_box, style.font_size);
@@ -314,6 +315,10 @@ static void paint_box(aether_display_list_builder_s* builder,
         emit_push_clip(cmds, box->padding_box, clip);
     }
 
+    const bool dynamic_scroll = box->element &&
+        (box->scroll.scrollable_overflow_x > 0.f || box->scroll.scrollable_overflow_y > 0.f);
+    const bool scrollbar_chrome = box->element && box_has_scrollbar_chrome(box);
+    if (dynamic_scroll) emit_push_scroll_offset(cmds, box->element->style_node_id);
     // Children (or atomic control paint)
     if (box->is_atomic_control) {
         paint_control(builder, box, focused_element, cmds);
@@ -323,10 +328,11 @@ static void paint_box(aether_display_list_builder_s* builder,
         }
     }
 
-    // Scrollbar
-    if (is_scroll_container && box->scrollable_overflow_y > 0) {
-        paint_scrollbar(box, cmds);
-    }
+    if (dynamic_scroll) emit_pop_scroll_offset(cmds);
+    // Scrollbar chrome is retained separately from content offset. Bindings
+    // resolve its live thumb position from the same native geometry formula
+    // used by hit-testing.
+    if (scrollbar_chrome) emit_draw_scrollbar_chrome(cmds, box->element->style_node_id);
 
     if (clips) {
         emit_pop_clip(cmds);
@@ -512,25 +518,10 @@ static void paint_canvas_background(aether_display_list_builder_s* builder,
 
 /* ── paint_scrollbar ──────────────────────────────────────────────── */
 
-static void paint_scrollbar(aether_layout_box_s* box,
-                             std::vector<aether_paint_command_t>& cmds)
+static bool box_has_scrollbar_chrome(aether_layout_box_s* box)
 {
-    const float thumb_width = 4.f;
-    const float margin = 2.f;
-    auto track = box->padding_box;
-    float track_h = track.height;
-    float content_extent = track_h + box->scrollable_overflow_y;
-    float thumb_h = std::max(24.f, track_h * (track_h / content_extent));
-    float available = std::max(0.f, track_h - thumb_h);
-    float progress = box->scrollable_overflow_y > 0
-        ? box->scroll_offset_y / box->scrollable_overflow_y : 0.f;
-    float thumb_y = track.y + available * progress;
-    aether_rectf thumb_rect = {
-        track.x + track.width - thumb_width - margin,
-        thumb_y, thumb_width, thumb_h
-    };
-    const float radius = thumb_width / 2;
-    emit_fill_rounded_rect(cmds, thumb_rect, {radius, radius, radius, radius, radius, radius, radius, radius}, {0.5f, 0.5f, 0.5f, 0.55f});
+    const auto geometry = aether_resolve_scrollbar_geometry(*box);
+    return geometry.vertical_visible || geometry.horizontal_visible;
 }
 
 /* ── paint_control (opaque input text + caret) ────────────────────── */
@@ -716,8 +707,15 @@ AETHER_API aether_status_t aether_display_list_get_command(
         case AETHER_PAINT_PUSH_TRANSFORM:
             out_cmd->data.push_transform = src.data.push_transform;
             break;
+        case AETHER_PAINT_PUSH_SCROLL_OFFSET:
+            out_cmd->data.push_scroll_offset = src.data.push_scroll_offset;
+            break;
+        case AETHER_PAINT_DRAW_SCROLLBAR_CHROME:
+            out_cmd->data.draw_scrollbar_chrome = src.data.draw_scrollbar_chrome;
+            break;
         case AETHER_PAINT_POP_CLIP:
         case AETHER_PAINT_POP_TRANSFORM:
+        case AETHER_PAINT_POP_SCROLL_OFFSET:
             break;
     }
     return AETHER_OK;

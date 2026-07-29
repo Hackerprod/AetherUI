@@ -12,8 +12,8 @@ public readonly record struct NativeLayoutBox(
     NativeRect PaddingBox,
     NativeRect ContentBox,
     bool IsAtomicControl,
-    float ScrollableOverflowY,
-    float ScrollOffsetY,
+    NativeScrollMetrics ScrollMetrics,
+    NativeScrollbarGeometry ScrollbarGeometry,
     int ChildCount);
 
 public sealed class NativeLayoutInterop : IDisposable
@@ -22,13 +22,13 @@ public sealed class NativeLayoutInterop : IDisposable
     private delegate NativeTextMetrics MeasureDelegate(IntPtr text, IntPtr style, float maxWidth, IntPtr userData);
 
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
-    private delegate float ScrollDelegate(IntPtr element, IntPtr userData);
+    private delegate NativeScrollOffset ScrollDelegate(IntPtr element, IntPtr userData);
 
     private readonly Func<string, NativeComputedStyle, float, NativeTextMetrics> _measure;
     private readonly MeasureDelegate _measureDelegate;
     private readonly ScrollDelegate _scrollDelegate;
     private readonly GCHandle _self;
-    private Func<IntPtr, float>? _scroll;
+    private Func<IntPtr, NativeScrollOffset>? _scroll;
     private IntPtr _engine;
 
     public NativeLayoutInterop(Func<string, NativeComputedStyle, float, NativeTextMetrics> measure)
@@ -43,7 +43,7 @@ public sealed class NativeLayoutInterop : IDisposable
     }
 
     public NativeLayoutResult Layout(NativeDomDocument document, NativeStyleMap styles,
-        float width, float height, Func<IntPtr, float> scroll)
+        float width, float height, Func<IntPtr, NativeScrollOffset> scroll)
     {
         ObjectDisposedException.ThrowIf(_engine == IntPtr.Zero, this);
         _scroll = scroll ?? throw new ArgumentNullException(nameof(scroll));
@@ -51,6 +51,28 @@ public sealed class NativeLayoutInterop : IDisposable
             Marshal.GetFunctionPointerForDelegate(_scrollDelegate), GCHandle.ToIntPtr(_self), out var result));
         return new NativeLayoutResult(result);
     }
+
+    public IntPtr HitTest(NativeLayoutResult result, float x, float y, Func<IntPtr, NativeScrollOffset> scroll)
+    {
+        ArgumentNullException.ThrowIfNull(result);
+        ObjectDisposedException.ThrowIf(_engine == IntPtr.Zero, this);
+        var previous = _scroll;
+        _scroll = scroll ?? throw new ArgumentNullException(nameof(scroll));
+        try
+        {
+            return NativeMethods.LayoutResultHitTestWithScrollOffsets(
+                result.Handle, x, y,
+                Marshal.GetFunctionPointerForDelegate(_scrollDelegate),
+                GCHandle.ToIntPtr(_self));
+        }
+        finally
+        {
+            _scroll = previous;
+        }
+    }
+
+    public NativeScrollbarGeometry GetScrollbarGeometryAtOffset(IntPtr box, NativeScrollOffset offset) =>
+        NativeMethods.LayoutBoxGetScrollbarGeometryAtOffset(box, offset);
 
     public void Dispose()
     {
@@ -71,10 +93,10 @@ public sealed class NativeLayoutInterop : IDisposable
         catch { return default; }
     }
 
-    private static float Scroll(IntPtr element, IntPtr userData)
+    private static NativeScrollOffset Scroll(IntPtr element, IntPtr userData)
     {
-        try { return ((NativeLayoutInterop)GCHandle.FromIntPtr(userData).Target!)._scroll?.Invoke(element) ?? 0; }
-        catch { return 0; }
+        try { return ((NativeLayoutInterop)GCHandle.FromIntPtr(userData).Target!)._scroll?.Invoke(element) ?? default; }
+        catch { return default; }
     }
 
     private static void Throw(int status)
@@ -113,7 +135,7 @@ public sealed class NativeLayoutResult : IDisposable
         NativeMethods.LayoutBoxGetPaddingBox(box),
         NativeMethods.LayoutBoxGetContentBox(box),
         NativeMethods.LayoutBoxIsAtomic(box) != 0,
-        NativeMethods.LayoutBoxGetScrollableOverflowY(box),
-        NativeMethods.LayoutBoxGetScrollOffsetY(box),
+        NativeMethods.LayoutBoxGetScrollMetrics(box),
+        NativeMethods.LayoutBoxGetScrollbarGeometry(box),
         NativeMethods.LayoutBoxGetChildCount(box));
 }

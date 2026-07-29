@@ -114,6 +114,7 @@ export class DesktopHost {
   textInput(character: string): void;
   keyPressed(key: string): void;
   mouseWheelScrolled(point: { x: number; y: number }, notches: number): void;
+  mouseHorizontalWheelScrolled(point: { x: number; y: number }, notches: number): void;
   cursorAt(point: { x: number; y: number }): number;
   dispose(): void;
   [Symbol.dispose](): void;

@@ -29,6 +29,10 @@ AETHER_API char* aether_node_get_text_content(aether_node_t node) {
     return aether::strdup(node->text.c_str());
 }
 
+AETHER_API int64_t aether_node_get_style_node_id(aether_node_t node) {
+    return node ? node->style_node_id : 0;
+}
+
 AETHER_API aether_status_t aether_node_append_child(aether_node_t parent, aether_node_t child) {
     if (!parent || !child) return AETHER_ERROR_NULL_ARG;
     if (child->parent) {

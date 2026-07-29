@@ -14,6 +14,7 @@ export const Win32Message = Object.freeze({
   MOUSE_MOVE: 0x0200,
   MOUSE_LEAVE: 0x02a3,
   MOUSE_WHEEL: 0x020a,
+  MOUSE_HWHEEL: 0x020e,
   LBUTTON_DOWN: 0x0201,
   LBUTTON_UP: 0x0202,
   KEY_DOWN: 0x0100,
@@ -493,13 +494,17 @@ export class Win32Window {
         this._host?.pointerLeft();
         this._cursorFromHost({ x: 0, y: 0 });
         return 0;
-      case Win32Message.MOUSE_WHEEL: {
+      case Win32Message.MOUSE_WHEEL:
+      case Win32Message.MOUSE_HWHEEL: {
         const screenPoint = packedPoint(lParam, this.api.ffi);
         const point = { x: screenPoint.x, y: screenPoint.y };
         this.api.user32.screenToClient(this._windowHandle, point);
         const dpiValue = Number(this.api.user32.getDpiForWindow(this._windowHandle)) || 96;
         const dpi = dpiValue / 96;
-        this._host?.mouseWheelScrolled({ x: point.x / dpi, y: point.y / dpi }, highWord(wParam) / 120);
+        const hostPoint = { x: point.x / dpi, y: point.y / dpi };
+        const horizontal = Number(message) === Win32Message.MOUSE_HWHEEL || (Number(wParam) & 0x0004) !== 0;
+        if (horizontal) this._host?.mouseHorizontalWheelScrolled(hostPoint, highWord(wParam) / 120);
+        else this._host?.mouseWheelScrolled(hostPoint, highWord(wParam) / 120);
         return 0;
       }
       case Win32Message.LBUTTON_DOWN:

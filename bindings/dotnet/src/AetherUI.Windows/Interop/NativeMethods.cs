@@ -29,6 +29,8 @@ internal static class NativeMethods
     internal const uint WmLButtonUp = 0x0202;
     internal const uint WmMouseLeave = 0x02A3;
     internal const uint WmMouseWheel = 0x020A;
+    internal const uint WmMouseHWheel = 0x020E;
+    internal const uint MkShift = 0x0004;
     internal const uint TmeLeave = 0x00000002;
     internal const uint DlGcWantArrows = 0x0001;
     internal const uint DlGcWantTab = 0x0002;

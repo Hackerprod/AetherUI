@@ -27,7 +27,7 @@ extern "C" {
  * ABI 1.0, a major-version change denotes an incompatible ABI.
  */
 #define AETHER_ABI_VERSION_MAJOR 0u
-#define AETHER_ABI_VERSION_MINOR 22u
+#define AETHER_ABI_VERSION_MINOR 25u
 #define AETHER_ABI_VERSION_PATCH 0u
 
 #define AETHER_ABI_VERSION_MAKE(major, minor, patch) \
@@ -559,6 +559,7 @@ AETHER_API aether_node_t      aether_node_get_parent(aether_node_t node);
 AETHER_API int32_t            aether_node_get_child_count(aether_node_t node);
 AETHER_API aether_node_t      aether_node_get_child(aether_node_t node, int32_t index);
 AETHER_API char*              aether_node_get_text_content(aether_node_t node);
+AETHER_API int64_t            aether_node_get_style_node_id(aether_node_t node);
 
 /* Element-specific */
 AETHER_API char*           aether_element_get_tag_name(aether_node_t element);
@@ -615,7 +616,33 @@ typedef aether_text_metrics_t (*aether_text_measurer_fn)(
     float max_width,
     void* user_data);
 
-typedef float (*aether_scroll_offset_fn)(
+/* Scroll state is intentionally two-dimensional.  Overflow is resolved per
+   CSS axis and a host may preserve either offset independently. */
+typedef struct aether_scroll_offset_s {
+    float x;
+    float y;
+} aether_scroll_offset_t;
+
+typedef struct aether_scroll_metrics_s {
+    float scrollable_overflow_x;
+    float scrollable_overflow_y;
+    float scroll_offset_x;
+    float scroll_offset_y;
+} aether_scroll_metrics_t;
+
+/* Native scroll chrome geometry. The layout engine resolves this once so every
+   host can use identical track/thumb hit testing and painting semantics. */
+typedef struct aether_scrollbar_geometry_s {
+    aether_bool_t horizontal_visible;
+    aether_bool_t vertical_visible;
+    aether_rectf horizontal_track;
+    aether_rectf horizontal_thumb;
+    aether_rectf vertical_track;
+    aether_rectf vertical_thumb;
+    aether_rectf corner;
+} aether_scrollbar_geometry_t;
+
+typedef aether_scroll_offset_t (*aether_scroll_offset_fn)(
     aether_node_t element,
     void* user_data);
 
@@ -645,6 +672,9 @@ AETHER_API void aether_layout_result_destroy(aether_layout_result_t result);
 AETHER_API aether_layout_box_t aether_layout_result_get_root(aether_layout_result_t result);
 AETHER_API aether_layout_box_t aether_layout_result_find_primary_box(aether_layout_result_t result, aether_node_t element);
 AETHER_API aether_node_t       aether_layout_result_hit_test(aether_layout_result_t result, float x, float y);
+AETHER_API aether_node_t       aether_layout_result_hit_test_with_scroll_offsets(
+    aether_layout_result_t result, float x, float y,
+    aether_scroll_offset_fn offsets, void* user_data);
 AETHER_API int32_t             aether_layout_result_get_paint_order_count(aether_layout_result_t result);
 AETHER_API aether_layout_box_t aether_layout_result_get_paint_order_box(aether_layout_result_t result, int32_t index);
 
@@ -660,7 +690,14 @@ AETHER_API aether_rectf    aether_layout_box_get_padding_box(aether_layout_box_t
 AETHER_API aether_rectf    aether_layout_box_get_content_box(aether_layout_box_t box);
 AETHER_API aether_bool_t   aether_layout_box_is_atomic(aether_layout_box_t box);
 AETHER_API char*           aether_layout_box_get_text(aether_layout_box_t box);
+AETHER_API aether_scroll_metrics_t aether_layout_box_get_scroll_metrics(aether_layout_box_t box);
+AETHER_API aether_scrollbar_geometry_t aether_layout_box_get_scrollbar_geometry(aether_layout_box_t box);
+AETHER_API aether_scrollbar_geometry_t aether_layout_box_get_scrollbar_geometry_at_offset(
+    aether_layout_box_t box,
+    aether_scroll_offset_t offset);
+AETHER_API float           aether_layout_box_get_scrollable_overflow_x(aether_layout_box_t box);
 AETHER_API float           aether_layout_box_get_scrollable_overflow_y(aether_layout_box_t box);
+AETHER_API float           aether_layout_box_get_scroll_offset_x(aether_layout_box_t box);
 AETHER_API float           aether_layout_box_get_scroll_offset_y(aether_layout_box_t box);
 AETHER_API aether_node_t   aether_layout_box_get_element(aether_layout_box_t box);
 AETHER_API int32_t         aether_layout_box_get_child_count(aether_layout_box_t box);
@@ -683,6 +720,11 @@ typedef enum {
     AETHER_PAINT_APPLY_BACKDROP_FILTER,
     AETHER_PAINT_PUSH_TRANSFORM,
     AETHER_PAINT_POP_TRANSFORM,
+    /* Dynamic retained-composition scope. Bindings resolve this stable id
+       against their live scroll state; no layout pointer crosses the ABI. */
+    AETHER_PAINT_PUSH_SCROLL_OFFSET,
+    AETHER_PAINT_POP_SCROLL_OFFSET,
+    AETHER_PAINT_DRAW_SCROLLBAR_CHROME,
 } aether_paint_command_tag_t;
 
 typedef struct {
@@ -709,6 +751,8 @@ typedef struct {
         struct { aether_rectf rect; aether_corner_radii radii;
                  aether_backdrop_filter_list filters; } apply_backdrop_filter;
         struct { aether_transform_matrix matrix; } push_transform;
+        struct { int64_t scroll_container_id; } push_scroll_offset;
+        struct { int64_t scroll_container_id; } draw_scrollbar_chrome;
     } data;
 } aether_paint_command_t;
 
