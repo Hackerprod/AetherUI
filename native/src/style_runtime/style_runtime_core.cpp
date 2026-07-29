@@ -26,8 +26,12 @@ struct runtime_node_state_s {
 
 struct aether_style_update_s {
     aether_node_s* node = nullptr;
-    aether_computed_style_handle_s* current = nullptr;
+    // An update crosses the runtime/binding boundary after the style tree may
+    // have been rebuilt.  It therefore owns a deep snapshot rather than
+    // borrowing storage from runtime_node_state_s.
+    aether_computed_style_handle_s current{};
     uint32_t impact = STYLE_IMPACT_NONE;
+    ~aether_style_update_s() { aether_computed_style_free(&current.style); }
 };
 
 struct aether_style_runtime_s {
@@ -41,6 +45,20 @@ struct aether_style_runtime_s {
     std::unordered_map<aether_node_s*, std::unique_ptr<runtime_node_state_s>> states;
     rule_index_s index;
 };
+
+static aether_style_update_s* make_style_update(aether_node_s* node,
+                                                 aether_computed_style_handle_s& current,
+                                                 uint32_t impact) {
+    auto* update = new (std::nothrow) aether_style_update_s();
+    if (!update) return nullptr;
+    update->node = node;
+    update->impact = impact;
+    if (aether_computed_style_copy(&current, &update->current.style) != AETHER_OK) {
+        delete update;
+        return nullptr;
+    }
+    return update;
+}
 
 static bool is_calc_expression(const char* value) {
     if (!value) return false;
@@ -433,8 +451,13 @@ static void add_generated_pseudo(
     }
     if (insert_before) host->children.insert(host->children.begin(), generated);
     else host->children.push_back(generated);
-    if (impact != STYLE_IMPACT_NONE)
-        updates.push_back(new aether_style_update_s{generated, &state->style, impact});
+    if (impact != STYLE_IMPACT_NONE) {
+        if (auto* update = make_style_update(generated, state->style, impact))
+            updates.push_back(update);
+        else
+            report(runtime, "AETHER-STYLE-UPDATE", "::after", "",
+                   "Unable to snapshot the generated pseudo-element style update.");
+    }
 }
 
 static void resolve_tree(aether_style_runtime_s* runtime, aether_node_s* node,
@@ -442,13 +465,37 @@ static void resolve_tree(aether_style_runtime_s* runtime, aether_node_s* node,
     if (!node) return;
     runtime_node_state_s* current_parent = parent;
     if (node->type == AETHER_NODE_ELEMENT) {
-        if (!node->is_generated) clear_generated_children(runtime, node);
-        uint32_t impact = STYLE_IMPACT_NONE;
-        auto* current = compute_node(runtime, node, parent, impact);
-        current_parent = current;
-        if (impact != STYLE_IMPACT_NONE)
-            updates.push_back(new aether_style_update_s{node, &current->style, impact});
-        if (!node->is_generated) {
+        if (node->is_generated) {
+            // add_generated_pseudo already computed and published this node in
+            // the current traversal.  Reusing that state avoids replacing it
+            // while its update is being consumed below.
+            auto existing = runtime->states.find(node);
+            if (existing != runtime->states.end()) {
+                current_parent = existing->second.get();
+            } else {
+                uint32_t impact = STYLE_IMPACT_NONE;
+                auto* current = compute_node(runtime, node, parent, impact);
+                current_parent = current;
+                if (impact != STYLE_IMPACT_NONE) {
+                    if (auto* update = make_style_update(node, current->style, impact))
+                        updates.push_back(update);
+                    else
+                        report(runtime, "AETHER-STYLE-UPDATE", "::generated", "",
+                               "Unable to snapshot the generated pseudo-element style update.");
+                }
+            }
+        } else {
+            clear_generated_children(runtime, node);
+            uint32_t impact = STYLE_IMPACT_NONE;
+            auto* current = compute_node(runtime, node, parent, impact);
+            current_parent = current;
+            if (impact != STYLE_IMPACT_NONE) {
+                if (auto* update = make_style_update(node, current->style, impact))
+                    updates.push_back(update);
+                else
+                    report(runtime, "AETHER-STYLE-UPDATE", "element", "",
+                           "Unable to snapshot the style update.");
+            }
             add_generated_pseudo(runtime, node, current, aether_pseudo_element_t::before, true, updates);
             add_generated_pseudo(runtime, node, current, aether_pseudo_element_t::after, false, updates);
         }
@@ -535,7 +582,10 @@ AETHER_API aether_status_t aether_style_runtime_get_update(
     if (out_current) {
         auto* copy = new (std::nothrow) aether_computed_style_handle_s();
         if (!copy) return AETHER_ERROR_OUT_OF_MEMORY;
-        copy->style = update->current->style;
+        if (aether_computed_style_copy(&update->current, &copy->style) != AETHER_OK) {
+            delete copy;
+            return AETHER_ERROR_OUT_OF_MEMORY;
+        }
         *out_current = copy;
     }
     if (out_impact) *out_impact = update->impact;

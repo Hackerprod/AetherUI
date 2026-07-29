@@ -84,6 +84,10 @@ struct inline_item_s {
 
 struct aether_layout_result_s {
     aether_layout_box_s* root = nullptr;
+    // Borrowed for the lifetime of a layout result.  Rendering needs the
+    // document element's style to apply CSS canvas-background propagation even
+    // though layout intentionally starts at <body>.
+    aether_style_map_s* style_map = nullptr;
     std::unordered_map<aether_node_s*, aether_layout_box_s*> primary_boxes;
     std::vector<aether_layout_box_s*> paint_order;
     // Anonymous flex items are layout-only nodes.  They must outlive their

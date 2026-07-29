@@ -4,12 +4,14 @@
 
 #include <vector>
 
-// Resolves CSS background-image sizing, positioning, and repetition after layout has produced
-// the painting area and the binding has supplied intrinsic image dimensions. This stays in the
-// core so every binding consumes identical tile geometry.
+// Resolves CSS background-layer sizing, positioning, and repetition after layout has produced
+// the painting area. Raster resources supply intrinsic dimensions; procedural images such as
+// gradients deliberately do not. This stays in the core so every binding consumes identical
+// tile geometry.
 struct aether_background_image_geometry_context_s {
     aether_rectf paint_rect{};
     aether_sizef image_size{};
+    bool has_intrinsic_size = true;
     aether_css_length position_x{};
     aether_css_length position_y{};
     int32_t size_kind = AETHER_BACKGROUND_SIZE_AUTO;
@@ -26,10 +28,14 @@ struct aether_background_image_geometry_context_s {
 struct aether_background_image_tile_s {
     aether_rectf destination{};
     aether_rectf source{};
+    // Unclipped tile bounds. Procedural images use this as their coordinate space so a clipped
+    // edge tile preserves the same gradient phase as the complete tile.
+    aether_rectf tile_rect{};
 };
 
-// Returns false only when intrinsic dimensions or the painting area are invalid. On success,
-// tiles are clipped to paint_rect and source coordinates are adjusted to the clipped portion.
+// Returns false only when sizing or the painting area are invalid. On success, tiles are clipped
+// to paint_rect, source coordinates are adjusted to the clipped portion, and tile_rect retains
+// each original un-clipped tile.
 bool aether_background_image_resolve_geometry(
     const aether_background_image_geometry_context_s& context,
     std::vector<aether_background_image_tile_s>& tiles);

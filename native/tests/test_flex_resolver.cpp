@@ -102,5 +102,43 @@ int main() {
         require(result.items[0].target_main_size >= 0.f && result.items[1].target_main_size >= 0.f,
             "shrink resolution must never manufacture negative main sizes");
     }
+    {
+        auto first = item(28.f);
+        auto second = item(28.f);
+        second.outer_main_size = -8.f;
+        auto items = std::vector<aether_flex_item_input_s>{ first, second };
+        const auto result = resolve(items, 48.f);
+        require(same(result.items[0].target_main_size, 28.f) && same(result.items[1].target_main_size, 28.f),
+            "negative main-axis margins must reduce outer size without shrinking fitting items");
+    }
+    {
+        auto first = item(28.f);
+        auto second = item(28.f);
+        second.outer_main_size = -8.f;
+        auto items = std::vector<aether_flex_item_input_s>{ first, second };
+        const auto result = resolve(items, 40.f);
+        require(same(result.items[0].target_main_size, 24.f) && same(result.items[1].target_main_size, 24.f),
+            "negative margins must still participate in real flex shrink deficits");
+    }
+    {
+        auto first = item(28.f);
+        auto second = item(28.f);
+        auto third = item(28.f);
+        second.outer_main_size = -8.f;
+        auto items = std::vector<aether_flex_item_input_s>{ first, second, third };
+        const auto result = resolve(items, 48.f, true);
+        require(result.lines.size() == 2 && result.lines[0].item_indices.size() == 2 &&
+                result.lines[0].item_indices[0] == 0 && result.lines[0].item_indices[1] == 1,
+            "wrapping must use signed outer margins when selecting flex lines");
+    }
+    {
+        auto first = item(28.f);
+        auto second = item(28.f);
+        second.outer_main_size = 4.f;
+        auto items = std::vector<aether_flex_item_input_s>{ first, second };
+        const auto result = resolve(items, 60.f);
+        require(same(result.items[0].target_main_size, 28.f) && same(result.items[1].target_main_size, 28.f),
+            "positive main-axis margins must retain their existing outer-size behavior");
+    }
     return 0;
 }

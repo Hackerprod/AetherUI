@@ -128,15 +128,17 @@ public sealed class NativeDisplayListInterop : IDisposable
         var directionY = BitConverter.ToSingle(bytes, offset + 4);
         var stopsPointer = Pointer(bytes, offset + 8);
         var count = BitConverter.ToInt32(bytes, offset + 16);
+        if (count < 0 || count > 4096)
+            throw new InvalidOperationException($"Native paint gradient stop count {count} exceeds the ABI safety limit.");
         var stops = new NativeGradientStop[Math.Max(0, count)];
         for (var index = 0; index < stops.Length; index++)
         {
-            var raw = new byte[20];
-            Marshal.Copy(stopsPointer + index * 20, raw, 0, raw.Length);
+            var raw = new byte[52];
+            Marshal.Copy(stopsPointer + index * 52, raw, 0, raw.Length);
             stops[index] = new NativeGradientStop(
                 new NativeColor(BitConverter.ToSingle(raw, 0), BitConverter.ToSingle(raw, 4),
                     BitConverter.ToSingle(raw, 8), BitConverter.ToSingle(raw, 12)),
-                BitConverter.ToSingle(raw, 16));
+                default, false, BitConverter.ToSingle(raw, 44));
         }
         return new NativeGradient(directionX, directionY, stops);
     }

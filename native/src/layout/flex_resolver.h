@@ -47,7 +47,7 @@ struct aether_flex_item_input_s {
     float min_main_size = NAN;
     aether_flex_automatic_minimum_input_s automatic_minimum{};
     float max_main_size = NAN;
-    float outer_main_size = 0.f; // Non-auto main-axis margins.
+    float outer_main_size = 0.f; // Signed non-auto main-axis margins.
     float flex_grow = 0.f;
     float flex_shrink = 1.f;
 };

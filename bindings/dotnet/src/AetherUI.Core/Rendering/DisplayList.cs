@@ -17,7 +17,12 @@ public readonly record struct CornerRadii(
 
 public sealed record FillRoundedRectangleCommand(RectF Rectangle, CornerRadii Radii, ColorRgba Color) : PaintCommand;
 public sealed record DrawBoxShadowCommand(RectF BorderBoxRectangle, CornerRadii Radii, BoxShadow Shadow) : PaintCommand;
-public sealed record FillRoundedRectangleGradientCommand(RectF Rectangle, CornerRadii Radii, LinearGradient Gradient, float Opacity) : PaintCommand;
+/// <summary>
+/// Fills <see cref="Rectangle"/> while evaluating the gradient in <see cref="GradientRectangle"/>
+/// coordinates. The distinction preserves phase across clipped/repeated CSS background tiles.
+/// </summary>
+public sealed record FillRoundedRectangleGradientCommand(
+    RectF Rectangle, CornerRadii Radii, RectF GradientRectangle, LinearGradient Gradient, float Opacity) : PaintCommand;
 public sealed record StrokeRoundedRectangleCommand(RectF Rectangle, CornerRadii Radii, float StrokeWidth, ColorRgba Color) : PaintCommand;
 public sealed record FillBorderSideCommand(
     RectF OuterRectangle, CornerRadii OuterRadii,

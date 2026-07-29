@@ -51,7 +51,138 @@ VerifyVitalisNestedFlexReflowAtValidatorWidth();
 Console.WriteLine("OK: DirectWrite Vitalis nested-flex reflow invariants passed");
 VerifyViewportResizeCoalescing();
 Console.WriteLine("OK: viewport resize coalescing passed");
+VerifyRoundedAvatarPixelsThroughSwapChain();
+Console.WriteLine("OK: Direct2D WARP avatar-radius swap-chain probe passed");
+VerifyFullKanbanAvatarComposition();
 return 0;
+
+static void VerifyRoundedAvatarPixelsThroughSwapChain()
+{
+    var blue = new ColorRgba(0x3b / 255f, 0x82 / 255f, 0xf6 / 255f, 1);
+    var green = new ColorRgba(.1f, .8f, .3f, 1);
+    var white = new ColorRgba(1, 1, 1, 1);
+    foreach (var dpiScale in new[] { 1f, 1.25f, 1.5f })
+    {
+        var pixelWidth = (int)MathF.Round(160 * dpiScale);
+        var pixelHeight = (int)MathF.Round(96 * dpiScale);
+        using var window = HiddenWindow.Create(pixelWidth, pixelHeight);
+        using var backend = new Direct2DRenderBackend(window.Handle, pixelWidth, pixelHeight, dpiScale, DriverType.Warp);
+        var frame = new DisplayList([
+            // The exact avatar fill/stroke pair emitted by the native diagnostic.
+            new FillRoundedRectangleCommand(new RectF(20, 20, 28, 28), CornerRadii.Uniform(14), blue),
+            new StrokeRoundedRectangleCommand(new RectF(21, 21, 26, 26), CornerRadii.Uniform(13), 2, white),
+            // A valid 24x40 CSS box with 50% radii must remain an ellipse.
+            new FillRoundedRectangleCommand(new RectF(80, 20, 24, 40),
+                new CornerRadii(12, 20, 12, 20, 12, 20, 12, 20), green),
+        ]);
+        var pixels = backend.RenderAndCaptureBackBufferForDiagnostics(frame, new ColorRgba(0, 0, 0, 1));
+
+        var blueBounds = FindSolidColorBounds(pixels, pixelWidth, pixelHeight, blue);
+        var whiteBounds = FindSolidColorBounds(pixels, pixelWidth, pixelHeight, white);
+        var ellipseBounds = FindSolidColorBounds(pixels, pixelWidth, pixelHeight, green);
+        var circleExpected = (int)MathF.Round(28 * dpiScale);
+        var ellipseWidthExpected = (int)MathF.Round(24 * dpiScale);
+        var ellipseHeightExpected = (int)MathF.Round(40 * dpiScale);
+        Console.WriteLine($"avatar WARP dpi={dpiScale:F2}: blue={blueBounds}, white={whiteBounds}, ellipse={ellipseBounds}");
+
+        RequireNearSquare(blueBounds, (int)MathF.Round(24 * dpiScale), "avatar interior", dpiScale);
+        RequireNearSquare(whiteBounds, circleExpected, "avatar outer border", dpiScale);
+        if (Math.Abs(ellipseBounds.Width - ellipseWidthExpected) > 2 ||
+            Math.Abs(ellipseBounds.Height - ellipseHeightExpected) > 2 ||
+            ellipseBounds.Height <= ellipseBounds.Width + MathF.Max(3, dpiScale * 8))
+        {
+            throw new InvalidOperationException(
+                $"A 24x40 box with 50% radii must remain an ellipse at dpi={dpiScale:F2}: {ellipseBounds}.");
+        }
+    }
+}
+
+static void RequireNearSquare(PixelBounds bounds, int expectedExtent, string label, float dpiScale)
+{
+    if (Math.Abs(bounds.Width - bounds.Height) > 1 ||
+        Math.Abs(bounds.Width - expectedExtent) > 2 || Math.Abs(bounds.Height - expectedExtent) > 2)
+    {
+        throw new InvalidOperationException(
+            $"Direct2D WARP distorted {label} at dpi={dpiScale:F2}: {bounds}, expected approximately {expectedExtent}px square.");
+    }
+}
+
+static PixelBounds FindSolidColorBounds(byte[] pixels, int pixelWidth, int pixelHeight, ColorRgba color)
+{
+    var blue = (byte)MathF.Round(color.B * 255);
+    var green = (byte)MathF.Round(color.G * 255);
+    var red = (byte)MathF.Round(color.R * 255);
+    var left = pixelWidth;
+    var top = pixelHeight;
+    var right = -1;
+    var bottom = -1;
+    for (var y = 0; y < pixelHeight; ++y)
+    {
+        for (var x = 0; x < pixelWidth; ++x)
+        {
+            var offset = ((y * pixelWidth) + x) * 4;
+            if (Math.Abs(pixels[offset] - blue) > 4 || Math.Abs(pixels[offset + 1] - green) > 4 ||
+                Math.Abs(pixels[offset + 2] - red) > 4 || pixels[offset + 3] < 250)
+            {
+                continue;
+            }
+            left = Math.Min(left, x);
+            top = Math.Min(top, y);
+            right = Math.Max(right, x);
+            bottom = Math.Max(bottom, y);
+        }
+    }
+    if (right < left || bottom < top)
+    {
+        throw new InvalidOperationException("The Direct2D WARP probe did not paint its expected opaque color.");
+    }
+    return new PixelBounds(left, top, right, bottom);
+}
+
+static void VerifyFullKanbanAvatarComposition()
+{
+    var path = FindKanbanFixture();
+    if (path is null)
+    {
+        Console.WriteLine("SKIP: full Kanban avatar diagnostic fixture is unavailable outside the local Validator workspace.");
+        return;
+    }
+
+    var markup = File.ReadAllText(path);
+    var blue = new ColorRgba(0x3b / 255f, 0x82 / 255f, 0xf6 / 255f, 1);
+    var pink = new ColorRgba(0xec / 255f, 0x48 / 255f, 0x99 / 255f, 1);
+    var purple = new ColorRgba(0x8b / 255f, 0x5c / 255f, 0xf6 / 255f, 1);
+    var green = new ColorRgba(0x10 / 255f, 0xb9 / 255f, 0x81 / 255f, 1);
+
+    // This intentionally drives UiDocumentHost, not a hand-built DisplayList. It includes the
+    // native DOM/CSS/layout pipeline, DirectWrite measurement, and the exact swap-chain renderer
+    // used by Validator. The second case separates WARP from the actual GPU path.
+    foreach (var probe in new[] { (Name: "WARP", Driver: DriverType.Warp), (Name: "hardware", Driver: DriverType.Hardware) })
+    {
+        using var window = HiddenWindow.Create(770, 870);
+        using var renderer = new Direct2DRenderBackend(window.Handle, 770, 870, 1, probe.Driver);
+        using var host = new UiDocumentHost(new RawMarkupComponent(markup), renderer, renderer, new UiHostOptions());
+        host.SetViewport(770, 870, 1);
+        renderer.RequestBackBufferCaptureForDiagnostics();
+        host.Render();
+        var pixels = renderer.TakeBackBufferCaptureForDiagnostics();
+        var blueBounds = FindSolidColorBounds(pixels, 770, 870, blue);
+        var pinkBounds = FindSolidColorBounds(pixels, 770, 870, pink);
+        var purpleBounds = FindSolidColorBounds(pixels, 770, 870, purple);
+        var greenBounds = FindSolidColorBounds(pixels, 770, 870, green);
+        Console.WriteLine($"Kanban host {probe.Name}: blue={blueBounds}; pink={pinkBounds}; purple={purpleBounds}; green={greenBounds}");
+    }
+}
+
+static string? FindKanbanFixture()
+{
+    for (var directory = new DirectoryInfo(AppContext.BaseDirectory); directory is not null; directory = directory.Parent)
+    {
+        var candidate = Path.Combine(directory.FullName, ".tmp", "Pages", "kanban_board.html");
+        if (File.Exists(candidate)) return candidate;
+    }
+    return null;
+}
 
 static void VerifyViewportResizeCoalescing()
 {
@@ -1061,4 +1192,10 @@ sealed class HiddenWindow : IDisposable
 sealed class RawMarkupComponent(string markup) : UiComponent
 {
     protected override void BuildRenderTree(MarkupWriter writer) => writer.WriteLiteral(markup);
+}
+
+readonly record struct PixelBounds(int Left, int Top, int Right, int Bottom)
+{
+    public int Width => Right - Left + 1;
+    public int Height => Bottom - Top + 1;
 }

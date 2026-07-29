@@ -210,19 +210,13 @@ int main() {
     diagnostic_capture_s diagnostics{};
     aether_style_runtime_set_diagnostics_callback(runtime, capture_diagnostic, &diagnostics);
     require(aether_doc_parse_html(
-        doc, "<body><div id=\"bad-gradient\" style=\"background-image: linear-gradient(to right, red 10px, blue 90%)\"></div></body>") == AETHER_OK,
-        "invalid gradient fixture parsing failed");
+        doc, "<body><div id=\"length-gradient\" style=\"background-image: linear-gradient(to right, red 10px, blue 90%)\"></div></body>") == AETHER_OK,
+        "length gradient fixture parsing failed");
     updates = nullptr;
     update_count = aether_style_runtime_resolve_subtree(runtime, aether_doc_get_body(doc), &updates);
     require(update_count > 0, "invalid gradient fixture style resolution failed");
     aether_style_updates_free(updates, update_count);
-    require(diagnostics.count == 1, "unsupported gradient stop must emit exactly one diagnostic");
-    require(diagnostics.code == "AETHER-CSS-GRADIENT",
-        "unsupported gradient stop diagnostic code is incorrect");
-    require(diagnostics.property == "background-image",
-        "gradient diagnostic must identify the longhand property");
-    require(diagnostics.value.find("10px") != std::string::npos,
-        "gradient diagnostic must retain the unsupported source value");
+    require(diagnostics.count == 0, "length-based gradient stops must not be rejected during cascade");
 
     diagnostics = {};
     require(aether_doc_parse_html(

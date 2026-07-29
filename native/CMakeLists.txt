@@ -142,9 +142,23 @@ if(AETHERUI_BUILD_TESTS)
     target_link_libraries(aether_background_image_display_list_test PRIVATE AetherUI::Core)
     add_test(NAME aether.background-image-display-list COMMAND aether_background_image_display_list_test)
 
+    add_executable(aether_canvas_background_test tests/test_canvas_background.cpp)
+    target_link_libraries(aether_canvas_background_test PRIVATE AetherUI::Core)
+    add_test(NAME aether.canvas-background COMMAND aether_canvas_background_test)
+
+    # Diagnostic harness for the current Kanban avatar fidelity investigation.
+    # It becomes a CTest regression only after the observed layout/painter
+    # invariant is established from its numeric output.
+    add_executable(aether_avatar_radius_diagnostic tests/test_avatar_radius_diagnostic.cpp)
+    target_link_libraries(aether_avatar_radius_diagnostic PRIVATE AetherUI::Core)
+
     add_executable(aether_background_image_geometry_test tests/test_background_image_geometry.cpp src/rendering/background_image_geometry.cpp)
     target_link_libraries(aether_background_image_geometry_test PRIVATE AetherUI::Core)
     add_test(NAME aether.background-image-geometry COMMAND aether_background_image_geometry_test)
+
+    add_executable(aether_background_gradient_tiling_test tests/test_background_gradient_tiling.cpp)
+    target_link_libraries(aether_background_gradient_tiling_test PRIVATE AetherUI::Core)
+    add_test(NAME aether.background-gradient-tiling COMMAND aether_background_gradient_tiling_test)
 
     add_executable(aether_backdrop_filters_test tests/test_backdrop_filters.cpp)
     target_link_libraries(aether_backdrop_filters_test PRIVATE AetherUI::Core)
@@ -166,6 +180,14 @@ if(AETHERUI_BUILD_TESTS)
     target_link_libraries(aether_auto_margins_test PRIVATE AetherUI::Core)
     target_include_directories(aether_auto_margins_test PRIVATE src/layout)
     add_test(NAME aether.auto-margins COMMAND aether_auto_margins_test)
+
+    add_executable(aether_selector_structure_test tests/test_selector_structure.cpp)
+    target_link_libraries(aether_selector_structure_test PRIVATE AetherUI::Core)
+    add_test(NAME aether.selector-structure COMMAND aether_selector_structure_test)
+
+    add_executable(aether_generated_pseudo_updates_test tests/test_generated_pseudo_updates.cpp)
+    target_link_libraries(aether_generated_pseudo_updates_test PRIVATE AetherUI::Core)
+    add_test(NAME aether.generated-pseudo-updates COMMAND aether_generated_pseudo_updates_test)
 
     add_executable(aether_layout_ownership_test tests/test_layout_ownership.cpp src/layout/layout_box.cpp)
     target_include_directories(aether_layout_ownership_test PRIVATE src/layout include)

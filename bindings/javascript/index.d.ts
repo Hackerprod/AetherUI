@@ -63,7 +63,13 @@ export interface CssLength {
   linearVh: number;
 }
 export interface CssEdges { left: CssLength; top: CssLength; right: CssLength; bottom: CssLength }
-export interface GradientStop { color: Color; offset: number }
+export interface GradientStop {
+  color: Color;
+  /** Authored symbolic stop position; offsets are resolved per final paint box. */
+  position: CssLength;
+  hasPosition: boolean;
+  offset: number;
+}
 export interface LinearGradient { directionX: number; directionY: number; stops: GradientStop[] }
 export interface BoxShadow {
   offsetX: number;

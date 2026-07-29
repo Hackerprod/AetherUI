@@ -67,5 +67,7 @@ AETHER_API aether_status_t aether_computed_style_copy(aether_computed_style_hand
 }
 
 AETHER_API void aether_computed_style_handle_destroy(aether_computed_style_handle_t handle) {
+    if (!handle) return;
+    aether_computed_style_free(&handle->style);
     delete handle;
 }

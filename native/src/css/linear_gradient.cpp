@@ -103,13 +103,15 @@ direction_result try_parse_direction(const std::string& source, float& x, float&
     return direction_result::valid;
 }
 
-bool parse_stop(const std::string& source, aether_color_rgba& color, float& offset, bool& has_offset) {
+bool parse_stop(const std::string& source, aether_gradient_stop& stop) {
     const std::string token = trim(source);
     if (token.empty()) return false;
 
     size_t color_end = token.find_first_of(" \t\r\n");
     const auto open = token.find('(');
-    if (open != std::string::npos) {
+    // Parentheses belong to the color token only when the function starts
+    // before its first whitespace. A later `calc(...)` is the stop position.
+    if (open != std::string::npos && open < color_end) {
         int depth = 0;
         for (size_t index = open; index < token.size(); ++index) {
             if (token[index] == '(') ++depth;
@@ -121,38 +123,42 @@ bool parse_stop(const std::string& source, aether_color_rgba& color, float& offs
         if (depth != 0) return false;
     }
     if (color_end == std::string::npos) color_end = token.size();
-    if (!aether_color_rgba_try_parse(token.substr(0, color_end).c_str(), &color)) return false;
+    if (!aether_color_rgba_try_parse(token.substr(0, color_end).c_str(), &stop.color)) return false;
 
     const auto offset_text = trim(token.substr(color_end));
     if (offset_text.empty()) {
-        has_offset = false;
+        stop.position = aether_css_length_zero();
+        stop.offset = 0.f;
+        stop.has_position = AETHER_FALSE;
         return true;
     }
     aether_css_length length{};
-    if (!aether_css_length_try_parse(offset_text.c_str(), &length) || length.unit != AETHER_CSS_UNIT_PERCENT) return false;
-    offset = std::clamp(length.value / 100.f, 0.f, 1.f);
-    has_offset = true;
+    if (!aether_css_length_try_parse(offset_text.c_str(), &length) ||
+        aether_css_length_is_auto(length)) return false;
+    stop.position = length;
+    stop.offset = 0.f;
+    stop.has_position = AETHER_TRUE;
     return true;
 }
 
-void normalize_offsets(std::vector<aether_gradient_stop>& stops, const std::vector<bool>& explicit_offsets) {
-    if (!explicit_offsets.front()) stops.front().offset = 0.f;
-    if (!explicit_offsets.back()) stops.back().offset = 1.f;
+void normalize_offsets(std::vector<aether_gradient_stop>& stops) {
+    if (!stops.front().has_position) stops.front().offset = 0.f;
+    if (!stops.back().has_position) stops.back().offset = 1.f;
 
     // CSS Images: color-stop positions never move backward. A descending explicit
     // position becomes a hard transition at the preceding used position.
     float previous = stops.front().offset;
     for (size_t index = 1; index < stops.size(); ++index) {
-        const bool endpoint_default = index + 1 == stops.size() && !explicit_offsets[index];
-        if (!explicit_offsets[index] && !endpoint_default) continue;
+        const bool endpoint_default = index + 1 == stops.size() && !stops[index].has_position;
+        if (!stops[index].has_position && !endpoint_default) continue;
         stops[index].offset = std::max(stops[index].offset, previous);
         previous = stops[index].offset;
     }
 
     for (size_t index = 1; index + 1 < stops.size();) {
-        if (explicit_offsets[index]) { ++index; continue; }
+        if (stops[index].has_position) { ++index; continue; }
         const size_t start = index - 1;
-        while (index + 1 < stops.size() && !explicit_offsets[index]) ++index;
+        while (index + 1 < stops.size() && !stops[index].has_position) ++index;
         const size_t end = index;
         const float from = stops[start].offset;
         const float to = stops[end].offset;
@@ -188,18 +194,44 @@ bool aether_linear_gradient_try_parse(const char* source, aether_linear_gradient
     if (parts.size() - first_stop < 2) return false;
 
     std::vector<aether_gradient_stop> stops(parts.size() - first_stop);
-    std::vector<bool> explicit_offsets(stops.size(), false);
     for (size_t index = 0; index < stops.size(); ++index) {
-        bool has_explicit_offset = false;
-        if (!parse_stop(parts[first_stop + index], stops[index].color, stops[index].offset, has_explicit_offset)) return false;
-        explicit_offsets[index] = has_explicit_offset;
+        if (!parse_stop(parts[first_stop + index], stops[index])) return false;
     }
-    normalize_offsets(stops, explicit_offsets);
 
     auto* owned_stops = static_cast<aether_gradient_stop*>(std::malloc(sizeof(aether_gradient_stop) * stops.size()));
     if (!owned_stops) return false;
     std::memcpy(owned_stops, stops.data(), sizeof(aether_gradient_stop) * stops.size());
     *out_gradient = {x, y, owned_stops, static_cast<int32_t>(stops.size())};
     if (out_info) out_info->uses_fixed_corner_direction = uses_fixed_corner_direction;
+    return true;
+}
+
+bool aether_linear_gradient_resolve(const aether_linear_gradient& source,
+                                    const aether_linear_gradient_resolution_context_s& context,
+                                    aether_linear_gradient* out_gradient) {
+    if (!out_gradient || source.stop_count <= 0 || !source.stops ||
+        context.gradient_rect.width < 0.f || context.gradient_rect.height < 0.f) return false;
+    *out_gradient = {};
+
+    const float line_length = std::abs(context.gradient_rect.width * source.direction_x) +
+                              std::abs(context.gradient_rect.height * source.direction_y);
+    if (!std::isfinite(line_length) || line_length <= 0.f) return false;
+
+    std::vector<aether_gradient_stop> stops(source.stops, source.stops + source.stop_count);
+    for (auto& stop : stops) {
+        if (!stop.has_position) continue;
+        const float length = aether_css_length_resolve(stop.position, line_length,
+            context.font_size, context.root_font_size,
+            context.viewport_width, context.viewport_height);
+        if (!std::isfinite(length)) return false;
+        stop.offset = std::clamp(length / line_length, 0.f, 1.f);
+    }
+    normalize_offsets(stops);
+
+    const size_t bytes = sizeof(aether_gradient_stop) * stops.size();
+    auto* owned_stops = static_cast<aether_gradient_stop*>(std::malloc(bytes));
+    if (!owned_stops) return false;
+    std::memcpy(owned_stops, stops.data(), bytes);
+    *out_gradient = {source.direction_x, source.direction_y, owned_stops, source.stop_count};
     return true;
 }

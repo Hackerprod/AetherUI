@@ -32,7 +32,11 @@ internal sealed class RenderingInterop : IDisposable
             0 => new FillRoundedRectangleCommand(Rect(bytes, NativePaintCommandLayout.FillRect), Radii(bytes, NativePaintCommandLayout.FillRadii), Color(bytes, NativePaintCommandLayout.FillColor)),
             1 => new DrawBoxShadowCommand(Rect(bytes, NativePaintCommandLayout.ShadowRect), Radii(bytes, NativePaintCommandLayout.ShadowRadii), new BoxShadow(
                 Float(bytes, NativePaintCommandLayout.ShadowOffsetX), Float(bytes, NativePaintCommandLayout.ShadowOffsetX + 4), Float(bytes, NativePaintCommandLayout.ShadowOffsetX + 8), Float(bytes, NativePaintCommandLayout.ShadowOffsetX + 12), Color(bytes, NativePaintCommandLayout.ShadowColor), Int(bytes, NativePaintCommandLayout.ShadowInset) != 0)),
-            2 => new FillRoundedRectangleGradientCommand(Rect(bytes, NativePaintCommandLayout.GradientRect), Radii(bytes, NativePaintCommandLayout.GradientRadii), Gradient(command), Float(bytes, NativePaintCommandLayout.GradientOpacity)),
+            2 => new FillRoundedRectangleGradientCommand(
+                Rect(bytes, NativePaintCommandLayout.GradientRect),
+                Radii(bytes, NativePaintCommandLayout.GradientRadii),
+                Rect(bytes, NativePaintCommandLayout.GradientCoordinateRect),
+                Gradient(command), Float(bytes, NativePaintCommandLayout.GradientOpacity)),
             3 => new StrokeRoundedRectangleCommand(Rect(bytes, NativePaintCommandLayout.StrokeRect), Radii(bytes, NativePaintCommandLayout.StrokeRadii), Float(bytes, NativePaintCommandLayout.StrokeWidth), Color(bytes, NativePaintCommandLayout.StrokeColor)),
             4 => new DrawTextCommand(command.Text ?? string.Empty, Rect(bytes, NativePaintCommandLayout.TextRect), Family(bytes, NativePaintCommandLayout.TextFamily), Float(bytes, NativePaintCommandLayout.TextSize),
                 (FontWeight)Int(bytes, NativePaintCommandLayout.TextWeight), (TextAlign)Int(bytes, NativePaintCommandLayout.TextAlignment), Color(bytes, NativePaintCommandLayout.TextColor), Int(bytes, NativePaintCommandLayout.TextWrap) != 0),

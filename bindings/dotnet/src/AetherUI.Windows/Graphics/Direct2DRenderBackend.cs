@@ -1,5 +1,6 @@
 using System.Drawing;
 using System.Numerics;
+using System.Runtime.InteropServices;
 using AetherUI.Css;
 using AetherUI.Layout;
 using AetherUI.Primitives;
@@ -27,6 +28,7 @@ namespace AetherUI.Windows.Graphics;
 public sealed class Direct2DRenderBackend : IRenderBackend, ITextMeasurer
 {
     private readonly nint _windowHandle;
+    private readonly DriverType? _forcedDriverType;
     private readonly ID2D1Factory1 _d2dFactory;
     private readonly IDWriteFactory2 _writeFactory;
     private readonly Dictionary<ColorRgba, ID2D1SolidColorBrush> _brushes = new();
@@ -63,6 +65,8 @@ public sealed class Direct2DRenderBackend : IRenderBackend, ITextMeasurer
     private bool _disposed;
     private int _lastTransformPushes;
     private int _lastTransformPops;
+    private bool _diagnosticCaptureRequested;
+    private byte[]? _diagnosticCapturedFrame;
 
     // A clip is expressed in the coordinate space that was active when it was pushed. Keeping
     // that matrix with the clip is essential when a text-shadow cache miss or backdrop snapshot
@@ -82,7 +86,93 @@ public sealed class Direct2DRenderBackend : IRenderBackend, ITextMeasurer
     internal int LastTransformPushes => _lastTransformPushes;
     internal int LastTransformPops => _lastTransformPops;
 
+    /// <summary>
+    /// Renders through the production swap-chain path and copies that exact completed
+    /// frame before Present changes the current flip-sequential back buffer.
+    /// </summary>
+    internal byte[] RenderAndCaptureBackBufferForDiagnostics(DisplayList displayList, ColorRgba clearColor)
+    {
+        RequestBackBufferCaptureForDiagnostics();
+        try
+        {
+            Render(displayList, clearColor);
+            return TakeBackBufferCaptureForDiagnostics();
+        }
+        finally
+        {
+            _diagnosticCaptureRequested = false;
+            _diagnosticCapturedFrame = null;
+        }
+    }
+
+    /// <summary>Arms one production render for a deterministic, pre-Present back-buffer copy.</summary>
+    internal void RequestBackBufferCaptureForDiagnostics()
+    {
+        _diagnosticCapturedFrame = null;
+        _diagnosticCaptureRequested = true;
+    }
+
+    /// <summary>Returns the frame requested by <see cref="RequestBackBufferCaptureForDiagnostics"/>.</summary>
+    internal byte[] TakeBackBufferCaptureForDiagnostics()
+    {
+        var capture = _diagnosticCapturedFrame
+            ?? throw new InvalidOperationException("The Direct2D diagnostic frame was not captured before Present.");
+        _diagnosticCaptureRequested = false;
+        _diagnosticCapturedFrame = null;
+        return capture;
+    }
+
+    private unsafe byte[] CopyBackBufferForDiagnostics()
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        if (_isDrawSegmentActive)
+        {
+            throw new InvalidOperationException("Cannot capture the back buffer while a Direct2D draw segment is active.");
+        }
+
+        var device = _d3dDevice ?? throw new InvalidOperationException("The D3D11 device is not initialized.");
+        var context = _d3dContext ?? throw new InvalidOperationException("The D3D11 context is not initialized.");
+        using var source = _swapChain?.GetBuffer<ID3D11Texture2D>(0)
+            ?? throw new InvalidOperationException("The swap-chain back buffer is not initialized.");
+        using var staging = device.CreateTexture2D(new Texture2DDescription(
+            Format.B8G8R8A8_UNorm, (uint)_targetPixelWidth, (uint)_targetPixelHeight, 1, 1,
+            BindFlags.None, ResourceUsage.Staging, CpuAccessFlags.Read, 1, 0, ResourceOptionFlags.None));
+        context.CopyResource(staging, source);
+        context.Flush();
+
+        var pixels = new byte[_targetPixelWidth * _targetPixelHeight * 4];
+        var mapped = context.Map(staging, 0, MapMode.Read, Vortice.Direct3D11.MapFlags.None);
+        try
+        {
+            var sourceBytes = (byte*)mapped.DataPointer;
+            for (var row = 0; row < _targetPixelHeight; ++row)
+            {
+                Marshal.Copy((nint)(sourceBytes + row * mapped.RowPitch), pixels,
+                    row * _targetPixelWidth * 4, _targetPixelWidth * 4);
+            }
+        }
+        finally
+        {
+            context.Unmap(staging, 0);
+        }
+        return pixels;
+    }
+
     public Direct2DRenderBackend(nint windowHandle, int pixelWidth, int pixelHeight, float dpiScale)
+        : this(windowHandle, pixelWidth, pixelHeight, dpiScale, null)
+    {
+    }
+
+    // The friend regression assembly uses this overload to exercise the exact
+    // swap-chain pipeline deterministically on WARP.
+    internal Direct2DRenderBackend(nint windowHandle, int pixelWidth, int pixelHeight, float dpiScale,
+        DriverType forcedDriverType)
+        : this(windowHandle, pixelWidth, pixelHeight, dpiScale, (DriverType?)forcedDriverType)
+    {
+    }
+
+    private Direct2DRenderBackend(nint windowHandle, int pixelWidth, int pixelHeight, float dpiScale,
+        DriverType? forcedDriverType)
     {
         if (windowHandle == nint.Zero)
         {
@@ -90,6 +180,7 @@ public sealed class Direct2DRenderBackend : IRenderBackend, ITextMeasurer
         }
 
         _windowHandle = windowHandle;
+        _forcedDriverType = forcedDriverType;
         _pixelWidth = Math.Max(1, pixelWidth);
         _pixelHeight = Math.Max(1, pixelHeight);
         _dpiScale = NormalizeDpiScale(dpiScale);
@@ -366,6 +457,12 @@ public sealed class Direct2DRenderBackend : IRenderBackend, ITextMeasurer
                 RenderCore(displayList, clearColor, allowDeviceRetry: false);
                 return;
             }
+        }
+
+        if (_diagnosticCaptureRequested)
+        {
+            _diagnosticCapturedFrame = CopyBackBufferForDiagnostics();
+            _diagnosticCaptureRequested = false;
         }
 
         var presentResult = _swapChain!.Present(1, PresentFlags.None);
@@ -664,6 +761,7 @@ public sealed class Direct2DRenderBackend : IRenderBackend, ITextMeasurer
             verticalCenter: false);
 
         var rect = command.Rectangle;
+        var gradientRect = command.Rectangle;
         var gradient = command.Gradient;
         var stops = new Vortice.Direct2D1.GradientStop[gradient.Stops.Count];
         for (var i = 0; i < gradient.Stops.Count; i++)
@@ -678,9 +776,9 @@ public sealed class Direct2DRenderBackend : IRenderBackend, ITextMeasurer
         }
 
         using var stopCollection = target.CreateGradientStopCollection(stops);
-        var centerX = rect.X + rect.Width / 2f;
-        var centerY = rect.Y + rect.Height / 2f;
-        var halfLength = MathF.Abs(rect.Width / 2f * gradient.DirectionX) + MathF.Abs(rect.Height / 2f * gradient.DirectionY);
+        var centerX = gradientRect.X + gradientRect.Width / 2f;
+        var centerY = gradientRect.Y + gradientRect.Height / 2f;
+        var halfLength = MathF.Abs(gradientRect.Width / 2f * gradient.DirectionX) + MathF.Abs(gradientRect.Height / 2f * gradient.DirectionY);
         var start = new Vector2(centerX - gradient.DirectionX * halfLength, centerY - gradient.DirectionY * halfLength);
         var end = new Vector2(centerX + gradient.DirectionX * halfLength, centerY + gradient.DirectionY * halfLength);
 
@@ -758,6 +856,7 @@ public sealed class Direct2DRenderBackend : IRenderBackend, ITextMeasurer
     private void DrawGradientFill(ID2D1RenderTarget target, FillRoundedRectangleGradientCommand command)
     {
         var rect = command.Rectangle;
+        var gradientRect = command.GradientRectangle;
         var gradient = command.Gradient;
         if (gradient.Stops.Count < 2 || rect.Width <= 0 || rect.Height <= 0)
         {
@@ -778,9 +877,9 @@ public sealed class Direct2DRenderBackend : IRenderBackend, ITextMeasurer
 
         using var stopCollection = target.CreateGradientStopCollection(stops);
 
-        var centerX = rect.X + rect.Width / 2f;
-        var centerY = rect.Y + rect.Height / 2f;
-        var halfLength = MathF.Abs(rect.Width / 2f * gradient.DirectionX) + MathF.Abs(rect.Height / 2f * gradient.DirectionY);
+        var centerX = gradientRect.X + gradientRect.Width / 2f;
+        var centerY = gradientRect.Y + gradientRect.Height / 2f;
+        var halfLength = MathF.Abs(gradientRect.Width / 2f * gradient.DirectionX) + MathF.Abs(gradientRect.Height / 2f * gradient.DirectionY);
         var start = new Vector2(centerX - gradient.DirectionX * halfLength, centerY - gradient.DirectionY * halfLength);
         var end = new Vector2(centerX + gradient.DirectionX * halfLength, centerY + gradient.DirectionY * halfLength);
 
@@ -897,6 +996,12 @@ public sealed class Direct2DRenderBackend : IRenderBackend, ITextMeasurer
     private void CreateDeviceResources()
     {
         ReleaseDeviceResources();
+        if (_forcedDriverType is { } forcedDriverType)
+        {
+            CreateD3DDevice(forcedDriverType);
+            CreateD2DAndSwapChain();
+            return;
+        }
         try
         {
             CreateD3DDevice(DriverType.Hardware);

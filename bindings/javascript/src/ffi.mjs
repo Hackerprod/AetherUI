@@ -5,7 +5,7 @@ import { existsSync } from "node:fs";
 // The command union and computed-style layout include background layers, backdrop filters,
 // resolved image geometry, typed 2D transforms, transform Display List brackets, align-self, and overflow axes through ABI 0.19;
 // accepting an older minor would read invalid offsets.
-export const SUPPORTED_ABI = Object.freeze({ major: 0, minor: 17, patch: 0 });
+export const SUPPORTED_ABI = Object.freeze({ major: 0, minor: 22, patch: 0 });
 
 export const CAPABILITIES = Object.freeze({
   DOM: 1n << 0n,
@@ -193,9 +193,20 @@ function createTypes(ffi) {
     bottom_right_x: "float", bottom_right_y: "float",
     bottom_left_x: "float", bottom_left_y: "float",
   });
+  const CssLength = ffi.struct("aether_css_length", {
+    value: "float",
+    unit: "int32_t",
+    linear_percent: "float",
+    linear_em: "float",
+    linear_rem: "float",
+    linear_vw: "float",
+    linear_vh: "float",
+  });
   const GradientStop = ffi.struct("aether_gradient_stop", {
     color: Color,
+    position: CssLength,
     offset: "float",
+    has_position: "int32_t",
   });
   const GradientStopPointer = ffi.pointer(GradientStop);
   const LinearGradient = ffi.struct("aether_linear_gradient", {
@@ -216,15 +227,6 @@ function createTypes(ffi) {
   const ShadowList = ffi.struct("aether_shadow_list", {
     items: ShadowPointer,
     count: "int32_t",
-  });
-  const CssLength = ffi.struct("aether_css_length", {
-    value: "float",
-    unit: "int32_t",
-    linear_percent: "float",
-    linear_em: "float",
-    linear_rem: "float",
-    linear_vw: "float",
-    linear_vh: "float",
   });
   const FlexBasis = ffi.struct("aether_flex_basis", {
     kind: "int32_t",
@@ -396,6 +398,7 @@ function createTypes(ffi) {
   const FillRoundedRectGradient = ffi.struct("aether_paint_fill_rounded_rect_gradient", {
     rect: Rect,
     radii: CornerRadii,
+    gradient_rect: Rect,
     gradient: LinearGradient,
     opacity: "float",
   });

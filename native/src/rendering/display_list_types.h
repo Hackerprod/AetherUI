@@ -9,6 +9,9 @@ struct aether_display_list_builder_s {
     void*                   image_dimensions_data = nullptr;
     aether_sizef            viewport{};
     float                   root_font_size = 16.f;
+    // When body supplies the CSS canvas background, its ordinary box must not
+    // paint that same background a second time.
+    const aether_node_s*    canvas_background_source = nullptr;
 };
 
 struct aether_display_list_s {

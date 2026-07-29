@@ -91,7 +91,7 @@ int main() {
     backgrounds.items[0].gradient.stops = static_cast<aether_gradient_stop*>(std::malloc(sizeof(aether_gradient_stop)));
     require(backgrounds.items[0].gradient.stops != nullptr, "background gradient stop allocation failed");
     backgrounds.items[0].gradient.stop_count = 1;
-    backgrounds.items[0].gradient.stops[0] = {{1, 0, 0, 1}, 0};
+    backgrounds.items[0].gradient.stops[0] = {{1, 0, 0, 1}, aether_css_length_zero(), 0.f, AETHER_TRUE};
     backgrounds.items[1].kind = AETHER_BACKGROUND_LAYER_IMAGE_URL;
     backgrounds.items[1].image_source = static_cast<char*>(std::malloc(18));
     require(backgrounds.items[1].image_source != nullptr, "background image source allocation failed");

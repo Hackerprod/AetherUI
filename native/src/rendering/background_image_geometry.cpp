@@ -40,10 +40,18 @@ bool resolve_image_size(const aether_background_image_geometry_context_s& contex
     const float source_height = context.image_size.height;
     const float area_width = context.paint_rect.width;
     const float area_height = context.paint_rect.height;
-    if (!(source_width > 0.f && source_height > 0.f && area_width > 0.f && area_height > 0.f)) return false;
+    if (!(area_width > 0.f && area_height > 0.f)) return false;
+    if (context.has_intrinsic_size && !(source_width > 0.f && source_height > 0.f)) return false;
 
     if (context.size_kind == AETHER_BACKGROUND_SIZE_COVER ||
         context.size_kind == AETHER_BACKGROUND_SIZE_CONTAIN) {
+        // A procedural CSS image has neither an intrinsic size nor ratio. Both cover and contain
+        // therefore resolve to the background positioning area.
+        if (!context.has_intrinsic_size) {
+            width = area_width;
+            height = area_height;
+            return true;
+        }
         const float scale_x = area_width / source_width;
         const float scale_y = area_height / source_height;
         const float scale = context.size_kind == AETHER_BACKGROUND_SIZE_COVER
@@ -56,16 +64,16 @@ bool resolve_image_size(const aether_background_image_geometry_context_s& contex
     const bool auto_x = context.size_x.unit == AETHER_CSS_UNIT_AUTO;
     const bool auto_y = context.size_y.unit == AETHER_CSS_UNIT_AUTO;
     if (auto_x && auto_y) {
-        width = source_width;
-        height = source_height;
+        width = context.has_intrinsic_size ? source_width : area_width;
+        height = context.has_intrinsic_size ? source_height : area_height;
     } else if (auto_x) {
         height = resolve_length(context.size_y, area_height, context.font_size, context.root_font_size,
                                 context.viewport_width, context.viewport_height);
-        width = source_width * height / source_height;
+        width = context.has_intrinsic_size ? source_width * height / source_height : area_width;
     } else if (auto_y) {
         width = resolve_length(context.size_x, area_width, context.font_size, context.root_font_size,
                                context.viewport_width, context.viewport_height);
-        height = source_height * width / source_width;
+        height = context.has_intrinsic_size ? source_height * width / source_width : area_height;
     } else {
         width = resolve_length(context.size_x, area_width, context.font_size, context.root_font_size,
                                context.viewport_width, context.viewport_height);
@@ -149,12 +157,15 @@ bool aether_background_image_resolve_geometry(
             float clipped_x = 0.f;
             float clipped_width = 0.f;
             if (!intersect(x.start, x.length, context.paint_rect.x, context.paint_rect.width, clipped_x, clipped_width)) continue;
-            const float source_x = (clipped_x - x.start) * context.image_size.width / x.length;
-            const float source_y = (clipped_y - y.start) * context.image_size.height / y.length;
-            const float source_width = clipped_width * context.image_size.width / x.length;
-            const float source_height = clipped_height * context.image_size.height / y.length;
+            const float source_width_base = context.has_intrinsic_size ? context.image_size.width : image_width;
+            const float source_height_base = context.has_intrinsic_size ? context.image_size.height : image_height;
+            const float source_x = (clipped_x - x.start) * source_width_base / x.length;
+            const float source_y = (clipped_y - y.start) * source_height_base / y.length;
+            const float source_width = clipped_width * source_width_base / x.length;
+            const float source_height = clipped_height * source_height_base / y.length;
             tiles.push_back({{clipped_x, clipped_y, clipped_width, clipped_height},
-                             {source_x, source_y, source_width, source_height}});
+                             {source_x, source_y, source_width, source_height},
+                             {x.start, y.start, x.length, y.length}});
         }
     }
     return !tiles.empty();

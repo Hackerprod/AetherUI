@@ -2,9 +2,12 @@
 #include "display_list_types.h"
 #include "../layout/layout_types.h"
 #include "../layout/form_controls.h"
+#include "../css/style_map_types.h"
+#include "../dom/dom_types.h"
 #include "../abi/aether_abi.h"
 #include "../dom/dom_types.h"
 #include "../css/border_radii.h"
+#include "../css/linear_gradient.h"
 #include "border_painter.h"
 #include "background_image_geometry.h"
 #include "transform_matrix.h"
@@ -40,6 +43,19 @@ static aether_linear_gradient copy_gradient(const aether_linear_gradient& src) {
     return g;
 }
 
+static bool resolve_gradient_for_paint(const aether_display_list_builder_s* builder,
+                                       const aether_linear_gradient& source,
+                                       aether_rectf gradient_rect, float font_size,
+                                       aether_linear_gradient* resolved) {
+    aether_linear_gradient_resolution_context_s context{};
+    context.gradient_rect = gradient_rect;
+    context.font_size = font_size;
+    context.root_font_size = builder->root_font_size;
+    context.viewport_width = builder->viewport.width;
+    context.viewport_height = builder->viewport.height;
+    return aether_linear_gradient_resolve(source, context, resolved);
+}
+
 /* ── command emitters ─────────────────────────────────────────────── */
 
 static void emit_fill_rounded_rect(std::vector<aether_paint_command_t>& cmds,
@@ -52,10 +68,12 @@ static void emit_fill_rounded_rect(std::vector<aether_paint_command_t>& cmds,
 
 static void emit_fill_rounded_rect_gradient(std::vector<aether_paint_command_t>& cmds,
                                              aether_rectf rect, aether_corner_radii radii,
-                                             const aether_linear_gradient& gradient, float opacity) {
+                                             const aether_linear_gradient& gradient, float opacity,
+                                             aether_rectf gradient_rect = {}) {
     aether_paint_command_t cmd{};
     cmd.tag = AETHER_PAINT_FILL_ROUNDED_RECT_GRADIENT;
-    cmd.data.fill_rounded_rect_gradient = {rect, radii, copy_gradient(gradient), opacity};
+    if (gradient_rect.width <= 0.f || gradient_rect.height <= 0.f) gradient_rect = rect;
+    cmd.data.fill_rounded_rect_gradient = {rect, radii, gradient_rect, copy_gradient(gradient), opacity};
     cmds.push_back(cmd);
 }
 
@@ -216,7 +234,7 @@ static void paint_box_shadows(aether_layout_box_s* box,
                                std::vector<aether_paint_command_t>& cmds);
 
 static void paint_background_and_border(aether_display_list_builder_s* builder, aether_layout_box_s* box,
-                                         std::vector<aether_paint_command_t>& cmds);
+                                         bool suppress_background, std::vector<aether_paint_command_t>& cmds);
 
 static void paint_scrollbar(aether_layout_box_s* box,
                              std::vector<aether_paint_command_t>& cmds);
@@ -259,9 +277,14 @@ static void paint_box(aether_display_list_builder_s* builder,
             emit_text_shadows(cmds, style, box->text.c_str(), box->content_box,
                               AETHER_TEXT_ALIGN_START, false);
             if (style.has_text_gradient) {
-                emit_draw_text_gradient(cmds, box->text.c_str(), box->content_box,
-                                        style.font_family, style.font_size, style.font_weight,
-                                        AETHER_TEXT_ALIGN_START, style.text_gradient, style.opacity);
+                aether_linear_gradient gradient{};
+                if (resolve_gradient_for_paint(builder, style.text_gradient, box->content_box,
+                                               style.font_size, &gradient)) {
+                    emit_draw_text_gradient(cmds, box->text.c_str(), box->content_box,
+                                            style.font_family, style.font_size, style.font_weight,
+                                            AETHER_TEXT_ALIGN_START, gradient, style.opacity);
+                    aether_linear_gradient_free(&gradient);
+                }
             } else {
                 emit_draw_text(cmds, box->text.c_str(), box->content_box,
                                style.font_family, style.font_size, style.font_weight,
@@ -277,7 +300,7 @@ static void paint_box(aether_display_list_builder_s* builder,
     paint_box_shadows(box, cmds);
 
     // Background fill + border stroke
-    paint_background_and_border(builder, box, cmds);
+    paint_background_and_border(builder, box, box->element == builder->canvas_background_source, cmds);
 
     // Clip for overflow:hidden/scroll
     bool is_scroll_container = style.overflow_y == AETHER_OVERFLOW_AUTO || style.overflow_y == AETHER_OVERFLOW_SCROLL;
@@ -344,33 +367,56 @@ static void paint_box_shadows(aether_layout_box_s* box,
 
 /* ── paint_background_and_border ──────────────────────────────────── */
 
-static void paint_background_and_border(aether_display_list_builder_s* builder, aether_layout_box_s* box,
-                                         std::vector<aether_paint_command_t>& cmds)
+static void paint_background_layers(aether_display_list_builder_s* builder,
+                                    const aether_computed_style_t& style,
+                                    const aether_rectf& paint_rect,
+                                    const aether_corner_radii& radii,
+                                    std::vector<aether_paint_command_t>& cmds)
 {
-    auto& style = box->style;
-    const auto radii = aether_border_radii_resolve(style.border_radii, box->border_box, style.font_size);
-
-    // Flat Display List v1 semantics: this snapshots exactly the commands already
-    // painted before this box, never its own background, border, or descendants.
-    emit_apply_backdrop_filter(cmds, box->border_box, radii, style.backdrop_filters);
-
-    auto bg = apply_opacity(style.background_color, style.opacity);
+    const auto bg = apply_opacity(style.background_color, style.opacity);
     if (bg.a > 0) {
-        emit_fill_rounded_rect(cmds, box->border_box, radii, bg);
+        emit_fill_rounded_rect(cmds, paint_rect, radii, bg);
     }
     // CSS paints the first declared background layer on top. Emit the list in reverse so the
     // flat display list preserves that order above the already-painted background color.
     if (style.background_layers.items) {
+        // Background layers are clipped as a group. Besides obeying border-radius, this keeps
+        // repeated procedural tiles from assigning the corner radius to every individual tile.
+        emit_push_clip(cmds, paint_rect, radii);
         for (int32_t index = style.background_layers.count - 1; index >= 0; --index) {
             const auto& layer = style.background_layers.items[index];
             if (layer.kind == AETHER_BACKGROUND_LAYER_LINEAR_GRADIENT) {
-                emit_fill_rounded_rect_gradient(cmds, box->border_box, radii, layer.gradient, style.opacity);
+                aether_background_image_geometry_context_s context{};
+                context.paint_rect = paint_rect;
+                context.has_intrinsic_size = false;
+                context.position_x = layer.position_x;
+                context.position_y = layer.position_y;
+                context.size_kind = layer.size_kind;
+                context.size_x = layer.size_x;
+                context.size_y = layer.size_y;
+                context.repeat_x = layer.repeat_x;
+                context.repeat_y = layer.repeat_y;
+                context.font_size = style.font_size;
+                context.root_font_size = builder->root_font_size;
+                context.viewport_width = builder->viewport.width;
+                context.viewport_height = builder->viewport.height;
+                std::vector<aether_background_image_tile_s> tiles;
+                if (aether_background_image_resolve_geometry(context, tiles)) {
+                    for (const auto& tile : tiles) {
+                        aether_linear_gradient gradient{};
+                        if (!resolve_gradient_for_paint(builder, layer.gradient, tile.tile_rect,
+                                                        style.font_size, &gradient)) continue;
+                        emit_fill_rounded_rect_gradient(cmds, tile.destination, {}, gradient,
+                                                        style.opacity, tile.tile_rect);
+                        aether_linear_gradient_free(&gradient);
+                    }
+                }
             } else if (layer.kind == AETHER_BACKGROUND_LAYER_IMAGE_URL && layer.image_source) {
                 aether_sizef image_size{};
                 if (builder->image_dimensions &&
                     builder->image_dimensions(layer.image_source, &image_size, builder->image_dimensions_data) == AETHER_TRUE) {
                     aether_background_image_geometry_context_s context{};
-                    context.paint_rect = box->border_box;
+                    context.paint_rect = paint_rect;
                     context.image_size = image_size;
                     context.position_x = layer.position_x;
                     context.position_y = layer.position_y;
@@ -386,7 +432,7 @@ static void paint_background_and_border(aether_display_list_builder_s* builder, 
                     std::vector<aether_background_image_tile_s> tiles;
                     if (aether_background_image_resolve_geometry(context, tiles)) {
                         for (const auto& tile : tiles) {
-                            emit_draw_background_image(cmds, box->border_box, layer, style.opacity,
+                            emit_draw_background_image(cmds, paint_rect, layer, style.opacity,
                                                        tile.source, tile.destination, AETHER_TRUE);
                         }
                         continue;
@@ -394,12 +440,74 @@ static void paint_background_and_border(aether_display_list_builder_s* builder, 
                 }
                 // Pending or failed resources retain the declarative command so the binding can
                 // request it; the renderer intentionally paints no unresolved command.
-                emit_draw_background_image(cmds, box->border_box, layer, style.opacity);
+                emit_draw_background_image(cmds, paint_rect, layer, style.opacity);
             }
         }
+        emit_pop_clip(cmds);
+    }
+}
+
+static void paint_background_and_border(aether_display_list_builder_s* builder, aether_layout_box_s* box,
+                                         const bool suppress_background, std::vector<aether_paint_command_t>& cmds)
+{
+    auto& style = box->style;
+    const auto radii = aether_border_radii_resolve(style.border_radii, box->border_box, style.font_size);
+
+    // Flat Display List v1 semantics: this snapshots exactly the commands already
+    // painted before this box, never its own background, border, or descendants.
+    emit_apply_backdrop_filter(cmds, box->border_box, radii, style.backdrop_filters);
+    if (!suppress_background) {
+        paint_background_layers(builder, style, box->border_box, radii, cmds);
     }
 
     aether_paint_border(style, box->border_box, radii, cmds);
+}
+
+static bool has_canvas_eligible_background(const aether_computed_style_t& style) {
+    return style.background_color.a > 0.f ||
+        (style.background_layers.count > 0 && style.background_layers.items != nullptr);
+}
+
+static const aether_computed_style_t* style_for_node(const aether_style_map_s* styles,
+                                                      const aether_node_s* node) {
+    if (!styles || !node) return nullptr;
+    const auto found = styles->styles.find(const_cast<aether_node_s*>(node));
+    return found == styles->styles.end() ? nullptr : &found->second;
+}
+
+static const aether_node_s* document_element_for(const aether_node_s* body) {
+    for (auto* node = body ? body->parent : nullptr; node; node = node->parent) {
+        if (node->type == AETHER_NODE_ELEMENT && node->tag_name == "html") return node;
+    }
+    return nullptr;
+}
+
+static void paint_canvas_background(aether_display_list_builder_s* builder,
+                                    const aether_layout_result_s* layout,
+                                    std::vector<aether_paint_command_t>& cmds) {
+    const auto* body = layout->root ? layout->root->element : nullptr;
+    const auto* html = document_element_for(body);
+    const auto* html_style = style_for_node(layout->style_map, html);
+    const auto* body_style = body ? &layout->root->style : nullptr;
+
+    // CSS 2.1 §14.2: the root background paints the canvas.  When it is fully
+    // transparent/no-image, body's background is propagated instead and body
+    // becomes transparent for its ordinary box paint.
+    const aether_computed_style_t* source_style = nullptr;
+    const aether_node_s* source_node = nullptr;
+    if (html_style && has_canvas_eligible_background(*html_style)) {
+        source_style = html_style;
+        source_node = html;
+    } else if (body_style && has_canvas_eligible_background(*body_style)) {
+        source_style = body_style;
+        source_node = body;
+    }
+    if (!source_style) return;
+
+    const aether_rectf canvas{0.f, 0.f, layout->viewport.width, layout->viewport.height};
+    const aether_corner_radii square{};
+    paint_background_layers(builder, *source_style, canvas, square, cmds);
+    builder->canvas_background_source = source_node == body ? source_node : nullptr;
 }
 
 /* ── paint_scrollbar ──────────────────────────────────────────────── */
@@ -510,7 +618,10 @@ AETHER_API aether_status_t aether_display_list_build(
     auto* list = new(std::nothrow) aether_display_list_s();
     if (!list) return AETHER_ERROR_OUT_OF_MEMORY;
 
+    builder->canvas_background_source = nullptr;
+    paint_canvas_background(builder, layout, list->commands);
     paint_box(builder, layout->root, focused_element, list->commands);
+    builder->canvas_background_source = nullptr;
     *out_list = list;
     return AETHER_OK;
 }
@@ -546,6 +657,7 @@ AETHER_API aether_status_t aether_display_list_get_command(
         case AETHER_PAINT_FILL_ROUNDED_RECT_GRADIENT:
             out_cmd->data.fill_rounded_rect_gradient.rect = src.data.fill_rounded_rect_gradient.rect;
             out_cmd->data.fill_rounded_rect_gradient.radii = src.data.fill_rounded_rect_gradient.radii;
+            out_cmd->data.fill_rounded_rect_gradient.gradient_rect = src.data.fill_rounded_rect_gradient.gradient_rect;
             out_cmd->data.fill_rounded_rect_gradient.opacity = src.data.fill_rounded_rect_gradient.opacity;
             out_cmd->data.fill_rounded_rect_gradient.gradient = copy_gradient(src.data.fill_rounded_rect_gradient.gradient);
             break;

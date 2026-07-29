@@ -10,7 +10,7 @@ public readonly record struct NativeColorEdges(NativeColor Left, NativeColor Top
 public readonly record struct NativeBorderStyleEdges(int Left, int Top, int Right, int Bottom);
 public readonly record struct NativeCornerRadius(NativeLength Horizontal, NativeLength Vertical);
 public readonly record struct NativeBorderRadii(NativeCornerRadius TopLeft, NativeCornerRadius TopRight, NativeCornerRadius BottomRight, NativeCornerRadius BottomLeft);
-public readonly record struct NativeGradientStop(NativeColor Color, float Offset);
+public readonly record struct NativeGradientStop(NativeColor Color, NativeLength Position, bool HasPosition, float Offset);
 public sealed record NativeGradient(float DirectionX, float DirectionY, IReadOnlyList<NativeGradientStop> Stops);
 public readonly record struct NativeShadow(float X, float Y, float Blur, float Spread, NativeColor Color, bool Inset);
 public sealed record NativeBackgroundLayer(
@@ -253,7 +253,7 @@ public sealed unsafe class StyleRuntimeInterop : IDisposable
     [StructLayout(LayoutKind.Sequential)]
     private struct GradientRaw { public float X, Y; public IntPtr Stops; public int Count; }
     [StructLayout(LayoutKind.Sequential)]
-    private readonly record struct GradientStopRaw(ColorRaw Color, float Offset);
+    private readonly record struct GradientStopRaw(ColorRaw Color, LengthRaw Position, float Offset, int HasPosition);
     [StructLayout(LayoutKind.Sequential)]
     private readonly record struct BackgroundLayerListRaw(IntPtr Items, int Count);
     [StructLayout(LayoutKind.Sequential)]
@@ -361,12 +361,14 @@ public sealed unsafe class StyleRuntimeInterop : IDisposable
     private static NativeGradient? ReadGradient(int present, GradientRaw gradient)
     {
         if (present == 0 || gradient.Count <= 0 || gradient.Stops == IntPtr.Zero) return null;
+        if (gradient.Count > 4096)
+            throw new InvalidOperationException($"Native gradient stop count {gradient.Count} exceeds the ABI safety limit.");
         var size = Marshal.SizeOf<GradientStopRaw>();
         var stops = new NativeGradientStop[gradient.Count];
         for (var i = 0; i < stops.Length; i++)
         {
             var raw = Marshal.PtrToStructure<GradientStopRaw>(gradient.Stops + i * size);
-            stops[i] = new NativeGradientStop(raw.Color.ToPublic(), raw.Offset);
+            stops[i] = new NativeGradientStop(raw.Color.ToPublic(), raw.Position.ToPublic(), raw.HasPosition != 0, raw.Offset);
         }
         return new NativeGradient(gradient.X, gradient.Y, stops);
     }

@@ -938,10 +938,9 @@ internal static class Program
         Assert.Equal(2, alphaGradient.Gradient.Stops.Count);
         Assert.True(MathF.Abs(alphaGradient.Gradient.Stops[0].Color.A - .1f) < .01f);
         Assert.Equal(0f, alphaGradient.Gradient.Stops[1].Color.A);
-        var offsetGradient = Assert.NotNull(host.Document?.GetElementById("offset-gradient"));
-        var offsetGradientBox = Assert.NotNull(host.Layout?.FindPrimaryBox(offsetGradient));
-        Assert.True(offsetGradientBox.Style.BackgroundGradient is { }, "gradient shorthand must reach the computed style");
-        var offsetStops = offsetGradientBox.Style.BackgroundGradient!.Value.Stops;
+        var offsetGradient = Assert.NotNull(commands.OfType<FillRoundedRectangleGradientCommand>().FirstOrDefault(command =>
+            command.Gradient.DirectionX < 0f && command.Gradient.DirectionY > 0f));
+        var offsetStops = offsetGradient.Gradient.Stops;
         Assert.Equal(4, offsetStops.Count);
         Assert.Equal(.7f, offsetStops[0].Offset);
         Assert.Equal(.7f, offsetStops[1].Offset);

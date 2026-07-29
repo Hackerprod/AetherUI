@@ -37,40 +37,59 @@ static const std::string& get_attribute(aether_node_s* node, const std::string& 
     return (it != node->attributes.end()) ? it->second : empty_string;
 }
 
-static int child_count(aether_node_s* node) {
-    node = selector_subject(node);
-    return static_cast<int>(node->children.size());
+static bool is_element(aether_node_s* node) {
+    return node && node->type == AETHER_NODE_ELEMENT;
 }
 
-static aether_node_s* get_child(aether_node_s* node, int index) {
+// :empty is deliberately based on every DOM child: whitespace text is content
+// for that pseudo-class. Structural child pseudos and sibling combinators use
+// the element-only helpers below instead.
+static int dom_child_count(aether_node_s* node) {
     node = selector_subject(node);
-    if (index < 0 || index >= static_cast<int>(node->children.size())) return nullptr;
-    return node->children[index];
+    return node ? static_cast<int>(node->children.size()) : 0;
 }
 
-static int get_sibling_index(aether_node_s* node) {
+static int element_sibling_index(aether_node_s* node) {
     node = selector_subject(node);
     auto* parent = node ? node->parent : nullptr;
     if (!parent) return 0;
-    for (int i = 0; i < static_cast<int>(parent->children.size()); ++i)
-        if (parent->children[i] == node) return i;
+    int element_index = 0;
+    for (auto* sibling : parent->children) {
+        if (!is_element(sibling)) continue;
+        if (sibling == node) return element_index;
+        ++element_index;
+    }
     return -1;
 }
 
-static bool is_last_child(aether_node_s* node) {
+static int element_child_count(aether_node_s* node) {
     node = selector_subject(node);
-    auto* parent = node ? node->parent : nullptr;
-    return !parent || (parent->children.size() > 0 && parent->children.back() == node);
+    if (!node) return 0;
+    int count = 0;
+    for (auto* child : node->children)
+        if (is_element(child)) ++count;
+    return count;
 }
 
-static aether_node_s* get_previous_sibling(aether_node_s* node) {
+static bool is_last_element_child(aether_node_s* node) {
+    node = selector_subject(node);
+    auto* parent = node ? node->parent : nullptr;
+    if (!parent) return true;
+    for (auto it = parent->children.rbegin(); it != parent->children.rend(); ++it) {
+        if (!is_element(*it)) continue;
+        return *it == node;
+    }
+    return false;
+}
+
+static aether_node_s* previous_element_sibling(aether_node_s* node) {
     node = selector_subject(node);
     auto* parent = node ? node->parent : nullptr;
     if (!parent) return nullptr;
     aether_node_s* prev = nullptr;
     for (auto* child : parent->children) {
         if (child == node) return prev;
-        prev = child;
+        if (is_element(child)) prev = child;
     }
     return nullptr;
 }
@@ -183,15 +202,15 @@ static bool matches_pseudo(const pseudo_selector_s& pseudo, aether_node_s* node)
     case PSEUDO_ROOT:
         return node->parent == nullptr;
     case PSEUDO_EMPTY:
-        return child_count(node) == 0;
+        return dom_child_count(node) == 0;
     case PSEUDO_FIRST_CHILD:
-        return get_sibling_index(node) == 0;
+        return element_sibling_index(node) == 0;
     case PSEUDO_LAST_CHILD:
-        return is_last_child(node);
+        return is_last_element_child(node);
     case PSEUDO_ONLY_CHILD:
-        return node->parent != nullptr && child_count(node->parent) == 1;
+        return node->parent != nullptr && element_child_count(node->parent) == 1;
     case PSEUDO_NTH_CHILD:
-        return pseudo.nth.matches(get_sibling_index(node) + 1);
+        return pseudo.nth.matches(element_sibling_index(node) + 1);
     case PSEUDO_IS:
     case PSEUDO_WHERE:
         if (!pseudo.nested) return false;
@@ -237,6 +256,8 @@ static bool matches_compound(const compound_selector_s& compound, aether_node_s*
 static bool match_step(const compiled_selector_s& sel, int step_index, aether_node_s* node) {
     if (step_index < 0 || step_index >= static_cast<int>(sel.steps.size()))
         return false;
+    if (!is_element(selector_subject(node)))
+        return false;
     auto& step = sel.steps[step_index];
     if (!matches_compound(step.compound, node))
         return false;
@@ -249,7 +270,7 @@ static bool match_step(const compiled_selector_s& sel, int step_index, aether_no
     case COMB_DESCENDANT:
         return match_ancestor(sel, next, selector_parent(node));
     case COMB_ADJACENT_SIBLING: {
-        auto* prev = get_previous_sibling(node);
+        auto* prev = previous_element_sibling(node);
         return prev && match_step(sel, next, prev);
     }
     case COMB_GENERAL_SIBLING:
@@ -278,6 +299,7 @@ static bool match_previous_siblings(const compiled_selector_s& sel, int step_ind
     if (!parent) return false;
     for (auto* sibling : parent->children) {
         if (sibling == node) return false;
+        if (!is_element(sibling)) continue;
         if (match_step(sel, step_index, sibling)) return true;
     }
     return false;

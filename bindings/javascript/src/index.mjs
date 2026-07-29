@@ -146,8 +146,10 @@ function cloneGradient(api, gradient) {
   const count = Math.max(0, Number(gradient.stop_count ?? 0));
   const stops = isNullHandle(gradient.stops)
     ? []
-    : api.ffi.decode(gradient.stops, api.types.GradientStop, count).map((stop) => ({
+      : api.ffi.decode(gradient.stops, api.types.GradientStop, count).map((stop) => ({
         color: cloneColor(stop.color),
+        position: cloneLength(stop.position),
+        hasPosition: Boolean(stop.has_position),
         offset: Number(stop.offset),
       }));
   return {
@@ -885,6 +887,8 @@ function copyPaintGradient(api, gradient) {
       ? []
       : api.ffi.decode(gradient.stops, api.types.GradientStop, count).map((stop) => ({
           color: cloneColor(stop.color),
+          position: cloneLength(stop.position),
+          hasPosition: Boolean(stop.has_position),
           offset: Number(stop.offset),
         })),
   };

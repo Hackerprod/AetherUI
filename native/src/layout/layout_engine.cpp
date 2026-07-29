@@ -1122,8 +1122,12 @@ static resolved_flex_children_s resolve_flex_children(
             flex_automatic_minimum_is_zero_for_overflow(main_axis_overflow),
             content_size_suggestion, item.basis.specified_main_size, NAN, item.max_main_size
         };
-        item.outer_main_size = std::max(0.f,
-            flex_box_outer_main_size(base_box, horizontal) - flex_box_main_size(base_box, horizontal));
+        // Unlike every other flex input, explicit margins are signed.  A
+        // negative margin reduces the item's outer main size and must take
+        // part in line formation and free-space resolution (Flexbox §9.7).
+        // Auto margins are still zero here and consumed in their later phase.
+        item.outer_main_size =
+            flex_box_outer_main_size(base_box, horizontal) - flex_box_main_size(base_box, horizontal);
         item.flex_grow = child_style.flex_grow;
         item.flex_shrink = child_style.flex_shrink;
         inputs.push_back(item);
@@ -2107,6 +2111,7 @@ AETHER_API aether_status_t aether_layout_layout(
     auto* result = new(std::nothrow) aether_layout_result_s();
     if (!result) return AETHER_ERROR_OUT_OF_MEMORY;
     result->viewport = {viewport_width, viewport_height};
+    result->style_map = styles;
 
     // Find root element (using C API from document_node.cpp)
     aether_node_s* root_el = aether_doc_get_body(doc);

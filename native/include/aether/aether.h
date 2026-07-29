@@ -27,7 +27,7 @@ extern "C" {
  * ABI 1.0, a major-version change denotes an incompatible ABI.
  */
 #define AETHER_ABI_VERSION_MAJOR 0u
-#define AETHER_ABI_VERSION_MINOR 21u
+#define AETHER_ABI_VERSION_MINOR 22u
 #define AETHER_ABI_VERSION_PATCH 0u
 
 #define AETHER_ABI_VERSION_MAKE(major, minor, patch) \
@@ -110,17 +110,6 @@ typedef struct {
     float bottom_right_x, bottom_right_y, bottom_left_x, bottom_left_y;
 } aether_corner_radii;
 
-typedef struct { aether_color_rgba color; float offset; } aether_gradient_stop;
-
-typedef struct {
-    float direction_x;
-    float direction_y;
-    aether_gradient_stop* stops;
-    int32_t               stop_count;
-} aether_linear_gradient;
-
-AETHER_API void aether_linear_gradient_free(aether_linear_gradient* g);
-
 /* A single CSS shadow. A list owns its contiguous item storage; use the
    shadow-list helpers below to copy, compare, or release it. */
 typedef struct {
@@ -167,6 +156,25 @@ typedef struct {
     float linear_vw;
     float linear_vh;
 } aether_css_length;
+
+/* A gradient stop keeps its authored <length-percentage> symbolic until the
+   final gradient line is known at paint time. `offset` is the resolved 0..1
+   value carried only by paint commands. */
+typedef struct {
+    aether_color_rgba color;
+    aether_css_length position;
+    float             offset;
+    aether_bool_t     has_position;
+} aether_gradient_stop;
+
+typedef struct {
+    float direction_x;
+    float direction_y;
+    aether_gradient_stop* stops;
+    int32_t               stop_count;
+} aether_linear_gradient;
+
+AETHER_API void aether_linear_gradient_free(aether_linear_gradient* g);
 
 /* flex-basis needs to distinguish auto (use the main-size property), content
    (intrinsic content size), and a concrete CSS length. A plain length cannot
@@ -682,7 +690,9 @@ typedef struct {
     union {
         struct { aether_rectf rect; aether_corner_radii radii; aether_color_rgba color; } fill_rounded_rect;
         struct { aether_rectf rect; aether_corner_radii radii; aether_shadow shadow; } draw_box_shadow;
-        struct { aether_rectf rect; aether_corner_radii radii; aether_linear_gradient gradient; float opacity; } fill_rounded_rect_gradient;
+        /* rect is the painted area; gradient_rect owns the 0%-100% gradient coordinate system.
+           They differ for clipped/repeated CSS gradient tiles. */
+        struct { aether_rectf rect; aether_corner_radii radii; aether_rectf gradient_rect; aether_linear_gradient gradient; float opacity; } fill_rounded_rect_gradient;
         struct { aether_rectf rect; aether_corner_radii radii; float stroke_width; aether_color_rgba color; } stroke_rounded_rect;
         struct { char* text; aether_rectf rect; char font_family[64]; float font_size; int32_t font_weight; int32_t text_align; aether_color_rgba color; aether_bool_t wrap; } draw_text;
         struct { char* text; aether_rectf rect; char font_family[64]; float font_size; int32_t font_weight; int32_t text_align; aether_linear_gradient gradient; float opacity; } draw_text_gradient;

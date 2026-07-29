@@ -23,7 +23,10 @@ float clamp_main_size(float value, const aether_flex_item_input_s& item) {
 }
 
 float outer_size(float main_size, const aether_flex_item_input_s& item) {
-    return main_size + non_negative(item.outer_main_size);
+    // outer_main_size represents explicit margins, which are legally signed
+    // in CSS. Do not reuse non_negative(): it is intentionally correct for
+    // flex bases and size constraints, but incorrect for margins.
+    return main_size + (std::isfinite(item.outer_main_size) ? item.outer_main_size : 0.f);
 }
 
 float line_outer_size(const std::vector<aether_flex_item_input_s>& items,

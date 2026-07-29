@@ -6,7 +6,7 @@ namespace AetherUI.Core.Native;
 /// </summary>
 public static class NativeAbiContract
 {
-    public const uint ExpectedVersion = (0u << 24) | (21u << 16) | 0u;
+    public const uint ExpectedVersion = (0u << 24) | (22u << 16) | 0u;
     public const ulong RequiredCapabilities = (1UL << 0) | (1UL << 1) | (1UL << 2) | (1UL << 3);
 
     /// <summary>Validates the loaded runtime before native resources are created.</summary>
@@ -14,7 +14,7 @@ public static class NativeAbiContract
     {
         if (IntPtr.Size != 8)
             throw new PlatformNotSupportedException(
-                "AetherUI .NET display-list decoding for ABI 0.21.0 currently requires a 64-bit process.");
+                "AetherUI .NET display-list decoding for ABI 0.22.0 currently requires a 64-bit process.");
         var commandSize = Validate(NativeMethods.AbiVersion(), NativeMethods.AbiCapabilities(), NativeMethods.PaintCommandSize());
         ValidateComputedStyleSize(NativeMethods.ComputedStyleSize(), StyleRuntimeInterop.ComputedStyleSize);
         return commandSize;
@@ -24,7 +24,7 @@ public static class NativeAbiContract
     {
         if (version != ExpectedVersion)
             throw new InvalidOperationException(
-                $"AetherUI native ABI mismatch: managed binding expects 0.21.0 (0x{ExpectedVersion:X8}), " +
+                $"AetherUI native ABI mismatch: managed binding expects 0.22.0 (0x{ExpectedVersion:X8}), " +
                 $"but the loaded runtime reports 0x{version:X8}.");
         if ((capabilities & RequiredCapabilities) != RequiredCapabilities)
             throw new InvalidOperationException(
@@ -32,7 +32,7 @@ public static class NativeAbiContract
                 $"actual mask 0x{capabilities:X}.");
         if (commandSize < NativePaintCommandLayout.MinimumBufferSize || commandSize > int.MaxValue)
             throw new InvalidOperationException(
-                $"AetherUI native paint-command size {commandSize} is incompatible with ABI 0.21.0 " +
+                $"AetherUI native paint-command size {commandSize} is incompatible with ABI 0.22.0 " +
                 $"(minimum readable size {NativePaintCommandLayout.MinimumBufferSize}).");
         return checked((int)commandSize);
     }
@@ -42,17 +42,18 @@ public static class NativeAbiContract
     {
         if (nativeSize != checked((nuint)managedSize))
             throw new InvalidOperationException(
-                $"AetherUI native computed-style size {nativeSize} does not match the managed ABI 0.21.0 size {managedSize}.");
+                $"AetherUI native computed-style size {nativeSize} does not match the managed ABI 0.22.0 size {managedSize}.");
     }
 }
 
-/// <summary>Byte layout of aether_paint_command_t for ABI 0.21.0 on supported 64-bit ABIs.</summary>
+/// <summary>Byte layout of aether_paint_command_t for ABI 0.22.0 on supported 64-bit ABIs.</summary>
 public static class NativePaintCommandLayout
 {
     public const int Tag = 0;
     public const int FillRect = 8, FillRadii = 24, FillColor = 56;
     public const int ShadowRect = 8, ShadowRadii = 24, ShadowOffsetX = 56, ShadowColor = 72, ShadowInset = 88;
-    public const int GradientRect = 8, GradientRadii = 24, GradientData = 56, GradientOpacity = 80;
+    public const int GradientRect = 8, GradientRadii = 24, GradientCoordinateRect = 56,
+        GradientData = 72, GradientOpacity = 96;
     public const int StrokeRect = 8, StrokeRadii = 24, StrokeWidth = 56, StrokeColor = 60;
     public const int TextPointer = 8, TextRect = 16, TextFamily = 32, TextSize = 96,
         TextWeight = 100, TextAlignment = 104, TextColor = 108, TextWrap = 124;
