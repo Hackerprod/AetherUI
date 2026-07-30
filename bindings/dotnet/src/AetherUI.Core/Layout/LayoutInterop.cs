@@ -37,10 +37,10 @@ internal sealed class LayoutInterop : IDisposable
         return new LayoutResult(root, primary, paintOrder, viewport);
     }
 
-    public ElementNode? HitTest(NativeLayoutResult nativeResult, DomInterop dom, PointF point,
-        Func<ElementNode, ScrollOffset> scrollOffsetFor)
+    public ElementNode? HitTest(NativeLayoutResult nativeResult, NativeStyleMap? currentStyles,
+        DomInterop dom, PointF point, Func<ElementNode, ScrollOffset> scrollOffsetFor)
     {
-        var handle = _native.HitTest(nativeResult, point.X, point.Y,
+        var handle = _native.HitTest(nativeResult, currentStyles, point.X, point.Y,
             nativeElement => dom.GetManagedElement(nativeElement) is { } element
                 ? new NativeScrollOffset(scrollOffsetFor(element).X, scrollOffsetFor(element).Y)
                 : default);

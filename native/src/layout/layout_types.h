@@ -7,6 +7,7 @@
 #include <string>
 #include <vector>
 #include <unordered_map>
+#include "../css/style_map_types.h"
 
 /* ── Internal layout types (mirrors C# LayoutBox/LayoutResult) ──── */
 
@@ -129,28 +130,47 @@ struct aether_layout_result_s {
 
     aether_node_s* hit_test(float x, float y) const {
         if (!root) return nullptr;
-        return hit_test_recursive(root, x, y);
+        return hit_test_recursive(root, x, y, nullptr);
     }
 
     aether_node_s* hit_test(float x, float y, aether_scroll_offset_fn offsets, void* data) const {
         if (!root) return nullptr;
-        return hit_test_recursive(root, x, y, offsets, data);
+        return hit_test_recursive(root, x, y, nullptr, offsets, data);
+    }
+
+    aether_node_s* hit_test(float x, float y, const aether_style_map_s* styles,
+                            aether_scroll_offset_fn offsets, void* data) const {
+        if (!root) return nullptr;
+        return hit_test_recursive(root, x, y, styles, offsets, data);
     }
 
 private:
-    static aether_node_s* hit_test_recursive(aether_layout_box_s* box, float x, float y) {
+    static const aether_computed_style_t& hit_style(const aether_layout_box_s* box, const aether_style_map_s* styles) {
+        if (styles && box && box->element) {
+            const auto found = styles->styles.find(box->element);
+            if (found != styles->styles.end()) return found->second;
+        }
+        return box->style;
+    }
+
+    static aether_node_s* hit_test_recursive(aether_layout_box_s* box, float x, float y,
+                                             const aether_style_map_s* styles) {
+        const auto& style = hit_style(box, styles);
         for (int i = static_cast<int>(box->children.size()) - 1; i >= 0; --i) {
-            auto* found = hit_test_recursive(box->children[i], x, y);
+            auto* found = hit_test_recursive(box->children[i], x, y, styles);
             if (found) return found;
         }
-        if (aether_rectf_contains(box->margin_box, {x, y})) {
+        if (style.pointer_events != AETHER_POINTER_EVENTS_NONE &&
+            aether_rectf_contains(box->margin_box, {x, y})) {
             return box->element;
         }
         return nullptr;
     }
 
     static aether_node_s* hit_test_recursive(aether_layout_box_s* box, float x, float y,
+                                              const aether_style_map_s* styles,
                                               aether_scroll_offset_fn offsets, void* data) {
+        const auto& style = hit_style(box, styles);
         // A scroll offset moves only descendants; the scroll container's own
         // border/padding box remains in viewport coordinates.
         float child_x = x;
@@ -163,15 +183,16 @@ private:
             child_y += std::clamp(requested.y, 0.f, box->scroll.scrollable_overflow_y);
         }
         const bool clips_children =
-            box->style.overflow_x != AETHER_OVERFLOW_VISIBLE ||
-            box->style.overflow_y != AETHER_OVERFLOW_VISIBLE;
+            style.overflow_x != AETHER_OVERFLOW_VISIBLE ||
+            style.overflow_y != AETHER_OVERFLOW_VISIBLE;
         if (!clips_children || aether_rectf_contains(box->padding_box, {x, y})) {
             for (int i = static_cast<int>(box->children.size()) - 1; i >= 0; --i) {
-                auto* found = hit_test_recursive(box->children[i], child_x, child_y, offsets, data);
+                auto* found = hit_test_recursive(box->children[i], child_x, child_y, styles, offsets, data);
                 if (found) return found;
             }
         }
-        if (aether_rectf_contains(box->margin_box, {x, y})) return box->element;
+        if (style.pointer_events != AETHER_POINTER_EVENTS_NONE &&
+            aether_rectf_contains(box->margin_box, {x, y})) return box->element;
         return nullptr;
     }
 };

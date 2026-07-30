@@ -132,6 +132,12 @@ public enum CursorKind : byte
     Text,
 }
 
+public enum PointerEventsKind : byte
+{
+    Auto,
+    None,
+}
+
 public enum FlexBasisKind : byte
 {
     Auto,
@@ -237,6 +243,7 @@ public sealed class ComputedStyle
     public OverflowKind OverflowX { get; set; } = OverflowKind.Visible;
     public OverflowKind OverflowY { get; set; } = OverflowKind.Visible;
     public CursorKind Cursor { get; set; } = CursorKind.Default;
+    public PointerEventsKind PointerEvents { get; set; } = PointerEventsKind.Auto;
     public bool Visible { get; set; } = true;
 
     public ComputedStyle Clone() => (ComputedStyle)MemberwiseClone();
@@ -257,6 +264,7 @@ public sealed class ComputedStyle
         result.TextAlign = parent.TextAlign;
         result.TextTransform = parent.TextTransform;
         result.Cursor = parent.Cursor;
+        result.PointerEvents = parent.PointerEvents;
         return result;
     }
 }

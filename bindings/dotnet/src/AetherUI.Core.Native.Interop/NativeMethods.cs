@@ -178,6 +178,10 @@ internal static unsafe partial class NativeMethods
     internal static partial IntPtr LayoutResultHitTestWithScrollOffsets(
         IntPtr result, float x, float y, IntPtr scrollCallback, IntPtr scrollData);
 
+    [LibraryImport(Lib, EntryPoint = "aether_layout_result_hit_test_with_styles_and_scroll_offsets")]
+    internal static partial IntPtr LayoutResultHitTestWithStylesAndScrollOffsets(
+        IntPtr result, IntPtr styles, float x, float y, IntPtr scrollCallback, IntPtr scrollData);
+
     [LibraryImport(Lib, EntryPoint = "aether_layout_box_get_kind")]
     internal static partial int LayoutBoxGetKind(IntPtr box);
 
@@ -241,6 +245,10 @@ internal static unsafe partial class NativeMethods
 
     [LibraryImport(Lib, EntryPoint = "aether_display_list_build")]
     internal static partial int DisplayListBuild(IntPtr builder, IntPtr layout, IntPtr focusedElement, out IntPtr displayList);
+
+    [LibraryImport(Lib, EntryPoint = "aether_display_list_build_with_styles")]
+    internal static partial int DisplayListBuildWithStyles(
+        IntPtr builder, IntPtr layout, IntPtr currentStyles, IntPtr focusedElement, out IntPtr displayList);
 
     [LibraryImport(Lib, EntryPoint = "aether_display_list_destroy")]
     internal static partial void DisplayListDestroy(IntPtr displayList);

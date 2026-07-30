@@ -78,7 +78,8 @@ public sealed class UiDocumentHost : IDisposable
 
     private DocumentNode? _document;
     private DomInterop? _nativeDom;
-    private NativeStyleMap? _nativeStyleMap;
+    private NativeStyleMap? _nativeLayoutStyleMap;
+    private NativeStyleMap? _nativeVisualStyleMap;
     private NativeLayoutResult? _nativeLayout;
     private LayoutResult? _layout;
     private DisplayList? _displayList;
@@ -89,6 +90,7 @@ public sealed class UiDocumentHost : IDisposable
     private SizeF _viewport;
     private float _dpiScale = 1;
     private bool _markupDirty = true;
+    private bool _runtimeValuesDirty;
     private VisualInvalidation _invalidation = VisualInvalidation.Style;
     private long _styleResolutionCount;
     private long _layoutBuildCount;
@@ -190,6 +192,7 @@ public sealed class UiDocumentHost : IDisposable
             foreach (var image in _displayList!.Commands.OfType<DrawBackgroundImageCommand>())
                 _imageResolver.Request(image.Source);
         _renderer.SetScrollVisualStateProvider(ScrollVisualStateFor);
+        _renderer.SetScrollCompositionMode(scrollOnly);
         _renderer.Render(_displayList!, _options.ClearColor);
         if (scrollOnly) Interlocked.Increment(ref _scrollCompositionCount);
     }
@@ -323,7 +326,7 @@ public sealed class UiDocumentHost : IDisposable
             SetInputValue(input, current);
         }
 
-        InvalidateVisual();
+        InvalidateLayout();
     }
 
     public void KeyPressed(UiKey key)
@@ -372,7 +375,7 @@ public sealed class UiDocumentHost : IDisposable
 
             SetInputValue(input, current[..^1]);
             Dispatch("input", input, default, key);
-            InvalidateVisual();
+            InvalidateLayout();
         }
         else if (key == UiKey.Enter)
         {
@@ -500,6 +503,7 @@ public sealed class UiDocumentHost : IDisposable
     private void SetInputValue(ElementNode input, string value)
     {
         input.RuntimeValue = value;
+        _runtimeValuesDirty = true;
         if (input.Id is { Length: > 0 } id)
         {
             _uncontrolledInputValues[id] = value;
@@ -523,22 +527,32 @@ public sealed class UiDocumentHost : IDisposable
             return;
         }
 
+        if (_runtimeValuesDirty && _nativeDom is not null &&
+            (_invalidation & (VisualInvalidation.Style | VisualInvalidation.Layout | VisualInvalidation.DisplayList)) != 0)
+        {
+            _nativeDom.SyncRuntimeValues();
+            _runtimeValuesDirty = false;
+        }
+
         if ((_invalidation & VisualInvalidation.Style) != 0)
         {
-            _nativeDom!.SyncRuntimeValues();
             var elements = EnumerateElements(_document!).ToArray();
-            var nativeStyles = _nativeStyleRuntime.Resolve(
+            var resolution = _nativeStyleRuntime.Resolve(
                 elements.Select(static element => (int)element.State).ToArray(),
                 _viewport.Width, _viewport.Height, _dpiScale);
+            var nativeStyles = resolution.Styles;
             for (var i = 0; i < elements.Length; i++)
             {
                 _computedStyles[elements[i]] = StyleRuntimeBridge.ToComputedStyle(nativeStyles[i], elements[i]);
             }
 
             _styles = new StyleMap(_computedStyles);
+            RefreshProjectedLayoutStyles();
+            _nativeVisualStyleMap?.Dispose();
+            _nativeVisualStyleMap = _nativeStyleRuntime.CreateResolvedStyleMap(_nativeDom!.Native);
             Interlocked.Increment(ref _styleResolutionCount);
             _invalidation &= ~VisualInvalidation.Style;
-            _invalidation |= VisualInvalidation.Layout;
+            _invalidation |= InvalidationForStyleImpact(resolution.Impact);
         }
 
         if ((_invalidation & VisualInvalidation.Layout) != 0)
@@ -549,9 +563,9 @@ public sealed class UiDocumentHost : IDisposable
             // layout destructor holding a dangling native style-map pointer.
             _nativeLayout?.Dispose();
             _nativeLayout = null;
-            _nativeStyleMap?.Dispose();
-            _nativeStyleMap = _nativeStyleRuntime.CreateResolvedStyleMap(_nativeDom!.Native);
-            _nativeLayout = _layoutInterop.CreateNativeLayout(_nativeDom, _nativeStyleMap, _viewport);
+            _nativeLayoutStyleMap?.Dispose();
+            _nativeLayoutStyleMap = _nativeStyleRuntime.CreateResolvedStyleMap(_nativeDom!.Native);
+            _nativeLayout = _layoutInterop.CreateNativeLayout(_nativeDom, _nativeLayoutStyleMap, _viewport);
             Interlocked.Increment(ref _layoutBuildCount);
             _layout = _layoutInterop.Project(_nativeLayout, _nativeDom, _styles!, _viewport);
             RebuildScrollBoxIndex();
@@ -568,7 +582,9 @@ public sealed class UiDocumentHost : IDisposable
                 return;
             }
 
-            _displayList = AttachResolvedImages(_renderingInterop.Build(_nativeLayout,
+            if (_nativeVisualStyleMap is null)
+                _nativeVisualStyleMap = _nativeStyleRuntime.CreateResolvedStyleMap(_nativeDom!.Native);
+            _displayList = AttachResolvedImages(_renderingInterop.Build(_nativeLayout, _nativeVisualStyleMap,
                 _focused is null ? IntPtr.Zero : _nativeDom!.GetNativeHandle(_focused)));
             Interlocked.Increment(ref _displayListBuildCount);
             _invalidation &= ~VisualInvalidation.DisplayList;
@@ -582,6 +598,16 @@ public sealed class UiDocumentHost : IDisposable
     private ScrollOffset ScrollOffsetFor(ElementNode element) =>
         _scrollOffsets.TryGetValue(element, out var offset) ? offset : default;
 
+    private void RefreshProjectedLayoutStyles()
+    {
+        if (_layout is null || _styles is null) return;
+        foreach (var box in _layout.Root.DescendantsAndSelf())
+        {
+            if (_styles.TryGetValue(box.Element, out var style))
+                box.Style = style;
+        }
+    }
+
     public ScrollOffset GetScrollOffset(ElementNode element)
     {
         ArgumentNullException.ThrowIfNull(element);
@@ -592,10 +618,11 @@ public sealed class UiDocumentHost : IDisposable
     {
         if (_nativeLayout is not null && _nativeDom is not null)
         {
-            return _layoutInterop.HitTest(_nativeLayout, _nativeDom, point, ScrollOffsetFor);
+            var nativeHit = _layoutInterop.HitTest(_nativeLayout, _nativeVisualStyleMap, _nativeDom, point, ScrollOffsetFor);
+            if (nativeHit is not null) return nativeHit;
         }
 
-        return _layout?.HitTest(point);
+        return _layout?.HitTest(point, ScrollOffsetFor);
     }
 
     private ScrollVisualState ScrollVisualStateFor(long styleNodeId)
@@ -689,8 +716,10 @@ public sealed class UiDocumentHost : IDisposable
         _styles = null;
         _nativeLayout?.Dispose();
         _nativeLayout = null;
-        _nativeStyleMap?.Dispose();
-        _nativeStyleMap = null;
+        _nativeLayoutStyleMap?.Dispose();
+        _nativeLayoutStyleMap = null;
+        _nativeVisualStyleMap?.Dispose();
+        _nativeVisualStyleMap = null;
         _layout = null;
         _displayList = null;
 
@@ -921,6 +950,23 @@ public sealed class UiDocumentHost : IDisposable
         RenderRequested?.Invoke(this, EventArgs.Empty);
     }
 
+    private static VisualInvalidation InvalidationForStyleImpact(NativeStyleImpact impact)
+    {
+        var invalidation = VisualInvalidation.None;
+        if ((impact & (NativeStyleImpact.Layout | NativeStyleImpact.TextLayout)) != 0)
+        {
+            invalidation |= VisualInvalidation.Layout;
+        }
+        else if ((impact & (NativeStyleImpact.Paint | NativeStyleImpact.Composite)) != 0)
+        {
+            invalidation |= VisualInvalidation.DisplayList;
+        }
+
+        // Hit-test and cursor-only updates are consumed by the live managed
+        // style map. They do not need layout or display-list work.
+        return invalidation;
+    }
+
     private void InvalidateLayout()
     {
         _invalidation |= VisualInvalidation.Layout;
@@ -971,7 +1017,8 @@ public sealed class UiDocumentHost : IDisposable
         finally
         {
             _nativeLayout?.Dispose();
-            _nativeStyleMap?.Dispose();
+            _nativeLayoutStyleMap?.Dispose();
+            _nativeVisualStyleMap?.Dispose();
             _nativeStyleRuntime.Dispose();
             _layoutInterop.Dispose();
             _renderingInterop.Dispose();

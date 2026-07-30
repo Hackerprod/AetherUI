@@ -81,6 +81,7 @@ public static class StyleRuntimeBridge
             OverflowX = (OverflowKind)source.OverflowX,
             OverflowY = (OverflowKind)source.OverflowY,
             Cursor = (CursorKind)source.Cursor,
+            PointerEvents = (PointerEventsKind)source.PointerEvents,
             Visible = source.Visible,
         };
         if (source.BoxShadows.Any(static shadow => shadow.Inset))

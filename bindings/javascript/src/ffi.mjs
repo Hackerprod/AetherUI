@@ -3,9 +3,9 @@ import path from "node:path";
 import { existsSync } from "node:fs";
 
 // The command union and computed-style layout include retained scroll commands
-// and typed two-axis scroll metrics through ABI 0.25; accepting an older minor
+// typed two-axis scroll metrics and pointer-events through ABI 0.26; accepting an older minor
 // would read invalid offsets or miss command tags.
-export const SUPPORTED_ABI = Object.freeze({ major: 0, minor: 25, patch: 0 });
+export const SUPPORTED_ABI = Object.freeze({ major: 0, minor: 26, patch: 0 });
 
 export const CAPABILITIES = Object.freeze({
   DOM: 1n << 0n,
@@ -357,6 +357,7 @@ function createTypes(ffi) {
     overflow_x: "int32_t",
     overflow_y: "int32_t",
     cursor: "int32_t",
+    pointer_events: "int32_t",
     visible: "int32_t",
   });
   const TextMetrics = ffi.struct("aether_text_metrics", {

@@ -52,7 +52,8 @@ public sealed class NativeLayoutInterop : IDisposable
         return new NativeLayoutResult(result);
     }
 
-    public IntPtr HitTest(NativeLayoutResult result, float x, float y, Func<IntPtr, NativeScrollOffset> scroll)
+    public IntPtr HitTest(NativeLayoutResult result, NativeStyleMap? currentStyles,
+        float x, float y, Func<IntPtr, NativeScrollOffset> scroll)
     {
         ArgumentNullException.ThrowIfNull(result);
         ObjectDisposedException.ThrowIf(_engine == IntPtr.Zero, this);
@@ -60,10 +61,12 @@ public sealed class NativeLayoutInterop : IDisposable
         _scroll = scroll ?? throw new ArgumentNullException(nameof(scroll));
         try
         {
-            return NativeMethods.LayoutResultHitTestWithScrollOffsets(
-                result.Handle, x, y,
-                Marshal.GetFunctionPointerForDelegate(_scrollDelegate),
-                GCHandle.ToIntPtr(_self));
+            var scrollCallback = Marshal.GetFunctionPointerForDelegate(_scrollDelegate);
+            var scrollData = GCHandle.ToIntPtr(_self);
+            return currentStyles is null
+                ? NativeMethods.LayoutResultHitTestWithScrollOffsets(result.Handle, x, y, scrollCallback, scrollData)
+                : NativeMethods.LayoutResultHitTestWithStylesAndScrollOffsets(
+                    result.Handle, currentStyles.Handle, x, y, scrollCallback, scrollData);
         }
         finally
         {

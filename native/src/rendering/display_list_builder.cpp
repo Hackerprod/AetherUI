@@ -229,12 +229,27 @@ static void emit_draw_scrollbar_chrome(std::vector<aether_paint_command_t>& cmds
    DisplayListBuilder — walks LayoutBox tree, emits paint commands
    ══════════════════════════════════════════════════════════════════════ */
 
+static const aether_computed_style_t* style_for_node(const aether_style_map_s* styles,
+                                                      const aether_node_s* node) {
+    if (!styles || !node) return nullptr;
+    const auto found = styles->styles.find(const_cast<aether_node_s*>(node));
+    return found == styles->styles.end() ? nullptr : &found->second;
+}
+
+static const aether_computed_style_t& style_for_box(const aether_display_list_builder_s* builder,
+                                                     const aether_layout_box_s* box) {
+    if (const auto* style = style_for_node(builder ? builder->current_style_map : nullptr, box ? box->element : nullptr))
+        return *style;
+    return box->style;
+}
+
 static void paint_box(aether_display_list_builder_s* builder,
                       aether_layout_box_s* box,
                       aether_node_s* focused_element,
                       std::vector<aether_paint_command_t>& cmds);
 
-static void paint_box_shadows(aether_layout_box_s* box,
+static void paint_box_shadows(aether_display_list_builder_s* builder,
+                               aether_layout_box_s* box,
                                std::vector<aether_paint_command_t>& cmds);
 
 static void paint_background_and_border(aether_display_list_builder_s* builder, aether_layout_box_s* box,
@@ -254,7 +269,7 @@ static void paint_box(aether_display_list_builder_s* builder,
                       aether_node_s* focused_element,
                       std::vector<aether_paint_command_t>& cmds)
 {
-    auto& style = box->style;
+    const auto& style = style_for_box(builder, box);
     if (!style.visible || style.display == AETHER_DISPLAY_NONE || rect_is_empty(box->border_box)) {
         return;
     }
@@ -300,7 +315,7 @@ static void paint_box(aether_display_list_builder_s* builder,
     }
 
     // Box shadows (paint behind background)
-    paint_box_shadows(box, cmds);
+    paint_box_shadows(builder, box, cmds);
 
     // Background fill + border stroke
     paint_background_and_border(builder, box, box->element == builder->canvas_background_source, cmds);
@@ -353,13 +368,15 @@ static void paint_box(aether_display_list_builder_s* builder,
 
 /* ── paint_box_shadows ────────────────────────────────────────────── */
 
-static void paint_box_shadows(aether_layout_box_s* box,
+static void paint_box_shadows(aether_display_list_builder_s* builder,
+                               aether_layout_box_s* box,
                                std::vector<aether_paint_command_t>& cmds)
 {
-    const auto& shadows = box->style.box_shadows;
+    const auto& style = style_for_box(builder, box);
+    const auto& shadows = style.box_shadows;
     if (shadows.count <= 0 || !shadows.items) return;
 
-    const auto radii = aether_border_radii_resolve(box->style.border_radii, box->border_box, box->style.font_size);
+    const auto radii = aether_border_radii_resolve(style.border_radii, box->border_box, style.font_size);
     // CSS paints the first declared shadow closest to the element. Commands
     // are painter's order, so emit the declaration list back-to-front.
     for (int32_t index = shadows.count - 1; index >= 0; --index) {
@@ -456,7 +473,7 @@ static void paint_background_layers(aether_display_list_builder_s* builder,
 static void paint_background_and_border(aether_display_list_builder_s* builder, aether_layout_box_s* box,
                                          const bool suppress_background, std::vector<aether_paint_command_t>& cmds)
 {
-    auto& style = box->style;
+    const auto& style = style_for_box(builder, box);
     const auto radii = aether_border_radii_resolve(style.border_radii, box->border_box, style.font_size);
 
     // Flat Display List v1 semantics: this snapshots exactly the commands already
@@ -474,13 +491,6 @@ static bool has_canvas_eligible_background(const aether_computed_style_t& style)
         (style.background_layers.count > 0 && style.background_layers.items != nullptr);
 }
 
-static const aether_computed_style_t* style_for_node(const aether_style_map_s* styles,
-                                                      const aether_node_s* node) {
-    if (!styles || !node) return nullptr;
-    const auto found = styles->styles.find(const_cast<aether_node_s*>(node));
-    return found == styles->styles.end() ? nullptr : &found->second;
-}
-
 static const aether_node_s* document_element_for(const aether_node_s* body) {
     for (auto* node = body ? body->parent : nullptr; node; node = node->parent) {
         if (node->type == AETHER_NODE_ELEMENT && node->tag_name == "html") return node;
@@ -493,8 +503,8 @@ static void paint_canvas_background(aether_display_list_builder_s* builder,
                                     std::vector<aether_paint_command_t>& cmds) {
     const auto* body = layout->root ? layout->root->element : nullptr;
     const auto* html = document_element_for(body);
-    const auto* html_style = style_for_node(layout->style_map, html);
-    const auto* body_style = body ? &layout->root->style : nullptr;
+    const auto* html_style = style_for_node(builder->current_style_map, html);
+    const auto* body_style = layout->root ? &style_for_box(builder, layout->root) : nullptr;
 
     // CSS 2.1 §14.2: the root background paints the canvas.  When it is fully
     // transparent/no-image, body's background is propagated instead and body
@@ -532,7 +542,7 @@ static void paint_control(aether_display_list_builder_s* builder,
                            std::vector<aether_paint_command_t>& cmds)
 {
     auto* element = box->element;
-    auto& style = box->style;
+    const auto& style = style_for_box(builder, box);
 
     const std::string displayed = aether_opaque_control_display_text(element, style);
     // Buttons are painted through the child fragments that layout created, so
@@ -600,11 +610,22 @@ AETHER_API aether_status_t aether_display_list_build(
     aether_display_list_builder_t builder, aether_layout_result_t layout,
     aether_node_t focused_element, aether_display_list_t* out_list)
 {
+    return aether_display_list_build_with_styles(builder, layout,
+                                                 layout ? layout->style_map : nullptr,
+                                                 focused_element, out_list);
+}
+
+AETHER_API aether_status_t aether_display_list_build_with_styles(
+    aether_display_list_builder_t builder, aether_layout_result_t layout,
+    aether_style_map_t current_styles, aether_node_t focused_element,
+    aether_display_list_t* out_list)
+{
     if (!builder || !layout || !out_list) return AETHER_ERROR_NULL_ARG;
     if (!layout->root) return AETHER_ERROR_INVALID_STATE;
 
     builder->viewport = layout->viewport;
     builder->root_font_size = layout->root->style.font_size > 0.f ? layout->root->style.font_size : 16.f;
+    builder->current_style_map = current_styles ? current_styles : layout->style_map;
 
     auto* list = new(std::nothrow) aether_display_list_s();
     if (!list) return AETHER_ERROR_OUT_OF_MEMORY;
@@ -613,6 +634,7 @@ AETHER_API aether_status_t aether_display_list_build(
     paint_canvas_background(builder, layout, list->commands);
     paint_box(builder, layout->root, focused_element, list->commands);
     builder->canvas_background_source = nullptr;
+    builder->current_style_map = nullptr;
     *out_list = list;
     return AETHER_OK;
 }

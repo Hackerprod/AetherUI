@@ -291,6 +291,7 @@ function cloneComputedStyle(api, style) {
     overflowX: Number(style.overflow_x),
     overflowY: Number(style.overflow_y),
     cursor: Number(style.cursor),
+    pointerEvents: Number(style.pointer_events),
     visible: Boolean(style.visible),
   };
 }

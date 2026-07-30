@@ -24,6 +24,19 @@ public readonly record struct NativeTransformOperation(
     float MatrixA, float MatrixB, float MatrixC, float MatrixD, float MatrixE, float MatrixF);
 public readonly record struct NativeTransformOrigin(NativeLength X, NativeLength Y);
 
+[Flags]
+public enum NativeStyleImpact : uint
+{
+    None = 0,
+    Layout = 1 << 0,
+    Paint = 1 << 1,
+    HitTest = 1 << 2,
+    Composite = 1 << 3,
+    TextLayout = 1 << 4,
+    Cursor = 1 << 5,
+    Inherited = 1 << 6,
+}
+
 public sealed record NativeComputedStyle(
     int Display, int FlexDirection, int JustifyContent, int AlignItems, int AlignSelf, float FlexGrow, float FlexShrink, NativeFlexBasis FlexBasis, bool FlexWrap, float Gap,
     int Position, NativeEdges Inset,
@@ -36,7 +49,11 @@ public sealed record NativeComputedStyle(
     IReadOnlyList<NativeShadow> TextShadows, NativeBorderRadii BorderRadii, float Opacity,
     IReadOnlyList<NativeShadow> BoxShadows,
     string FontFamily, float FontSize, int FontWeight, float LineHeight, int TextAlign, int TextTransform, int WhiteSpace,
-    int OverflowX, int OverflowY, int Cursor, bool Visible);
+    int OverflowX, int OverflowY, int Cursor, int PointerEvents, bool Visible);
+
+public sealed record NativeStyleResolution(
+    IReadOnlyList<NativeComputedStyle> Styles,
+    NativeStyleImpact Impact);
 
 public sealed unsafe class StyleRuntimeInterop : IDisposable
 {
@@ -96,7 +113,7 @@ public sealed unsafe class StyleRuntimeInterop : IDisposable
         _elements = document.EnumerateElementHandles().ToList();
     }
 
-    public IReadOnlyList<NativeComputedStyle> Resolve(
+    public NativeStyleResolution Resolve(
         IReadOnlyList<int> states, float width, float height, float dpiScale)
     {
         ThrowIfDisposed();
@@ -110,12 +127,11 @@ public sealed unsafe class StyleRuntimeInterop : IDisposable
         try
         {
             Marshal.StructureToPtr(environment, envPtr, false);
-            ResolveUpdates(NativeMethods.StyleRuntimeSetEnvironment(
+            var impact = ResolveUpdates(NativeMethods.StyleRuntimeSetEnvironment(
                 _runtime, envPtr, _document, out var updates), updates);
+            return new NativeStyleResolution(_elements.Select(element => _styles[element]).ToArray(), impact);
         }
         finally { Marshal.FreeHGlobal(envPtr); }
-
-        return _elements.Select(element => _styles[element]).ToArray();
     }
 
     /// <summary>Creates the frame-local style-map used by native layout without another CSS pass.</summary>
@@ -136,19 +152,22 @@ public sealed unsafe class StyleRuntimeInterop : IDisposable
         return handle;
     }
 
-    private void ResolveUpdates(int count, IntPtr updates)
+    private NativeStyleImpact ResolveUpdates(int count, IntPtr updates)
     {
+        var aggregate = NativeStyleImpact.None;
         try
         {
             for (var i = 0; i < count; i++)
             {
                 var update = Marshal.ReadIntPtr(updates, i * IntPtr.Size);
-                Throw(NativeMethods.StyleRuntimeGetUpdate(update, out var node, out var style, out _));
+                Throw(NativeMethods.StyleRuntimeGetUpdate(update, out var node, out var style, out var impact));
+                aggregate |= (NativeStyleImpact)impact;
                 try { _styles[node] = ReadStyle(style); }
                 finally { NativeMethods.ComputedStyleHandleDestroy(style); }
             }
         }
         finally { NativeMethods.StyleUpdatesFree(updates, count); }
+        return aggregate;
     }
 
     internal static NativeComputedStyle ReadStyle(IntPtr handle)
@@ -329,7 +348,7 @@ public sealed unsafe class StyleRuntimeInterop : IDisposable
         public BorderRadiiRaw BorderRadii; public float Opacity;
         public fixed byte FontFamily[64];
         public float FontSize; public int FontWeight; public float LineHeight; public int TextAlign, TextTransform, WhiteSpace;
-        public int OverflowX, OverflowY, Cursor, Visible;
+        public int OverflowX, OverflowY, Cursor, PointerEvents, Visible;
 
         public NativeComputedStyle ToPublic()
         {
@@ -344,7 +363,8 @@ public sealed unsafe class StyleRuntimeInterop : IDisposable
                 ReadGradient(HasTextGradient, TextGradient), ReadTransforms(Transforms), TransformOrigin.ToPublic(),
                 ReadShadows(TextShadows), BorderRadii.ToPublic(), Opacity,
                 ReadShadows(BoxShadows),
-                family, FontSize, FontWeight, LineHeight, TextAlign, TextTransform, WhiteSpace, OverflowX, OverflowY, Cursor, Visible != 0);
+                family, FontSize, FontWeight, LineHeight, TextAlign, TextTransform, WhiteSpace,
+                OverflowX, OverflowY, Cursor, PointerEvents, Visible != 0);
         }
     }
 

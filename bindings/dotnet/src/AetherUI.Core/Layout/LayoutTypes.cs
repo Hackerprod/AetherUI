@@ -44,7 +44,7 @@ public sealed class LayoutBox
 
     public LayoutBoxKind Kind { get; }
     public ElementNode Element { get; }
-    public ComputedStyle Style { get; }
+    public ComputedStyle Style { get; internal set; }
     public IReadOnlyList<LayoutBox> Children => _children;
     public string? Text { get; internal set; }
     public RectF MarginBox { get; internal set; }

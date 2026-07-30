@@ -1295,7 +1295,11 @@ void builtin_properties_register(style_property_registry_s* reg) {
         static const char* kw[] = { "auto", "none" };
         reg->register_property("pointer-events", true, STYLE_IMPACT_HITTEST, "auto",
             [](const char* s, std::string& o) -> bool { return bi_try_keyword(s, kw, 2, o); },
-            [](aether_computed_style_t* st, const std::string& v) { (void)st; (void)v; });
+            [](aether_computed_style_t* st, const std::string& v) {
+                st->pointer_events = str_iequals(v, "none")
+                    ? AETHER_POINTER_EVENTS_NONE
+                    : AETHER_POINTER_EVENTS_AUTO;
+            });
     }
 
     // ── Transforms ─────────────────────────────────────────────

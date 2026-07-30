@@ -47,6 +47,8 @@ internal static class Program
         ("Native root scrolls overflowing content", NativeRootScrollsOverflowingContent),
         ("Native scroll metrics are bidirectional and resize-aware", NativeScrollMetricsAreBidirectionalAndResizeAware),
         ("Native scrollbar chrome supports two-axis pointer interaction and chaining", NativeScrollbarChromeSupportsTwoAxisInteractionAndChaining),
+        ("Native hover paint impact skips layout", NativeHoverPaintImpactSkipsLayout),
+        ("Native pointer-events hover updates hit testing without layout", NativePointerEventsHoverUpdatesHitTestingWithoutLayout),
         ("Native layout disposes before borrowed style map", NativeLayoutDisposesBeforeBorrowedStyleMap),
         ("Image resolver deduplicates resources and reports lifecycle", ImageResolverDeduplicatesResourcesAndReportsLifecycle),
         ("Native image geometry rebuilds when a resource becomes ready", NativeImageGeometryRebuildsWhenResourceReady),
@@ -902,6 +904,81 @@ internal static class Program
         host.SetViewport(360, 220, 1);
         host.PointerReleased(new PointF(thumb.X + 1, thumb.Y + 1));
         Assert.Equal(0, component.ClickCount);
+    }
+
+    private static void NativeHoverPaintImpactSkipsLayout()
+    {
+        const string markup = """
+            <style>
+              body { margin: 0; }
+              #card { width: 120px; height: 80px; background-color: #111827; color: white; }
+              #card:hover { background-color: #ef4444; }
+            </style>
+            <body><div id="card">Hover target</div></body>
+            """;
+
+        using var renderer = new RecordingRenderer();
+        using var host = new UiDocumentHost(new RawMarkupComponent(markup), new ApproximateTextMeasurer(), renderer, new UiHostOptions());
+        host.SetViewport(240, 160, 1);
+        host.Render();
+
+        var card = Assert.NotNull(host.Document?.GetElementById("card"));
+        var box = Assert.NotNull(host.Layout?.FindPrimaryBox(card));
+        var inside = new PointF(box.BorderBox.X + 10, box.BorderBox.Y + 10);
+
+        host.ResetMetrics();
+        host.PointerMoved(inside);
+        host.Render();
+        var hovered = host.Metrics;
+        Assert.Equal(1L, hovered.StyleResolutions);
+        Assert.Equal(0L, hovered.LayoutBuilds);
+        Assert.Equal(1L, hovered.DisplayListBuilds);
+
+        host.ResetMetrics();
+        host.PointerMoved(new PointF(inside.X + 4, inside.Y + 4));
+        host.Render();
+        var unchangedTarget = host.Metrics;
+        Assert.Equal(0L, unchangedTarget.StyleResolutions);
+        Assert.Equal(0L, unchangedTarget.LayoutBuilds);
+        Assert.Equal(0L, unchangedTarget.DisplayListBuilds);
+    }
+
+    private static void NativePointerEventsHoverUpdatesHitTestingWithoutLayout()
+    {
+        const string markup = """
+            <style>
+              body { margin: 0; }
+              #bottom, #top { position: absolute; left: 0; top: 0; width: 100px; height: 100px; }
+              #bottom { background: #22c55e; color: white; }
+              #top { background: #ef4444; color: white; }
+              #top:hover { pointer-events: none; }
+            </style>
+            <body><div id="bottom">bottom</div><div id="top">top</div></body>
+            """;
+
+        using var renderer = new RecordingRenderer();
+        using var host = new UiDocumentHost(new RawMarkupComponent(markup), new ApproximateTextMeasurer(), renderer, new UiHostOptions());
+        host.SetViewport(160, 120, 1);
+        host.Render();
+
+        var top = Assert.NotNull(host.Document?.GetElementById("top"));
+        var bottom = Assert.NotNull(host.Document?.GetElementById("bottom"));
+        var point = new PointF(50, 50);
+
+        host.PointerMoved(point);
+        host.Render();
+        Assert.True((top.State & ElementState.Hover) != 0);
+
+        host.ResetMetrics();
+        host.PointerMoved(point);
+        host.Render();
+
+        Assert.True((top.State & ElementState.Hover) == 0);
+        Assert.True((bottom.State & ElementState.Hover) != 0);
+        var metrics = host.Metrics;
+        Assert.True(metrics.StyleResolutions >= 1);
+        Assert.Equal(0L, metrics.LayoutBuilds);
+        Assert.Equal(0L, metrics.DisplayListBuilds);
     }
 
     private static void NativeLayoutDisposesBeforeBorrowedStyleMap()

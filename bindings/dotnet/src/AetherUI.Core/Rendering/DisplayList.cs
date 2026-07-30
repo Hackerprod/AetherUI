@@ -101,12 +101,16 @@ public readonly record struct ScrollVisualState(ScrollVisualOffset Offset, Scrol
 
 public sealed class DisplayList
 {
+    private static long s_nextGeneration;
+
     public DisplayList(IReadOnlyList<PaintCommand> commands)
     {
         Commands = commands ?? throw new ArgumentNullException(nameof(commands));
+        Generation = System.Threading.Interlocked.Increment(ref s_nextGeneration);
     }
 
     public IReadOnlyList<PaintCommand> Commands { get; }
+    public long Generation { get; }
     public int Count => Commands.Count;
 }
 
@@ -114,6 +118,7 @@ public interface IRenderBackend : IDisposable
 {
     void Resize(int pixelWidth, int pixelHeight, float dpiScale);
     void Render(DisplayList displayList, ColorRgba clearColor);
+    void SetScrollCompositionMode(bool enabled) { }
     void SetScrollOffsetProvider(Func<long, ScrollVisualOffset>? provider) { }
     void SetScrollVisualStateProvider(Func<long, ScrollVisualState>? provider)
     {

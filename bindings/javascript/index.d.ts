@@ -173,6 +173,7 @@ export interface ComputedStyle {
   /** Computed vertical overflow behavior. */
   overflowY: number;
   cursor: number;
+  pointerEvents: number;
   visible: boolean;
 }
 

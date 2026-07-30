@@ -27,7 +27,7 @@ extern "C" {
  * ABI 1.0, a major-version change denotes an incompatible ABI.
  */
 #define AETHER_ABI_VERSION_MAJOR 0u
-#define AETHER_ABI_VERSION_MINOR 25u
+#define AETHER_ABI_VERSION_MINOR 26u
 #define AETHER_ABI_VERSION_PATCH 0u
 
 #define AETHER_ABI_VERSION_MAKE(major, minor, patch) \
@@ -449,6 +449,11 @@ typedef enum {
     AETHER_CURSOR_TEXT
 } aether_cursor_kind_t;
 
+typedef enum {
+    AETHER_POINTER_EVENTS_AUTO = 0,
+    AETHER_POINTER_EVENTS_NONE
+} aether_pointer_events_t;
+
 /* ── ComputedStyle (blittable flat struct) ─────────────────────────── */
 
 typedef struct {
@@ -516,6 +521,7 @@ typedef struct {
     int32_t           overflow_x;
     int32_t           overflow_y;
     int32_t           cursor;
+    int32_t           pointer_events;
     aether_bool_t     visible;
 } aether_computed_style_t;
 
@@ -675,6 +681,9 @@ AETHER_API aether_node_t       aether_layout_result_hit_test(aether_layout_resul
 AETHER_API aether_node_t       aether_layout_result_hit_test_with_scroll_offsets(
     aether_layout_result_t result, float x, float y,
     aether_scroll_offset_fn offsets, void* user_data);
+AETHER_API aether_node_t       aether_layout_result_hit_test_with_styles_and_scroll_offsets(
+    aether_layout_result_t result, aether_style_map_t styles, float x, float y,
+    aether_scroll_offset_fn offsets, void* user_data);
 AETHER_API int32_t             aether_layout_result_get_paint_order_count(aether_layout_result_t result);
 AETHER_API aether_layout_box_t aether_layout_result_get_paint_order_box(aether_layout_result_t result, int32_t index);
 
@@ -777,6 +786,13 @@ AETHER_API void aether_display_list_builder_set_image_dimensions_callback(
 AETHER_API aether_status_t aether_display_list_build(
     aether_display_list_builder_t builder,
     aether_layout_result_t layout,
+    aether_node_t focused_element,
+    aether_display_list_t* out_list);
+
+AETHER_API aether_status_t aether_display_list_build_with_styles(
+    aether_display_list_builder_t builder,
+    aether_layout_result_t layout,
+    aether_style_map_t current_styles,
     aether_node_t focused_element,
     aether_display_list_t* out_list);
 

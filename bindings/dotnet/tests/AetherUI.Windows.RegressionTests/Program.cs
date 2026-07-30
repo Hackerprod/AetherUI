@@ -51,6 +51,8 @@ VerifyVitalisNestedFlexReflowAtValidatorWidth();
 Console.WriteLine("OK: DirectWrite Vitalis nested-flex reflow invariants passed");
 VerifyViewportResizeCoalescing();
 Console.WriteLine("OK: viewport resize coalescing passed");
+VerifyScrollTileCacheMetrics();
+Console.WriteLine("OK: Direct2D scroll tile cache metrics passed");
 VerifyRoundedAvatarPixelsThroughSwapChain();
 Console.WriteLine("OK: Direct2D WARP avatar-radius swap-chain probe passed");
 VerifyFullKanbanAvatarComposition();
@@ -104,6 +106,64 @@ static void RequireNearSquare(PixelBounds bounds, int expectedExtent, string lab
     {
         throw new InvalidOperationException(
             $"Direct2D WARP distorted {label} at dpi={dpiScale:F2}: {bounds}, expected approximately {expectedExtent}px square.");
+    }
+}
+
+static void VerifyScrollTileCacheMetrics()
+{
+    using var window = HiddenWindow.Create(256, 256);
+    using var backend = new Direct2DRenderBackend(window.Handle, 256, 256, 1f, DriverType.Warp);
+    backend.SetScrollVisualStateProvider(id => new ScrollVisualState(
+        id == 42 ? new ScrollVisualOffset(16, 24) : default,
+        default));
+
+    var cacheable = new DisplayList([
+        new PushClipCommand(new RectF(0, 0, 128, 128), CornerRadii.Zero),
+        new PushScrollOffsetCommand(42),
+        new FillRoundedRectangleCommand(new RectF(0, 0, 96, 96), CornerRadii.Zero, new ColorRgba(.9f, .1f, .1f, 1)),
+        new FillRoundedRectangleCommand(new RectF(128, 0, 96, 96), CornerRadii.Zero, new ColorRgba(.1f, .9f, .1f, 1)),
+        new FillRoundedRectangleCommand(new RectF(0, 128, 96, 96), CornerRadii.Zero, new ColorRgba(.1f, .1f, .9f, 1)),
+        new DrawTextCommand("cached scroll content", new RectF(12, 180, 220, 32),
+            "Segoe UI", 16, UiFontWeight.Normal, TextAlign.Start, new ColorRgba(1, 1, 1, 1), true),
+        new PopScrollOffsetCommand(),
+        new PopClipCommand(),
+    ]);
+
+    backend.SetScrollCompositionMode(true);
+    _ = backend.RenderAndCaptureBackBufferForDiagnostics(cacheable, new ColorRgba(1, 1, 1, 1));
+    if (backend.LastScrollTileCacheMisses <= 0 || backend.LastScrollTileRasterizedCommands <= 0 ||
+        backend.LastScrollTileCacheHits != 0 || backend.LastScrollTileCacheBypasses != 0 ||
+        backend.LastScrollTileBytes <= 0)
+    {
+        throw new InvalidOperationException(
+            $"Expected first scroll tile frame to rasterize misses only: hits={backend.LastScrollTileCacheHits}, misses={backend.LastScrollTileCacheMisses}, rasterized={backend.LastScrollTileRasterizedCommands}, bypasses={backend.LastScrollTileCacheBypasses}, bytes={backend.LastScrollTileBytes}.");
+    }
+
+    backend.SetScrollCompositionMode(true);
+    _ = backend.RenderAndCaptureBackBufferForDiagnostics(cacheable, new ColorRgba(1, 1, 1, 1));
+    if (backend.LastScrollTileCacheHits <= 0 || backend.LastScrollTileCacheMisses != 0 ||
+        backend.LastScrollTileRasterizedCommands != 0 || backend.LastScrollTileCacheBypasses != 0)
+    {
+        throw new InvalidOperationException(
+            $"Expected repeat scroll tile frame to be cache-hit only: hits={backend.LastScrollTileCacheHits}, misses={backend.LastScrollTileCacheMisses}, rasterized={backend.LastScrollTileRasterizedCommands}, bypasses={backend.LastScrollTileCacheBypasses}.");
+    }
+
+    var bypassed = new DisplayList([
+        new PushClipCommand(new RectF(0, 0, 128, 128), CornerRadii.Zero),
+        new PushScrollOffsetCommand(42),
+        new PushTransformCommand(new TransformMatrix(1, 0, 0, 1, 2, 0)),
+        new FillRoundedRectangleCommand(new RectF(0, 0, 96, 96), CornerRadii.Zero, new ColorRgba(.2f, .2f, .2f, 1)),
+        new PopTransformCommand(),
+        new PopScrollOffsetCommand(),
+        new PopClipCommand(),
+    ]);
+    backend.SetScrollCompositionMode(true);
+    _ = backend.RenderAndCaptureBackBufferForDiagnostics(bypassed, new ColorRgba(1, 1, 1, 1));
+    if (backend.LastScrollTileCacheBypasses != 1 || backend.LastScrollTileCacheMisses != 0 ||
+        backend.LastScrollTileRasterizedCommands != 0)
+    {
+        throw new InvalidOperationException(
+            $"Expected transformed scroll segment to bypass tile cache: bypasses={backend.LastScrollTileCacheBypasses}, misses={backend.LastScrollTileCacheMisses}, rasterized={backend.LastScrollTileRasterizedCommands}.");
     }
 }
 

@@ -21,6 +21,9 @@ struct aether_computed_style_handle_s {
 struct runtime_node_state_s {
     aether_computed_style_handle_s style{};
     custom_property_scope_s custom_properties{};
+    uint32_t declared_impact = STYLE_IMPACT_NONE;
+    uint32_t declared_inherited_impact = STYLE_IMPACT_NONE;
+    uint32_t inherited_change_impact = STYLE_IMPACT_NONE;
     ~runtime_node_state_s() { aether_computed_style_free(&style.style); }
 };
 
@@ -59,6 +62,15 @@ static aether_style_update_s* make_style_update(aether_node_s* node,
     }
     return update;
 }
+
+static constexpr uint32_t STYLE_IMPACT_ALL_BITS =
+    static_cast<uint32_t>(STYLE_IMPACT_LAYOUT) |
+    static_cast<uint32_t>(STYLE_IMPACT_PAINT) |
+    static_cast<uint32_t>(STYLE_IMPACT_HITTEST) |
+    static_cast<uint32_t>(STYLE_IMPACT_COMPOSITE) |
+    static_cast<uint32_t>(STYLE_IMPACT_TEXT_LAYOUT) |
+    static_cast<uint32_t>(STYLE_IMPACT_CURSOR) |
+    static_cast<uint32_t>(STYLE_IMPACT_INHERITED);
 
 static bool is_calc_expression(const char* value) {
     if (!value) return false;
@@ -213,7 +225,8 @@ static bool try_parse_generated_content(const std::string& source, std::string& 
 }
 
 static runtime_node_state_s* compute_node(aether_style_runtime_s* runtime, aether_node_s* node,
-                                          runtime_node_state_s* parent, uint32_t& impact,
+                                          runtime_node_state_s* parent, uint32_t inherited_parent_impact,
+                                          uint32_t& impact, uint32_t& inherited_change_impact,
                                           std::optional<std::string>* generated_content = nullptr) {
     auto* registry = style_property_registry_get_global();
     auto next = aether_computed_style_inherit_from(parent ? &parent->style.style : nullptr);
@@ -306,10 +319,43 @@ static runtime_node_state_s* compute_node(aether_style_runtime_s* runtime, aethe
         }
     }
 
+    auto found = runtime->states.find(node);
+    const aether_computed_style_t* previous_style =
+        found == runtime->states.end() ? nullptr : &found->second->style.style;
+
+    auto apply_property_value = [&](const style_property_definition_s& definition,
+                                    aether_computed_style_t& style,
+                                    color_resolution_state_s& references,
+                                    const std::string& value,
+                                    bool emit_diagnostics) {
+        property_apply_context_s context{&style, &references};
+        property_apply_result_s apply_result{};
+        if (definition.apply_with_context_checked) {
+            apply_result = definition.apply_with_context_checked(context, value);
+        } else if (definition.apply_with_context) {
+            definition.apply_with_context(context, value);
+        } else if (definition.apply_checked) {
+            apply_result = definition.apply_checked(&style, value);
+        } else if (definition.apply) {
+            definition.apply(&style, value);
+        }
+        if (!apply_result.success || apply_result.diagnostic_code) {
+            if (emit_diagnostics) {
+                report(runtime,
+                       apply_result.diagnostic_code ? apply_result.diagnostic_code : "AETHER-CSS-APPLY",
+                       definition.name.c_str(), value.c_str(),
+                       apply_result.diagnostic_message ? apply_result.diagnostic_message : "CSS value could not be applied.");
+            }
+            if (!apply_result.success) return false;
+        }
+        return true;
+    };
+
     color_resolution_state_s color_references;
-    property_apply_context_s apply_context{&next, &color_references};
+    uint32_t declared_impact = STYLE_IMPACT_NONE;
+    uint32_t declared_inherited_impact = STYLE_IMPACT_NONE;
     auto apply_definition = [&](size_t i) {
-        if (!cascade[i].is_set) return;
+        if (!cascade[i].is_set) return false;
         const auto& definition = registry->definitions[i];
         const auto& compiled = cascade[i].value;
         std::string value;
@@ -323,9 +369,9 @@ static runtime_node_state_s* compute_node(aether_style_runtime_s* runtime, aethe
         case compiled_value_mode::inherit:
             // The style starts with inherited values. Non-inherited explicit
             // inherit is uncommon in Aether markup and remains unchanged here.
-            return;
+            return false;
         case compiled_value_mode::unset:
-            if (definition.inherited && parent) return;
+            if (definition.inherited && parent) return false;
             value = definition.initial_value;
             break;
         case compiled_value_mode::deferred:
@@ -334,7 +380,7 @@ static runtime_node_state_s* compute_node(aether_style_runtime_s* runtime, aethe
                                   runtime->options.max_variable_expansion_length, value)) {
                 report(runtime, "AETHER-CSS-VAR", definition.name.c_str(),
                        compiled.deferred_source.c_str(), "Unable to resolve CSS variable.");
-                return;
+                return false;
             }
             if (!definition.parse(value.c_str(), value)) {
                 report(runtime,
@@ -343,26 +389,37 @@ static runtime_node_state_s* compute_node(aether_style_runtime_s* runtime, aethe
                        is_calc_expression(value.c_str())
                            ? "The calc() expression is syntactically or dimensionally invalid."
                            : "Resolved CSS value is invalid.");
-                return;
+                return false;
             }
             break;
         }
-        property_apply_result_s apply_result{};
-        if (definition.apply_with_context_checked) {
-            apply_result = definition.apply_with_context_checked(apply_context, value);
-        } else if (definition.apply_with_context) {
-            definition.apply_with_context(apply_context, value);
-        } else if (definition.apply_checked) {
-            apply_result = definition.apply_checked(&next, value);
-        } else if (definition.apply) {
-            definition.apply(&next, value);
+        if (!apply_property_value(definition, next, color_references, value, true))
+            return false;
+        bool property_changed = previous_style == nullptr;
+        if (previous_style) {
+            aether_computed_style_handle_s previous_handle{};
+            previous_handle.style = *previous_style;
+            aether_computed_style_t probe{};
+            if (aether_computed_style_copy(&previous_handle, &probe) == AETHER_OK) {
+                color_resolution_state_s probe_references;
+                if (apply_property_value(definition, probe, probe_references, value, false)) {
+                    resolve_symbolic_colors(probe, probe_references);
+                    normalize_overflow_axes(probe);
+                    property_changed = !style_equal(*previous_style, probe);
+                } else {
+                    property_changed = true;
+                }
+                aether_computed_style_free(&probe);
+            } else {
+                property_changed = true;
+            }
         }
-        if (!apply_result.success || apply_result.diagnostic_code) {
-            report(runtime,
-                   apply_result.diagnostic_code ? apply_result.diagnostic_code : "AETHER-CSS-APPLY",
-                   definition.name.c_str(), value.c_str(),
-                   apply_result.diagnostic_message ? apply_result.diagnostic_message : "CSS value could not be applied.");
+        if (property_changed) {
+            declared_impact |= definition.impact;
+            if ((definition.impact & STYLE_IMPACT_INHERITED) != 0)
+                declared_inherited_impact |= definition.impact;
         }
+        return true;
     };
 
     // The cascade has already selected winners. Resolve the node's final
@@ -384,16 +441,41 @@ static runtime_node_state_s* compute_node(aether_style_runtime_s* runtime, aethe
     // line break participate in native inline layout as a line-break item.
     if (node->tag_name == "br") {
         const auto* display = registry->try_get("display");
-        if (display && !cascade[static_cast<size_t>(display->id)].is_set)
+        if (display && !cascade[static_cast<size_t>(display->id)].is_set) {
             next.display = AETHER_DISPLAY_LINE_BREAK;
+            declared_impact |= display->impact;
+        }
     }
 
-    auto found = runtime->states.find(node);
-    impact = found == runtime->states.end() ? 0x7fu :
-        (style_equal(found->second->style.style, next) ? STYLE_IMPACT_NONE : 0x7fu);
+    const bool is_new_node = found == runtime->states.end();
+    const bool changed = is_new_node || !style_equal(found->second->style.style, next);
+    if (!changed) {
+        impact = STYLE_IMPACT_NONE;
+        inherited_change_impact = STYLE_IMPACT_NONE;
+    } else if (is_new_node) {
+        impact = STYLE_IMPACT_ALL_BITS;
+        inherited_change_impact = declared_inherited_impact | inherited_parent_impact;
+    } else {
+        impact = declared_impact | inherited_parent_impact;
+        if (impact == STYLE_IMPACT_NONE) {
+            impact = found->second->declared_impact;
+        }
+        if (impact == STYLE_IMPACT_NONE) {
+            // Safety net for computed-style changes produced outside a concrete
+            // property applicator. This should be rare; known CSS properties
+            // should flow through their registry impact instead of this path.
+            impact = STYLE_IMPACT_ALL_BITS;
+        }
+        inherited_change_impact = declared_inherited_impact | inherited_parent_impact;
+        if (inherited_change_impact == STYLE_IMPACT_NONE)
+            inherited_change_impact = found->second->declared_inherited_impact;
+    }
     auto state = std::make_unique<runtime_node_state_s>();
     state->style.style = next;
     state->custom_properties = std::move(scope);
+    state->declared_impact = declared_impact;
+    state->declared_inherited_impact = declared_inherited_impact;
+    state->inherited_change_impact = inherited_change_impact;
     auto* result = state.get();
     runtime->states[node] = std::move(state);
     return result;
@@ -434,8 +516,11 @@ static void add_generated_pseudo(
     generated->style_origin = host;
 
     uint32_t impact = STYLE_IMPACT_NONE;
+    uint32_t inherited_change_impact = STYLE_IMPACT_NONE;
     std::optional<std::string> content;
-    auto* state = compute_node(runtime, generated, host_state, impact, &content);
+    auto* state = compute_node(runtime, generated, host_state,
+                               host_state ? host_state->inherited_change_impact : STYLE_IMPACT_NONE,
+                               impact, inherited_change_impact, &content);
     if (!content) {
         runtime->states.erase(generated);
         delete generated;
@@ -461,9 +546,11 @@ static void add_generated_pseudo(
 }
 
 static void resolve_tree(aether_style_runtime_s* runtime, aether_node_s* node,
-                         runtime_node_state_s* parent, std::vector<aether_style_update_s*>& updates) {
+                         runtime_node_state_s* parent, uint32_t inherited_parent_impact,
+                         std::vector<aether_style_update_s*>& updates) {
     if (!node) return;
     runtime_node_state_s* current_parent = parent;
+    uint32_t current_inherited_impact = inherited_parent_impact;
     if (node->type == AETHER_NODE_ELEMENT) {
         if (node->is_generated) {
             // add_generated_pseudo already computed and published this node in
@@ -472,10 +559,14 @@ static void resolve_tree(aether_style_runtime_s* runtime, aether_node_s* node,
             auto existing = runtime->states.find(node);
             if (existing != runtime->states.end()) {
                 current_parent = existing->second.get();
+                current_inherited_impact = existing->second->inherited_change_impact;
             } else {
                 uint32_t impact = STYLE_IMPACT_NONE;
-                auto* current = compute_node(runtime, node, parent, impact);
+                uint32_t inherited_change_impact = STYLE_IMPACT_NONE;
+                auto* current = compute_node(runtime, node, parent, inherited_parent_impact,
+                                             impact, inherited_change_impact);
                 current_parent = current;
+                current_inherited_impact = inherited_change_impact;
                 if (impact != STYLE_IMPACT_NONE) {
                     if (auto* update = make_style_update(node, current->style, impact))
                         updates.push_back(update);
@@ -487,8 +578,11 @@ static void resolve_tree(aether_style_runtime_s* runtime, aether_node_s* node,
         } else {
             clear_generated_children(runtime, node);
             uint32_t impact = STYLE_IMPACT_NONE;
-            auto* current = compute_node(runtime, node, parent, impact);
+            uint32_t inherited_change_impact = STYLE_IMPACT_NONE;
+            auto* current = compute_node(runtime, node, parent, inherited_parent_impact,
+                                         impact, inherited_change_impact);
             current_parent = current;
+            current_inherited_impact = inherited_change_impact;
             if (impact != STYLE_IMPACT_NONE) {
                 if (auto* update = make_style_update(node, current->style, impact))
                     updates.push_back(update);
@@ -500,7 +594,8 @@ static void resolve_tree(aether_style_runtime_s* runtime, aether_node_s* node,
             add_generated_pseudo(runtime, node, current, aether_pseudo_element_t::after, false, updates);
         }
     }
-    for (auto* child : node->children) resolve_tree(runtime, child, current_parent, updates);
+    for (auto* child : node->children)
+        resolve_tree(runtime, child, current_parent, current_inherited_impact, updates);
 }
 
 AETHER_API aether_status_t aether_style_runtime_create(
@@ -566,7 +661,7 @@ AETHER_API int32_t aether_style_runtime_resolve_subtree(
     aether_style_runtime_t runtime, aether_node_t root, aether_style_update_t** out_updates) {
     if (!runtime || !root || !out_updates) return 0;
     std::vector<aether_style_update_s*> updates;
-    resolve_tree(runtime, root, nullptr, updates);
+    resolve_tree(runtime, root, nullptr, STYLE_IMPACT_NONE, updates);
     if (updates.empty()) { *out_updates = nullptr; return 0; }
     auto* array = new aether_style_update_t[updates.size()];
     std::copy(updates.begin(), updates.end(), array);

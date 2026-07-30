@@ -2181,6 +2181,13 @@ AETHER_API aether_node_t aether_layout_result_hit_test_with_scroll_offsets(
     return result->hit_test(x, y, offsets, user_data);
 }
 
+AETHER_API aether_node_t aether_layout_result_hit_test_with_styles_and_scroll_offsets(
+    aether_layout_result_t result, aether_style_map_t styles, float x, float y,
+    aether_scroll_offset_fn offsets, void* user_data) {
+    if (!result) return nullptr;
+    return result->hit_test(x, y, styles, offsets, user_data);
+}
+
 AETHER_API int32_t aether_layout_result_get_paint_order_count(aether_layout_result_t result) {
     return result ? static_cast<int32_t>(result->paint_order.size()) : 0;
 }

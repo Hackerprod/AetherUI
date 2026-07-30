@@ -34,10 +34,11 @@ public sealed class NativeDisplayListInterop : IDisposable
                 Marshal.GetFunctionPointerForDelegate(_imageDimensionsDelegate), GCHandle.ToIntPtr(_self));
     }
 
-    public IReadOnlyList<NativePaintCommand> Build(NativeLayoutResult layout, IntPtr focusedElement)
+    public IReadOnlyList<NativePaintCommand> Build(NativeLayoutResult layout, NativeStyleMap currentStyles, IntPtr focusedElement)
     {
         ObjectDisposedException.ThrowIf(_builder == IntPtr.Zero, this);
-        Throw(NativeMethods.DisplayListBuild(_builder, layout.Handle, focusedElement, out var list));
+        ArgumentNullException.ThrowIfNull(currentStyles);
+        Throw(NativeMethods.DisplayListBuildWithStyles(_builder, layout.Handle, currentStyles.Handle, focusedElement, out var list));
         try
         {
             var commands = new List<NativePaintCommand>(NativeMethods.DisplayListGetCount(list));

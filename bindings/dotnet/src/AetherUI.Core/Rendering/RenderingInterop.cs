@@ -19,8 +19,8 @@ internal sealed class RenderingInterop : IDisposable
         _native = new NativeDisplayListInterop(Measure, imageDimensions);
     }
 
-    public DisplayList Build(NativeLayoutResult layout, IntPtr focusedElement) =>
-        new(_native.Build(layout, focusedElement).Select(Decode).ToArray());
+    public DisplayList Build(NativeLayoutResult layout, NativeStyleMap currentStyles, IntPtr focusedElement) =>
+        new(_native.Build(layout, currentStyles, focusedElement).Select(Decode).ToArray());
 
     public void Dispose() => _native.Dispose();
 
