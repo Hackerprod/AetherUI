@@ -36,6 +36,27 @@ public readonly record struct NativeScrollbarGeometry(
     NativeRect VerticalThumb,
     NativeRect Corner);
 
+[StructLayout(LayoutKind.Sequential)]
+public readonly record struct NativeRenderPlanInput(
+    uint Invalidation,
+    int MarkupDirty,
+    int HasPendingPointerMove,
+    int DisplayListAvailable,
+    int DisplayListContainsPatchedChunks,
+    int RendererSupportsIncremental);
+
+[StructLayout(LayoutKind.Sequential)]
+public readonly record struct NativeRenderPlan(
+    uint NormalizedInvalidation,
+    int RequiresStyle,
+    int RequiresLayout,
+    int RequiresDisplayList,
+    int RequiresPaintChunks,
+    int PointerOnlyRender,
+    int ScrollOnlyRender,
+    int AllowIncrementalRender,
+    int UseScrollComposition);
+
 internal static unsafe partial class NativeMethods
 {
     private const string Lib = "aether_core";
@@ -51,6 +72,15 @@ internal static unsafe partial class NativeMethods
 
     [LibraryImport(Lib, EntryPoint = "aether_paint_command_size")]
     internal static partial nuint PaintCommandSize();
+
+    [LibraryImport(Lib, EntryPoint = "aether_visual_invalidation_from_style_impact")]
+    internal static partial uint VisualInvalidationFromStyleImpact(uint impact);
+
+    [LibraryImport(Lib, EntryPoint = "aether_visual_invalidation_for_scroll")]
+    internal static partial uint VisualInvalidationForScroll(int displayListContainsPatchedChunks);
+
+    [LibraryImport(Lib, EntryPoint = "aether_render_plan_evaluate")]
+    internal static partial int RenderPlanEvaluate(in NativeRenderPlanInput input, out NativeRenderPlan plan);
 
     // ── Status & Lifecycle ──────────────────────────────────────────
 
@@ -250,6 +280,10 @@ internal static unsafe partial class NativeMethods
     internal static partial int DisplayListBuildWithStyles(
         IntPtr builder, IntPtr layout, IntPtr currentStyles, IntPtr focusedElement, out IntPtr displayList);
 
+    [LibraryImport(Lib, EntryPoint = "aether_display_list_build_node_with_styles")]
+    internal static partial int DisplayListBuildNodeWithStyles(
+        IntPtr builder, IntPtr layout, IntPtr currentStyles, IntPtr element, IntPtr focusedElement, out IntPtr displayList);
+
     [LibraryImport(Lib, EntryPoint = "aether_display_list_destroy")]
     internal static partial void DisplayListDestroy(IntPtr displayList);
 
@@ -293,6 +327,10 @@ internal static unsafe partial class NativeMethods
     internal static partial int StyleRuntimeResolveSubtree(
         IntPtr handle, IntPtr root, out IntPtr updates);
 
+    [LibraryImport(Lib, EntryPoint = "aether_style_runtime_resolve_state_changes")]
+    internal static partial int StyleRuntimeResolveStateChanges(
+        IntPtr handle, IntPtr root, IntPtr changedNodes, int changedCount, out IntPtr updates);
+
     [LibraryImport(Lib, EntryPoint = "aether_style_runtime_get_update")]
     internal static partial int StyleRuntimeGetUpdate(
         IntPtr update, out IntPtr node, out IntPtr current, out uint impact);
@@ -306,6 +344,10 @@ internal static unsafe partial class NativeMethods
 
     [LibraryImport(Lib, EntryPoint = "aether_style_runtime_create_resolved_style_map")]
     internal static partial int StyleRuntimeCreateResolvedStyleMap(IntPtr runtime, IntPtr document, out IntPtr styleMap);
+
+    [LibraryImport(Lib, EntryPoint = "aether_style_runtime_update_resolved_style_map")]
+    internal static partial int StyleRuntimeUpdateResolvedStyleMap(
+        IntPtr runtime, IntPtr styleMap, IntPtr nodes, int nodeCount);
 
     [LibraryImport(Lib, EntryPoint = "aether_style_map_destroy")]
     internal static partial void StyleMapDestroy(IntPtr styleMap);

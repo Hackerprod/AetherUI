@@ -20,7 +20,10 @@ internal sealed class RenderingInterop : IDisposable
     }
 
     public DisplayList Build(NativeLayoutResult layout, NativeStyleMap currentStyles, IntPtr focusedElement) =>
-        new(_native.Build(layout, currentStyles, focusedElement).Select(Decode).ToArray());
+        DecodeList(_native.Build(layout, currentStyles, focusedElement));
+
+    public DisplayList BuildNode(NativeLayoutResult layout, NativeStyleMap currentStyles, IntPtr element, IntPtr focusedElement) =>
+        DecodeList(_native.BuildNode(layout, currentStyles, element, focusedElement));
 
     public void Dispose() => _native.Dispose();
 
@@ -85,6 +88,53 @@ internal sealed class RenderingInterop : IDisposable
             16 => new DrawScrollbarChromeCommand(Long(bytes, NativePaintCommandLayout.ScrollContainerId)),
             _ => throw new InvalidOperationException($"Unknown native paint command tag {command.Tag}."),
         };
+    }
+
+    private DisplayList DecodeList(IReadOnlyList<NativePaintCommand> nativeCommands)
+    {
+        var commands = new List<PaintCommand>(nativeCommands.Count);
+        var openChunks = new Stack<(long StyleNodeId, int Start, int Depth)>();
+        var chunks = new List<PaintChunk>();
+
+        foreach (var native in nativeCommands)
+        {
+            switch (native.Tag)
+            {
+                case 17:
+                    openChunks.Push((Long(native.Bytes, NativePaintCommandLayout.PaintChunkStyleNodeId),
+                        commands.Count, openChunks.Count));
+                    break;
+                case 18:
+                {
+                    var id = Long(native.Bytes, NativePaintCommandLayout.PaintChunkStyleNodeId);
+                    if (openChunks.Count == 0)
+                    {
+                        throw new InvalidOperationException("Native display list ended a paint chunk without a matching begin.");
+                    }
+
+                    var chunk = openChunks.Pop();
+                    if (chunk.StyleNodeId != id)
+                    {
+                        throw new InvalidOperationException(
+                            $"Native display list paint chunk mismatch: begin={chunk.StyleNodeId}, end={id}.");
+                    }
+
+                    chunks.Add(new PaintChunk(id, chunk.Start, commands.Count,
+                        PaintCommandBounds.BoundsForRange(commands, chunk.Start, commands.Count), chunk.Depth));
+                    break;
+                }
+                default:
+                    commands.Add(Decode(native));
+                    break;
+            }
+        }
+
+        if (openChunks.Count != 0)
+        {
+            throw new InvalidOperationException("Native display list ended with an active paint chunk.");
+        }
+
+        return new DisplayList(commands, chunks);
     }
 
     private static long Long(byte[] bytes, int offset) => BitConverter.ToInt64(bytes, offset);

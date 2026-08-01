@@ -27,7 +27,7 @@ extern "C" {
  * ABI 1.0, a major-version change denotes an incompatible ABI.
  */
 #define AETHER_ABI_VERSION_MAJOR 0u
-#define AETHER_ABI_VERSION_MINOR 26u
+#define AETHER_ABI_VERSION_MINOR 30u
 #define AETHER_ABI_VERSION_PATCH 0u
 
 #define AETHER_ABI_VERSION_MAKE(major, minor, patch) \
@@ -49,6 +49,7 @@ typedef uint64_t aether_capabilities_t;
 #define AETHER_CAPABILITY_STYLE_RUNTIME (UINT64_C(1) << 1)
 #define AETHER_CAPABILITY_LAYOUT        (UINT64_C(1) << 2)
 #define AETHER_CAPABILITY_DISPLAY_LIST  (UINT64_C(1) << 3)
+#define AETHER_CAPABILITY_RENDER_PLAN   (UINT64_C(1) << 4)
 
 AETHER_API uint32_t              aether_abi_version(void);
 AETHER_API aether_capabilities_t aether_abi_capabilities(void);
@@ -734,6 +735,11 @@ typedef enum {
     AETHER_PAINT_PUSH_SCROLL_OFFSET,
     AETHER_PAINT_POP_SCROLL_OFFSET,
     AETHER_PAINT_DRAW_SCROLLBAR_CHROME,
+    /* Retained-paint metadata. Bindings use these brackets to replace and
+       damage only the paint subtree whose computed style changed. Renderers
+       must not paint them. */
+    AETHER_PAINT_BEGIN_PAINT_CHUNK,
+    AETHER_PAINT_END_PAINT_CHUNK,
 } aether_paint_command_tag_t;
 
 typedef struct {
@@ -762,6 +768,7 @@ typedef struct {
         struct { aether_transform_matrix matrix; } push_transform;
         struct { int64_t scroll_container_id; } push_scroll_offset;
         struct { int64_t scroll_container_id; } draw_scrollbar_chrome;
+        struct { int64_t style_node_id; } paint_chunk;
     } data;
 } aether_paint_command_t;
 
@@ -796,11 +803,73 @@ AETHER_API aether_status_t aether_display_list_build_with_styles(
     aether_node_t focused_element,
     aether_display_list_t* out_list);
 
+AETHER_API aether_status_t aether_display_list_build_node_with_styles(
+    aether_display_list_builder_t builder,
+    aether_layout_result_t layout,
+    aether_style_map_t current_styles,
+    aether_node_t element,
+    aether_node_t focused_element,
+    aether_display_list_t* out_list);
+
 AETHER_API void aether_display_list_destroy(aether_display_list_t list);
 AETHER_API int32_t aether_display_list_get_count(aether_display_list_t list);
 AETHER_API aether_status_t aether_display_list_get_command(aether_display_list_t list, int32_t index, aether_paint_command_t* out_cmd);
 
 AETHER_API void aether_paint_command_free(aether_paint_command_t* cmd);
+
+/* -- Render planning -------------------------------------------------------
+ *
+ * Bindings own platform rendering backends, but the engine owns the policy
+ * that maps CSS/style/layout invalidation into the next frame's required work.
+ * Keep this decision here so each binding does not reimplement it.
+ */
+
+typedef enum {
+    AETHER_STYLE_IMPACT_NONE        = 0,
+    AETHER_STYLE_IMPACT_LAYOUT      = 1 << 0,
+    AETHER_STYLE_IMPACT_PAINT       = 1 << 1,
+    AETHER_STYLE_IMPACT_HITTEST     = 1 << 2,
+    AETHER_STYLE_IMPACT_COMPOSITE   = 1 << 3,
+    AETHER_STYLE_IMPACT_TEXT_LAYOUT = 1 << 4,
+    AETHER_STYLE_IMPACT_CURSOR      = 1 << 5,
+    AETHER_STYLE_IMPACT_INHERITED   = 1 << 6
+} aether_style_impact_public_t;
+
+typedef enum {
+    AETHER_VISUAL_INVALIDATION_NONE         = 0,
+    AETHER_VISUAL_INVALIDATION_STYLE        = 1 << 0,
+    AETHER_VISUAL_INVALIDATION_LAYOUT       = 1 << 1,
+    AETHER_VISUAL_INVALIDATION_DISPLAY_LIST = 1 << 2,
+    AETHER_VISUAL_INVALIDATION_PAINT_CHUNKS = 1 << 3,
+    AETHER_VISUAL_INVALIDATION_SCROLL       = 1 << 4
+} aether_visual_invalidation_t;
+
+typedef struct {
+    uint32_t invalidation;
+    aether_bool_t markup_dirty;
+    aether_bool_t has_pending_pointer_move;
+    aether_bool_t display_list_available;
+    aether_bool_t display_list_contains_patched_chunks;
+    aether_bool_t renderer_supports_incremental;
+} aether_render_plan_input_t;
+
+typedef struct {
+    uint32_t normalized_invalidation;
+    aether_bool_t requires_style;
+    aether_bool_t requires_layout;
+    aether_bool_t requires_display_list;
+    aether_bool_t requires_paint_chunks;
+    aether_bool_t pointer_only_render;
+    aether_bool_t scroll_only_render;
+    aether_bool_t allow_incremental_render;
+    aether_bool_t use_scroll_composition;
+} aether_render_plan_t;
+
+AETHER_API uint32_t aether_visual_invalidation_from_style_impact(uint32_t impact);
+AETHER_API uint32_t aether_visual_invalidation_for_scroll(aether_bool_t display_list_contains_patched_chunks);
+AETHER_API aether_status_t aether_render_plan_evaluate(
+    const aether_render_plan_input_t* input,
+    aether_render_plan_t* out_plan);
 
 /* ── Full StyleRuntime (Phase 6) ──────────────────────────────────── */
 
@@ -867,6 +936,13 @@ AETHER_API int32_t aether_style_runtime_resolve_subtree(
     aether_node_t root,
     aether_style_update_t** out_updates);
 
+AETHER_API int32_t aether_style_runtime_resolve_state_changes(
+    aether_style_runtime_t runtime,
+    aether_node_t root,
+    const aether_node_t* changed_nodes,
+    int32_t changed_count,
+    aether_style_update_t** out_updates);
+
 AETHER_API aether_status_t aether_style_runtime_get_update(
     aether_style_update_t update,
     aether_node_t* out_node,
@@ -886,6 +962,12 @@ AETHER_API aether_status_t aether_style_runtime_create_resolved_style_map(
     aether_style_runtime_t runtime,
     aether_doc_t doc,
     aether_style_map_t* out_map);
+
+AETHER_API aether_status_t aether_style_runtime_update_resolved_style_map(
+    aether_style_runtime_t runtime,
+    aether_style_map_t map,
+    const aether_node_t* nodes,
+    int32_t node_count);
 
 AETHER_API void aether_style_runtime_clear_cache(aether_style_runtime_t runtime);
 

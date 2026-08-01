@@ -224,6 +224,8 @@ static void emit_pop_transform(std::vector<aether_paint_command_t>& cmds) {
 static void emit_push_scroll_offset(std::vector<aether_paint_command_t>& cmds, int64_t id) { aether_paint_command_t c{}; c.tag=AETHER_PAINT_PUSH_SCROLL_OFFSET; c.data.push_scroll_offset={id}; cmds.push_back(c); }
 static void emit_pop_scroll_offset(std::vector<aether_paint_command_t>& cmds) { aether_paint_command_t c{}; c.tag=AETHER_PAINT_POP_SCROLL_OFFSET; cmds.push_back(c); }
 static void emit_draw_scrollbar_chrome(std::vector<aether_paint_command_t>& cmds, int64_t id) { aether_paint_command_t c{}; c.tag=AETHER_PAINT_DRAW_SCROLLBAR_CHROME; c.data.draw_scrollbar_chrome={id}; cmds.push_back(c); }
+static void emit_begin_paint_chunk(std::vector<aether_paint_command_t>& cmds, int64_t id) { if (id <= 0) return; aether_paint_command_t c{}; c.tag=AETHER_PAINT_BEGIN_PAINT_CHUNK; c.data.paint_chunk={id}; cmds.push_back(c); }
+static void emit_end_paint_chunk(std::vector<aether_paint_command_t>& cmds, int64_t id) { if (id <= 0) return; aether_paint_command_t c{}; c.tag=AETHER_PAINT_END_PAINT_CHUNK; c.data.paint_chunk={id}; cmds.push_back(c); }
 
 /* ══════════════════════════════════════════════════════════════════════
    DisplayListBuilder — walks LayoutBox tree, emits paint commands
@@ -257,6 +259,18 @@ static void paint_background_and_border(aether_display_list_builder_s* builder, 
 
 static bool box_has_scrollbar_chrome(aether_layout_box_s* box);
 
+static bool is_scroll_container_axis(int32_t overflow)
+{
+    return overflow == AETHER_OVERFLOW_AUTO || overflow == AETHER_OVERFLOW_SCROLL;
+}
+
+static bool box_has_dynamic_scroll(aether_layout_box_s* box)
+{
+    return box->element &&
+        ((is_scroll_container_axis(box->style.overflow_x) && box->scroll.scrollable_overflow_x > 0.f) ||
+         (is_scroll_container_axis(box->style.overflow_y) && box->scroll.scrollable_overflow_y > 0.f));
+}
+
 static void paint_control(aether_display_list_builder_s* builder,
                            aether_layout_box_s* box,
                            aether_node_s* focused_element,
@@ -270,9 +284,13 @@ static void paint_box(aether_display_list_builder_s* builder,
                       std::vector<aether_paint_command_t>& cmds)
 {
     const auto& style = style_for_box(builder, box);
-    if (!style.visible || style.display == AETHER_DISPLAY_NONE || rect_is_empty(box->border_box)) {
+    if (!style.visible || style.display == AETHER_DISPLAY_NONE) {
         return;
     }
+    const bool empty_border_box = rect_is_empty(box->border_box);
+    const bool has_paint_chunk = box->kind == LAYOUT_BOX_ELEMENT &&
+        box->element && box->element->style_node_id > 0;
+    if (has_paint_chunk) emit_begin_paint_chunk(cmds, box->element->style_node_id);
 
     // CSS transforms are post-layout and scope over the element's own paint
     // plus every descendant. Keeping this as Display List structure avoids
@@ -291,7 +309,7 @@ static void paint_box(aether_display_list_builder_s* builder,
 
     // Text box → emit text command and return
     if (box->kind == LAYOUT_BOX_TEXT) {
-        if (!box->text.empty()) {
+        if (!empty_border_box && !box->text.empty()) {
             emit_text_shadows(cmds, style, box->text.c_str(), box->content_box,
                               AETHER_TEXT_ALIGN_START, false);
             if (style.has_text_gradient) {
@@ -314,11 +332,13 @@ static void paint_box(aether_display_list_builder_s* builder,
         return;
     }
 
-    // Box shadows (paint behind background)
-    paint_box_shadows(builder, box, cmds);
+    if (!empty_border_box) {
+        // Box shadows (paint behind background)
+        paint_box_shadows(builder, box, cmds);
 
-    // Background fill + border stroke
-    paint_background_and_border(builder, box, box->element == builder->canvas_background_source, cmds);
+        // Background fill + border stroke
+        paint_background_and_border(builder, box, box->element == builder->canvas_background_source, cmds);
+    }
 
     bool clips = style.overflow_x != AETHER_OVERFLOW_VISIBLE || style.overflow_y != AETHER_OVERFLOW_VISIBLE;
     if (clips) {
@@ -330,9 +350,8 @@ static void paint_box(aether_display_list_builder_s* builder,
         emit_push_clip(cmds, box->padding_box, clip);
     }
 
-    const bool dynamic_scroll = box->element &&
-        (box->scroll.scrollable_overflow_x > 0.f || box->scroll.scrollable_overflow_y > 0.f);
-    const bool scrollbar_chrome = box->element && box_has_scrollbar_chrome(box);
+    const bool dynamic_scroll = box_has_dynamic_scroll(box);
+    const bool scrollbar_chrome = box->element && !empty_border_box && box_has_scrollbar_chrome(box);
     if (dynamic_scroll) emit_push_scroll_offset(cmds, box->element->style_node_id);
     // Children (or atomic control paint)
     if (box->is_atomic_control) {
@@ -354,7 +373,7 @@ static void paint_box(aether_display_list_builder_s* builder,
     }
 
     // Focus ring
-    if (box->element == focused_element) {
+    if (!empty_border_box && box->element == focused_element) {
         auto focus_radii = aether_border_radii_resolve(style.border_radii, box->border_box, style.font_size);
         float* values = &focus_radii.top_left_x;
         for (int i = 0; i < 8; ++i) values[i] += 2.f;
@@ -364,6 +383,7 @@ static void paint_box(aether_display_list_builder_s* builder,
     }
 
     if (has_transform) emit_pop_transform(cmds);
+    if (has_paint_chunk) emit_end_paint_chunk(cmds, box->element->style_node_id);
 }
 
 /* ── paint_box_shadows ────────────────────────────────────────────── */
@@ -639,6 +659,37 @@ AETHER_API aether_status_t aether_display_list_build_with_styles(
     return AETHER_OK;
 }
 
+AETHER_API aether_status_t aether_display_list_build_node_with_styles(
+    aether_display_list_builder_t builder,
+    aether_layout_result_t layout,
+    aether_style_map_t current_styles,
+    aether_node_t element,
+    aether_node_t focused_element,
+    aether_display_list_t* out_list)
+{
+    if (!builder || !layout || !element || !out_list) return AETHER_ERROR_NULL_ARG;
+    if (!layout->root) return AETHER_ERROR_INVALID_STATE;
+
+    builder->viewport = layout->viewport;
+    builder->root_font_size = layout->root->style.font_size > 0.f ? layout->root->style.font_size : 16.f;
+    builder->current_style_map = current_styles ? current_styles : layout->style_map;
+    builder->canvas_background_source = nullptr;
+
+    auto* list = new(std::nothrow) aether_display_list_s();
+    if (!list) {
+        builder->current_style_map = nullptr;
+        return AETHER_ERROR_OUT_OF_MEMORY;
+    }
+
+    if (auto* box = layout->find_primary_box(element)) {
+        paint_box(builder, box, focused_element, list->commands);
+    }
+
+    builder->current_style_map = nullptr;
+    *out_list = list;
+    return AETHER_OK;
+}
+
 AETHER_API void aether_display_list_destroy(aether_display_list_t list) {
     delete list;
 }
@@ -734,6 +785,10 @@ AETHER_API aether_status_t aether_display_list_get_command(
             break;
         case AETHER_PAINT_DRAW_SCROLLBAR_CHROME:
             out_cmd->data.draw_scrollbar_chrome = src.data.draw_scrollbar_chrome;
+            break;
+        case AETHER_PAINT_BEGIN_PAINT_CHUNK:
+        case AETHER_PAINT_END_PAINT_CHUNK:
+            out_cmd->data.paint_chunk = src.data.paint_chunk;
             break;
         case AETHER_PAINT_POP_CLIP:
         case AETHER_PAINT_POP_TRANSFORM:

@@ -53,6 +53,17 @@ struct fixture_s {
     std::vector<update_record_s> resolve() const {
         aether_style_update_t* updates = nullptr;
         const int32_t count = aether_style_runtime_resolve_subtree(runtime, body, &updates);
+        return collect_updates(updates, count);
+    }
+
+    std::vector<update_record_s> resolve_changed(const std::vector<aether_node_t>& changed) const {
+        aether_style_update_t* updates = nullptr;
+        const int32_t count = aether_style_runtime_resolve_state_changes(
+            runtime, body, changed.data(), static_cast<int32_t>(changed.size()), &updates);
+        return collect_updates(updates, count);
+    }
+
+    static std::vector<update_record_s> collect_updates(aether_style_update_t* updates, int32_t count) {
         std::vector<update_record_s> records;
         for (int32_t index = 0; index < count; ++index) {
             update_record_s record{};
@@ -86,8 +97,10 @@ static bool has_update_for(const std::vector<update_record_s>& updates, aether_n
 
 static void require_only(uint32_t impact, uint32_t expected, const char* message) {
     const uint32_t actual = effective(impact);
-    require((actual & expected) == expected, message);
-    require((actual & ~expected) == 0, message);
+    if ((actual & expected) != expected || (actual & ~expected) != 0) {
+        std::fprintf(stderr, "impact mismatch: actual=0x%02x expected=0x%02x\n", actual, expected);
+        require(false, message);
+    }
 }
 
 static void paint_only_hover_does_not_escalate_to_layout() {
@@ -106,6 +119,29 @@ static void paint_only_hover_does_not_escalate_to_layout() {
     updates = fixture.resolve();
     require_only(impact_for(updates, card), STYLE_IMPACT_PAINT, "paint hover removal impact escalated");
     require(!has_update_for(updates, child), "non-inherited paint hover removal changed the child style");
+}
+
+static void paint_only_shorthand_hover_does_not_escalate_to_layout() {
+    fixture_s fixture(
+        "<body><article id='card'><div><div>vitalis_health</div></div><button id='open'>Open</button></article></body>",
+        "body { margin: 0; background: #0b1324; font-family: \"Segoe UI\", Arial, sans-serif; }"
+        "#open { padding: 10px 16px; background: #38bdf8; color: #06233a; border: 0; border-radius: 9px; font-weight: 700; }"
+        "#open:hover { background: #7dd3fc; }"
+        "#card { display: flex; justify-content: space-between; align-items: center; margin-bottom: 11px; padding: 16px 18px;"
+        "        background: rgba(19, 31, 57, 0.94); border: 1px solid #263d65; border-radius: 13px; }"
+        "#card:hover { background: #1a2b4d; border-color: #4a78b9; }");
+    auto* card = fixture.id("card");
+    auto* open = fixture.id("open");
+
+    aether_element_set_state(card, AETHER_STATE_HOVER);
+    auto updates = fixture.resolve();
+    require_only(impact_for(updates, card), STYLE_IMPACT_PAINT, "catalog card hover impact escalated");
+
+    aether_element_set_state(card, AETHER_STATE_NONE);
+    aether_element_set_state(open, AETHER_STATE_HOVER);
+    updates = fixture.resolve();
+    require_only(impact_for(updates, card), STYLE_IMPACT_PAINT, "catalog card hover removal impact escalated");
+    require_only(impact_for(updates, open), STYLE_IMPACT_PAINT, "catalog button hover impact escalated");
 }
 
 static void layout_hover_reports_layout_paint_and_hittest() {
@@ -148,11 +184,42 @@ static void pointer_events_hover_reports_hittest_only() {
     require_only(impact_for(updates, hit), STYLE_IMPACT_HITTEST, "pointer-events hover impact escalated");
 }
 
+static void incremental_state_change_scopes_subject_local_hover() {
+    fixture_s fixture(
+        "<body><div id='card'><span id='child'>Child</span></div></body>",
+        "#card:hover { background-color: #eeeeee; }");
+    auto* card = fixture.id("card");
+    auto* child = fixture.id("child");
+
+    aether_element_set_state(card, AETHER_STATE_HOVER);
+    const auto updates = fixture.resolve_changed({card});
+    require(updates.size() == 1, "subject-local hover should only update the changed subject subtree");
+    require_only(impact_for(updates, card), STYLE_IMPACT_PAINT, "incremental hover impact escalated");
+    require(!has_update_for(updates, child), "incremental hover updated an unaffected child");
+}
+
+static void incremental_state_change_falls_back_for_ancestor_state_selectors() {
+    fixture_s fixture(
+        "<body><div id='parent'><span id='child'>Child</span></div></body>",
+        "#parent:hover #child { color: #ff0000; }");
+    auto* parent = fixture.id("parent");
+    auto* child = fixture.id("child");
+
+    aether_element_set_state(parent, AETHER_STATE_HOVER);
+    const auto updates = fixture.resolve_changed({parent});
+    require(has_update_for(updates, child),
+            "ancestor-state selector must fall back so descendants affected by :hover are updated");
+    require_only(impact_for(updates, child), STYLE_IMPACT_PAINT, "ancestor-state fallback impact escalated");
+}
+
 int main() {
     paint_only_hover_does_not_escalate_to_layout();
+    paint_only_shorthand_hover_does_not_escalate_to_layout();
     layout_hover_reports_layout_paint_and_hittest();
     inherited_text_layout_hover_propagates_without_full_impact();
     cursor_hover_reports_cursor_only();
     pointer_events_hover_reports_hittest_only();
+    incremental_state_change_scopes_subject_local_hover();
+    incremental_state_change_falls_back_for_ancestor_state_selectors();
     return 0;
 }

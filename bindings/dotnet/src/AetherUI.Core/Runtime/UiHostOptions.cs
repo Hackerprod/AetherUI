@@ -25,4 +25,5 @@ public sealed class UiHostOptions
     public WindowBounds? InitialWindowBounds { get; init; }
     public ColorRgba ClearColor { get; init; } = ColorRgba.White;
     public IImageResourceResolver? ImageResolver { get; init; }
+    public Action<UiDocumentHostMetrics>? MetricsSink { get; init; }
 }

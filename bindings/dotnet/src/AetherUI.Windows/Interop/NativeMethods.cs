@@ -30,6 +30,7 @@ internal static class NativeMethods
     internal const uint WmMouseLeave = 0x02A3;
     internal const uint WmMouseWheel = 0x020A;
     internal const uint WmMouseHWheel = 0x020E;
+    internal const uint WmTimer = 0x0113;
     internal const uint MkShift = 0x0004;
     internal const uint TmeLeave = 0x00000002;
     internal const uint DlGcWantArrows = 0x0001;
@@ -228,6 +229,13 @@ internal static class NativeMethods
     [DllImport("user32.dll")]
     [return: MarshalAs(UnmanagedType.Bool)]
     internal static extern bool InvalidateRect(nint window, nint rectangle, [MarshalAs(UnmanagedType.Bool)] bool erase);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    internal static extern nuint SetTimer(nint window, nuint eventId, uint elapsedMilliseconds, nint timerProcedure);
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static extern bool KillTimer(nint window, nuint eventId);
 
     [DllImport("user32.dll")]
     internal static extern uint GetDpiForWindow(nint window);

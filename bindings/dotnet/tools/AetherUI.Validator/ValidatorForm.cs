@@ -37,15 +37,17 @@ public sealed class ValidatorForm : Form
 
     private readonly string _htmlPath;
     private readonly string _aetherWindowTitle;
+    private readonly PerfReporter? _perfReporter;
     private readonly WebView2 _webView = new();
     private RawHtmlFileComponent? _component;
     private DateTime _lastReload = DateTime.MinValue;
     private nint _aetherWindowHandle;
     private System.Windows.Forms.Timer? _nativeWindowMonitor;
 
-    public ValidatorForm(string htmlPath)
+    public ValidatorForm(string htmlPath, PerfReporter? perfReporter = null)
     {
         _htmlPath = Path.GetFullPath(htmlPath);
+        _perfReporter = perfReporter;
         var pageName = Path.GetFileNameWithoutExtension(_htmlPath);
         _aetherWindowTitle = $"AetherUI Validator — Native — {pageName} — {Guid.NewGuid():N}";
         Text = $"AetherUI Validator — Web reference (Chromium) — {pageName}";
@@ -113,6 +115,7 @@ public sealed class ValidatorForm : Form
                 // way instead of white-on-white or black-on-black hiding it.
                 ClearColor = new ColorRgba(0.5f, 0.5f, 0.5f, 1f),
                 ImageResolver = imageResolver,
+                MetricsSink = _perfReporter is null ? null : _perfReporter.Report,
             };
             WindowsUiApplication.Run(() => _component, options);
         })

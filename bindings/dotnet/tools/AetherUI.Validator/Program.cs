@@ -13,7 +13,9 @@ internal static class Program
         Application.EnableVisualStyles();
         Application.SetCompatibleTextRenderingDefault(false);
 
-        if (args.Length == 0)
+        var options = ParseArgs(args);
+        var perfReporter = options.Perf ? new PerfReporter("native") : null;
+        if (options.HtmlPath is null)
         {
             var pagesDirectory = Path.Combine(AppContext.BaseDirectory, "Pages");
             WindowsUiApplication.Run(
@@ -24,19 +26,43 @@ internal static class Program
                     Width = 920,
                     Height = 760,
                     ClearColor = new ColorRgba(0.035f, 0.063f, 0.114f, 1f),
+                    MetricsSink = perfReporter is null ? null : perfReporter.Report,
                 });
             return;
         }
 
-        Application.Run(new ValidatorForm(ResolveHtmlPath(args)));
+        Application.Run(new ValidatorForm(options.HtmlPath, perfReporter));
     }
 
-    private static string ResolveHtmlPath(string[] args)
+    private static ValidatorCommandLineOptions ParseArgs(string[] args)
     {
-        var path = args.Length == 2 && string.Equals(args[0], "--page", StringComparison.OrdinalIgnoreCase)
-            ? args[1]
-            : args[0];
+        var perf = false;
+        string? path = null;
+        for (var i = 0; i < args.Length; i++)
+        {
+            var arg = args[i];
+            if (string.Equals(arg, "--perf", StringComparison.OrdinalIgnoreCase))
+            {
+                perf = true;
+                continue;
+            }
 
-        return Path.GetFullPath(path);
+            if (string.Equals(arg, "--page", StringComparison.OrdinalIgnoreCase))
+            {
+                if (++i >= args.Length)
+                {
+                    throw new ArgumentException("--page requires an HTML path.");
+                }
+
+                path = args[i];
+                continue;
+            }
+
+            path ??= arg;
+        }
+
+        return new ValidatorCommandLineOptions(path is null ? null : Path.GetFullPath(path), perf);
     }
+
+    private sealed record ValidatorCommandLineOptions(string? HtmlPath, bool Perf);
 }

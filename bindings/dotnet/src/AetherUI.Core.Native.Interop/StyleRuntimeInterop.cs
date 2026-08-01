@@ -55,6 +55,15 @@ public sealed record NativeStyleResolution(
     IReadOnlyList<NativeComputedStyle> Styles,
     NativeStyleImpact Impact);
 
+public sealed record NativeStyleUpdate(
+    IntPtr Node,
+    NativeComputedStyle Style,
+    NativeStyleImpact Impact);
+
+public sealed record NativeStyleChangeResolution(
+    IReadOnlyList<NativeStyleUpdate> Updates,
+    NativeStyleImpact Impact);
+
 public sealed unsafe class StyleRuntimeInterop : IDisposable
 {
     internal static int ComputedStyleSize => Marshal.SizeOf<ComputedStyleRaw>();
@@ -66,6 +75,7 @@ public sealed unsafe class StyleRuntimeInterop : IDisposable
     private long _author;
     private bool _disposed;
     private readonly Dictionary<IntPtr, NativeComputedStyle> _styles = [];
+    private readonly Dictionary<IntPtr, int> _elementIndex = [];
     private List<IntPtr> _elements = [];
 
     public StyleRuntimeInterop(float width, float height, float dpiScale)
@@ -111,6 +121,11 @@ public sealed unsafe class StyleRuntimeInterop : IDisposable
         _defaults = AddStyleSheet(defaultsCss, 0, "aether-defaults.css");
         _author = AddStyleSheet(authorCss, 2, "<style>");
         _elements = document.EnumerateElementHandles().ToList();
+        _elementIndex.Clear();
+        for (var index = 0; index < _elements.Count; index++)
+        {
+            _elementIndex[_elements[index]] = index;
+        }
     }
 
     public NativeStyleResolution Resolve(
@@ -127,11 +142,40 @@ public sealed unsafe class StyleRuntimeInterop : IDisposable
         try
         {
             Marshal.StructureToPtr(environment, envPtr, false);
-            var impact = ResolveUpdates(NativeMethods.StyleRuntimeSetEnvironment(
+            var resolution = ResolveUpdates(NativeMethods.StyleRuntimeSetEnvironment(
                 _runtime, envPtr, _document, out var updates), updates);
-            return new NativeStyleResolution(_elements.Select(element => _styles[element]).ToArray(), impact);
+            return new NativeStyleResolution(_elements.Select(element => _styles[element]).ToArray(), resolution.Impact);
         }
         finally { Marshal.FreeHGlobal(envPtr); }
+    }
+
+    public NativeStyleChangeResolution ResolveStateChanges(
+        IReadOnlyList<IntPtr> changedElements,
+        IReadOnlyList<int> changedStates)
+    {
+        ThrowIfDisposed();
+        if (changedElements.Count != changedStates.Count)
+            throw new ArgumentException("Changed element and state counts differ.", nameof(changedStates));
+
+        if (changedElements.Count == 0)
+            return new NativeStyleChangeResolution(Array.Empty<NativeStyleUpdate>(), NativeStyleImpact.None);
+
+        var changedByElement = new Dictionary<IntPtr, int>(changedElements.Count);
+        for (var i = 0; i < changedElements.Count; i++)
+            changedByElement[changedElements[i]] = changedStates[i];
+
+        var changed = changedByElement.Keys.ToArray();
+        foreach (var (element, state) in changedByElement)
+        {
+            if (_elementIndex.ContainsKey(element))
+                NativeMethods.ElementSetState(element, state);
+        }
+
+        fixed (IntPtr* changedPointer = changed)
+        {
+            return ResolveUpdates(NativeMethods.StyleRuntimeResolveStateChanges(
+                _runtime, _document, (IntPtr)changedPointer, changed.Length, out var updates), updates);
+        }
     }
 
     /// <summary>Creates the frame-local style-map used by native layout without another CSS pass.</summary>
@@ -143,6 +187,23 @@ public sealed unsafe class StyleRuntimeInterop : IDisposable
         return new NativeStyleMap(styleMap);
     }
 
+    public void UpdateResolvedStyleMap(NativeStyleMap map, IReadOnlyList<IntPtr> nodes)
+    {
+        ThrowIfDisposed();
+        ArgumentNullException.ThrowIfNull(map);
+        if (nodes.Count == 0)
+        {
+            return;
+        }
+
+        var distinct = nodes.Distinct().ToArray();
+        fixed (IntPtr* nodePointer = distinct)
+        {
+            Throw(NativeMethods.StyleRuntimeUpdateResolvedStyleMap(
+                _runtime, map.Handle, (IntPtr)nodePointer, distinct.Length));
+        }
+    }
+
     private long AddStyleSheet(string css, int layer, string name)
     {
         long handle = 0;
@@ -152,22 +213,29 @@ public sealed unsafe class StyleRuntimeInterop : IDisposable
         return handle;
     }
 
-    private NativeStyleImpact ResolveUpdates(int count, IntPtr updates)
+    private NativeStyleChangeResolution ResolveUpdates(int count, IntPtr updates)
     {
         var aggregate = NativeStyleImpact.None;
+        var records = count > 0 ? new List<NativeStyleUpdate>(count) : new List<NativeStyleUpdate>();
         try
         {
             for (var i = 0; i < count; i++)
             {
                 var update = Marshal.ReadIntPtr(updates, i * IntPtr.Size);
                 Throw(NativeMethods.StyleRuntimeGetUpdate(update, out var node, out var style, out var impact));
-                aggregate |= (NativeStyleImpact)impact;
-                try { _styles[node] = ReadStyle(style); }
+                var nativeImpact = (NativeStyleImpact)impact;
+                aggregate |= nativeImpact;
+                try
+                {
+                    var publicStyle = ReadStyle(style);
+                    _styles[node] = publicStyle;
+                    records.Add(new NativeStyleUpdate(node, publicStyle, nativeImpact));
+                }
                 finally { NativeMethods.ComputedStyleHandleDestroy(style); }
             }
         }
         finally { NativeMethods.StyleUpdatesFree(updates, count); }
-        return aggregate;
+        return new NativeStyleChangeResolution(records, aggregate);
     }
 
     internal static NativeComputedStyle ReadStyle(IntPtr handle)

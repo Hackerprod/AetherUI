@@ -13,6 +13,8 @@ internal sealed class NativeWindow : IDisposable
 {
     private const string WindowClassName = "AetherUI.NativeWindow.1";
     private const uint ClientHitTest = 1;
+    private const nuint RenderTimerId = 1;
+    private const uint RenderFrameDelayMilliseconds = 16;
     private static readonly object ClassGate = new();
     private static readonly NativeMethods.WindowProcedure WindowProcedure = StaticWindowProcedure;
     private static ushort _windowClassAtom;
@@ -27,6 +29,9 @@ internal sealed class NativeWindow : IDisposable
     private float _dpiScale = 1f;
     private ViewportUpdate? _appliedViewport;
     private bool _trackingMouse;
+    private bool _renderPending;
+    private bool _renderTimerArmed;
+    private bool _paintInvalidated;
     private bool _disposed;
     private CursorKind _cursor = CursorKind.Default;
 
@@ -285,6 +290,14 @@ internal sealed class NativeWindow : IDisposable
             case NativeMethods.WmMouseHWheel:
                 MouseWheel(wParam, lParam, horizontal: true);
                 return nint.Zero;
+            case NativeMethods.WmTimer:
+                if (wParam == RenderTimerId)
+                {
+                    OnRenderTimer();
+                    return nint.Zero;
+                }
+
+                break;
             case NativeMethods.WmMouseLeave:
                 _trackingMouse = false;
                 _host?.PointerLeft();
@@ -347,6 +360,9 @@ internal sealed class NativeWindow : IDisposable
         _ = NativeMethods.BeginPaint(_windowHandle, out var paint);
         try
         {
+            DisarmRenderTimer();
+            _renderPending = false;
+            _paintInvalidated = false;
             ApplyPendingViewport();
             _host?.Render();
         }
@@ -371,9 +387,12 @@ internal sealed class NativeWindow : IDisposable
         }
 
         var point = ToLogicalPoint(lParam);
-        _host?.PointerMoved(point);
-        _cursor = _host?.CursorAt(point) ?? CursorKind.Default;
-        SetCursor(_cursor);
+        var nextCursor = _host?.PointerMoved(point) ?? CursorKind.Default;
+        if (nextCursor != _cursor)
+        {
+            _cursor = nextCursor;
+            SetCursor(_cursor);
+        }
     }
 
     private void MouseWheel(nuint wParam, nint lParam, bool horizontal)
@@ -497,10 +516,58 @@ internal sealed class NativeWindow : IDisposable
 
     private void RequestRender()
     {
-        if (_windowHandle != nint.Zero)
+        if (_windowHandle == nint.Zero)
         {
-            _ = NativeMethods.InvalidateRect(_windowHandle, nint.Zero, false);
+            return;
         }
+
+        _renderPending = true;
+        if (_paintInvalidated || _renderTimerArmed)
+        {
+            return;
+        }
+
+        _renderTimerArmed = NativeMethods.SetTimer(
+            _windowHandle,
+            RenderTimerId,
+            RenderFrameDelayMilliseconds,
+            nint.Zero) != 0;
+        if (!_renderTimerArmed)
+        {
+            InvalidateForPaint();
+        }
+    }
+
+    private void OnRenderTimer()
+    {
+        DisarmRenderTimer();
+        if (_renderPending)
+        {
+            InvalidateForPaint();
+        }
+    }
+
+    private void InvalidateForPaint()
+    {
+        if (_windowHandle == nint.Zero || _paintInvalidated)
+        {
+            return;
+        }
+
+        _paintInvalidated = true;
+        _ = NativeMethods.InvalidateRect(_windowHandle, nint.Zero, false);
+    }
+
+    private void DisarmRenderTimer()
+    {
+        if (!_renderTimerArmed || _windowHandle == nint.Zero)
+        {
+            _renderTimerArmed = false;
+            return;
+        }
+
+        _ = NativeMethods.KillTimer(_windowHandle, RenderTimerId);
+        _renderTimerArmed = false;
     }
 
     private void ThrowIfDisposed() => ObjectDisposedException.ThrowIf(_disposed, this);
@@ -521,6 +588,7 @@ internal sealed class NativeWindow : IDisposable
 
         if (_windowHandle != nint.Zero)
         {
+            DisarmRenderTimer();
             _ = NativeMethods.DestroyWindow(_windowHandle);
             _windowHandle = nint.Zero;
         }

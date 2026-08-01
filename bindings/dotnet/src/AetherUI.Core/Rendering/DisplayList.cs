@@ -88,6 +88,8 @@ public sealed record PopScrollOffsetCommand : PaintCommand;
 /// <summary>Delegates dynamic thumb geometry to the renderer's scroll-state provider.</summary>
 public sealed record DrawScrollbarChromeCommand(long ScrollContainerId) : PaintCommand;
 
+public sealed record PaintChunk(long StyleNodeId, int Start, int End, RectF Bounds, int Depth);
+
 public readonly record struct ScrollVisualOffset(float X, float Y);
 public readonly record struct ScrollbarChrome(
     bool HorizontalVisible,
@@ -103,15 +105,209 @@ public sealed class DisplayList
 {
     private static long s_nextGeneration;
 
-    public DisplayList(IReadOnlyList<PaintCommand> commands)
+    public DisplayList(IReadOnlyList<PaintCommand> commands, IReadOnlyList<PaintChunk>? chunks = null)
     {
         Commands = commands ?? throw new ArgumentNullException(nameof(commands));
+        PaintChunks = chunks ?? Array.Empty<PaintChunk>();
         Generation = System.Threading.Interlocked.Increment(ref s_nextGeneration);
     }
 
     public IReadOnlyList<PaintCommand> Commands { get; }
+    public IReadOnlyList<PaintChunk> PaintChunks { get; }
     public long Generation { get; }
     public int Count => Commands.Count;
+
+    public bool TryReplaceChunks(
+        IReadOnlyCollection<long> dirtyStyleNodeIds,
+        IReadOnlyDictionary<long, DisplayList> replacements,
+        out DisplayList updated)
+    {
+        updated = this;
+        if (dirtyStyleNodeIds.Count == 0 || PaintChunks.Count == 0)
+        {
+            return false;
+        }
+
+        var selected = PaintChunks
+            .Where(chunk => dirtyStyleNodeIds.Contains(chunk.StyleNodeId) && replacements.ContainsKey(chunk.StyleNodeId))
+            .OrderBy(chunk => chunk.Start)
+            .ToList();
+        if (selected.Count == 0)
+        {
+            return false;
+        }
+
+        // Replace only outermost dirty chunks. If both parent and descendant changed,
+        // regenerating the parent subtree already contains the descendant's new paint.
+        selected = selected
+            .Where(chunk => !selected.Any(other =>
+                !ReferenceEquals(chunk, other) &&
+                other.Start <= chunk.Start && other.End >= chunk.End &&
+                (other.Start != chunk.Start || other.End != chunk.End)))
+            .ToList();
+
+        var selectedRanges = selected.Select(chunk => (chunk.Start, chunk.End)).ToArray();
+        var newCommands = new List<PaintCommand>(Commands.Count);
+        var cursor = 0;
+        foreach (var chunk in selected)
+        {
+            if (chunk.Start < cursor)
+            {
+                return false;
+            }
+
+            CopyCommands(Commands, cursor, chunk.Start, newCommands);
+            CopyCommands(replacements[chunk.StyleNodeId].Commands, 0,
+                replacements[chunk.StyleNodeId].Commands.Count, newCommands);
+            cursor = chunk.End;
+        }
+        CopyCommands(Commands, cursor, Commands.Count, newCommands);
+
+        var newChunks = new List<PaintChunk>(PaintChunks.Count);
+        foreach (var oldChunk in PaintChunks)
+        {
+            if (selectedRanges.Any(range => oldChunk.Start >= range.Start && oldChunk.End <= range.End))
+            {
+                continue;
+            }
+
+            if (!TryMapPosition(oldChunk.Start, selected, replacements, out var mappedStart) ||
+                !TryMapPosition(oldChunk.End, selected, replacements, out var mappedEnd))
+            {
+                continue;
+            }
+
+            newChunks.Add(oldChunk with { Start = mappedStart, End = mappedEnd });
+        }
+
+        var cumulativeDelta = 0;
+        foreach (var chunk in selected)
+        {
+            var insertionStart = chunk.Start + cumulativeDelta;
+            var replacement = replacements[chunk.StyleNodeId];
+            foreach (var replacementChunk in replacement.PaintChunks)
+            {
+                newChunks.Add(replacementChunk with
+                {
+                    Start = insertionStart + replacementChunk.Start,
+                    End = insertionStart + replacementChunk.End
+                });
+            }
+
+            cumulativeDelta += replacement.Commands.Count - (chunk.End - chunk.Start);
+        }
+
+        updated = new DisplayList(newCommands, newChunks
+            .OrderBy(chunk => chunk.Start)
+            .ThenByDescending(chunk => chunk.End)
+            .ThenBy(chunk => chunk.Depth)
+            .ToArray());
+        return true;
+    }
+
+    private static void CopyCommands(IReadOnlyList<PaintCommand> source, int start, int end, List<PaintCommand> target)
+    {
+        for (var index = start; index < end; index++)
+        {
+            target.Add(source[index]);
+        }
+    }
+
+    private static bool TryMapPosition(
+        int position,
+        IReadOnlyList<PaintChunk> selected,
+        IReadOnlyDictionary<long, DisplayList> replacements,
+        out int mapped)
+    {
+        var delta = 0;
+        foreach (var chunk in selected)
+        {
+            if (position <= chunk.Start)
+            {
+                break;
+            }
+
+            if (position < chunk.End)
+            {
+                mapped = 0;
+                return false;
+            }
+
+            delta += replacements[chunk.StyleNodeId].Commands.Count - (chunk.End - chunk.Start);
+        }
+
+        mapped = position + delta;
+        return true;
+    }
+}
+
+internal static class PaintCommandBounds
+{
+    internal static bool TryGet(PaintCommand command, out RectF bounds)
+    {
+        switch (command)
+        {
+            case FillRoundedRectangleCommand fill:
+                bounds = fill.Rectangle;
+                return true;
+            case FillRoundedRectangleGradientCommand fill:
+                bounds = fill.Rectangle;
+                return true;
+            case DrawBoxShadowCommand shadow:
+            {
+                var spread = MathF.Abs(shadow.Shadow.SpreadRadius);
+                var blur = MathF.Max(0, shadow.Shadow.BlurRadius);
+                bounds = shadow.BorderBoxRectangle.Inflate(spread + (blur * 2) + 4)
+                    .Offset(shadow.Shadow.OffsetX, shadow.Shadow.OffsetY);
+                return true;
+            }
+            case StrokeRoundedRectangleCommand stroke:
+                bounds = stroke.Rectangle.Inflate(MathF.Max(.25f, stroke.StrokeWidth) * .5f + 2);
+                return true;
+            case FillBorderSideCommand border:
+                bounds = border.OuterRectangle.Inflate(2);
+                return true;
+            case DrawTextCommand text:
+                bounds = text.Rectangle.Inflate(2);
+                return true;
+            case DrawTextGradientCommand text:
+                bounds = text.Rectangle.Inflate(2);
+                return true;
+            case DrawTextShadowCommand textShadow:
+                bounds = textShadow.Rectangle
+                    .Offset(textShadow.Shadow.OffsetX, textShadow.Shadow.OffsetY)
+                    .Inflate(MathF.Max(0, textShadow.Shadow.BlurRadius) * 2 + 4);
+                return true;
+            case DrawBackgroundImageCommand image:
+                bounds = image.HasResolvedGeometry ? image.DestinationRectangle : image.PaintRectangle;
+                return true;
+            case ApplyBackdropFilterCommand backdrop:
+                bounds = backdrop.Rectangle;
+                return true;
+            default:
+                bounds = default;
+                return false;
+        }
+    }
+
+    internal static RectF BoundsForRange(IReadOnlyList<PaintCommand> commands, int start, int end)
+    {
+        RectF? union = null;
+        for (var index = start; index < end; index++)
+        {
+            if (!TryGet(commands[index], out var bounds) || bounds.IsEmpty)
+            {
+                continue;
+            }
+
+            union = union is { } current
+                ? RectF.FromEdges(MathF.Min(current.Left, bounds.Left), MathF.Min(current.Top, bounds.Top),
+                    MathF.Max(current.Right, bounds.Right), MathF.Max(current.Bottom, bounds.Bottom))
+                : bounds;
+        }
+
+        return union ?? default;
+    }
 }
 
 public interface IRenderBackend : IDisposable
@@ -124,4 +320,9 @@ public interface IRenderBackend : IDisposable
     {
         SetScrollOffsetProvider(provider is null ? null : id => provider(id).Offset);
     }
+}
+
+public interface IIncrementalRenderBackend
+{
+    bool TryRenderIncremental(DisplayList displayList, ColorRgba clearColor);
 }

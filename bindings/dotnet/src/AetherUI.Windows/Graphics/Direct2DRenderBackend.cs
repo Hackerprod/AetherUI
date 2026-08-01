@@ -25,7 +25,7 @@ namespace AetherUI.Windows.Graphics;
 /// Direct2D/DirectWrite implementation of AetherUI's retained display-list backend.
 /// A single D3D11/DXGI/Direct2D device-context pipeline owns every GPU resource.
 /// </summary>
-public sealed class Direct2DRenderBackend : IRenderBackend, ITextMeasurer
+public sealed class Direct2DRenderBackend : IRenderBackend, IIncrementalRenderBackend, ITextMeasurer
 {
     private readonly nint _windowHandle;
     private readonly DriverType? _forcedDriverType;
@@ -53,6 +53,8 @@ public sealed class Direct2DRenderBackend : IRenderBackend, ITextMeasurer
     // both roles because it is intentionally created with CannotDraw.
     private ID2D1Bitmap1? _backdropSceneBitmap;
     private ID2D1Bitmap1? _backdropSnapshotBitmap;
+    private ID2D1Bitmap1? _retainedFrameBitmap;
+    private DisplayList? _retainedFrameDisplayList;
     private int _pixelWidth;
     private int _pixelHeight;
     private float _dpiScale;
@@ -67,6 +69,7 @@ public sealed class Direct2DRenderBackend : IRenderBackend, ITextMeasurer
     private Func<long, ScrollVisualState>? _scrollStateProvider;
     private bool _scrollTileCompositionEnabled;
     private bool _disposed;
+    private readonly bool _incrementalDebug;
 
     public void SetScrollOffsetProvider(Func<long, ScrollVisualOffset>? provider) =>
         _scrollStateProvider = provider is null ? null : id => new ScrollVisualState(provider(id), default);
@@ -81,6 +84,9 @@ public sealed class Direct2DRenderBackend : IRenderBackend, ITextMeasurer
     private bool _diagnosticCaptureRequested;
     private byte[]? _diagnosticCapturedFrame;
     private long _scrollTileDisplayListGeneration;
+    private int _lastIncrementalStartIndex = -1;
+    private int _lastIncrementalScannedCommands;
+    private int _lastIncrementalPaintedCommands;
 
     // A clip is expressed in the coordinate space that was active when it was pushed. Keeping
     // that matrix with the clip is essential when a text-shadow cache miss or backdrop snapshot
@@ -105,6 +111,9 @@ public sealed class Direct2DRenderBackend : IRenderBackend, ITextMeasurer
     internal int LastScrollTileEvictions => _scrollTileMetrics.Evictions;
     internal int LastScrollTileCacheBypasses => _scrollTileMetrics.Bypasses;
     internal long LastScrollTileBytes => _scrollTileCache.Bytes;
+    internal int LastIncrementalStartIndex => _lastIncrementalStartIndex;
+    internal int LastIncrementalScannedCommands => _lastIncrementalScannedCommands;
+    internal int LastIncrementalPaintedCommands => _lastIncrementalPaintedCommands;
 
     /// <summary>
     /// Renders through the production swap-chain path and copies that exact completed
@@ -204,6 +213,8 @@ public sealed class Direct2DRenderBackend : IRenderBackend, ITextMeasurer
         _pixelWidth = Math.Max(1, pixelWidth);
         _pixelHeight = Math.Max(1, pixelHeight);
         _dpiScale = NormalizeDpiScale(dpiScale);
+        _incrementalDebug = string.Equals(
+            Environment.GetEnvironmentVariable("AETHER_INC_DIAG"), "1", StringComparison.Ordinal);
 
         var d2dFactory = D2D1.D2D1CreateFactory<ID2D1Factory1>();
         IDWriteFactory2? writeFactory = null;
@@ -293,12 +304,62 @@ public sealed class Direct2DRenderBackend : IRenderBackend, ITextMeasurer
         _scrollTileMetrics.Reset();
         _lastTransformPushes = 0;
         _lastTransformPops = 0;
+        _lastIncrementalStartIndex = -1;
+        _lastIncrementalScannedCommands = 0;
+        _lastIncrementalPaintedCommands = 0;
         if (_scrollTileDisplayListGeneration != displayList.Generation)
         {
             _scrollTileCache.Clear();
             _scrollTileDisplayListGeneration = displayList.Generation;
         }
         RenderCore(displayList, clearColor, allowDeviceRetry: true);
+    }
+
+    public bool TryRenderIncremental(DisplayList displayList, ColorRgba clearColor)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        ArgumentNullException.ThrowIfNull(displayList);
+        if (clearColor.A < .999f)
+        {
+            return false;
+        }
+
+        if (_retainedFrameBitmap is null || _retainedFrameDisplayList is null)
+        {
+            return false;
+        }
+
+        if (!TryCreateDamagePlan(_retainedFrameDisplayList, displayList, out var plan))
+        {
+            if (_incrementalDebug)
+            {
+                Console.WriteLine("TryCreateDamagePlan rejected; fallback required.");
+            }
+
+            return false;
+        }
+
+        if (plan.DirtyRects.Count == 0)
+        {
+            if (_incrementalDebug)
+            {
+                Console.WriteLine($"TryCreateDamagePlan no changes: first={plan.FirstChangedIndex}.");
+            }
+
+            _retainedFrameDisplayList = displayList;
+            return true;
+        }
+
+        _textShadowMetrics.Reset();
+        _backdropMetrics.Reset();
+        _scrollTileMetrics.Reset();
+        _lastTransformPushes = 0;
+        _lastTransformPops = 0;
+        _lastIncrementalScannedCommands = 0;
+        _lastIncrementalPaintedCommands = 0;
+        RenderIncrementalCore(displayList, clearColor, plan, allowDeviceRetry: true);
+        _lastIncrementalStartIndex = plan.FirstChangedIndex;
+        return true;
     }
 
     private void RenderCore(DisplayList displayList, ColorRgba clearColor, bool allowDeviceRetry)
@@ -525,6 +586,8 @@ public sealed class Direct2DRenderBackend : IRenderBackend, ITextMeasurer
             _diagnosticCaptureRequested = false;
         }
 
+        UpdateRetainedFrameCache(target, displayList);
+
         var presentResult = _swapChain!.Present(1, PresentFlags.None);
         if (presentResult.Failure)
         {
@@ -536,6 +599,867 @@ public sealed class Direct2DRenderBackend : IRenderBackend, ITextMeasurer
 
             presentResult.CheckError();
         }
+    }
+
+    private void RenderIncrementalCore(DisplayList displayList, ColorRgba clearColor, DamagePlan plan, bool allowDeviceRetry)
+    {
+        EnsureDeviceResources();
+        if (_retainedFrameBitmap is null)
+        {
+            RenderCore(displayList, clearColor, allowDeviceRetry);
+            return;
+        }
+
+        var target = _renderTarget!;
+        ConfigureSceneTarget(usesBackdropFilters: false);
+        BeginDrawSegment(target);
+        target.Transform = Matrix3x2.Identity;
+        target.Clear(ToColor4(clearColor));
+        DrawRetainedFrame(target);
+        for (var i = 0; i < plan.DirtyRects.Count; i++)
+        {
+            var dirtyRect = plan.DirtyRects[i];
+            target.PushAxisAlignedClip(ToRawRect(dirtyRect), AntialiasMode.PerPrimitive);
+            try
+            {
+                ClearDirtyRect(target, clearColor, dirtyRect);
+                RenderSimpleCommandRange(
+                    target,
+                    displayList.Commands,
+                    plan.ChangedRanges,
+                    plan.StateCommandIndices,
+                    [dirtyRect],
+                    out var scannedCommands,
+                    out var paintedCommands);
+
+                _lastIncrementalScannedCommands += scannedCommands;
+                _lastIncrementalPaintedCommands += paintedCommands;
+            }
+            finally
+            {
+                target.PopAxisAlignedClip();
+            }
+        }
+
+        var result = EndDrawSegment(target);
+        if (result.Failure)
+        {
+            if (RecoverFromDeviceLoss(result, allowDeviceRetry))
+            {
+                RenderCore(displayList, clearColor, allowDeviceRetry: false);
+                return;
+            }
+
+            result.CheckError();
+        }
+
+        if (_diagnosticCaptureRequested)
+        {
+            _diagnosticCapturedFrame = CopyBackBufferForDiagnostics();
+            _diagnosticCaptureRequested = false;
+        }
+
+        UpdateRetainedFrameCache(target, displayList, plan.DirtyRects);
+
+        var presentResult = _swapChain!.Present(1, PresentFlags.None);
+        if (presentResult.Failure)
+        {
+            if (RecoverFromDeviceLoss(presentResult, allowDeviceRetry))
+            {
+                RenderCore(displayList, clearColor, allowDeviceRetry: false);
+                return;
+            }
+
+            presentResult.CheckError();
+        }
+    }
+
+    private void DrawRetainedFrame(ID2D1DeviceContext target)
+    {
+        if (_retainedFrameBitmap is null)
+        {
+            return;
+        }
+
+        target.DrawImage(_retainedFrameBitmap, Vector2.Zero, null,
+            Vortice.Direct2D1.InterpolationMode.NearestNeighbor, CompositeMode.SourceCopy);
+    }
+
+    private void UpdateRetainedFrameCache(ID2D1DeviceContext target, DisplayList displayList, IReadOnlyList<RectF>? dirtyRects = null)
+    {
+        if (_targetBitmap is null || _targetPixelWidth <= 0 || _targetPixelHeight <= 0 || _targetDpiScale <= 0)
+        {
+            ReleaseRetainedFrameCache();
+            return;
+        }
+
+        if (_retainedFrameBitmap is null)
+        {
+            var dpi = 96f * _targetDpiScale;
+            _retainedFrameBitmap = target.CreateBitmap(
+                new SizeI(_targetPixelWidth, _targetPixelHeight),
+                IntPtr.Zero,
+                0,
+                new BitmapProperties1(
+                    new Vortice.DCommon.PixelFormat(Format.B8G8R8A8_UNorm, Vortice.DCommon.AlphaMode.Premultiplied),
+                    dpi,
+                    dpi,
+                    BitmapOptions.None));
+        }
+
+        if (dirtyRects is { Count: > 0 })
+        {
+            foreach (var dirtyRect in dirtyRects)
+            {
+                var pixelRect = ToPixelRectangle(dirtyRect);
+                if (pixelRect.Width <= 0 || pixelRect.Height <= 0)
+                {
+                    continue;
+                }
+
+                _retainedFrameBitmap.CopyFromBitmap(
+                    new Point(pixelRect.Left, pixelRect.Top),
+                    _targetBitmap,
+                    pixelRect);
+            }
+        }
+        else
+        {
+            _retainedFrameBitmap.CopyFromBitmap(_targetBitmap);
+        }
+
+        _retainedFrameDisplayList = displayList;
+    }
+
+    private void ReleaseRetainedFrameCache()
+    {
+        _retainedFrameBitmap?.Dispose();
+        _retainedFrameBitmap = null;
+        _retainedFrameDisplayList = null;
+    }
+
+    private sealed record CommandRange(int Start, int End);
+
+    private sealed record DamagePlan(
+        int FirstChangedIndex,
+        IReadOnlyList<RectF> DirtyRects,
+        IReadOnlyList<CommandRange> ChangedRanges,
+        IReadOnlyList<int> StateCommandIndices);
+
+    private bool TryCreateDamagePlan(DisplayList previous, DisplayList current, out DamagePlan plan)
+    {
+        plan = new DamagePlan(0, Array.Empty<RectF>(), Array.Empty<CommandRange>(), Array.Empty<int>());
+
+        static bool Reject(string reason, bool incrementalDebug, int index = -1)
+        {
+            if (incrementalDebug)
+            {
+                Console.WriteLine(reason);
+            }
+
+            return false;
+        }
+
+        var oldCommands = previous.Commands;
+        var newCommands = current.Commands;
+        if (oldCommands.Count != newCommands.Count || oldCommands.Count == 0)
+        {
+            return Reject(
+                $"TryCreateDamagePlan reject: count mismatch old={oldCommands.Count} new={newCommands.Count}",
+                _incrementalDebug);
+        }
+
+        var dirtyRects = new List<RectF>();
+        var firstChanged = -1;
+        var scrollOffsets = new Stack<ScrollVisualOffset>();
+        var currentScrollOffset = new ScrollVisualOffset(0, 0);
+        for (var i = 0; i < oldCommands.Count; i++)
+        {
+            var oldCommand = oldCommands[i];
+            var newCommand = newCommands[i];
+            if (oldCommand.GetType() != newCommand.GetType())
+            {
+                return Reject(
+                    $"TryCreateDamagePlan reject: type mismatch index={i} old={oldCommand.GetType().Name} new={newCommand.GetType().Name}",
+                    _incrementalDebug);
+            }
+
+            if (RequiresFullRenderForDamage(oldCommand))
+            {
+            return Reject(
+                $"TryCreateDamagePlan reject: unsupported command for incremental index={i} type={oldCommand.GetType().Name}",
+                _incrementalDebug);
+        }
+
+            if (oldCommand is PushScrollOffsetCommand oldScroll)
+            {
+                if (!PaintCommandsEqualForDamage(oldCommand, newCommand))
+                {
+                    return Reject(
+                        $"TryCreateDamagePlan reject: scroll container changed at index={i} type={oldCommand.GetType().Name}",
+                        _incrementalDebug);
+                }
+
+                scrollOffsets.Push(currentScrollOffset);
+                var offset = _scrollStateProvider?.Invoke(oldScroll.ScrollContainerId).Offset ?? default;
+                currentScrollOffset = new ScrollVisualOffset(
+                    currentScrollOffset.X + offset.X,
+                    currentScrollOffset.Y + offset.Y);
+                continue;
+            }
+
+            if (oldCommand is PopScrollOffsetCommand)
+            {
+                if (scrollOffsets.Count == 0)
+                {
+                    return Reject(
+                        $"TryCreateDamagePlan reject: unmatched scroll pop index={i}",
+                        _incrementalDebug);
+                }
+
+                currentScrollOffset = scrollOffsets.Pop();
+                continue;
+            }
+
+            if (oldCommand is PushClipCommand or PopClipCommand or DrawScrollbarChromeCommand)
+            {
+                if (!PaintCommandsEqualForDamage(oldCommand, newCommand))
+                {
+                    return Reject(
+                        $"TryCreateDamagePlan reject: structural command changed index={i} type={oldCommand.GetType().Name}",
+                        _incrementalDebug);
+                }
+
+                continue;
+            }
+
+            if (PaintCommandsEqualForDamage(oldCommand, newCommand))
+            {
+                continue;
+            }
+
+            if (!TryGetCommandBounds(oldCommand, out var oldBounds) ||
+                !TryGetCommandBounds(newCommand, out var newBounds))
+            {
+                return Reject(
+                    $"TryCreateDamagePlan reject: bounds unavailable index={i} type={oldCommand.GetType().Name}",
+                    _incrementalDebug);
+            }
+
+            firstChanged = firstChanged < 0 ? i : firstChanged;
+            oldBounds = TranslateForScroll(oldBounds, currentScrollOffset);
+            newBounds = TranslateForScroll(newBounds, currentScrollOffset);
+            AddDirtyRect(dirtyRects, oldBounds.Inflate(3));
+            AddDirtyRect(dirtyRects, newBounds.Inflate(3));
+        }
+
+        if (firstChanged < 0)
+        {
+            plan = new DamagePlan(0, Array.Empty<RectF>(), Array.Empty<CommandRange>(), Array.Empty<int>());
+            return true;
+        }
+
+        if (scrollOffsets.Count != 0)
+        {
+            return Reject("TryCreateDamagePlan reject: unmatched scroll push", _incrementalDebug);
+        }
+
+        var viewport = new RectF(0, 0, _targetPixelWidth / _targetDpiScale, _targetPixelHeight / _targetDpiScale);
+        var clippedDirtyRects = new List<RectF>(dirtyRects.Count);
+        var dirtyArea = 0f;
+        foreach (var dirtyRect in dirtyRects)
+        {
+            var clipped = Intersect(dirtyRect, viewport);
+            if (clipped.IsEmpty)
+            {
+                continue;
+            }
+
+            clippedDirtyRects.Add(clipped);
+            dirtyArea += clipped.Width * clipped.Height;
+        }
+
+        if (_incrementalDebug && clippedDirtyRects.Count > 0)
+        {
+            Console.WriteLine($"TryCreateDamagePlan firstChanged={firstChanged} dirtyRects={dirtyRects.Count} clipped={clippedDirtyRects.Count}");
+            for (var i = 0; i < clippedDirtyRects.Count; i++)
+            {
+                var rect = clippedDirtyRects[i];
+                Console.WriteLine($"  dirty[{i}] x={rect.X:F2} y={rect.Y:F2} w={rect.Width:F2} h={rect.Height:F2}");
+            }
+        }
+
+        if (clippedDirtyRects.Count == 0)
+        {
+            return Reject("TryCreateDamagePlan reject: no visible dirty area", _incrementalDebug);
+        }
+
+        if (dirtyArea > viewport.Width * viewport.Height * 0.45f)
+        {
+            if (_incrementalDebug)
+            {
+                Console.WriteLine(
+                    $"TryCreateDamagePlan reject: dirty area too large area={dirtyArea} viewport={viewport.Width * viewport.Height}");
+            }
+
+            return false;
+        }
+
+        var changedRanges = CollectRepaintRanges(newCommands, clippedDirtyRects);
+        if (changedRanges.Count == 0)
+        {
+            return Reject("TryCreateDamagePlan reject: dirty area has no repaintable commands", _incrementalDebug);
+        }
+
+        if (_incrementalDebug && changedRanges.Count > 0)
+        {
+            Console.WriteLine($"TryCreateDamagePlan changed ranges: {changedRanges.Count}.");
+            for (var i = 0; i < changedRanges.Count; i++)
+            {
+                Console.WriteLine($"  range[{i}]: {changedRanges[i].Start}-{changedRanges[i].End}");
+            }
+        }
+
+        if (!TryCollectStateCommandIndices(oldCommands, changedRanges, out var stateCommandIndices))
+        {
+            return Reject("TryCreateDamagePlan reject: unbalanced state stack.", _incrementalDebug);
+        }
+
+        plan = new DamagePlan(firstChanged, clippedDirtyRects, changedRanges, stateCommandIndices);
+        return true;
+    }
+
+    private List<CommandRange> CollectRepaintRanges(
+        IReadOnlyList<PaintCommand> commands,
+        IReadOnlyList<RectF> dirtyRects)
+    {
+        var repaintIndices = new List<int>();
+        var scrollOffsets = new Stack<ScrollVisualOffset>();
+        var currentScrollOffset = new ScrollVisualOffset(0, 0);
+
+        for (var i = 0; i < commands.Count; i++)
+        {
+            var command = commands[i];
+            switch (command)
+            {
+                case PushScrollOffsetCommand scroll:
+                {
+                    scrollOffsets.Push(currentScrollOffset);
+                    var offset = _scrollStateProvider?.Invoke(scroll.ScrollContainerId).Offset ?? default;
+                    currentScrollOffset = new ScrollVisualOffset(
+                        currentScrollOffset.X + offset.X,
+                        currentScrollOffset.Y + offset.Y);
+                    continue;
+                }
+                case PopScrollOffsetCommand:
+                    if (scrollOffsets.Count == 0)
+                    {
+                        return [];
+                    }
+
+                    currentScrollOffset = scrollOffsets.Pop();
+                    continue;
+                case PushClipCommand or PopClipCommand or DrawScrollbarChromeCommand:
+                    continue;
+            }
+
+            if (TryGetCommandBounds(command, out var bounds) &&
+                CommandIntersectsDirtyRects(bounds, dirtyRects, currentScrollOffset))
+            {
+                repaintIndices.Add(i);
+            }
+        }
+
+        if (scrollOffsets.Count != 0 || repaintIndices.Count == 0)
+        {
+            return [];
+        }
+
+        return ToCommandRanges(repaintIndices);
+    }
+
+    private static List<CommandRange> ToCommandRanges(List<int> indices)
+    {
+        indices.Sort();
+        var ranges = new List<CommandRange>(indices.Count);
+        var rangeStart = indices[0];
+        var rangeEnd = rangeStart + 1;
+        for (var i = 1; i < indices.Count; i++)
+        {
+            var index = indices[i];
+            if (index == rangeEnd)
+            {
+                rangeEnd = index + 1;
+            }
+            else
+            {
+                ranges.Add(new CommandRange(rangeStart, rangeEnd));
+                rangeStart = index;
+                rangeEnd = index + 1;
+            }
+        }
+
+        ranges.Add(new CommandRange(rangeStart, rangeEnd));
+        return ranges;
+    }
+
+    private static bool TryCollectStateCommandIndices(
+        IReadOnlyList<PaintCommand> commands,
+        IReadOnlyList<CommandRange> changedRanges,
+        out IReadOnlyList<int> stateCommandIndices)
+    {
+        stateCommandIndices = Array.Empty<int>();
+
+        var stateStack = new Stack<(int index, bool isScroll)>();
+        var statePairs = new List<(int pushIndex, int popIndex)>();
+
+        for (var i = 0; i < commands.Count; i++)
+        {
+            switch (commands[i])
+            {
+                case PushClipCommand:
+                    stateStack.Push((i, isScroll: false));
+                    break;
+                case PopClipCommand:
+                    if (stateStack.Count == 0)
+                    {
+                        return false;
+                    }
+
+                    var statePop = stateStack.Pop();
+                    if (statePop.isScroll)
+                    {
+                        return false;
+                    }
+
+                    statePairs.Add((statePop.index, i));
+                    break;
+                case PushScrollOffsetCommand:
+                    stateStack.Push((i, isScroll: true));
+                    break;
+                case PopScrollOffsetCommand:
+                    if (stateStack.Count == 0)
+                    {
+                        return false;
+                    }
+
+                    var statePush = stateStack.Pop();
+                    if (!statePush.isScroll)
+                    {
+                        return false;
+                    }
+
+                    statePairs.Add((statePush.index, i));
+                    break;
+            }
+        }
+
+        if (stateStack.Count != 0)
+        {
+            return false;
+        }
+
+        static bool SpansChanged(int push, int pop, IReadOnlyList<CommandRange> ranges)
+        {
+            foreach (var range in ranges)
+            {
+                if (range.Start < pop && range.End > push)
+                {
+                    return true;
+                }
+
+                if (range.Start > pop)
+                {
+                    return false;
+                }
+            }
+
+            return false;
+        }
+
+        var changedStateCommands = new HashSet<int>(Math.Min(commands.Count, 128));
+        foreach (var (push, pop) in statePairs)
+        {
+            if (SpansChanged(push, pop, changedRanges))
+            {
+                changedStateCommands.Add(push);
+                changedStateCommands.Add(pop);
+            }
+        }
+
+        if (changedStateCommands.Count == 0)
+        {
+            return true;
+        }
+
+        var stateIndices = changedStateCommands.ToArray();
+        Array.Sort(stateIndices);
+        stateCommandIndices = stateIndices;
+        return true;
+    }
+
+    private static bool RequiresFullRenderForDamage(PaintCommand command) =>
+        command is PushTransformCommand or PopTransformCommand or
+            ApplyBackdropFilterCommand or DrawTextShadowCommand;
+
+    private static RectF TranslateForScroll(RectF rect, ScrollVisualOffset offset) =>
+        new(rect.X - offset.X, rect.Y - offset.Y, rect.Width, rect.Height);
+
+    private static void AddDirtyRect(List<RectF> dirtyRects, RectF rect)
+    {
+        if (rect.IsEmpty)
+        {
+            return;
+        }
+
+        for (var i = 0; i < dirtyRects.Count; i++)
+        {
+            if (!RectsIntersect(dirtyRects[i], rect))
+            {
+                continue;
+            }
+
+            dirtyRects[i] = Union(dirtyRects[i], rect);
+            return;
+        }
+
+        dirtyRects.Add(rect);
+    }
+
+    private static bool PaintCommandsEqualForDamage(PaintCommand oldCommand, PaintCommand newCommand)
+    {
+        if (ReferenceEquals(oldCommand, newCommand))
+        {
+            return true;
+        }
+
+        if (oldCommand.GetType() != newCommand.GetType())
+        {
+            return false;
+        }
+
+        return oldCommand switch
+        {
+            FillRoundedRectangleGradientCommand oldGradient
+                when newCommand is FillRoundedRectangleGradientCommand newGradient =>
+                    oldGradient.Rectangle.Equals(newGradient.Rectangle) &&
+                    oldGradient.Radii.Equals(newGradient.Radii) &&
+                    oldGradient.GradientRectangle.Equals(newGradient.GradientRectangle) &&
+                    oldGradient.Opacity.Equals(newGradient.Opacity) &&
+                    LinearGradientsEqual(oldGradient.Gradient, newGradient.Gradient),
+
+            DrawTextGradientCommand oldTextGradient
+                when newCommand is DrawTextGradientCommand newTextGradient =>
+                    string.Equals(oldTextGradient.Text, newTextGradient.Text, StringComparison.Ordinal) &&
+                    oldTextGradient.Rectangle.Equals(newTextGradient.Rectangle) &&
+                    string.Equals(oldTextGradient.FontFamily, newTextGradient.FontFamily, StringComparison.Ordinal) &&
+                    oldTextGradient.FontSize.Equals(newTextGradient.FontSize) &&
+                    oldTextGradient.FontWeight.Equals(newTextGradient.FontWeight) &&
+                    oldTextGradient.Alignment.Equals(newTextGradient.Alignment) &&
+                    oldTextGradient.Opacity.Equals(newTextGradient.Opacity) &&
+                    LinearGradientsEqual(oldTextGradient.Gradient, newTextGradient.Gradient),
+
+            _ => oldCommand.Equals(newCommand)
+        };
+    }
+
+    private static bool LinearGradientsEqual(LinearGradient oldGradient, LinearGradient newGradient)
+    {
+        if (!oldGradient.DirectionX.Equals(newGradient.DirectionX) ||
+            !oldGradient.DirectionY.Equals(newGradient.DirectionY) ||
+            oldGradient.Stops.Count != newGradient.Stops.Count)
+        {
+            return false;
+        }
+
+        for (var i = 0; i < oldGradient.Stops.Count; i++)
+        {
+            if (!oldGradient.Stops[i].Equals(newGradient.Stops[i]))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private static RectF? Union(RectF? current, RectF next) =>
+        current is { } rect ? Union(rect, next) : next;
+
+    private static RectF Union(RectF a, RectF b) =>
+        RectF.FromEdges(MathF.Min(a.Left, b.Left), MathF.Min(a.Top, b.Top),
+            MathF.Max(a.Right, b.Right), MathF.Max(a.Bottom, b.Bottom));
+
+    private static bool RectsIntersect(RectF a, RectF b) =>
+        a.Left < b.Right && a.Right > b.Left && a.Top < b.Bottom && a.Bottom > b.Top;
+
+    private static bool TryGetCommandBounds(PaintCommand command, out RectF bounds)
+    {
+        switch (command)
+        {
+            case FillRoundedRectangleCommand fill:
+                bounds = fill.Rectangle;
+                return true;
+            case FillRoundedRectangleGradientCommand fill:
+                bounds = fill.Rectangle;
+                return true;
+            case DrawBoxShadowCommand shadow:
+            {
+                var spread = MathF.Abs(shadow.Shadow.SpreadRadius);
+                var blur = MathF.Max(0, shadow.Shadow.BlurRadius);
+                var inflated = shadow.BorderBoxRectangle.Inflate(spread + (blur * 2) + 4);
+                bounds = inflated.Offset(shadow.Shadow.OffsetX, shadow.Shadow.OffsetY);
+                return true;
+            }
+            case StrokeRoundedRectangleCommand stroke:
+                bounds = stroke.Rectangle.Inflate(MathF.Max(.25f, stroke.StrokeWidth) * .5f + 2);
+                return true;
+            case FillBorderSideCommand border:
+                bounds = border.OuterRectangle.Inflate(2);
+                return true;
+            case DrawTextCommand text:
+                bounds = text.Rectangle.Inflate(2);
+                return true;
+            case DrawTextGradientCommand text:
+                bounds = text.Rectangle.Inflate(2);
+                return true;
+            case DrawBackgroundImageCommand image:
+                bounds = image.HasResolvedGeometry ? image.DestinationRectangle : image.PaintRectangle;
+                return true;
+            case PushClipCommand or PopClipCommand:
+                bounds = default;
+                return false;
+            default:
+                bounds = default;
+                return false;
+        }
+    }
+
+    private void RenderSimpleCommandRange(
+        ID2D1DeviceContext target,
+        IReadOnlyList<PaintCommand> commands,
+        IReadOnlyList<CommandRange> changedRanges,
+        IReadOnlyList<int> stateCommandIndices,
+        IReadOnlyList<RectF> dirtyRects,
+        out int scannedCommands,
+        out int paintedCommands)
+    {
+        scannedCommands = 0;
+        paintedCommands = 0;
+        var clipStack = new Stack<ClipScope>();
+        var scrollStack = new Stack<Matrix3x2>();
+        var scrollOffsetStack = new Stack<ScrollVisualOffset>();
+        var currentScrollOffset = new ScrollVisualOffset(0, 0);
+
+        var selectedCommands = new List<int>(0);
+        foreach (var range in changedRanges)
+        {
+            for (var i = range.Start; i < range.End; ++i)
+            {
+                selectedCommands.Add(i);
+            }
+        }
+
+        foreach (var stateIndex in stateCommandIndices)
+        {
+            selectedCommands.Add(stateIndex);
+        }
+
+        if (selectedCommands.Count == 0)
+        {
+            return;
+        }
+
+        selectedCommands.Sort();
+        var deduped = new List<int>(selectedCommands.Count);
+        var previous = -1;
+        for (var i = 0; i < selectedCommands.Count; i++)
+        {
+            if (i == 0 || selectedCommands[i] != previous)
+            {
+                deduped.Add(selectedCommands[i]);
+            }
+
+            previous = selectedCommands[i];
+        }
+
+        var rangeIndex = 0;
+        foreach (var i in deduped)
+        {
+            while (rangeIndex < changedRanges.Count && i >= changedRanges[rangeIndex].End)
+            {
+                rangeIndex++;
+            }
+
+            var shouldPaint = rangeIndex < changedRanges.Count &&
+                i >= changedRanges[rangeIndex].Start;
+            var command = commands[i];
+            if (_incrementalDebug)
+            {
+                Console.WriteLine($"[{changedRanges.Count}] {i} shouldPaint={shouldPaint} type={command.GetType().Name} scroll=({currentScrollOffset.X},{currentScrollOffset.Y})");
+            }
+
+            scannedCommands++;
+            switch (command)
+            {
+                case ApplyBackdropFilterCommand:
+                case PushTransformCommand:
+                case PopTransformCommand:
+                    if (shouldPaint)
+                    {
+                        throw new InvalidOperationException($"Unsupported incremental command in paint range: {command.GetType().Name}.");
+                    }
+
+                    break;
+                case FillRoundedRectangleCommand fill:
+                    if (_incrementalDebug && shouldPaint)
+                    {
+                        Console.WriteLine($"  fill rect={fill.Rectangle} color={fill.Color.R},{fill.Color.G},{fill.Color.B}");
+                    }
+
+                    if (shouldPaint && CommandIntersectsDirtyRects(fill.Rectangle, dirtyRects, currentScrollOffset))
+                    {
+                        FillRoundedGeometry(target, fill.Rectangle, fill.Radii, GetBrush(fill.Color));
+                        paintedCommands++;
+                    }
+
+                    break;
+                case FillRoundedRectangleGradientCommand gradientFill:
+                    if (shouldPaint &&
+                        CommandIntersectsDirtyRects(gradientFill.Rectangle, dirtyRects, currentScrollOffset))
+                    {
+                        DrawGradientFill(target, gradientFill);
+                        paintedCommands++;
+                    }
+
+                    break;
+                case DrawBoxShadowCommand shadow:
+                    if (shouldPaint &&
+                        TryGetCommandBounds(shadow, out var shadowBounds) &&
+                        CommandIntersectsDirtyRects(shadowBounds, dirtyRects, currentScrollOffset))
+                    {
+                        DrawBoxShadow(target, shadow);
+                        paintedCommands++;
+                    }
+
+                    break;
+                case StrokeRoundedRectangleCommand stroke:
+                    if (shouldPaint &&
+                        TryGetCommandBounds(stroke, out var strokeBounds) &&
+                        CommandIntersectsDirtyRects(strokeBounds, dirtyRects, currentScrollOffset))
+                    {
+                        StrokeRoundedGeometry(target, stroke.Rectangle, stroke.Radii, GetBrush(stroke.Color), MathF.Max(.25f, stroke.StrokeWidth));
+                        paintedCommands++;
+                    }
+
+                    break;
+                case FillBorderSideCommand borderSide:
+                    if (shouldPaint &&
+                        CommandIntersectsDirtyRects(borderSide.OuterRectangle, dirtyRects, currentScrollOffset))
+                    {
+                        Direct2DBorderSidePainter.Draw(_d2dFactory, target, borderSide, GetBrush);
+                        paintedCommands++;
+                    }
+
+                    break;
+                case DrawTextCommand text:
+                    if (shouldPaint &&
+                        CommandIntersectsDirtyRects(text.Rectangle, dirtyRects, currentScrollOffset))
+                    {
+                        DrawText(target, text);
+                        paintedCommands++;
+                    }
+
+                    break;
+                case DrawTextGradientCommand textGradient:
+                    if (shouldPaint &&
+                        CommandIntersectsDirtyRects(textGradient.Rectangle, dirtyRects, currentScrollOffset))
+                    {
+                        DrawTextGradient(target, textGradient);
+                        paintedCommands++;
+                    }
+
+                    break;
+                case DrawBackgroundImageCommand image:
+                    if (shouldPaint &&
+                        TryGetCommandBounds(image, out var imageBounds) &&
+                        CommandIntersectsDirtyRects(imageBounds, dirtyRects, currentScrollOffset))
+                    {
+                        DrawBackgroundImage(target, image);
+                        paintedCommands++;
+                    }
+
+                    break;
+                case PushClipCommand push:
+                    PushClip(target, push, clipStack, transformDepth: 0);
+                    break;
+                case PopClipCommand:
+                    if (clipStack.Count == 0)
+                    {
+                        throw new InvalidOperationException("An incremental render popped a clip that was not active.");
+                    }
+
+                    PopClip(target, clipStack.Pop());
+                    break;
+                case PushScrollOffsetCommand scroll:
+                    scrollStack.Push(target.Transform);
+                    scrollOffsetStack.Push(currentScrollOffset);
+                    var offset = _scrollStateProvider?.Invoke(scroll.ScrollContainerId).Offset ?? default;
+                    currentScrollOffset = new ScrollVisualOffset(
+                        currentScrollOffset.X + offset.X,
+                        currentScrollOffset.Y + offset.Y);
+                    target.Transform = Matrix3x2.CreateTranslation(-offset.X, -offset.Y) * target.Transform;
+                    break;
+                case PopScrollOffsetCommand:
+                    if (scrollStack.Count == 0)
+                    {
+                        throw new InvalidOperationException("An incremental render popped a scroll offset that was not active.");
+                    }
+
+                    target.Transform = scrollStack.Pop();
+                    currentScrollOffset = scrollOffsetStack.Pop();
+                    break;
+                case DrawScrollbarChromeCommand chrome:
+                    if (shouldPaint)
+                    {
+                        paintedCommands++;
+                        DrawScrollbarChrome(target, _scrollStateProvider?.Invoke(chrome.ScrollContainerId).Chrome ?? default);
+                    }
+
+                    break;
+                default:
+                    throw new InvalidOperationException($"The command {command.GetType().Name} cannot be rendered incrementally.");
+            }
+        }
+
+        if (clipStack.Count != 0)
+        {
+            throw new InvalidOperationException("An incremental render ended with an active clip.");
+        }
+
+        if (scrollStack.Count != 0)
+        {
+            throw new InvalidOperationException("An incremental render ended with an active scroll offset.");
+        }
+    }
+
+    private void ClearDirtyRect(ID2D1RenderTarget target, ColorRgba clearColor, RectF dirtyRect)
+    {
+        target.FillRectangle(ToRawRect(dirtyRect), GetBrush(clearColor));
+    }
+
+    private static bool CommandIntersectsDirtyRects(RectF commandBounds, IReadOnlyList<RectF> dirtyRects, ScrollVisualOffset scrollOffset)
+    {
+        var translated = TranslateForScroll(commandBounds, scrollOffset);
+        for (var i = 0; i < dirtyRects.Count; i++)
+        {
+            if (RectsIntersect(translated, dirtyRects[i]))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private void ConfigureSceneTarget(bool usesBackdropFilters)
@@ -1586,6 +2510,7 @@ public sealed class Direct2DRenderBackend : IRenderBackend, ITextMeasurer
     private void ReleaseTargetBitmap()
     {
         _scrollTileCache.Clear();
+        ReleaseRetainedFrameCache();
         if (_renderTarget is not null)
         {
             _renderTarget.Target = null;
@@ -1718,6 +2643,15 @@ public sealed class Direct2DRenderBackend : IRenderBackend, ITextMeasurer
     }
 
     private static int FloatBits(float value) => BitConverter.SingleToInt32Bits(value);
+
+    private Rectangle ToPixelRectangle(RectF rectangle)
+    {
+        var left = Math.Clamp((int)MathF.Floor(rectangle.Left * _targetDpiScale), 0, _targetPixelWidth);
+        var top = Math.Clamp((int)MathF.Floor(rectangle.Top * _targetDpiScale), 0, _targetPixelHeight);
+        var right = Math.Clamp((int)MathF.Ceiling(rectangle.Right * _targetDpiScale), 0, _targetPixelWidth);
+        var bottom = Math.Clamp((int)MathF.Ceiling(rectangle.Bottom * _targetDpiScale), 0, _targetPixelHeight);
+        return Rectangle.FromLTRB(left, top, right, bottom);
+    }
 
     private static RawRectF ToRawRect(RectF rectangle) =>
         new(rectangle.Left, rectangle.Top, rectangle.Right, rectangle.Bottom);

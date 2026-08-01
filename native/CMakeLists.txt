@@ -46,6 +46,7 @@ add_library(aether_core SHARED
     src/rendering/background_image_geometry.cpp
     src/rendering/transform_matrix.cpp
     src/rendering/border_painter.cpp
+    src/rendering/render_plan.cpp
     src/style_runtime/style_values.cpp
     src/style_runtime/style_computed.cpp
     src/style_runtime/style_property_registry.cpp
@@ -197,6 +198,10 @@ if(AETHERUI_BUILD_TESTS)
     add_executable(aether_style_impact_test tests/test_style_impact.cpp)
     target_link_libraries(aether_style_impact_test PRIVATE AetherUI::Core)
     add_test(NAME aether.style-impact COMMAND aether_style_impact_test)
+
+    add_executable(aether_render_plan_test tests/test_render_plan.cpp)
+    target_link_libraries(aether_render_plan_test PRIVATE AetherUI::Core)
+    add_test(NAME aether.render-plan COMMAND aether_render_plan_test)
 
     add_executable(aether_layout_ownership_test tests/test_layout_ownership.cpp src/layout/layout_box.cpp)
     target_include_directories(aether_layout_ownership_test PRIVATE src/layout include)

@@ -78,6 +78,7 @@ public sealed class LayoutResult
 {
     private readonly IReadOnlyDictionary<ElementNode, LayoutBox> _primaryBoxes;
     private readonly IReadOnlyList<LayoutBox> _paintOrder;
+    private readonly Dictionary<ElementNode, IReadOnlyList<LayoutBox>> _paintBoxesByElement;
 
     internal LayoutResult(LayoutBox root, IReadOnlyDictionary<ElementNode, LayoutBox> primaryBoxes,
         IReadOnlyList<LayoutBox> paintOrder, SizeF viewport)
@@ -85,6 +86,22 @@ public sealed class LayoutResult
         Root = root;
         _primaryBoxes = primaryBoxes;
         _paintOrder = paintOrder;
+        var paintBoxesByElement = new Dictionary<ElementNode, List<LayoutBox>>();
+        foreach (var box in paintOrder)
+        {
+            if (!paintBoxesByElement.TryGetValue(box.Element, out var boxes))
+            {
+                boxes = [];
+                paintBoxesByElement[box.Element] = boxes;
+            }
+
+            boxes.Add(box);
+        }
+
+        var indexed = new Dictionary<ElementNode, IReadOnlyList<LayoutBox>>(paintBoxesByElement.Count);
+        foreach (var (element, boxes) in paintBoxesByElement)
+            indexed[element] = boxes;
+        _paintBoxesByElement = indexed;
         Viewport = viewport;
     }
 
@@ -94,6 +111,9 @@ public sealed class LayoutResult
 
     public LayoutBox? FindPrimaryBox(ElementNode element) =>
         _primaryBoxes.TryGetValue(element, out var box) ? box : null;
+
+    public IReadOnlyList<LayoutBox> FindPaintBoxes(ElementNode element) =>
+        _paintBoxesByElement.TryGetValue(element, out var boxes) ? boxes : Array.Empty<LayoutBox>();
 
     public ElementNode? HitTest(PointF point)
     {

@@ -39,6 +39,24 @@ public sealed class NativeDisplayListInterop : IDisposable
         ObjectDisposedException.ThrowIf(_builder == IntPtr.Zero, this);
         ArgumentNullException.ThrowIfNull(currentStyles);
         Throw(NativeMethods.DisplayListBuildWithStyles(_builder, layout.Handle, currentStyles.Handle, focusedElement, out var list));
+        return ReadList(list);
+    }
+
+    public IReadOnlyList<NativePaintCommand> BuildNode(
+        NativeLayoutResult layout,
+        NativeStyleMap currentStyles,
+        IntPtr element,
+        IntPtr focusedElement)
+    {
+        ObjectDisposedException.ThrowIf(_builder == IntPtr.Zero, this);
+        ArgumentNullException.ThrowIfNull(currentStyles);
+        Throw(NativeMethods.DisplayListBuildNodeWithStyles(_builder, layout.Handle, currentStyles.Handle,
+            element, focusedElement, out var list));
+        return ReadList(list);
+    }
+
+    private IReadOnlyList<NativePaintCommand> ReadList(IntPtr list)
+    {
         try
         {
             var commands = new List<NativePaintCommand>(NativeMethods.DisplayListGetCount(list));

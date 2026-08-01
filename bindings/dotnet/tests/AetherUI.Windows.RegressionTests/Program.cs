@@ -51,6 +51,11 @@ VerifyVitalisNestedFlexReflowAtValidatorWidth();
 Console.WriteLine("OK: DirectWrite Vitalis nested-flex reflow invariants passed");
 VerifyViewportResizeCoalescing();
 Console.WriteLine("OK: viewport resize coalescing passed");
+    VerifyIncrementalRenderMatchesFullFrame();
+    VerifyIncrementalRenderMatchesFullFrameInsideScrolledContent();
+    VerifyIncrementalPaintChangeStartsAtFirstChangedCommand();
+    VerifyIncrementalScannedCommandsBoundsForSparseChanges();
+    Console.WriteLine("OK: Direct2D incremental render matches full-frame pixels passed");
 VerifyScrollTileCacheMetrics();
 Console.WriteLine("OK: Direct2D scroll tile cache metrics passed");
 VerifyRoundedAvatarPixelsThroughSwapChain();
@@ -165,6 +170,211 @@ static void VerifyScrollTileCacheMetrics()
         throw new InvalidOperationException(
             $"Expected transformed scroll segment to bypass tile cache: bypasses={backend.LastScrollTileCacheBypasses}, misses={backend.LastScrollTileCacheMisses}, rasterized={backend.LastScrollTileRasterizedCommands}.");
     }
+
+    VerifyScrollTileCompositionMatchesFullFrame();
+}
+
+static void VerifyScrollTileCompositionMatchesFullFrame()
+{
+    using var fullWindow = HiddenWindow.Create(320, 220);
+    using var fullBackend = new Direct2DRenderBackend(fullWindow.Handle, 320, 220, 1f, DriverType.Warp);
+    using var tiledWindow = HiddenWindow.Create(320, 220);
+    using var tiledBackend = new Direct2DRenderBackend(tiledWindow.Handle, 320, 220, 1f, DriverType.Warp);
+    var clear = new ColorRgba(.96f, .97f, .99f, 1f);
+    var offset = new ScrollVisualOffset(392, 452);
+
+    var displayList = new DisplayList([
+        new FillRoundedRectangleCommand(new RectF(0, 0, 320, 220), CornerRadii.Zero, clear),
+        new PushClipCommand(new RectF(20, 18, 230, 160), CornerRadii.Zero),
+        new PushScrollOffsetCommand(9001),
+        new FillRoundedRectangleCommand(new RectF(20, 18, 900, 900), CornerRadii.Zero, new ColorRgba(.05f, .07f, .12f, 1f)),
+        // These four quads straddle both the X and Y tile seams at content coordinate 512.
+        // A tile compositor that omits or mispositions any newly visible tile leaves a
+        // visible clear/background gap that a counter-only test cannot detect.
+        new FillRoundedRectangleCommand(new RectF(412, 470, 100, 42), CornerRadii.Zero, new ColorRgba(.95f, .15f, .10f, 1f)),
+        new FillRoundedRectangleCommand(new RectF(512, 470, 130, 42), CornerRadii.Zero, new ColorRgba(.10f, .85f, .20f, 1f)),
+        new FillRoundedRectangleCommand(new RectF(412, 512, 100, 118), CornerRadii.Zero, new ColorRgba(.10f, .25f, .95f, 1f)),
+        new FillRoundedRectangleCommand(new RectF(512, 512, 130, 118), CornerRadii.Zero, new ColorRgba(.95f, .85f, .10f, 1f)),
+        new PopScrollOffsetCommand(),
+        new PopClipCommand(),
+    ]);
+
+    fullBackend.SetScrollVisualStateProvider(id => id == 9001
+        ? new ScrollVisualState(offset, default)
+        : default);
+    fullBackend.SetScrollCompositionMode(false);
+    var full = fullBackend.RenderAndCaptureBackBufferForDiagnostics(displayList, clear);
+
+    tiledBackend.SetScrollVisualStateProvider(id => id == 9001
+        ? new ScrollVisualState(offset, default)
+        : default);
+    tiledBackend.SetScrollCompositionMode(true);
+    var firstTiled = tiledBackend.RenderAndCaptureBackBufferForDiagnostics(displayList, clear);
+    AssertPixelsEqual(firstTiled, full, "scroll tile composition first frame");
+    if (tiledBackend.LastScrollTileCacheMisses <= 0 || tiledBackend.LastScrollTileRasterizedCommands <= 0)
+    {
+        throw new InvalidOperationException(
+            $"Expected first scroll tile equivalence frame to populate cache: misses={tiledBackend.LastScrollTileCacheMisses}, rasterized={tiledBackend.LastScrollTileRasterizedCommands}.");
+    }
+
+    tiledBackend.SetScrollCompositionMode(true);
+    var secondTiled = tiledBackend.RenderAndCaptureBackBufferForDiagnostics(displayList, clear);
+    AssertPixelsEqual(secondTiled, full, "scroll tile composition cache-hit frame");
+    if (tiledBackend.LastScrollTileCacheHits <= 0 || tiledBackend.LastScrollTileCacheMisses != 0 ||
+        tiledBackend.LastScrollTileRasterizedCommands != 0)
+    {
+        throw new InvalidOperationException(
+            $"Expected repeat scroll tile equivalence frame to reuse cache only: hits={tiledBackend.LastScrollTileCacheHits}, misses={tiledBackend.LastScrollTileCacheMisses}, rasterized={tiledBackend.LastScrollTileRasterizedCommands}.");
+    }
+
+    VerifyScrollTileCompositionMatchesPageCatalogHost();
+}
+
+static void VerifyScrollTileCompositionMatchesPageCatalogHost()
+{
+    const int width = 760;
+    const int height = 620;
+    var clear = new ColorRgba(0x0b / 255f, 0x11 / 255f, 0x20 / 255f, 1f);
+    var markup = BuildPageCatalogLikeMarkup();
+
+    using var fullWindow = HiddenWindow.Create(width, height);
+    using var fullBackend = new Direct2DRenderBackend(fullWindow.Handle, width, height, 1f, DriverType.Warp);
+    using var fullRenderer = new NonIncrementalRenderBackend(fullBackend);
+    using var fullHost = new UiDocumentHost(new RawMarkupComponent(markup), fullBackend, fullRenderer,
+        new UiHostOptions { ClearColor = clear });
+    fullHost.SetViewport(width, height, 1f);
+    fullHost.Render();
+    fullHost.ResetMetrics();
+    fullHost.MouseWheelScrolled(new PointF(24, 24), -8);
+    // Force a non-scroll invalidation on the reference path so Direct2D performs the ordinary
+    // full-frame scroll transform instead of the retained tile compositor.
+    fullHost.SetViewport(width, height, 1f);
+    fullBackend.RequestBackBufferCaptureForDiagnostics();
+    fullHost.Render();
+    var fullPixels = fullBackend.TakeBackBufferCaptureForDiagnostics();
+
+    using var tiledWindow = HiddenWindow.Create(width, height);
+    using var tiledBackend = new Direct2DRenderBackend(tiledWindow.Handle, width, height, 1f, DriverType.Warp);
+    using var tiledRenderer = new NonIncrementalRenderBackend(tiledBackend);
+    using var tiledHost = new UiDocumentHost(new RawMarkupComponent(markup), tiledBackend, tiledRenderer,
+        new UiHostOptions { ClearColor = clear });
+    tiledHost.SetViewport(width, height, 1f);
+    tiledHost.Render();
+    tiledHost.ResetMetrics();
+    tiledHost.MouseWheelScrolled(new PointF(24, 24), -8);
+    tiledBackend.RequestBackBufferCaptureForDiagnostics();
+    tiledHost.Render();
+    var tiledPixels = tiledBackend.TakeBackBufferCaptureForDiagnostics();
+
+    if (fullHost.Document?.Body is not { } fullBody ||
+        tiledHost.Document?.Body is not { } tiledBody ||
+        fullHost.GetScrollOffset(fullBody).Y <= 0 ||
+        tiledHost.GetScrollOffset(tiledBody).Y <= 0)
+    {
+        throw new InvalidOperationException("The page-catalog scroll fixture did not produce a real root scroll offset.");
+    }
+
+    AssertPixelsEqual(tiledPixels, fullPixels, "page-catalog scroll tile composition");
+    if (tiledHost.Metrics.StyleResolutions != 0 || tiledHost.Metrics.LayoutBuilds != 0 ||
+        tiledHost.Metrics.DisplayListBuilds != 0 || tiledHost.Metrics.ScrollCompositions != 1)
+    {
+        throw new InvalidOperationException(
+            $"Expected page-catalog scroll tile render to stay scroll-only: style={tiledHost.Metrics.StyleResolutions}, layout={tiledHost.Metrics.LayoutBuilds}, display={tiledHost.Metrics.DisplayListBuilds}, scroll={tiledHost.Metrics.ScrollCompositions}.");
+    }
+}
+
+static string BuildPageCatalogLikeMarkup()
+{
+    var cards = string.Concat(Enumerable.Range(0, 36).Select(i =>
+        $"""
+        <article class="page-card">
+          <div><div class="page-name">page_{i:00}</div><div class="page-file">page_{i:00}.html</div></div>
+          <button class="open">Open</button>
+        </article>
+        """));
+    return $$"""
+        <style>
+        html, body {
+            margin: 0;
+            height: 100%;
+            overflow-y: auto;
+            background: #0b1120;
+            color: #e5edf9;
+            font-family: "Segoe UI", Arial, sans-serif;
+        }
+
+        .workspace {
+            min-height: 100%;
+            padding: 32px;
+            background: linear-gradient(145deg, #111b34, #0b1120 48%, #09101d);
+        }
+
+        .hero {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 26px;
+            padding: 24px;
+            background: rgba(20, 32, 59, 0.9);
+            border: 1px solid #2a3d63;
+            border-radius: 18px;
+            box-shadow: 0 14px 32px rgba(0, 0, 0, 0.25);
+        }
+
+        h1 { margin: 0; color: #f8fbff; font-size: 28px; font-weight: 700; }
+        .subtitle { margin: 10px 0 0 0; color: #aebed7; font-size: 14px; }
+        .count {
+            padding: 9px 12px;
+            background: #17284a;
+            border: 1px solid #36598d;
+            border-radius: 999px;
+            color: #b9dcff;
+            font-size: 13px;
+            font-weight: 700;
+        }
+        .section-head {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin: 0 4px 12px 4px;
+        }
+        .section-title { color: #dce9fb; font-size: 15px; font-weight: 700; }
+        .open {
+            padding: 10px 16px;
+            border: 0;
+            border-radius: 9px;
+            background: #38bdf8;
+            color: #06233a;
+            font-family: "Segoe UI", Arial, sans-serif;
+            font-weight: 700;
+        }
+        .pages { display: flex; flex-direction: column; }
+        .page-card {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 11px;
+            padding: 16px 18px;
+            background: rgba(19, 31, 57, 0.94);
+            border: 1px solid #263d65;
+            border-radius: 13px;
+        }
+        .page-name { color: #f4f8ff; font-size: 16px; font-weight: 700; }
+        .page-file { margin-top: 5px; color: #8fa6c8; font-size: 12px; }
+        </style>
+        <body>
+          <main class="workspace">
+            <section class="hero">
+              <div><h1>Validation workspace</h1><p class="subtitle">Open a page to compare the native renderer with Chromium.</p></div>
+              <span class="count">36 pages</span>
+            </section>
+            <section class="pages">
+              <div class="section-head"><span class="section-title">Available pages</span><button class="open">Refresh</button></div>
+              {{cards}}
+            </section>
+          </main>
+        </body>
+        """;
 }
 
 static PixelBounds FindSolidColorBounds(byte[] pixels, int pixelWidth, int pixelHeight, ColorRgba color)
@@ -263,6 +473,227 @@ static void VerifyViewportResizeCoalescing()
     {
         throw new InvalidOperationException("Viewport resize coalescing accepted an invalid client size or DPI.");
     }
+}
+
+static void VerifyIncrementalRenderMatchesFullFrame()
+{
+    using var incrementalWindow = HiddenWindow.Create(160, 96);
+    using var incrementalBackend = new Direct2DRenderBackend(incrementalWindow.Handle, 160, 96, 1f, DriverType.Warp);
+    using var fullWindow = HiddenWindow.Create(160, 96);
+    using var fullBackend = new Direct2DRenderBackend(fullWindow.Handle, 160, 96, 1f, DriverType.Warp);
+    var clear = new ColorRgba(0, 0, 0, 1);
+
+    var initial = new DisplayList([
+        new FillRoundedRectangleCommand(new RectF(0, 0, 160, 96), CornerRadii.Zero, new ColorRgba(.95f, .96f, .98f, 1)),
+        new FillRoundedRectangleCommand(new RectF(24, 20, 80, 40), CornerRadii.Zero, new ColorRgba(.10f, .20f, .30f, 1)),
+        new FillRoundedRectangleCommand(new RectF(118, 22, 20, 20), CornerRadii.Zero, new ColorRgba(.90f, .80f, .10f, 1)),
+    ]);
+    var hovered = new DisplayList([
+        new FillRoundedRectangleCommand(new RectF(0, 0, 160, 96), CornerRadii.Zero, new ColorRgba(.95f, .96f, .98f, 1)),
+        new FillRoundedRectangleCommand(new RectF(24, 20, 80, 40), CornerRadii.Zero, new ColorRgba(.14f, .34f, .58f, 1)),
+        new FillRoundedRectangleCommand(new RectF(118, 22, 20, 20), CornerRadii.Zero, new ColorRgba(.90f, .80f, .10f, 1)),
+    ]);
+
+    _ = incrementalBackend.RenderAndCaptureBackBufferForDiagnostics(initial, clear);
+    incrementalBackend.RequestBackBufferCaptureForDiagnostics();
+    if (!incrementalBackend.TryRenderIncremental(hovered, clear))
+    {
+        throw new InvalidOperationException("The Direct2D backend rejected a simple paint-only incremental update.");
+    }
+
+    var incrementalPixels = incrementalBackend.TakeBackBufferCaptureForDiagnostics();
+    var fullPixels = fullBackend.RenderAndCaptureBackBufferForDiagnostics(hovered, clear);
+    AssertPixelsEqual(incrementalPixels, fullPixels, "incremental paint-only update");
+}
+
+static void VerifyIncrementalRenderMatchesFullFrameInsideScrolledContent()
+{
+    using var incrementalWindow = HiddenWindow.Create(180, 140);
+    using var incrementalBackend = new Direct2DRenderBackend(incrementalWindow.Handle, 180, 140, 1f, DriverType.Warp);
+    using var fullWindow = HiddenWindow.Create(180, 140);
+    using var fullBackend = new Direct2DRenderBackend(fullWindow.Handle, 180, 140, 1f, DriverType.Warp);
+    var clear = new ColorRgba(.02f, .02f, .03f, 1);
+    var offset = new ScrollVisualOffset(0, 96);
+    incrementalBackend.SetScrollVisualStateProvider(id => id == 77 ? new ScrollVisualState(offset, default) : default);
+    fullBackend.SetScrollVisualStateProvider(id => id == 77 ? new ScrollVisualState(offset, default) : default);
+
+    var initial = new DisplayList([
+        new FillRoundedRectangleCommand(new RectF(0, 0, 180, 140), CornerRadii.Zero, new ColorRgba(.04f, .06f, .11f, 1)),
+        new PushClipCommand(new RectF(20, 20, 130, 92), CornerRadii.Zero),
+        new PushScrollOffsetCommand(77),
+        new FillRoundedRectangleCommand(new RectF(20, 20, 130, 260), CornerRadii.Zero, new ColorRgba(.08f, .12f, .20f, 1)),
+        new FillRoundedRectangleCommand(new RectF(28, 128, 112, 42), CornerRadii.Uniform(8), new ColorRgba(.10f, .18f, .32f, 1)),
+        new DrawTextCommand("page-card", new RectF(40, 140, 80, 18), "Segoe UI", 13,
+            UiFontWeight.Bold, TextAlign.Start, new ColorRgba(.9f, .95f, 1f, 1), Wrap: false),
+        new PopScrollOffsetCommand(),
+        new PopClipCommand(),
+    ]);
+    var hovered = new DisplayList([
+        new FillRoundedRectangleCommand(new RectF(0, 0, 180, 140), CornerRadii.Zero, new ColorRgba(.04f, .06f, .11f, 1)),
+        new PushClipCommand(new RectF(20, 20, 130, 92), CornerRadii.Zero),
+        new PushScrollOffsetCommand(77),
+        new FillRoundedRectangleCommand(new RectF(20, 20, 130, 260), CornerRadii.Zero, new ColorRgba(.08f, .12f, .20f, 1)),
+        new FillRoundedRectangleCommand(new RectF(28, 128, 112, 42), CornerRadii.Uniform(8), new ColorRgba(.14f, .29f, .52f, 1)),
+        new DrawTextCommand("page-card", new RectF(40, 140, 80, 18), "Segoe UI", 13,
+            UiFontWeight.Bold, TextAlign.Start, new ColorRgba(.9f, .95f, 1f, 1), Wrap: false),
+        new PopScrollOffsetCommand(),
+        new PopClipCommand(),
+    ]);
+
+    _ = incrementalBackend.RenderAndCaptureBackBufferForDiagnostics(initial, clear);
+    incrementalBackend.RequestBackBufferCaptureForDiagnostics();
+    if (!incrementalBackend.TryRenderIncremental(hovered, clear))
+    {
+        throw new InvalidOperationException("The Direct2D backend rejected a scrolled paint-only incremental update.");
+    }
+
+    if (Environment.GetEnvironmentVariable("AETHER_INC_DIAG") is "1")
+    {
+        Console.WriteLine($"incremental start={incrementalBackend.LastIncrementalStartIndex}, scanned={incrementalBackend.LastIncrementalScannedCommands}, painted={incrementalBackend.LastIncrementalPaintedCommands}");
+    }
+
+    var incrementalPixels = incrementalBackend.TakeBackBufferCaptureForDiagnostics();
+    var fullPixels = fullBackend.RenderAndCaptureBackBufferForDiagnostics(hovered, clear);
+    AssertPixelsEqual(incrementalPixels, fullPixels, "incremental paint-only update inside scrolled content");
+}
+
+static void VerifyIncrementalPaintChangeStartsAtFirstChangedCommand()
+{
+    using var incrementalWindow = HiddenWindow.Create(180, 140);
+    using var incrementalBackend = new Direct2DRenderBackend(incrementalWindow.Handle, 180, 140, 1f, DriverType.Warp);
+    using var fullWindow = HiddenWindow.Create(180, 140);
+    using var fullBackend = new Direct2DRenderBackend(fullWindow.Handle, 180, 140, 1f, DriverType.Warp);
+    var clear = new ColorRgba(.02f, .02f, .03f, 1);
+
+    var initial = new DisplayList([
+        new FillRoundedRectangleCommand(new RectF(0, 0, 180, 140), CornerRadii.Zero, new ColorRgba(.08f, .10f, .16f, 1)),
+        new PushClipCommand(new RectF(40, 24, 80, 78), CornerRadii.Uniform(6)),
+        new FillRoundedRectangleCommand(new RectF(40, 24, 80, 78), CornerRadii.Uniform(6), new ColorRgba(.19f, .64f, .98f, 1)),
+        new DrawTextCommand("before", new RectF(55, 40, 60, 16), "Segoe UI", 11,
+        UiFontWeight.Normal, TextAlign.Start, new ColorRgba(.9f, .95f, .98f, 1), Wrap: false),
+        new FillRoundedRectangleCommand(new RectF(48, 54, 64, 26), CornerRadii.Uniform(5), new ColorRgba(.92f, .36f, .24f, 1)),
+        new PopClipCommand(),
+        new FillRoundedRectangleCommand(new RectF(14, 112, 148, 12), CornerRadii.Zero, new ColorRgba(.13f, .18f, .29f, 1)),
+    ]);
+
+    var hovered = new DisplayList([
+        new FillRoundedRectangleCommand(new RectF(0, 0, 180, 140), CornerRadii.Zero, new ColorRgba(.08f, .10f, .16f, 1)),
+        new PushClipCommand(new RectF(40, 24, 80, 78), CornerRadii.Uniform(6)),
+        new FillRoundedRectangleCommand(new RectF(40, 24, 80, 78), CornerRadii.Uniform(6), new ColorRgba(.19f, .64f, .98f, 1)),
+        new DrawTextCommand("before", new RectF(55, 40, 60, 16), "Segoe UI", 11,
+        UiFontWeight.Normal, TextAlign.Start, new ColorRgba(.9f, .95f, .98f, 1), Wrap: false),
+        // Only this command should differ in this frame.
+        new FillRoundedRectangleCommand(new RectF(48, 54, 64, 26), CornerRadii.Uniform(5), new ColorRgba(.98f, .42f, .42f, 1)),
+        new PopClipCommand(),
+        new FillRoundedRectangleCommand(new RectF(14, 112, 148, 12), CornerRadii.Zero, new ColorRgba(.13f, .18f, .29f, 1)),
+    ]);
+
+    var initialPixels = incrementalBackend.RenderAndCaptureBackBufferForDiagnostics(initial, clear);
+    if (initialPixels.LongLength == 0)
+    {
+        throw new InvalidOperationException("Expected an initial WARP frame for incremental diagnostics.");
+    }
+
+    incrementalBackend.RequestBackBufferCaptureForDiagnostics();
+    if (!incrementalBackend.TryRenderIncremental(hovered, clear))
+    {
+        throw new InvalidOperationException("The Direct2D backend rejected an isolated paint-only incremental update.");
+    }
+
+    if (incrementalBackend.LastIncrementalStartIndex != 4)
+    {
+        throw new InvalidOperationException($"Incremental dirty start index regressed: expected 4, got {incrementalBackend.LastIncrementalStartIndex}.");
+    }
+
+    if (incrementalBackend.LastIncrementalPaintedCommands <= 0 || incrementalBackend.LastIncrementalScannedCommands <= 0)
+    {
+        throw new InvalidOperationException(
+            $"Incremental diagnostics did not record real command work: scanned={incrementalBackend.LastIncrementalScannedCommands}, painted={incrementalBackend.LastIncrementalPaintedCommands}.");
+    }
+
+    var incrementalPixels = incrementalBackend.TakeBackBufferCaptureForDiagnostics();
+    var fullPixels = fullBackend.RenderAndCaptureBackBufferForDiagnostics(hovered, clear);
+    AssertPixelsEqual(incrementalPixels, fullPixels, "incremental paint-only update with late changed command");
+}
+
+static void VerifyIncrementalScannedCommandsBoundsForSparseChanges()
+{
+    using var incrementalWindow = HiddenWindow.Create(360, 280);
+    using var incrementalBackend = new Direct2DRenderBackend(incrementalWindow.Handle, 360, 280, 1f, DriverType.Warp);
+    var clear = new ColorRgba(.02f, .02f, .03f, 1);
+
+    const int insideCommands = 500;
+    const int outsideCommands = 500;
+    const int changedCommandOffset = 120;
+    const int changedCommandIndex = 2 + changedCommandOffset;
+
+    var initial = new List<PaintCommand>(insideCommands + outsideCommands + 4);
+    initial.Add(new PushClipCommand(new RectF(0, 0, 360, 280), CornerRadii.Uniform(0)));
+    initial.Add(new PushClipCommand(new RectF(6, 6, 348, 268), CornerRadii.Uniform(0)));
+
+    for (var i = 0; i < insideCommands; i++)
+    {
+        var x = (i % 24) * 12 + 10;
+        var y = (i / 24) * 8 + 10;
+        initial.Add(new FillRoundedRectangleCommand(
+            new RectF(x, y % 240, 8, 6),
+            CornerRadii.Zero,
+            new ColorRgba(.20f, .36f, .66f, 1)));
+    }
+
+    initial.Add(new PopClipCommand());
+    initial.Add(new PopClipCommand());
+
+    for (var i = 0; i < outsideCommands; i++)
+    {
+        var x = (i % 24) * 12 + 10;
+        var y = 260 + ((i / 24) * 2 % 12);
+        initial.Add(new FillRoundedRectangleCommand(
+            new RectF(x, y, 8, 6),
+            CornerRadii.Uniform(0),
+            new ColorRgba(.11f, .18f, .22f, 1)));
+    }
+
+    if (changedCommandIndex >= initial.Count)
+    {
+        throw new InvalidOperationException("Test data is malformed: changed command index is out of bounds.");
+    }
+
+    var hovered = new List<PaintCommand>(initial);
+    var original = (FillRoundedRectangleCommand)initial[changedCommandIndex];
+    hovered[changedCommandIndex] = new FillRoundedRectangleCommand(
+        original.Rectangle,
+        original.Radii,
+        new ColorRgba(.93f, .28f, .28f, 1));
+
+    var initialDisplayList = new DisplayList(initial);
+    var hoveredDisplayList = new DisplayList(hovered);
+
+    _ = incrementalBackend.RenderAndCaptureBackBufferForDiagnostics(initialDisplayList, clear);
+
+    incrementalBackend.RequestBackBufferCaptureForDiagnostics();
+    if (!incrementalBackend.TryRenderIncremental(hoveredDisplayList, clear))
+    {
+        throw new InvalidOperationException("The Direct2D backend rejected a sparse incremental paint update.");
+    }
+
+    if (incrementalBackend.LastIncrementalScannedCommands > 12)
+    {
+        throw new InvalidOperationException(
+            $"Incremental scan was not bounded: scanned={incrementalBackend.LastIncrementalScannedCommands}, expected <= 12.");
+    }
+
+    if (incrementalBackend.LastIncrementalPaintedCommands > 3)
+    {
+        throw new InvalidOperationException(
+            $"Incremental paint work should be near-local: painted={incrementalBackend.LastIncrementalPaintedCommands}, expected <= 3.");
+    }
+
+    var incrementalPixels = incrementalBackend.TakeBackBufferCaptureForDiagnostics();
+    using var fullWindow = HiddenWindow.Create(360, 280);
+    using var fullBackend = new Direct2DRenderBackend(fullWindow.Handle, 360, 280, 1f, DriverType.Warp);
+    var fullPixels = fullBackend.RenderAndCaptureBackBufferForDiagnostics(hoveredDisplayList, clear);
+    AssertPixelsEqual(incrementalPixels, fullPixels, "incremental sparse paint-only update keeps command scan bounded");
 }
 
 static void VerifyVitalisNestedFlexReflowAtValidatorWidth()
@@ -1173,6 +1604,37 @@ static void AssertPixel(byte[] pixels, int x, int y, byte blue, byte green, byte
     }
 }
 
+static void AssertPixelsEqual(byte[] actual, byte[] expected, string label)
+{
+    if (actual.Length != expected.Length)
+    {
+        throw new InvalidOperationException(
+            $"{label}: pixel buffers have different lengths: actual={actual.Length}, expected={expected.Length}.");
+    }
+
+    for (var i = 0; i < actual.Length; i++)
+    {
+        if (actual[i] == expected[i])
+        {
+            continue;
+        }
+
+        var pixel = i / 4;
+        var channel = i % 4;
+        if (Environment.GetEnvironmentVariable("AETHER_INC_DIAG") is "1")
+        {
+            var x = pixel % width;
+            var y = pixel / width;
+            var aOffset = ((y * width) + x) * 4;
+            throw new InvalidOperationException(
+                $"{label}: first mismatch at pixel={pixel}, x={x}, y={y}, channel={channel}, actual={actual[aOffset]}|{actual[aOffset + 1]}|{actual[aOffset + 2]}|{actual[aOffset + 3]}, " +
+                $"expected={expected[aOffset]}|{expected[aOffset + 1]}|{expected[aOffset + 2]}|{expected[aOffset + 3]}.");
+        }
+        throw new InvalidOperationException(
+            $"{label}: first mismatch at pixel={pixel}, channel={channel}, actual={actual[i]}, expected={expected[i]}.");
+    }
+}
+
 static void AssertRingColour(byte[] pixels, float centerX, float centerY, float radius, float degrees,
     byte blue, byte green, byte red, string label)
 {
@@ -1252,6 +1714,27 @@ sealed class HiddenWindow : IDisposable
 sealed class RawMarkupComponent(string markup) : UiComponent
 {
     protected override void BuildRenderTree(MarkupWriter writer) => writer.WriteLiteral(markup);
+}
+
+sealed class NonIncrementalRenderBackend(Direct2DRenderBackend inner) : IRenderBackend
+{
+    public void Resize(int pixelWidth, int pixelHeight, float dpiScale) =>
+        inner.Resize(pixelWidth, pixelHeight, dpiScale);
+
+    public void Render(DisplayList displayList, ColorRgba clearColor) =>
+        inner.Render(displayList, clearColor);
+
+    public void SetScrollCompositionMode(bool enabled) =>
+        inner.SetScrollCompositionMode(enabled);
+
+    public void SetScrollVisualStateProvider(Func<long, ScrollVisualState>? provider) =>
+        inner.SetScrollVisualStateProvider(provider);
+
+    public void Dispose()
+    {
+        // The test owns the wrapped backend explicitly; disposing it here would make nested
+        // using declarations order-sensitive and could hide failures in the diagnostic path.
+    }
 }
 
 readonly record struct PixelBounds(int Left, int Top, int Right, int Bottom)

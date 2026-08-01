@@ -12,6 +12,7 @@
 #include <memory>
 #include <optional>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 struct aether_computed_style_handle_s {
@@ -21,6 +22,7 @@ struct aether_computed_style_handle_s {
 struct runtime_node_state_s {
     aether_computed_style_handle_s style{};
     custom_property_scope_s custom_properties{};
+    color_resolution_state_s color_references{};
     uint32_t declared_impact = STYLE_IMPACT_NONE;
     uint32_t declared_inherited_impact = STYLE_IMPACT_NONE;
     uint32_t inherited_change_impact = STYLE_IMPACT_NONE;
@@ -103,34 +105,130 @@ static node_style_info_s get_node_info(aether_node_s* node) {
     return info;
 }
 
+static bool color_equal(const aether_color_rgba& a, const aether_color_rgba& b) {
+    return a.r == b.r && a.g == b.g && a.b == b.b && a.a == b.a;
+}
+
+static bool length_equal(const aether_css_length& a, const aether_css_length& b) {
+    return a.value == b.value &&
+           a.unit == b.unit &&
+           a.linear_percent == b.linear_percent &&
+           a.linear_em == b.linear_em &&
+           a.linear_rem == b.linear_rem &&
+           a.linear_vw == b.linear_vw &&
+           a.linear_vh == b.linear_vh;
+}
+
+static bool edges_equal(const aether_css_edges& a, const aether_css_edges& b) {
+    return length_equal(a.left, b.left) &&
+           length_equal(a.top, b.top) &&
+           length_equal(a.right, b.right) &&
+           length_equal(a.bottom, b.bottom);
+}
+
+static bool color_edges_equal(const aether_color_edges& a, const aether_color_edges& b) {
+    return color_equal(a.left, b.left) &&
+           color_equal(a.top, b.top) &&
+           color_equal(a.right, b.right) &&
+           color_equal(a.bottom, b.bottom);
+}
+
+static bool border_style_edges_equal(const aether_border_style_edges& a, const aether_border_style_edges& b) {
+    return a.left == b.left &&
+           a.top == b.top &&
+           a.right == b.right &&
+           a.bottom == b.bottom;
+}
+
+static bool flex_basis_equal(const aether_flex_basis& a, const aether_flex_basis& b) {
+    return a.kind == b.kind && length_equal(a.length, b.length);
+}
+
+static bool corner_radius_equal(const aether_corner_radius& a, const aether_corner_radius& b) {
+    return length_equal(a.horizontal, b.horizontal) &&
+           length_equal(a.vertical, b.vertical);
+}
+
+static bool border_radii_equal(const aether_border_radii& a, const aether_border_radii& b) {
+    return corner_radius_equal(a.top_left, b.top_left) &&
+           corner_radius_equal(a.top_right, b.top_right) &&
+           corner_radius_equal(a.bottom_right, b.bottom_right) &&
+           corner_radius_equal(a.bottom_left, b.bottom_left);
+}
+
+static bool transform_origin_equal(const aether_transform_origin& a, const aether_transform_origin& b) {
+    return length_equal(a.x, b.x) && length_equal(a.y, b.y);
+}
+
+static bool gradient_stop_equal(const aether_gradient_stop& a, const aether_gradient_stop& b) {
+    return color_equal(a.color, b.color) &&
+           length_equal(a.position, b.position) &&
+           a.offset == b.offset &&
+           a.has_position == b.has_position;
+}
+
+static bool gradient_equal(const aether_linear_gradient& a, const aether_linear_gradient& b) {
+    if (a.direction_x != b.direction_x ||
+        a.direction_y != b.direction_y ||
+        a.stop_count != b.stop_count)
+        return false;
+    if (a.stop_count == 0) return true;
+    if (!a.stops || !b.stops) return false;
+    for (int32_t index = 0; index < a.stop_count; ++index)
+        if (!gradient_stop_equal(a.stops[index], b.stops[index])) return false;
+    return true;
+}
+
 static bool style_equal(const aether_computed_style_t& a, const aether_computed_style_t& b) {
-    aether_computed_style_t left = a;
-    aether_computed_style_t right = b;
-    left.background_layers.items = nullptr;
-    right.background_layers.items = nullptr;
-    left.backdrop_filters.items = nullptr;
-    right.backdrop_filters.items = nullptr;
-    left.transforms.items = nullptr;
-    right.transforms.items = nullptr;
-    left.text_gradient.stops = nullptr;
-    right.text_gradient.stops = nullptr;
-    left.text_shadows.items = nullptr;
-    right.text_shadows.items = nullptr;
-    left.box_shadows.items = nullptr;
-    right.box_shadows.items = nullptr;
-    if (std::memcmp(&left, &right, sizeof(left)) != 0) return false;
-    auto gradients_equal = [](const aether_linear_gradient& x, const aether_linear_gradient& y) {
-        if (x.stop_count != y.stop_count) return false;
-        if (x.stop_count == 0) return true;
-        return x.stops && y.stops &&
-            std::memcmp(x.stops, y.stops, sizeof(aether_gradient_stop) * x.stop_count) == 0;
-    };
-    return aether_background_layer_list_equal(&a.background_layers, &b.background_layers) == AETHER_TRUE &&
+    return a.display == b.display &&
+           a.flex_direction == b.flex_direction &&
+           a.justify_content == b.justify_content &&
+           a.align_items == b.align_items &&
+           a.align_self == b.align_self &&
+           a.flex_grow == b.flex_grow &&
+           a.flex_shrink == b.flex_shrink &&
+           flex_basis_equal(a.flex_basis, b.flex_basis) &&
+           a.flex_wrap == b.flex_wrap &&
+           a.gap == b.gap &&
+           a.position == b.position &&
+           edges_equal(a.inset, b.inset) &&
+           length_equal(a.width, b.width) &&
+           length_equal(a.height, b.height) &&
+           length_equal(a.min_width, b.min_width) &&
+           length_equal(a.min_height, b.min_height) &&
+           length_equal(a.max_width, b.max_width) &&
+           length_equal(a.max_height, b.max_height) &&
+           edges_equal(a.margin, b.margin) &&
+           edges_equal(a.padding, b.padding) &&
+           edges_equal(a.border_width, b.border_width) &&
+           a.box_sizing == b.box_sizing &&
+           color_equal(a.color, b.color) &&
+           color_equal(a.background_color, b.background_color) &&
+           aether_background_layer_list_equal(&a.background_layers, &b.background_layers) == AETHER_TRUE &&
            aether_backdrop_filter_list_equal(&a.backdrop_filters, &b.backdrop_filters) == AETHER_TRUE &&
+           color_equal(a.border_color, b.border_color) &&
+           color_edges_equal(a.border_colors, b.border_colors) &&
+           border_style_edges_equal(a.border_styles, b.border_styles) &&
+           a.has_text_gradient == b.has_text_gradient &&
+           gradient_equal(a.text_gradient, b.text_gradient) &&
            aether_transform_list_equal(&a.transforms, &b.transforms) == AETHER_TRUE &&
-           gradients_equal(a.text_gradient, b.text_gradient) &&
+           transform_origin_equal(a.transform_origin, b.transform_origin) &&
            aether_shadow_list_equal(&a.text_shadows, &b.text_shadows) == AETHER_TRUE &&
-           aether_shadow_list_equal(&a.box_shadows, &b.box_shadows) == AETHER_TRUE;
+           aether_shadow_list_equal(&a.box_shadows, &b.box_shadows) == AETHER_TRUE &&
+           border_radii_equal(a.border_radii, b.border_radii) &&
+           a.opacity == b.opacity &&
+           std::strncmp(a.font_family, b.font_family, sizeof(a.font_family)) == 0 &&
+           a.font_size == b.font_size &&
+           a.font_weight == b.font_weight &&
+           a.line_height == b.line_height &&
+           a.text_align == b.text_align &&
+           a.text_transform == b.text_transform &&
+           a.white_space == b.white_space &&
+           a.overflow_x == b.overflow_x &&
+           a.overflow_y == b.overflow_y &&
+           a.cursor == b.cursor &&
+           a.pointer_events == b.pointer_events &&
+           a.visible == b.visible;
 }
 
 static void rebuild_index(aether_style_runtime_s* runtime) {
@@ -352,6 +450,14 @@ static runtime_node_state_s* compute_node(aether_style_runtime_s* runtime, aethe
     };
 
     color_resolution_state_s color_references;
+    if (parent) {
+        // text-shadow is inherited, and currentColor inside an inherited
+        // shadow must remain symbolic until this node's own color is known.
+        // Borders and box-shadow are not inherited, so their symbolic state
+        // starts from the CSS initial values for this node.
+        color_references.text_shadow_uses_current_color =
+            parent->color_references.text_shadow_uses_current_color;
+    }
     uint32_t declared_impact = STYLE_IMPACT_NONE;
     uint32_t declared_inherited_impact = STYLE_IMPACT_NONE;
     auto apply_definition = [&](size_t i) {
@@ -401,7 +507,7 @@ static runtime_node_state_s* compute_node(aether_style_runtime_s* runtime, aethe
             previous_handle.style = *previous_style;
             aether_computed_style_t probe{};
             if (aether_computed_style_copy(&previous_handle, &probe) == AETHER_OK) {
-                color_resolution_state_s probe_references;
+                color_resolution_state_s probe_references = found->second->color_references;
                 if (apply_property_value(definition, probe, probe_references, value, false)) {
                     resolve_symbolic_colors(probe, probe_references);
                     normalize_overflow_axes(probe);
@@ -473,6 +579,7 @@ static runtime_node_state_s* compute_node(aether_style_runtime_s* runtime, aethe
     auto state = std::make_unique<runtime_node_state_s>();
     state->style.style = next;
     state->custom_properties = std::move(scope);
+    state->color_references = std::move(color_references);
     state->declared_impact = declared_impact;
     state->declared_inherited_impact = declared_inherited_impact;
     state->inherited_change_impact = inherited_change_impact;
@@ -598,6 +705,81 @@ static void resolve_tree(aether_style_runtime_s* runtime, aether_node_s* node,
         resolve_tree(runtime, child, current_parent, current_inherited_impact, updates);
 }
 
+static bool pseudo_contains_state(const pseudo_selector_s& pseudo) {
+    if (pseudo.kind == PSEUDO_REQUIRED_STATE || pseudo.kind == PSEUDO_FORBIDDEN_STATE)
+        return true;
+    if (pseudo.nested) {
+        for (const auto& selector : *pseudo.nested) {
+            for (const auto& step : selector.steps) {
+                for (const auto& nested_pseudo : step.compound.pseudos) {
+                    if (pseudo_contains_state(nested_pseudo)) return true;
+                }
+            }
+        }
+    }
+    return false;
+}
+
+static bool pseudo_is_direct_state(const pseudo_selector_s& pseudo) {
+    return pseudo.kind == PSEUDO_REQUIRED_STATE || pseudo.kind == PSEUDO_FORBIDDEN_STATE;
+}
+
+static bool selector_state_dependency_is_subject_local(const compiled_selector_s& selector) {
+    if (selector.steps.empty())
+        return true;
+
+    for (size_t step_index = 0; step_index < selector.steps.size(); ++step_index) {
+        for (const auto& pseudo : selector.steps[step_index].compound.pseudos) {
+            if (!pseudo_contains_state(pseudo)) continue;
+            // Only direct state selectors on the subject compound can be
+            // scoped to the elements whose state changed.  Ancestor/sibling
+            // state dependencies and nested forms like :not(:hover) or
+            // :has(:hover) can affect other subjects, so they require the
+            // full traversal for correctness.
+            if (step_index != 0 || !pseudo_is_direct_state(pseudo))
+                return false;
+        }
+    }
+    return true;
+}
+
+static bool runtime_state_changes_are_incremental_safe(const aether_style_runtime_s* runtime) {
+    for (const auto& sheet_pair : runtime->sheets) {
+        for (const auto& rule : sheet_pair.second->rules) {
+            if (!selector_state_dependency_is_subject_local(rule.selector))
+                return false;
+        }
+    }
+    return true;
+}
+
+static bool node_has_ancestor_in_set(aether_node_s* node,
+                                     const std::unordered_set<aether_node_s*>& roots) {
+    for (auto* parent = node ? node->parent : nullptr; parent; parent = parent->parent) {
+        if (roots.find(parent) != roots.end()) return true;
+    }
+    return false;
+}
+
+static runtime_node_state_s* parent_state_for(aether_style_runtime_s* runtime, aether_node_s* node) {
+    auto* parent = node ? node->parent : nullptr;
+    if (!parent) return nullptr;
+    auto found = runtime->states.find(parent);
+    return found == runtime->states.end() ? nullptr : found->second.get();
+}
+
+static int32_t publish_updates(std::vector<aether_style_update_s*>& updates,
+                               aether_style_update_t** out_updates) {
+    if (updates.empty()) {
+        *out_updates = nullptr;
+        return 0;
+    }
+    auto* array = new aether_style_update_t[updates.size()];
+    std::copy(updates.begin(), updates.end(), array);
+    *out_updates = array;
+    return static_cast<int32_t>(updates.size());
+}
+
 AETHER_API aether_status_t aether_style_runtime_create(
     const aether_style_runtime_options_t* options,
     const aether_style_environment_t* environment,
@@ -662,11 +844,62 @@ AETHER_API int32_t aether_style_runtime_resolve_subtree(
     if (!runtime || !root || !out_updates) return 0;
     std::vector<aether_style_update_s*> updates;
     resolve_tree(runtime, root, nullptr, STYLE_IMPACT_NONE, updates);
-    if (updates.empty()) { *out_updates = nullptr; return 0; }
-    auto* array = new aether_style_update_t[updates.size()];
-    std::copy(updates.begin(), updates.end(), array);
-    *out_updates = array;
-    return static_cast<int32_t>(updates.size());
+    return publish_updates(updates, out_updates);
+}
+
+AETHER_API int32_t aether_style_runtime_resolve_state_changes(
+    aether_style_runtime_t runtime,
+    aether_node_t root,
+    const aether_node_t* changed_nodes,
+    int32_t changed_count,
+    aether_style_update_t** out_updates) {
+    if (!runtime || !root || !out_updates) return 0;
+    if (!changed_nodes || changed_count <= 0) {
+        *out_updates = nullptr;
+        return 0;
+    }
+
+    std::vector<aether_style_update_s*> updates;
+    if (!runtime_state_changes_are_incremental_safe(runtime)) {
+        resolve_tree(runtime, root, nullptr, STYLE_IMPACT_NONE, updates);
+        return publish_updates(updates, out_updates);
+    }
+
+    std::vector<aether_node_s*> roots;
+    roots.reserve(static_cast<size_t>(changed_count));
+    std::unordered_set<aether_node_s*> root_set;
+    for (int32_t index = 0; index < changed_count; ++index) {
+        auto* node = changed_nodes[index];
+        if (!node || node->type != AETHER_NODE_ELEMENT) continue;
+        if (!root_set.insert(node).second) continue;
+        roots.push_back(node);
+    }
+
+    std::vector<aether_node_s*> minimal_roots;
+    minimal_roots.reserve(roots.size());
+    for (auto* node : roots) {
+        if (!node_has_ancestor_in_set(node, root_set))
+            minimal_roots.push_back(node);
+    }
+
+    for (auto* node : minimal_roots) {
+        auto* parent = parent_state_for(runtime, node);
+        if (node->parent && !parent) {
+            // The requested node is not connected to previously resolved state
+            // (for example after a stylesheet or DOM rebuild).  Preserve
+            // correctness by falling back to the full tree.
+            for (auto* update : updates) delete update;
+            updates.clear();
+            resolve_tree(runtime, root, nullptr, STYLE_IMPACT_NONE, updates);
+            return publish_updates(updates, out_updates);
+        }
+        // The parent was not recomputed in this incremental pass; its previous
+        // inherited_change_impact is historical state from an older traversal,
+        // not a fresh change to propagate now.  The changed node itself will
+        // compute and propagate any inherited impact caused by its own state.
+        resolve_tree(runtime, node, parent, STYLE_IMPACT_NONE, updates);
+    }
+    return publish_updates(updates, out_updates);
 }
 
 AETHER_API aether_status_t aether_style_runtime_get_update(
@@ -720,6 +953,29 @@ AETHER_API aether_status_t aether_style_runtime_create_resolved_style_map(
     };
     visit(doc);
     *out_map = map;
+    return AETHER_OK;
+}
+
+AETHER_API aether_status_t aether_style_runtime_update_resolved_style_map(
+    aether_style_runtime_t runtime,
+    aether_style_map_t map,
+    const aether_node_t* nodes,
+    int32_t node_count) {
+    if (!runtime || !map || (!nodes && node_count > 0)) return AETHER_ERROR_NULL_ARG;
+    if (node_count < 0) return AETHER_ERROR_INVALID_STATE;
+    for (int32_t index = 0; index < node_count; ++index) {
+        auto* node = nodes[index];
+        if (!node || node->type != AETHER_NODE_ELEMENT) continue;
+        auto state = runtime->states.find(node);
+        if (state != runtime->states.end()) {
+            // The style map is a frame-local borrowed view. Updating the exact
+            // changed entries preserves its lifetime model without rebuilding
+            // an O(document) map for every state-only hover transition.
+            map->styles[node] = state->second->style.style;
+        } else {
+            map->styles.erase(node);
+        }
+    }
     return AETHER_OK;
 }
 

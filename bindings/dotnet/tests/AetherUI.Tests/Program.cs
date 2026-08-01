@@ -11,6 +11,8 @@ using AetherUI.Runtime;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.Text;
+using System.Diagnostics;
+using System.Security.Cryptography;
 
 namespace AetherUI.Tests;
 
@@ -45,9 +47,15 @@ internal static class Program
         ("Native runtime renders generated pseudo-elements", NativeRuntimeRendersGeneratedPseudoElements),
         ("Native CSS typography, side borders, and column flex grow", NativeCssTypographySideBordersAndColumnFlexGrow),
         ("Native root scrolls overflowing content", NativeRootScrollsOverflowingContent),
+        ("Native visible overflow does not become a scroll container", NativeVisibleOverflowDoesNotBecomeScrollContainer),
         ("Native scroll metrics are bidirectional and resize-aware", NativeScrollMetricsAreBidirectionalAndResizeAware),
         ("Native scrollbar chrome supports two-axis pointer interaction and chaining", NativeScrollbarChromeSupportsTwoAxisInteractionAndChaining),
         ("Native hover paint impact skips layout", NativeHoverPaintImpactSkipsLayout),
+        ("Native catalog hover paint impact skips layout", NativeCatalogHoverPaintImpactSkipsLayout),
+        ("Native nested hover keeps ancestors active", NativeNestedHoverKeepsAncestorsActive),
+        ("Native catalog hover storm stays incremental", NativeCatalogHoverStormStaysIncremental),
+        ("Native scroll after hover patch rebuilds canonical display list", NativeScrollAfterHoverPatchRebuildsCanonicalDisplayList),
+        ("Native hover coalesces pointer moves before paint", NativeHoverCoalescesPointerMovesBeforePaint),
         ("Native pointer-events hover updates hit testing without layout", NativePointerEventsHoverUpdatesHitTestingWithoutLayout),
         ("Native layout disposes before borrowed style map", NativeLayoutDisposesBeforeBorrowedStyleMap),
         ("Image resolver deduplicates resources and reports lifecycle", ImageResolverDeduplicatesResourcesAndReportsLifecycle),
@@ -823,6 +831,34 @@ internal static class Program
         Assert.True(renderer.LastDisplayList?.Commands.OfType<DrawScrollbarChromeCommand>().Any() == true);
     }
 
+    private static void NativeVisibleOverflowDoesNotBecomeScrollContainer()
+    {
+        const string markup = """
+            <style>
+              body { margin: 0; overflow: visible; }
+              .box { height: 80px; overflow: visible; background: #111827; }
+              .content { height: 240px; background: #38bdf8; }
+            </style>
+            <body><div id="box" class="box"><div class="content"></div></div></body>
+            """;
+
+        using var renderer = new RecordingRenderer();
+        using var host = new UiDocumentHost(new RawMarkupComponent(markup), new ApproximateTextMeasurer(), renderer, new UiHostOptions());
+        host.SetViewport(240, 120, 1);
+        host.Render();
+
+        var box = Assert.NotNull(host.Layout?.FindPrimaryBox(Assert.NotNull(host.Document?.GetElementById("box"))));
+        Assert.Equal(OverflowKind.Visible, box.Style.OverflowY);
+        Assert.False(renderer.LastDisplayList?.Commands.OfType<PushScrollOffsetCommand>().Any() == true);
+        Assert.False(renderer.LastDisplayList?.Commands.OfType<DrawScrollbarChromeCommand>().Any() == true);
+
+        host.ResetMetrics();
+        host.MouseWheelScrolled(new PointF(box.BorderBox.X + 10, box.BorderBox.Y + 10), -3);
+        Assert.Equal(default, host.GetScrollOffset(box.Element));
+        Assert.False(host.NeedsRender);
+        Assert.Equal(0L, host.Metrics.ScrollCompositions);
+    }
+
     private static void NativeScrollMetricsAreBidirectionalAndResizeAware()
     {
         const string markup = """
@@ -928,19 +964,408 @@ internal static class Program
 
         host.ResetMetrics();
         host.PointerMoved(inside);
+        var beforePaint = host.Metrics;
+        Assert.Equal(0L, beforePaint.StyleResolutions);
+        Assert.Equal(0L, beforePaint.LayoutBuilds);
+        Assert.Equal(0L, beforePaint.DisplayListBuilds);
+        Assert.Equal(0L, beforePaint.RenderCalls);
+        _ = host.CursorAt(inside);
+        beforePaint = host.Metrics;
+        Assert.Equal(0L, beforePaint.StyleResolutions);
+        Assert.Equal(0L, beforePaint.LayoutBuilds);
+        Assert.Equal(0L, beforePaint.DisplayListBuilds);
+        Assert.Equal(0L, beforePaint.RenderCalls);
+
         host.Render();
         var hovered = host.Metrics;
         Assert.Equal(1L, hovered.StyleResolutions);
+        Assert.Equal(1L, hovered.StyleUpdatedElements);
         Assert.Equal(0L, hovered.LayoutBuilds);
-        Assert.Equal(1L, hovered.DisplayListBuilds);
+        Assert.Equal(0L, hovered.DisplayListBuilds);
+        Assert.Equal(0L, hovered.VisualStyleMapBuilds);
+        Assert.Equal(1L, hovered.VisualStyleMapUpdates);
+        Assert.Equal(1L, hovered.PaintChunkBuilds);
+        Assert.Equal(1L, hovered.RenderCalls);
+        Assert.True(hovered.DisplayListBuildMilliseconds >= 0d);
+        Assert.True(hovered.RenderMilliseconds >= 0d);
 
         host.ResetMetrics();
         host.PointerMoved(new PointF(inside.X + 4, inside.Y + 4));
-        host.Render();
+        Assert.False(host.NeedsRender);
         var unchangedTarget = host.Metrics;
         Assert.Equal(0L, unchangedTarget.StyleResolutions);
+        Assert.Equal(0L, unchangedTarget.StyleUpdatedElements);
         Assert.Equal(0L, unchangedTarget.LayoutBuilds);
         Assert.Equal(0L, unchangedTarget.DisplayListBuilds);
+        Assert.Equal(0L, unchangedTarget.VisualStyleMapBuilds);
+        Assert.Equal(0L, unchangedTarget.VisualStyleMapUpdates);
+        Assert.Equal(0L, unchangedTarget.PaintChunkBuilds);
+        Assert.Equal(0L, unchangedTarget.RenderCalls);
+    }
+
+    private static void NativeCatalogHoverPaintImpactSkipsLayout()
+    {
+        const string markup = """
+            <style>
+              body { margin: 0; background: #0b1324; font-family: "Segoe UI", Arial, sans-serif; }
+              .open {
+                padding: 10px 16px;
+                background: #38bdf8;
+                color: #06233a;
+                border: 0;
+                border-radius: 9px;
+                font-weight: 700;
+              }
+              .open:hover { background: #7dd3fc; }
+              .page-card {
+                display: flex;
+                justify-content: space-between;
+                align-items: center;
+                margin-bottom: 11px;
+                padding: 16px 18px;
+                background: rgba(19, 31, 57, 0.94);
+                border: 1px solid #263d65;
+                border-radius: 13px;
+              }
+              .page-card:hover {
+                background: #1a2b4d;
+                border-color: #4a78b9;
+              }
+              .page-name { color: #f4f8ff; font-size: 16px; font-weight: 700; }
+            </style>
+            <body>
+              <article id="card" class="page-card">
+                <div><div class="page-name">vitalis_health</div></div>
+                <button id="open" class="open">Open</button>
+              </article>
+            </body>
+            """;
+
+        using var renderer = new RecordingRenderer();
+        using var host = new UiDocumentHost(new RawMarkupComponent(markup), new ApproximateTextMeasurer(), renderer, new UiHostOptions());
+        host.SetViewport(420, 140, 1);
+        host.Render();
+
+        var card = Assert.NotNull(host.Document?.GetElementById("card"));
+        var open = Assert.NotNull(host.Document?.GetElementById("open"));
+        var cardBox = Assert.NotNull(host.Layout?.FindPrimaryBox(card));
+        var openBox = Assert.NotNull(host.Layout?.FindPrimaryBox(open));
+        var cardOnlyPoint = new PointF(cardBox.BorderBox.X + 8, cardBox.BorderBox.Y + 8);
+        var openPoint = new PointF(openBox.BorderBox.X + openBox.BorderBox.Width / 2, openBox.BorderBox.Y + openBox.BorderBox.Height / 2);
+
+        host.ResetMetrics();
+        host.PointerMoved(cardOnlyPoint);
+        host.Render();
+        var cardHover = host.Metrics;
+        Assert.Equal(1L, cardHover.StyleResolutions);
+        Assert.Equal(1L, cardHover.StyleUpdatedElements);
+        Assert.Equal(NativeStyleImpact.Paint, cardHover.LastStyleImpact);
+        AssertNoLayoutBuild("catalog card hover", cardHover);
+        Assert.Equal(0L, cardHover.DisplayListBuilds);
+        Assert.Equal(0L, cardHover.VisualStyleMapBuilds);
+        Assert.Equal(1L, cardHover.VisualStyleMapUpdates);
+        Assert.Equal(1L, cardHover.PaintChunkBuilds);
+
+        host.ResetMetrics();
+        host.PointerMoved(openPoint);
+        host.Render();
+        var buttonHover = host.Metrics;
+        Assert.Equal(1L, buttonHover.StyleResolutions);
+        Assert.Equal(1L, buttonHover.StyleUpdatedElements);
+        Assert.Equal(NativeStyleImpact.Paint, buttonHover.LastStyleImpact);
+        AssertNoLayoutBuild("catalog button hover", buttonHover);
+        Assert.Equal(0L, buttonHover.DisplayListBuilds);
+        Assert.Equal(0L, buttonHover.VisualStyleMapBuilds);
+        Assert.Equal(1L, buttonHover.VisualStyleMapUpdates);
+        Assert.True(buttonHover.PaintChunkBuilds >= 1);
+    }
+
+    private static void NativeNestedHoverKeepsAncestorsActive()
+    {
+        const string markup = """
+            <style>
+              body { margin: 0; background: #0b1324; }
+              .page-card {
+                display: flex;
+                width: 260px;
+                height: 72px;
+                padding: 12px;
+                background: #132039;
+                border: 1px solid #263d65;
+              }
+              .page-card:hover {
+                background: #1a2b4d;
+                border-color: #4a78b9;
+              }
+              .page-name { color: white; font-size: 16px; }
+            </style>
+            <body>
+              <article id="card" class="page-card">
+                <div><div id="name" class="page-name">vitalis_health</div></div>
+              </article>
+            </body>
+            """;
+
+        using var renderer = new RecordingRenderer();
+        using var host = new UiDocumentHost(new RawMarkupComponent(markup), new ApproximateTextMeasurer(), renderer, new UiHostOptions());
+        host.SetViewport(320, 120, 1);
+        host.Render();
+
+        var card = Assert.NotNull(host.Document?.GetElementById("card"));
+        var name = Assert.NotNull(host.Document?.GetElementById("name"));
+        var cardBox = Assert.NotNull(host.Layout?.FindPrimaryBox(card));
+        var nameBox = Assert.NotNull(host.Layout?.FindPrimaryBox(name));
+
+        host.ResetMetrics();
+        host.PointerMoved(new PointF(cardBox.BorderBox.X + 4, cardBox.BorderBox.Y + 4));
+        host.Render();
+        var cardHover = host.Metrics;
+        Assert.Equal(1L, cardHover.StyleUpdatedElements);
+        Assert.Equal(1L, cardHover.PaintChunkBuilds);
+        Assert.Equal(1L, cardHover.RenderCalls);
+
+        host.ResetMetrics();
+        host.PointerMoved(new PointF(nameBox.BorderBox.X + 2, nameBox.BorderBox.Y + 2));
+        host.Render();
+        var childHover = host.Metrics;
+        Assert.Equal(1L, childHover.StyleResolutions);
+        Assert.Equal(0L, childHover.StyleUpdatedElements);
+        Assert.Equal(0L, childHover.LayoutBuilds);
+        Assert.Equal(0L, childHover.DisplayListBuilds);
+        Assert.Equal(0L, childHover.PaintChunkBuilds);
+        Assert.Equal(0L, childHover.RenderCalls);
+    }
+
+    private static void NativeCatalogHoverStormStaysIncremental()
+    {
+        var cards = string.Concat(Enumerable.Range(0, 18).Select(i =>
+            $"""
+            <article id="card-{i}" class="page-card">
+              <div><div class="page-name">page_{i:00}</div><div class="page-file">page_{i:00}.html</div></div>
+              <button id="open-{i}" class="open">Open</button>
+            </article>
+            """));
+        var markup = $$"""
+            <style>
+              body { margin: 0; background: #0b1324; font-family: "Segoe UI", Arial, sans-serif; }
+              .page-card {
+                display: flex;
+                justify-content: space-between;
+                align-items: center;
+                margin-bottom: 11px;
+                padding: 16px 18px;
+                background: rgba(19, 31, 57, 0.94);
+                border: 1px solid #263d65;
+                border-radius: 13px;
+              }
+              .page-card:hover {
+                background: #1a2b4d;
+                border-color: #4a78b9;
+              }
+              .page-name { color: #f4f8ff; font-size: 16px; font-weight: 700; }
+              .page-file { margin-top: 5px; color: #8fa6c8; font-size: 12px; }
+              .open {
+                padding: 10px 16px;
+                background: #38bdf8;
+                color: #06233a;
+                border: 0;
+                border-radius: 9px;
+                font-weight: 700;
+              }
+              .open:hover { background: #7dd3fc; }
+            </style>
+            <body>{{cards}}</body>
+            """;
+
+        using var renderer = new RecordingRenderer();
+        using var host = new UiDocumentHost(new RawMarkupComponent(markup), new ApproximateTextMeasurer(), renderer, new UiHostOptions());
+        host.SetViewport(520, 1500, 1);
+        host.Render();
+
+        var points = Enumerable.Range(0, 18).Select(i =>
+        {
+            var element = Assert.NotNull(host.Document?.GetElementById($"card-{i}"));
+            var box = Assert.NotNull(host.Layout?.FindPrimaryBox(element));
+            return new PointF(box.BorderBox.X + 10, box.BorderBox.Y + 10);
+        }).ToArray();
+
+        host.ResetMetrics();
+        foreach (var point in points)
+        {
+            host.PointerMoved(point);
+            Assert.True(host.NeedsRender);
+            host.Render();
+
+            host.PointerMoved(new PointF(point.X + 2, point.Y + 2));
+            Assert.False(host.NeedsRender);
+        }
+
+        var metrics = host.Metrics;
+        Assert.Equal(points.Length, metrics.StyleResolutions);
+        Assert.Equal(0L, metrics.LayoutBuilds);
+        Assert.Equal(0L, metrics.DisplayListBuilds);
+        Assert.Equal(0L, metrics.VisualStyleMapBuilds);
+        Assert.Equal(points.Length, metrics.VisualStyleMapUpdates);
+        Assert.True(metrics.PaintChunkBuilds >= points.Length);
+        Assert.True(metrics.PaintChunkBuilds <= (points.Length * 2) - 1);
+    }
+
+    private static void NativeScrollAfterHoverPatchRebuildsCanonicalDisplayList()
+    {
+        var cards = string.Concat(Enumerable.Range(0, 10).Select(i =>
+            $"""
+            <article id="card-{i}" class="page-card">
+              <div><div class="page-name">page_{i:00}</div><div class="page-file">page_{i:00}.html</div></div>
+              <button class="open">Open</button>
+            </article>
+            """));
+        var markup = $$"""
+            <style>
+              body { margin: 0; height: 100%; overflow-y: auto; background: #0b1324; font-family: "Segoe UI", Arial, sans-serif; }
+              .page-card {
+                display: flex;
+                justify-content: space-between;
+                align-items: center;
+                margin-bottom: 11px;
+                padding: 16px 18px;
+                background: rgba(19, 31, 57, 0.94);
+                border: 1px solid #263d65;
+                border-radius: 13px;
+              }
+              .page-card:hover { background: #1a2b4d; border-color: #4a78b9; }
+              .page-name { color: #f4f8ff; font-size: 16px; font-weight: 700; }
+              .page-file { margin-top: 5px; color: #8fa6c8; font-size: 12px; }
+              .open { padding: 10px 16px; background: #38bdf8; color: #06233a; border: 0; border-radius: 9px; }
+              .open:hover { background: #7dd3fc; }
+            </style>
+            <body>{{cards}}</body>
+            """;
+
+        using var renderer = new ControlledIncrementalRenderer();
+        using var host = new UiDocumentHost(new RawMarkupComponent(markup), new ApproximateTextMeasurer(), renderer, new UiHostOptions());
+        host.SetViewport(520, 180, 1);
+        host.Render();
+        renderer.ResetCounts();
+
+        var firstCard = Assert.NotNull(host.Layout?.FindPrimaryBox(Assert.NotNull(host.Document?.GetElementById("card-0"))));
+        host.ResetMetrics();
+        host.PointerMoved(new PointF(firstCard.BorderBox.X + 10, firstCard.BorderBox.Y + 10));
+        host.Render();
+        Assert.True(host.Metrics.PaintChunkBuilds > 0);
+        Assert.Equal(0L, host.Metrics.DisplayListBuilds);
+        Assert.True(renderer.IncrementalAttempts > 0, "paint-only hover should remain eligible for incremental rendering");
+
+        renderer.ResetCounts();
+        host.ResetMetrics();
+        host.MouseWheelScrolled(new PointF(firstCard.BorderBox.X + 10, firstCard.BorderBox.Y + 10), -4);
+        host.Render();
+        Assert.Equal(1L, host.Metrics.DisplayListBuilds);
+        Assert.Equal(0L, host.Metrics.LayoutBuilds);
+        Assert.Equal(0, renderer.IncrementalAttempts);
+        Assert.Equal(1, renderer.RenderCount);
+        Assert.False(renderer.LastScrollCompositionMode);
+
+        renderer.ResetCounts();
+        host.ResetMetrics();
+        host.MouseWheelScrolled(new PointF(firstCard.BorderBox.X + 10, firstCard.BorderBox.Y + 10), -1);
+        host.Render();
+        Assert.Equal(0L, host.Metrics.DisplayListBuilds);
+        Assert.Equal(1L, host.Metrics.ScrollCompositions);
+        Assert.Equal(0, renderer.IncrementalAttempts);
+        Assert.Equal(1, renderer.RenderCount);
+        Assert.True(renderer.LastScrollCompositionMode);
+    }
+
+    private static void AssertNoLayoutBuild(string phase, UiDocumentHostMetrics metrics)
+    {
+        if (metrics.LayoutBuilds == 0)
+        {
+            return;
+        }
+
+        throw new InvalidOperationException(
+            $"{phase}: expected paint-only hover to skip layout, but LayoutBuilds={metrics.LayoutBuilds}. " +
+            $"Metrics: StyleResolutions={metrics.StyleResolutions}, StyleUpdatedElements={metrics.StyleUpdatedElements}, DisplayListBuilds={metrics.DisplayListBuilds}, PaintChunkBuilds={metrics.PaintChunkBuilds}, " +
+            $"RenderCalls={metrics.RenderCalls}, IncrementalRenderCalls={metrics.IncrementalRenderCalls}, " +
+            $"LastStyleImpact={metrics.LastStyleImpact}. " +
+            DescribeLoadedNativeRuntime());
+    }
+
+    private static string DescribeLoadedNativeRuntime()
+    {
+        try
+        {
+            using var process = Process.GetCurrentProcess();
+            var modules = process.Modules.Cast<ProcessModule>()
+                .Where(static module => string.Equals(module.ModuleName, "aether_core.dll", StringComparison.OrdinalIgnoreCase))
+                .Select(static module =>
+                {
+                    var file = module.FileName ?? "<unknown>";
+                    var hash = File.Exists(file)
+                        ? Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(file)))
+                        : "<missing>";
+                    return $"{file} sha256={hash}";
+                })
+                .ToArray();
+            return modules.Length == 0
+                ? "Loaded native runtime: <aether_core.dll not found in process module list>."
+                : "Loaded native runtime: " + string.Join("; ", modules) + ".";
+        }
+        catch (Exception ex)
+        {
+            return $"Loaded native runtime: <unable to inspect: {ex.GetType().Name}: {ex.Message}>.";
+        }
+    }
+
+    private static void NativeHoverCoalescesPointerMovesBeforePaint()
+    {
+        const string markup = """
+            <style>
+              body { margin: 0; }
+              #a, #b { position: absolute; top: 0; width: 50px; height: 50px; background-color: #111827; }
+              #a { left: 0; }
+              #b { left: 70px; }
+              #a:hover { background-color: #ef4444; }
+              #b:hover { background-color: #22c55e; }
+            </style>
+            <body><div id="a"></div><div id="b"></div></body>
+            """;
+
+        using var renderer = new RecordingRenderer();
+        using var host = new UiDocumentHost(new RawMarkupComponent(markup), new ApproximateTextMeasurer(), renderer, new UiHostOptions());
+        host.SetViewport(160, 80, 1);
+        host.Render();
+
+        var a = Assert.NotNull(host.Document?.GetElementById("a"));
+        var b = Assert.NotNull(host.Document?.GetElementById("b"));
+        var aBox = Assert.NotNull(host.Layout?.FindPrimaryBox(a));
+        var bBox = Assert.NotNull(host.Layout?.FindPrimaryBox(b));
+        var pointA = new PointF(aBox.BorderBox.X + 10, aBox.BorderBox.Y + 10);
+        var pointB = new PointF(bBox.BorderBox.X + 10, bBox.BorderBox.Y + 10);
+
+        host.ResetMetrics();
+        host.PointerMoved(pointA);
+        host.PointerMoved(pointB);
+        var beforePaint = host.Metrics;
+        Assert.Equal(0L, beforePaint.StyleResolutions);
+        Assert.Equal(0L, beforePaint.LayoutBuilds);
+        Assert.Equal(0L, beforePaint.DisplayListBuilds);
+        Assert.Equal(0L, beforePaint.RenderCalls);
+
+        host.Render();
+
+        Assert.True((a.State & ElementState.Hover) == 0);
+        Assert.True((b.State & ElementState.Hover) != 0);
+        var metrics = host.Metrics;
+        Assert.Equal(1L, metrics.StyleResolutions);
+        Assert.Equal(0L, metrics.LayoutBuilds);
+        Assert.Equal(0L, metrics.DisplayListBuilds);
+        Assert.Equal(0L, metrics.VisualStyleMapBuilds);
+        Assert.Equal(1L, metrics.VisualStyleMapUpdates);
+        Assert.Equal(1L, metrics.PaintChunkBuilds);
+        Assert.Equal(1L, metrics.RenderCalls);
+        Assert.True(metrics.DisplayListBuildMilliseconds >= 0d);
+        Assert.True(metrics.RenderMilliseconds >= 0d);
     }
 
     private static void NativePointerEventsHoverUpdatesHitTestingWithoutLayout()
@@ -979,6 +1404,7 @@ internal static class Program
         Assert.True(metrics.StyleResolutions >= 1);
         Assert.Equal(0L, metrics.LayoutBuilds);
         Assert.Equal(0L, metrics.DisplayListBuilds);
+        Assert.Equal(0L, metrics.PaintChunkBuilds);
     }
 
     private static void NativeLayoutDisposesBeforeBorrowedStyleMap()
@@ -1579,6 +2005,53 @@ internal static class Program
             ArgumentNullException.ThrowIfNull(displayList);
             RenderCount++;
             LastDisplayList = displayList;
+        }
+
+        public void Dispose()
+        {
+        }
+    }
+
+    private sealed class ControlledIncrementalRenderer : IRenderBackend, IIncrementalRenderBackend
+    {
+        private bool _hasFullFrame;
+
+        public int RenderCount { get; private set; }
+        public int IncrementalAttempts { get; private set; }
+        public bool LastScrollCompositionMode { get; private set; }
+        public DisplayList? LastDisplayList { get; private set; }
+
+        public void Resize(int pixelWidth, int pixelHeight, float dpiScale)
+        {
+        }
+
+        public void Render(DisplayList displayList, ColorRgba clearColor)
+        {
+            ArgumentNullException.ThrowIfNull(displayList);
+            RenderCount++;
+            LastDisplayList = displayList;
+            _hasFullFrame = true;
+        }
+
+        public bool TryRenderIncremental(DisplayList displayList, ColorRgba clearColor)
+        {
+            ArgumentNullException.ThrowIfNull(displayList);
+            IncrementalAttempts++;
+            if (!_hasFullFrame)
+            {
+                return false;
+            }
+
+            LastDisplayList = displayList;
+            return true;
+        }
+
+        public void SetScrollCompositionMode(bool enabled) => LastScrollCompositionMode = enabled;
+
+        public void ResetCounts()
+        {
+            RenderCount = 0;
+            IncrementalAttempts = 0;
         }
 
         public void Dispose()
