@@ -74,6 +74,7 @@ internal static class Program
         ("Close glyph centered in definite box even when line overflows", CloseGlyphCenteredInDefiniteBox),
         ("ModalController theme overrides via CSS variables", ModalControllerThemeViaCssVariables),
         ("Style binding inside raw-text emits literal", StyleBindingInsideRawTextEmitsLiteral),
+        ("Pseudo ::after text uses its own font-size, not the host's", PseudoAfterTextUsesOwnFontSize),
         ("File image loader decodes a file PNG", FileImageResourceLoader_DecodesFilePng),
         ("File image loader rejects http policy", FileImageResourceLoader_RejectsHttp),
         ("Data image loader decodes a base64 data URI", DataImageResourceLoader_DecodesDataUri),
@@ -733,6 +734,37 @@ internal static class Program
             }
             """;
         AssertGeneratedSourceCompiles(source, companion);
+    }
+
+    private static void PseudoAfterTextUsesOwnFontSize()
+    {
+        // Regression: weather_widget's degree symbol comes from .temp-main::after with
+        // font-size:40px inside an 80px host. The text fragment's element was the HOST
+        // (style_origin), so the paint re-resolved the host's font-size (80) — the symbol
+        // rendered BIGGER and out of place. The fragment must use the pseudo's own style.
+        const string markup = """
+            <style>
+              body { margin: 0; }
+              .temp-main { font-size: 80px; font-weight: 800; margin: 20px 0; position: relative; }
+              .temp-main::after { content: "°"; position: absolute; font-size: 40px; top: 10px; }
+            </style>
+            <body><div class="temp-main">24</div></body>
+            """;
+        using var renderer = new RecordingRenderer();
+        using var host = new UiDocumentHost(new RawMarkupComponent(markup), new ApproximateTextMeasurer(), renderer, new UiHostOptions());
+        host.SetViewport(640, 480, 1);
+        host.Render();
+
+        var commands = renderer.LastDisplayList?.Commands.OfType<DrawTextCommand>().ToArray()
+            ?? throw new InvalidOperationException("no text commands");
+        var digits = Assert.NotNull(commands.SingleOrDefault(c => c.Text == "24"));
+        var degree = Assert.NotNull(commands.SingleOrDefault(c => c.Text == "\u00B0"));
+        Assert.True(degree.FontSize < digits.FontSize,
+            $"the ::after degree must use its own 40px font, not the host's {digits.FontSize}px (got {degree.FontSize}px)");
+        Assert.True(degree.Rectangle.X >= digits.Rectangle.Right - 1f,
+            "the absolute degree must sit to the right of the digits");
+        Assert.True(degree.Rectangle.Top > digits.Rectangle.Top,
+            $"the degree must honor top:10 (offset from the box top) — got top={degree.Rectangle.Top} vs digits top={digits.Rectangle.Top}");
     }
 
     private static void AssertGeneratedSourceCompiles(string source, string? companionSource = null)

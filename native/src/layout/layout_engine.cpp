@@ -806,9 +806,14 @@ void collect_text_items(aether_node_s* owner,
                         std::vector<inline_item_s>& output)
 {
     if (!text.empty()) {
-        auto* style_origin = owner ? owner->style_origin : nullptr;
+        // The text item's element must be the OWNER (for generated content, the
+        // pseudo-element) so the paint path re-resolves the fragment's style from
+        // the style map correctly. Using style_origin (the host) here made the
+        // display-list builder apply the HOST's font-size to ::before/::after text
+        // (e.g. a weather-widget degree symbol measured at 40px but painted at the
+        // host's 80px). Selector combinators still navigate via style_origin.
         output.push_back(inline_item_s::text_item(
-            style_origin ? style_origin : owner, style,
+            owner, style,
             aether_apply_text_transform(text, style.text_transform)));
     }
 }
