@@ -441,7 +441,11 @@ typedef enum {
     AETHER_OVERFLOW_VISIBLE = 0,
     AETHER_OVERFLOW_HIDDEN,
     AETHER_OVERFLOW_AUTO,
-    AETHER_OVERFLOW_SCROLL
+    AETHER_OVERFLOW_SCROLL,
+    /* CSS Overflow 3: like hidden, but never a scroll container and never
+       programmatically or user scrollable. Clips at the padding box with the
+       default overflow-clip-margin of zero. */
+    AETHER_OVERFLOW_CLIP
 } aether_overflow_kind_t;
 
 typedef enum {
@@ -736,6 +740,11 @@ AETHER_API aether_node_t       aether_layout_result_hit_test_with_styles_and_scr
     aether_scroll_offset_fn offsets, void* user_data);
 AETHER_API int32_t             aether_layout_result_get_paint_order_count(aether_layout_result_t result);
 AETHER_API aether_layout_box_t aether_layout_result_get_paint_order_box(aether_layout_result_t result, int32_t index);
+/* CSS Overflow 3.3: the viewport's used overflow, propagated from the root
+   (or its first body child). The managed host uses these for the root box's
+   scroll-container semantics; the root's own style keeps its used value. */
+AETHER_API int32_t             aether_layout_result_get_viewport_overflow_x(aether_layout_result_t result);
+AETHER_API int32_t             aether_layout_result_get_viewport_overflow_y(aether_layout_result_t result);
 
 /* LayoutBox queries */
 AETHER_API int32_t         aether_layout_box_get_kind(aether_layout_box_t box);

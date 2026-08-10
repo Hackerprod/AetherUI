@@ -81,11 +81,14 @@ public sealed class LayoutResult
     private readonly Dictionary<ElementNode, IReadOnlyList<LayoutBox>> _paintBoxesByElement;
 
     internal LayoutResult(LayoutBox root, IReadOnlyDictionary<ElementNode, LayoutBox> primaryBoxes,
-        IReadOnlyList<LayoutBox> paintOrder, SizeF viewport)
+        IReadOnlyList<LayoutBox> paintOrder, SizeF viewport, OverflowKind viewportOverflowX,
+        OverflowKind viewportOverflowY)
     {
         Root = root;
         _primaryBoxes = primaryBoxes;
         _paintOrder = paintOrder;
+        ViewportOverflowX = viewportOverflowX;
+        ViewportOverflowY = viewportOverflowY;
         var paintBoxesByElement = new Dictionary<ElementNode, List<LayoutBox>>();
         foreach (var box in paintOrder)
         {
@@ -107,6 +110,11 @@ public sealed class LayoutResult
 
     public LayoutBox Root { get; }
     public SizeF Viewport { get; }
+    /// <summary>CSS Overflow 3.3: the viewport's used overflow, propagated from the root element
+    /// (or its first body child). The root box's scroll-container semantics follow these while its
+    /// own style keeps its used value for paint.</summary>
+    public OverflowKind ViewportOverflowX { get; }
+    public OverflowKind ViewportOverflowY { get; }
     public IReadOnlyList<LayoutBox> PaintOrder => _paintOrder;
 
     public LayoutBox? FindPrimaryBox(ElementNode element) =>

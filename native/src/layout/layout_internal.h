@@ -57,7 +57,11 @@ aether_layout_box_s* layout_element(
     float forced_border_height,
     bool has_forced_border_height,
     bool is_independent_layout_item,
-    aether_layout_result_s* result);
+    aether_layout_result_s* result,
+    /* CSS Overflow 3.3: propagated viewport overflow used ONLY for the root
+       box's scroll metrics. Null for every non-root element; the root's own
+       computed overflow stays untouched (paint keeps the used value). */
+    const int32_t* viewport_overflow_override = nullptr);
 
 float layout_flow_children(
     const aether_layout_engine_s* engine,
@@ -160,7 +164,9 @@ bool is_auto_margin(aether_css_length value);
 
 bool is_out_of_flow(const aether_computed_style_t& style);
 
-bool overflow_allows_user_scroll(int32_t overflow);
+bool aether_overflow_is_scroll_container(int32_t overflow);
+bool aether_overflow_allows_user_scroll(int32_t overflow);
+bool aether_overflow_is_clip(int32_t overflow);
 
 void accumulate_scrollable_descendant_extent(const aether_layout_box_s* parent,
                                              bool include_x,

@@ -47,6 +47,25 @@ public sealed partial class UiDocumentHost
         return ScrollOffsetFor(element);
     }
 
+    /// <summary>
+    /// Programmatic scroll (CSS Overflow 3.1: hidden containers accept script-driven offsets even
+    /// though the user cannot scroll them). No-op for elements that are not scroll containers.
+    /// </summary>
+    public void SetScrollOffset(ElementNode element, ScrollOffset offset)
+    {
+        ArgumentNullException.ThrowIfNull(element);
+        ThrowIfDisposed();
+        EnsureVisualTree();
+        if (_layout?.FindPrimaryBox(element) is not { } box || !IsScrollContainer(box)) return;
+        var clamped = new ScrollOffset(
+            Math.Clamp(offset.X, 0f, box.ScrollableOverflowX),
+            Math.Clamp(offset.Y, 0f, box.ScrollableOverflowY));
+        if (clamped == ScrollOffsetFor(element)) return;
+        _scrollOffsets[element] = clamped;
+        _scrollOffsetsByStyleNode[_nativeDom!.GetStyleNodeId(element)] = new ScrollVisualOffset(clamped.X, clamped.Y);
+        InvalidateScroll();
+    }
+
     private void RebuildScrollBoxIndex()
     {
         _scrollBoxesByStyleNode.Clear();
@@ -102,7 +121,7 @@ public sealed partial class UiDocumentHost
         {
             var box = _layout!.FindPrimaryBox(current);
             if (box is null) continue;
-            if (!IsUserScrollable(box.Style, axis)) continue;
+            if (!IsUserScrollable(EffectiveOverflow(box, axis))) continue;
 
             var range = ScrollRange(box, axis);
             if (range <= 0) continue;
@@ -207,17 +226,35 @@ public sealed partial class UiDocumentHost
     private static float ScrollRange(LayoutBox box, ScrollAxis axis) =>
         axis == ScrollAxis.Horizontal ? box.ScrollableOverflowX : box.ScrollableOverflowY;
 
-    private static bool IsScrollContainer(LayoutBox box) =>
-        (IsUserScrollable(box.Style, ScrollAxis.Horizontal) && box.ScrollableOverflowX > 0) ||
-        (IsUserScrollable(box.Style, ScrollAxis.Vertical) && box.ScrollableOverflowY > 0) ||
-        box.Scrollbar.HorizontalVisible ||
-        box.Scrollbar.VerticalVisible;
-
-    private static bool IsUserScrollable(ComputedStyle style, ScrollAxis axis)
+    /// <summary>
+    /// CSS Overflow 3.3: the root box stands in for the viewport scroll, so its container and
+    /// user-scroll decisions follow the propagated viewport overflow while its own style keeps its
+    /// used value for paint. Every other box uses its own computed overflow.
+    /// </summary>
+    private OverflowKind EffectiveOverflow(LayoutBox box, ScrollAxis axis)
     {
-        var overflow = axis == ScrollAxis.Horizontal ? style.OverflowX : style.OverflowY;
-        return overflow is OverflowKind.Auto or OverflowKind.Scroll;
+        if (_layout is not null && ReferenceEquals(box, _layout.Root))
+        {
+            return axis == ScrollAxis.Horizontal ? _layout.ViewportOverflowX : _layout.ViewportOverflowY;
+        }
+        return axis == ScrollAxis.Horizontal ? box.Style.OverflowX : box.Style.OverflowY;
     }
+
+    private static bool IsScrollContainerAxis(OverflowKind overflow) =>
+        overflow is OverflowKind.Auto or OverflowKind.Hidden or OverflowKind.Scroll;
+
+    private bool IsScrollContainer(LayoutBox box)
+    {
+        var x = EffectiveOverflow(box, ScrollAxis.Horizontal);
+        var y = EffectiveOverflow(box, ScrollAxis.Vertical);
+        // `scroll` is always a scroll container, even with zero overflow (§3.1).
+        if (x == OverflowKind.Scroll || y == OverflowKind.Scroll) return true;
+        return (IsScrollContainerAxis(x) && box.ScrollableOverflowX > 0) ||
+               (IsScrollContainerAxis(y) && box.ScrollableOverflowY > 0);
+    }
+
+    private static bool IsUserScrollable(OverflowKind overflow) =>
+        overflow is OverflowKind.Auto or OverflowKind.Scroll;
 
     private float ScrollOffsetOnAxis(ElementNode element, ScrollAxis axis)
     {

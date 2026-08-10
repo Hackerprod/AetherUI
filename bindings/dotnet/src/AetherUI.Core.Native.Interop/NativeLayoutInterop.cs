@@ -116,6 +116,8 @@ public sealed class NativeLayoutResult : IDisposable
 
     public NativeLayoutBox Root => Read(NativeMethods.LayoutResultGetRoot(Handle));
     public int PaintOrderCount => NativeMethods.LayoutResultGetPaintOrderCount(Handle);
+    public int ViewportOverflowX => NativeMethods.LayoutResultGetViewportOverflowX(Handle);
+    public int ViewportOverflowY => NativeMethods.LayoutResultGetViewportOverflowY(Handle);
     public NativeLayoutBox GetPaintOrderBox(int index) => Read(NativeMethods.LayoutResultGetPaintOrderBox(Handle, index));
     public NativeLayoutBox GetChild(NativeLayoutBox box, int index) => Read(NativeMethods.LayoutBoxGetChild(box.Handle, index));
 

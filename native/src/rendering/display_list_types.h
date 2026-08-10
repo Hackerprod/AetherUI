@@ -1,6 +1,7 @@
 #pragma once
 #include <aether/aether.h>
 #include "../animations/transition_runtime.h"
+#include "../layout/layout_types.h"
 #include <vector>
 
 /* One per-element paint context flowing through the builder. The struct is the
@@ -28,6 +29,9 @@ struct aether_display_list_builder_s {
     // Live transition overrides. Null disables transitions entirely; the
     // builder does not own this handle.
     aether_transition_runtime_t transition_runtime = nullptr;
+    // Borrowed layout result used to resolve the viewport-propagated overflow
+    // of the root box (CSS Overflow 3.3). Never owned by the builder.
+    const aether_layout_result_s* layout = nullptr;
 };
 
 struct aether_display_list_s {

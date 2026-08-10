@@ -3,8 +3,21 @@
 
 #include <algorithm>
 
-bool overflow_allows_user_scroll(int32_t overflow) {
+/* Overflow classification (CSS Overflow 3.1). Three separate predicates: a
+   box with a scroll-container value accumulates scrollable overflow and may
+   hold programmatic offsets (auto/scroll/hidden); only auto/scroll accept
+   user interaction; clip is a pure clip that never scrolls. */
+bool aether_overflow_is_scroll_container(int32_t overflow) {
+    return overflow == AETHER_OVERFLOW_AUTO || overflow == AETHER_OVERFLOW_SCROLL ||
+           overflow == AETHER_OVERFLOW_HIDDEN;
+}
+
+bool aether_overflow_allows_user_scroll(int32_t overflow) {
     return overflow == AETHER_OVERFLOW_AUTO || overflow == AETHER_OVERFLOW_SCROLL;
+}
+
+bool aether_overflow_is_clip(int32_t overflow) {
+    return overflow == AETHER_OVERFLOW_CLIP;
 }
 
 // A scroll container owns the overflow of descendants whose corresponding

@@ -100,6 +100,11 @@ struct aether_layout_result_s {
     // DOM ownership during provisional passes.
     std::unordered_map<aether_node_s*, std::vector<aether_node_s*>> anonymous_flex_items;
     aether_sizef viewport{};
+    // CSS Overflow 3.3: the viewport's used overflow, propagated from the root
+    // (or its first body child). The root box's scroll metrics use these while
+    // the root's own style keeps its used value for paint and chrome.
+    int32_t viewport_overflow_x = AETHER_OVERFLOW_VISIBLE;
+    int32_t viewport_overflow_y = AETHER_OVERFLOW_VISIBLE;
     // Measurement passes can build detached trees. Only final-layout boxes are
     // published through the query and paint indexes.
     bool records_boxes = true;

@@ -211,6 +211,12 @@ internal static unsafe partial class NativeMethods
     [LibraryImport(Lib, EntryPoint = "aether_layout_result_get_paint_order_box")]
     internal static partial IntPtr LayoutResultGetPaintOrderBox(IntPtr result, int index);
 
+    [LibraryImport(Lib, EntryPoint = "aether_layout_result_get_viewport_overflow_x")]
+    internal static partial int LayoutResultGetViewportOverflowX(IntPtr result);
+
+    [LibraryImport(Lib, EntryPoint = "aether_layout_result_get_viewport_overflow_y")]
+    internal static partial int LayoutResultGetViewportOverflowY(IntPtr result);
+
     [LibraryImport(Lib, EntryPoint = "aether_layout_result_hit_test_with_scroll_offsets")]
     internal static partial IntPtr LayoutResultHitTestWithScrollOffsets(
         IntPtr result, float x, float y, IntPtr scrollCallback, IntPtr scrollData);

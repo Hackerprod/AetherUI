@@ -49,6 +49,11 @@ internal static class Program
         ("Native CSS typography, side borders, and column flex grow", NativeCssTypographySideBordersAndColumnFlexGrow),
         ("Native root scrolls overflowing content", NativeRootScrollsOverflowingContent),
         ("Native visible overflow does not become a scroll container", NativeVisibleOverflowDoesNotBecomeScrollContainer),
+        ("Page scrolls by default without an overflow rule", PageScrollsByDefaultWithoutOverflowRule),
+        ("Div with hidden overflow is a programmatic scroll container", DivHiddenOverflowIsProgrammaticScrollContainer),
+        ("Div with clip overflow is never a scroll container", DivClipIsNeverScrollContainer),
+        ("Overflow scroll always shows chrome", OverflowScrollAlwaysShowsChrome),
+        ("One axis visible computes auto on the other axis", OneAxisVisibleComputesAuto),
         ("Native scroll metrics are bidirectional and resize-aware", NativeScrollMetricsAreBidirectionalAndResizeAware),
         ("Native scrollbar chrome supports two-axis pointer interaction and chaining", NativeScrollbarChromeSupportsTwoAxisInteractionAndChaining),
         ("Native hover paint impact skips layout", NativeHoverPaintImpactSkipsLayout),
@@ -1369,16 +1374,185 @@ internal static class Program
         host.Render();
 
         var box = Assert.NotNull(host.Layout?.FindPrimaryBox(Assert.NotNull(host.Document?.GetElementById("box"))));
+        var body = Assert.NotNull(host.Document?.Body);
         Assert.Equal(OverflowKind.Visible, box.Style.OverflowY);
-        Assert.False(renderer.LastDisplayList?.Commands.OfType<PushScrollOffsetCommand>().Any() == true);
-        Assert.False(renderer.LastDisplayList?.Commands.OfType<DrawScrollbarChromeCommand>().Any() == true);
+        // Viewport propagation applies ONLY to the root: an ordinary overflow:visible div is not a
+        // scroll container, while the page root becomes scrollable (visible on the viewport -> auto).
+        Assert.Equal(OverflowKind.Auto, host.Layout!.ViewportOverflowY);
 
         host.ResetMetrics();
         host.MouseWheelScrolled(new PointF(box.BorderBox.X + 10, box.BorderBox.Y + 10), -3);
+        host.Render();
+        // The wheel chains past the non-scrollable div to the page root instead of scrolling the div.
         Assert.Equal(default, host.GetScrollOffset(box.Element));
+        Assert.True(host.GetScrollOffset(body).Y > 0,
+            "A visible div must not swallow the wheel; the page root scrolls by default.");
+        Assert.Equal(1L, host.Metrics.ScrollCompositions);
+    }
+
+    private static void PageScrollsByDefaultWithoutOverflowRule()
+    {
+        const string markup = """
+            <style>
+              * { box-sizing: border-box; }
+              body { margin: 0; }
+              .row { height: 120px; border-bottom: 1px solid #334155; }
+            </style>
+            <body>
+              <div class="row">One</div><div class="row">Two</div><div class="row">Three</div>
+              <div class="row">Four</div><div class="row">Five</div><div class="row">Six</div>
+              <div class="row">Seven</div><div class="row">Eight</div>
+            </body>
+            """;
+
+        using var renderer = new RecordingRenderer();
+        using var host = new UiDocumentHost(new RawMarkupComponent(markup), new ApproximateTextMeasurer(), renderer, new UiHostOptions());
+        host.SetViewport(640, 240, 1);
+        host.Render();
+
+        var body = Assert.NotNull(host.Document?.Body);
+        var bodyBox = Assert.NotNull(host.Layout?.FindPrimaryBox(body));
+        Assert.Equal(OverflowKind.Visible, bodyBox.Style.OverflowY);
+        Assert.Equal(OverflowKind.Auto, host.Layout!.ViewportOverflowY);
+        Assert.True(bodyBox.ScrollableOverflowY > 0,
+            "A page without any overflow rule must expose scrollable overflow on the root.");
+
+        host.ResetMetrics();
+        host.MouseWheelScrolled(new PointF(12, 12), -2);
+        host.Render();
+
+        var scrolled = host.GetScrollOffset(body);
+        Assert.True(scrolled.Y > 0, "Wheel input must move the page root when no overflow rule exists.");
+        Assert.Equal(1L, host.Metrics.ScrollCompositions);
+        Assert.True(renderer.LastDisplayList?.Commands.OfType<PushScrollOffsetCommand>().Any() == true);
+    }
+
+    private static void DivHiddenOverflowIsProgrammaticScrollContainer()
+    {
+        const string markup = """
+            <style>
+              body { margin: 0; height: 100%; overflow: hidden; }
+              .box { height: 100px; overflow: hidden; }
+              .content { height: 400px; }
+            </style>
+            <body><div id="box" class="box"><div class="content"></div></div></body>
+            """;
+
+        using var renderer = new RecordingRenderer();
+        using var host = new UiDocumentHost(new RawMarkupComponent(markup), new ApproximateTextMeasurer(), renderer, new UiHostOptions());
+        host.SetViewport(300, 200, 1);
+        host.Render();
+
+        var box = Assert.NotNull(host.Layout?.FindPrimaryBox(Assert.NotNull(host.Document?.GetElementById("box"))));
+        Assert.Equal(OverflowKind.Hidden, box.Style.OverflowY);
+        Assert.True(box.ScrollableOverflowY > 0, "overflow:hidden must be a scroll container with a range.");
+        Assert.True(!box.Scrollbar.VerticalVisible, "overflow:hidden must never show user scrollbars.");
+
+        // Programmatic scroll is allowed on a hidden container.
+        var boxElement = Assert.NotNull(host.Document?.GetElementById("box"));
+        host.SetScrollOffset(boxElement, new ScrollOffset(0, 150));
+        host.Render();
+        Assert.Equal(150f, host.GetScrollOffset(boxElement).Y);
+
+        // The wheel must NOT scroll it (chains past to the equally-hidden page root).
+        host.SetScrollOffset(boxElement, default);
+        host.Render();
+        host.ResetMetrics();
+        host.MouseWheelScrolled(new PointF(box.BorderBox.X + 10, box.BorderBox.Y + 10), -2);
+        Assert.True(host.GetScrollOffset(boxElement).Y == 0f, "Wheel input must not scroll a hidden container.");
         Assert.False(host.NeedsRender);
         Assert.Equal(0L, host.Metrics.ScrollCompositions);
     }
+
+    private static void DivClipIsNeverScrollContainer()
+    {
+        const string markup = """
+            <style>
+              body { margin: 0; height: 100%; overflow: hidden; }
+              .box { height: 100px; overflow: clip; }
+              .content { height: 400px; }
+            </style>
+            <body><div id="box" class="box"><div class="content"></div></div></body>
+            """;
+
+        using var renderer = new RecordingRenderer();
+        using var host = new UiDocumentHost(new RawMarkupComponent(markup), new ApproximateTextMeasurer(), renderer, new UiHostOptions());
+        host.SetViewport(300, 200, 1);
+        host.Render();
+
+        var boxElement = Assert.NotNull(host.Document?.GetElementById("box"));
+        var box = Assert.NotNull(host.Layout?.FindPrimaryBox(boxElement));
+        Assert.Equal(OverflowKind.Clip, box.Style.OverflowY);
+        Assert.True(box.ScrollableOverflowY == 0f, "overflow:clip must never accumulate a scroll range.");
+        Assert.False(box.Scrollbar.VerticalVisible);
+
+        // Neither programmatic nor wheel scroll can move a clip container.
+        host.SetScrollOffset(boxElement, new ScrollOffset(0, 150));
+        host.Render();
+        Assert.True(host.GetScrollOffset(boxElement).Y == 0f, "overflow:clip must reject programmatic scroll.");
+        host.ResetMetrics();
+        host.MouseWheelScrolled(new PointF(box.BorderBox.X + 10, box.BorderBox.Y + 10), -2);
+        Assert.True(host.GetScrollOffset(boxElement).Y == 0f, "Wheel input must not scroll a clip container.");
+        Assert.Equal(0L, host.Metrics.ScrollCompositions);
+    }
+
+    private static void OverflowScrollAlwaysShowsChrome()
+    {
+        const string markup = """
+            <style>
+              body { margin: 0; overflow: hidden; }
+              .box { width: 150px; height: 100px; overflow: scroll; }
+              .content { width: 50px; height: 20px; }
+            </style>
+            <body><div id="box" class="box"><div class="content"></div></div></body>
+            """;
+
+        using var renderer = new RecordingRenderer();
+        using var host = new UiDocumentHost(new RawMarkupComponent(markup), new ApproximateTextMeasurer(), renderer, new UiHostOptions());
+        host.SetViewport(300, 200, 1);
+        host.Render();
+
+        var box = Assert.NotNull(host.Layout?.FindPrimaryBox(Assert.NotNull(host.Document?.GetElementById("box"))));
+        Assert.Equal(0f, box.ScrollableOverflowX);
+        Assert.Equal(0f, box.ScrollableOverflowY);
+        Assert.True(box.Scrollbar.HorizontalVisible && box.Scrollbar.VerticalVisible,
+            "overflow:scroll must show both scrollbar geometries even with no scrollable overflow.");
+        Assert.True(renderer.LastDisplayList?.Commands.OfType<DrawScrollbarChromeCommand>().Any() == true,
+            "overflow:scroll must emit scrollbar chrome even when the content fits.");
+    }
+
+    private static void OneAxisVisibleComputesAuto()
+    {
+        const string markup = """
+            <style>
+              body { margin: 0; overflow: hidden; }
+              .box { width: 150px; height: 100px; overflow-x: auto; }
+              .content { width: 300px; height: 300px; }
+            </style>
+            <body><div id="box" class="box"><div class="content"></div></div></body>
+            """;
+
+        using var renderer = new RecordingRenderer();
+        using var host = new UiDocumentHost(new RawMarkupComponent(markup), new ApproximateTextMeasurer(), renderer, new UiHostOptions());
+        host.SetViewport(300, 200, 1);
+        host.Render();
+
+        var boxElement = Assert.NotNull(host.Document?.GetElementById("box"));
+        var box = Assert.NotNull(host.Layout?.FindPrimaryBox(boxElement));
+        // overflow-y: visible next to overflow-x: auto must compute to auto (CSS Overflow 3.1).
+        Assert.Equal(OverflowKind.Auto, box.Style.OverflowX);
+        Assert.Equal(OverflowKind.Auto, box.Style.OverflowY);
+        Assert.True(box.ScrollableOverflowY > 0, "The normalized auto axis must expose a vertical scroll range.");
+
+        host.ResetMetrics();
+        host.MouseWheelScrolled(new PointF(box.BorderBox.X + 10, box.BorderBox.Y + 10), -2);
+        Assert.True(host.GetScrollOffset(boxElement).Y > 0, "Wheel input must scroll the normalized auto axis.");
+        host.SetScrollOffset(boxElement, default);
+        host.Render();
+        host.MouseHorizontalWheelScrolled(new PointF(box.BorderBox.X + 10, box.BorderBox.Y + 10), 100);
+        Assert.True(host.GetScrollOffset(boxElement).X > 0, "The horizontal wheel must scroll the authored auto axis.");
+    }
+
 
     private static void NativeScrollMetricsAreBidirectionalAndResizeAware()
     {

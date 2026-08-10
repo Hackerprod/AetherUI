@@ -118,11 +118,16 @@ public readonly record struct BorderStyleEdges(BorderStyle Left, BorderStyle Top
 public enum OverflowKind : byte
 {
     Visible,
+    /// <summary>Clips to the padding box and IS a scroll container: programmatic scroll offsets
+    /// are allowed, but no scrollbar and no user interaction (CSS Overflow 3.1).</summary>
     Hidden,
-    /// <summary>Clips like <see cref="Hidden"/> but is a scroll container (scrollable + shows a thumb only when content overflows).</summary>
+    /// <summary>Clips like <see cref="Hidden"/> and is a scroll container (scrollable + shows a thumb only when content overflows).</summary>
     Auto,
     /// <summary>Clips like <see cref="Hidden"/> and is always a scroll container regardless of overflow.</summary>
     Scroll,
+    /// <summary>Clips like <see cref="Hidden"/> but is never a scroll container: no scrollbar, no
+    /// programmatic scroll, no user interaction (CSS Overflow 3.1).</summary>
+    Clip,
 }
 
 public enum CursorKind : byte

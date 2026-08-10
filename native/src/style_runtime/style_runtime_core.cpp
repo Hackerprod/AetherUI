@@ -295,14 +295,28 @@ static bool overflow_is_visible(int32_t value) {
     return value == AETHER_OVERFLOW_VISIBLE;
 }
 
+static bool overflow_is_clip(int32_t value) {
+    return value == AETHER_OVERFLOW_CLIP;
+}
+
 static void normalize_overflow_axes(aether_computed_style_t& style) {
-    // CSS Overflow: a visible axis becomes auto when the opposite axis clips
-    // or scrolls. Normalizing after the cascade keeps all layout and paint
-    // consumers on the same computed values.
-    if (overflow_is_visible(style.overflow_x) && !overflow_is_visible(style.overflow_y))
+    // CSS Overflow 3.1 computed-value rule. An axis cannot be visible (or clip)
+    // while the opposite axis clips or scrolls. Visible -> auto when the other
+    // axis is neither visible nor clip; clip -> hidden when the other axis is
+    // neither visible nor clip. Normalizing after the cascade keeps all layout
+    // and paint consumers on the same computed values.
+    if (overflow_is_visible(style.overflow_x) && !overflow_is_visible(style.overflow_y) &&
+        !overflow_is_clip(style.overflow_y))
         style.overflow_x = AETHER_OVERFLOW_AUTO;
-    if (overflow_is_visible(style.overflow_y) && !overflow_is_visible(style.overflow_x))
+    if (overflow_is_visible(style.overflow_y) && !overflow_is_visible(style.overflow_x) &&
+        !overflow_is_clip(style.overflow_x))
         style.overflow_y = AETHER_OVERFLOW_AUTO;
+    if (overflow_is_clip(style.overflow_x) && !overflow_is_visible(style.overflow_y) &&
+        !overflow_is_clip(style.overflow_y))
+        style.overflow_x = AETHER_OVERFLOW_HIDDEN;
+    if (overflow_is_clip(style.overflow_y) && !overflow_is_visible(style.overflow_x) &&
+        !overflow_is_clip(style.overflow_x))
+        style.overflow_y = AETHER_OVERFLOW_HIDDEN;
 }
 
 static bool try_parse_generated_content(const std::string& source, std::string& output) {

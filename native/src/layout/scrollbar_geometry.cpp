@@ -1,4 +1,5 @@
 #include "scrollbar_geometry.h"
+#include "layout_internal.h"
 
 #include <algorithm>
 
@@ -8,8 +9,10 @@ constexpr float scrollbar_thickness = 4.f;
 constexpr float scrollbar_margin = 2.f;
 
 bool scrollbar_is_visible(int32_t overflow, float scrollable_overflow) {
-    return overflow == AETHER_OVERFLOW_SCROLL ||
-        (overflow == AETHER_OVERFLOW_AUTO && scrollable_overflow > 0.f);
+    // Scrollbars only exist for user-scrollable values: scroll always, auto when
+    // overflowing; hidden/clip never publish chrome (§3.1).
+    if (!aether_overflow_allows_user_scroll(overflow)) return false;
+    return overflow == AETHER_OVERFLOW_SCROLL || scrollable_overflow > 0.f;
 }
 
 aether_rectf resolve_thumb(const aether_rectf& track, bool horizontal,

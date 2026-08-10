@@ -34,7 +34,9 @@ internal sealed class LayoutInterop : IDisposable
             if (boxes.TryGetValue(nativeBox.Handle, out var box)) paintOrder.Add(box);
         }
 
-        return new LayoutResult(root, primary, paintOrder, viewport);
+        return new LayoutResult(root, primary, paintOrder, viewport,
+            (OverflowKind)nativeResult.ViewportOverflowX,
+            (OverflowKind)nativeResult.ViewportOverflowY);
     }
 
     public ElementNode? HitTest(NativeLayoutResult nativeResult, NativeStyleMap? currentStyles,

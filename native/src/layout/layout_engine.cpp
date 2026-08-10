@@ -276,7 +276,8 @@ aether_layout_box_s* layout_element(
     float forced_border_width, bool has_forced_border_width,
     float forced_border_height, bool has_forced_border_height,
     bool is_independent_layout_item,
-    aether_layout_result_s* result)
+    aether_layout_result_s* result,
+    const int32_t* viewport_overflow_override)
 {
     auto style = get_style(styles, element);
     auto* box = result->create_box();
@@ -509,9 +510,21 @@ aether_layout_box_s* layout_element(
     // Scroll metrics are calculated once for both axes from the same
     // descendant-overflow walk.  This deliberately avoids separate X/Y
     // implementations drifting apart as the layout model grows.
-    const bool scrolls_x = overflow_allows_user_scroll(style.overflow_x);
-    const bool scrolls_y = overflow_allows_user_scroll(style.overflow_y);
-    if (scrolls_x || (scrolls_y && std::isfinite(definite_content_height))) {
+    // A scroll-container value (auto/scroll/hidden) accumulates overflow;
+    // only the root box may substitute the propagated viewport overflow.
+    const int32_t scroll_overflow_x = viewport_overflow_override
+        ? viewport_overflow_override[0] : style.overflow_x;
+    const int32_t scroll_overflow_y = viewport_overflow_override
+        ? viewport_overflow_override[1] : style.overflow_y;
+    const bool scrolls_x = aether_overflow_is_scroll_container(scroll_overflow_x);
+    const bool scrolls_y = aether_overflow_is_scroll_container(scroll_overflow_y);
+    // The viewport's scroll area is the viewport itself: the root box measures
+    // its overflow against the viewport extent even when its own height is auto
+    // (the page must scroll by default), whereas a normal element only scrolls
+    // against a definite content height.
+    const float scroll_base_height = viewport_overflow_override
+        ? engine->viewport_height : definite_content_height;
+    if (scrolls_x || (scrolls_y && std::isfinite(scroll_base_height))) {
         float right = content_x + content_width;
         float bottom = content_y + std::max(0.f, content_height);
         accumulate_scrollable_descendant_extent(box, scrolls_x, scrolls_y, right, bottom);
@@ -520,9 +533,9 @@ aether_layout_box_s* layout_element(
             const float content_extent = std::max(content_width, right - content_x);
             box->scroll.scrollable_overflow_x = std::max(0.f, content_extent - content_width);
         }
-        if (scrolls_y && std::isfinite(definite_content_height)) {
+        if (scrolls_y && std::isfinite(scroll_base_height)) {
             const float content_extent = std::max(content_height, bottom - content_y);
-            box->scroll.scrollable_overflow_y = std::max(0.f, content_extent - definite_content_height);
+            box->scroll.scrollable_overflow_y = std::max(0.f, content_extent - scroll_base_height);
         }
 
     }
@@ -1173,10 +1186,38 @@ AETHER_API aether_status_t aether_layout_layout(
     auto root_style = get_style(styles, root_el);
     engine->root_font_size = root_style.font_size;
 
+    // CSS Overflow 3.3 viewport propagation. The root (html) overflow applies
+    // to the viewport; when html is visible in both axes and a body child is
+    // laid out, the body's overflow propagates instead. The propagated element
+    // keeps its own used overflow for paint, and visible on the viewport is
+    // interpreted as auto — so a page with no overflow rule scrolls by default.
+    aether_node_s* html_el = aether_doc_get_document_element(doc);
+    aether_node_s* overflow_source = root_el;
+    if (html_el && html_el != root_el) {
+        const auto html_style = get_style(styles, html_el);
+        const bool html_visible =
+            html_style.overflow_x == AETHER_OVERFLOW_VISIBLE &&
+            html_style.overflow_y == AETHER_OVERFLOW_VISIBLE;
+        if (!html_visible) {
+            overflow_source = html_el;
+        } else if (root_style.display == AETHER_DISPLAY_NONE) {
+            overflow_source = html_el;
+        }
+    }
+    const auto source_style = get_style(styles, overflow_source);
+    result->viewport_overflow_x = source_style.overflow_x;
+    result->viewport_overflow_y = source_style.overflow_y;
+    if (result->viewport_overflow_x == AETHER_OVERFLOW_VISIBLE)
+        result->viewport_overflow_x = AETHER_OVERFLOW_AUTO;
+    if (result->viewport_overflow_y == AETHER_OVERFLOW_VISIBLE)
+        result->viewport_overflow_y = AETHER_OVERFLOW_AUTO;
+
+    const int32_t viewport_overflow[2] = {result->viewport_overflow_x, result->viewport_overflow_y};
     auto* root_box = layout_element(engine, styles, root_el,
                                     {0, 0, viewport_width, viewport_height},
                                     0, true,
-                                    0, false, 0, false, false, result);
+                                    0, false, 0, false, false, result,
+                                    viewport_overflow);
     result->root = root_box;
     *out_result = result;
     return AETHER_OK;
@@ -1189,6 +1230,14 @@ AETHER_API void aether_layout_result_destroy(aether_layout_result_t result) {
 AETHER_API aether_layout_box_t aether_layout_result_get_root(aether_layout_result_t result) {
     if (!result) return nullptr;
     return result->root;
+}
+
+AETHER_API int32_t aether_layout_result_get_viewport_overflow_x(aether_layout_result_t result) {
+    return result ? result->viewport_overflow_x : AETHER_OVERFLOW_VISIBLE;
+}
+
+AETHER_API int32_t aether_layout_result_get_viewport_overflow_y(aether_layout_result_t result) {
+    return result ? result->viewport_overflow_y : AETHER_OVERFLOW_VISIBLE;
 }
 
 AETHER_API aether_layout_box_t aether_layout_result_find_primary_box(aether_layout_result_t result, aether_node_t element) {

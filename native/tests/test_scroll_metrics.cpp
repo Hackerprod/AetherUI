@@ -108,11 +108,12 @@ int main() {
             "overflow-x:auto must expose only horizontal scroll range when vertical content fits");
     const auto hidden = box_for(document, layout, "hidden");
     const auto hidden_metrics = aether_layout_box_get_scroll_metrics(hidden);
-    require(same(hidden_metrics.scrollable_overflow_x, 0.f) && same(hidden_metrics.scrollable_overflow_y, 0.f),
-            "overflow:hidden must clip without exposing user-scroll metrics on either axis");
+    require(same(hidden_metrics.scrollable_overflow_x, 120.f) &&
+                same(hidden_metrics.scrollable_overflow_y, 30.f),
+            "overflow:hidden is a scroll container: it must accumulate scrollable overflow for programmatic offsets");
     const auto hidden_geometry = aether_layout_box_get_scrollbar_geometry(hidden);
     require(!hidden_geometry.horizontal_visible && !hidden_geometry.vertical_visible,
-            "non-user-scrollable overflow must not publish scrollbar chrome");
+            "overflow:hidden must not publish user scrollbar chrome");
 
     aether_display_list_builder_t builder = nullptr;
     require(aether_display_list_builder_create(measure, nullptr, &builder) == AETHER_OK,

@@ -698,17 +698,18 @@ void builtin_properties_register(style_property_registry_s* reg) {
 
     // overflow-x
     {
-        static const char* kw[] = { "visible", "hidden", "auto", "scroll" };
+        static const char* kw[] = { "visible", "hidden", "auto", "scroll", "clip" };
         static const int32_t vals[] = {
-            AETHER_OVERFLOW_VISIBLE, AETHER_OVERFLOW_HIDDEN, AETHER_OVERFLOW_AUTO, AETHER_OVERFLOW_SCROLL
+            AETHER_OVERFLOW_VISIBLE, AETHER_OVERFLOW_HIDDEN, AETHER_OVERFLOW_AUTO,
+            AETHER_OVERFLOW_SCROLL, AETHER_OVERFLOW_CLIP
         };
         reg->register_property("overflow-x", false,
             STYLE_IMPACT_LAYOUT | STYLE_IMPACT_PAINT | STYLE_IMPACT_HITTEST,
             "visible",
             [](const char* s, std::string& o) -> bool {
                 std::string v;
-                if (!bi_try_keyword(s, kw, 4, v)) return false;
-                for (int i = 0; i < 4; ++i)
+                if (!bi_try_keyword(s, kw, 5, v)) return false;
+                for (int i = 0; i < 5; ++i)
                     if (str_iequals(v, kw[i])) { o = std::to_string(vals[i]); return true; }
                 return false;
             },
@@ -719,17 +720,18 @@ void builtin_properties_register(style_property_registry_s* reg) {
 
     // overflow-y
     {
-        static const char* kw[] = { "visible", "hidden", "auto", "scroll" };
+        static const char* kw[] = { "visible", "hidden", "auto", "scroll", "clip" };
         static const int32_t vals[] = {
-            AETHER_OVERFLOW_VISIBLE, AETHER_OVERFLOW_HIDDEN, AETHER_OVERFLOW_AUTO, AETHER_OVERFLOW_SCROLL
+            AETHER_OVERFLOW_VISIBLE, AETHER_OVERFLOW_HIDDEN, AETHER_OVERFLOW_AUTO,
+            AETHER_OVERFLOW_SCROLL, AETHER_OVERFLOW_CLIP
         };
         reg->register_property("overflow-y", false,
             STYLE_IMPACT_LAYOUT | STYLE_IMPACT_PAINT | STYLE_IMPACT_HITTEST,
             "visible",
             [](const char* s, std::string& o) -> bool {
                 std::string v;
-                if (!bi_try_keyword(s, kw, 4, v)) return false;
-                for (int i = 0; i < 4; ++i)
+                if (!bi_try_keyword(s, kw, 5, v)) return false;
+                for (int i = 0; i < 5; ++i)
                     if (str_iequals(v, kw[i])) { o = std::to_string(vals[i]); return true; }
                 return false;
             },

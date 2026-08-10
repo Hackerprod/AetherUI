@@ -1,6 +1,7 @@
 /* ── DisplayListBuilder — faithful port from DisplayListBuilder.cs ── */
 #include "display_list_types.h"
 #include "../layout/layout_types.h"
+#include "../layout/layout_internal.h"
 #include "../layout/scrollbar_geometry.h"
 #include "../layout/form_controls.h"
 #include "../css/style_map_types.h"
@@ -261,18 +262,36 @@ static void paint_background_and_border(aether_display_list_builder_s* builder, 
                                          bool suppress_background, const paint_context_s& ctx,
                                          std::vector<aether_paint_command_t>& cmds);
 
-static bool box_has_scrollbar_chrome(aether_layout_box_s* box);
+static bool box_has_scrollbar_chrome(const aether_display_list_builder_s* builder,
+                                     aether_layout_box_s* box);
 
 static bool is_scroll_container_axis(int32_t overflow)
 {
-    return overflow == AETHER_OVERFLOW_AUTO || overflow == AETHER_OVERFLOW_SCROLL;
+    return aether_overflow_is_scroll_container(overflow);
 }
 
-static bool box_has_dynamic_scroll(aether_layout_box_s* box)
+// The root box represents the viewport scroll: its scroll semantics follow the
+// propagated viewport overflow while its own used overflow stays visible.
+// Every other box uses its own style.
+static int32_t scroll_overflow_axis(const aether_display_list_builder_s* builder,
+                                    const aether_layout_box_s* box,
+                                    bool horizontal)
+{
+    if (builder->layout && builder->layout->root == box) {
+        return horizontal ? builder->layout->viewport_overflow_x
+                          : builder->layout->viewport_overflow_y;
+    }
+    return horizontal ? box->style.overflow_x : box->style.overflow_y;
+}
+
+static bool box_has_dynamic_scroll(const aether_display_list_builder_s* builder,
+                                   aether_layout_box_s* box)
 {
     return box->element &&
-        ((is_scroll_container_axis(box->style.overflow_x) && box->scroll.scrollable_overflow_x > 0.f) ||
-         (is_scroll_container_axis(box->style.overflow_y) && box->scroll.scrollable_overflow_y > 0.f));
+        ((is_scroll_container_axis(scroll_overflow_axis(builder, box, true)) &&
+          box->scroll.scrollable_overflow_x > 0.f) ||
+         (is_scroll_container_axis(scroll_overflow_axis(builder, box, false)) &&
+          box->scroll.scrollable_overflow_y > 0.f));
 }
 
 static void paint_control(aether_display_list_builder_s* builder,
@@ -437,8 +456,8 @@ static void paint_box(aether_display_list_builder_s* builder,
         emit_push_clip(cmds, box->padding_box, clip);
     }
 
-    const bool dynamic_scroll = box_has_dynamic_scroll(box);
-    const bool scrollbar_chrome = box->element && !empty_border_box && box_has_scrollbar_chrome(box);
+    const bool dynamic_scroll = box_has_dynamic_scroll(builder, box);
+    const bool scrollbar_chrome = box->element && !empty_border_box && box_has_scrollbar_chrome(builder, box);
     if (dynamic_scroll) emit_push_scroll_offset(cmds, box->element->style_node_id);
     // Children (or atomic control paint)
     if (box->is_atomic_control) {
@@ -639,8 +658,10 @@ static void paint_canvas_background(aether_display_list_builder_s* builder,
 
 /* ── paint_scrollbar ──────────────────────────────────────────────── */
 
-static bool box_has_scrollbar_chrome(aether_layout_box_s* box)
+static bool box_has_scrollbar_chrome(const aether_display_list_builder_s* builder,
+                                     aether_layout_box_s* box)
 {
+    (void)builder;
     const auto geometry = aether_resolve_scrollbar_geometry(*box);
     return geometry.vertical_visible || geometry.horizontal_visible;
 }
@@ -746,6 +767,7 @@ AETHER_API aether_status_t aether_display_list_build_with_styles(
     builder->viewport = layout->viewport;
     builder->root_font_size = layout->root->style.font_size > 0.f ? layout->root->style.font_size : 16.f;
     builder->current_style_map = current_styles ? current_styles : layout->style_map;
+    builder->layout = layout;
 
     auto* list = new(std::nothrow) aether_display_list_s();
     if (!list) return AETHER_ERROR_OUT_OF_MEMORY;
@@ -755,6 +777,7 @@ AETHER_API aether_status_t aether_display_list_build_with_styles(
     paint_box(builder, layout->root, focused_element, paint_context_s{}, list->commands);
     builder->canvas_background_source = nullptr;
     builder->current_style_map = nullptr;
+    builder->layout = nullptr;
     *out_list = list;
     return AETHER_OK;
 }
@@ -773,11 +796,13 @@ AETHER_API aether_status_t aether_display_list_build_node_with_styles(
     builder->viewport = layout->viewport;
     builder->root_font_size = layout->root->style.font_size > 0.f ? layout->root->style.font_size : 16.f;
     builder->current_style_map = current_styles ? current_styles : layout->style_map;
+    builder->layout = layout;
     builder->canvas_background_source = nullptr;
 
     auto* list = new(std::nothrow) aether_display_list_s();
     if (!list) {
         builder->current_style_map = nullptr;
+        builder->layout = nullptr;
         return AETHER_ERROR_OUT_OF_MEMORY;
     }
 
@@ -786,6 +811,7 @@ AETHER_API aether_status_t aether_display_list_build_node_with_styles(
     }
 
     builder->current_style_map = nullptr;
+    builder->layout = nullptr;
     *out_list = list;
     return AETHER_OK;
 }
