@@ -8,6 +8,7 @@ using AetherUI.Layout;
 using AetherUI.Primitives;
 using AetherUI.Rendering;
 using AetherUI.Runtime;
+using AetherUI.Windows.Resources;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.Text;
@@ -60,7 +61,28 @@ internal static class Program
         ("Native layout disposes before borrowed style map", NativeLayoutDisposesBeforeBorrowedStyleMap),
         ("Image resolver deduplicates resources and reports lifecycle", ImageResolverDeduplicatesResourcesAndReportsLifecycle),
         ("Native image geometry rebuilds when a resource becomes ready", NativeImageGeometryRebuildsWhenResourceReady),
+        ("Image command survives hover re-render with resolved geometry", ImageCommandSurvivesHoverRerender),
         ("Native table layout shares automatic column widths across rows", NativeTableLayoutSharesAutomaticColumns),
+        ("UA form controls have no min-width floor (square round button)", UaFormControlsHaveNoMinWidthFloor),
+        ("UA stylesheet comes from native", UaStylesheetComesFromNative),
+        ("Button text centers vertically in a definite height", ButtonTextVerticallyCentersInDefiniteHeight),
+        ("Body min-height 100vh centers flex card and anchors absolute bottom circle", BodyMinHeightVhCentersCardAndAnchorsCircle),
+        ("Shorthand with CSS variable resolves to gradient", ShorthandWithCssVariableResolvesToGradient),
+        ("Parent opacity applies to descendant paint", ParentOpacityAppliesToDescendantPaint),
+        ("ModalController toggles overlay and keeps backdrop passive", ModalControllerTogglesOverlayAndKeepsBackdropPassive),
+        ("Fixed-size button renders square with centered text", FixedSizeButtonRendersSquare),
+        ("Close glyph centered in definite box even when line overflows", CloseGlyphCenteredInDefiniteBox),
+        ("ModalController theme overrides via CSS variables", ModalControllerThemeViaCssVariables),
+        ("Style binding inside raw-text emits literal", StyleBindingInsideRawTextEmitsLiteral),
+        ("File image loader decodes a file PNG", FileImageResourceLoader_DecodesFilePng),
+        ("File image loader rejects http policy", FileImageResourceLoader_RejectsHttp),
+        ("Data image loader decodes a base64 data URI", DataImageResourceLoader_DecodesDataUri),
+        ("Http image loader rejects file policy", HttpImageResourceLoader_RejectsFilePolicy),
+        ("Composite image loader falls through schemes", CompositeImageResourceLoader_FallsThroughSchemes),
+        ("Native image decode rejects garbage bytes", NativeImageDecode_RejectsGarbage),
+        ("Native z-index reorders paint above DOM order", ZIndexReordersPaintAboveDomOrder),
+        ("Opacity animates on state-triggered class change", TransitionsAnimateOpacityOnStateChange),
+        ("No transition property means no animation", TransitionsDoNotAnimateWithoutTransitionProperty),
     ];
 
     public static int Main()
@@ -158,6 +180,375 @@ internal static class Program
         Assert.Equal(table.ContentBox.Width, h1.BorderBox.Width + h2.BorderBox.Width);
         Assert.True(h1.BorderBox.Width > h2.BorderBox.Width,
             "The longer first-column contribution should receive more of an automatic table's width.");
+    }
+
+    private static void ModalControllerTogglesOverlayAndKeepsBackdropPassive()
+    {
+        var component = new ModalPageComponent();
+        using var renderer = new RecordingRenderer();
+        using var host = new UiDocumentHost(component, new ApproximateTextMeasurer(), renderer, new UiHostOptions());
+        host.SetViewport(640, 480, 1);
+        host.Render();
+
+        // Closed: the fixed overlay is pointer-events:none, so the trigger button behind it
+        // still receives the hit test, and no overlay/card fills are visible.
+        var openButton = Assert.NotNull(host.Document?.GetElementById("open"));
+        var box = Assert.NotNull(host.Layout?.FindPrimaryBox(openButton));
+        var center = new PointF(box.BorderBox.X + box.BorderBox.Width / 2, box.BorderBox.Y + box.BorderBox.Height / 2);
+        Assert.Same(openButton, host.Layout!.HitTest(center));
+        Assert.True(renderer.LastDisplayList?.Commands.OfType<FillRoundedRectangleCommand>()
+            .All(c => c.Color.A < .01f || c.Rectangle.Width <= 120f) == true,
+            "closed modal must not paint the dark overlay or the card");
+
+        // Click the trigger -> the controller opens (Changed -> StateHasChanged -> re-render).
+        host.PointerPressed(center);
+        host.PointerReleased(center);
+        Assert.Equal(1, component.ClickCount);
+        Assert.True(component.Modal.IsOpen);
+        host.Render();
+
+        var overlayFill = Assert.NotNull(renderer.LastDisplayList?.Commands.OfType<FillRoundedRectangleCommand>()
+            .FirstOrDefault(c => c.Color.A > .4f && c.Rectangle.Width > 400f));
+        Assert.True(overlayFill.Rectangle.Width >= 640f && overlayFill.Rectangle.Height >= 480f,
+            "open modal must paint the fixed overlay over the viewport");
+        var cardFill = Assert.NotNull(renderer.LastDisplayList?.Commands.OfType<FillRoundedRectangleCommand>()
+            .FirstOrDefault(c => c.Color.A > .99f && c.Rectangle.Width > 300f && c.Rectangle.Width < 600f));
+        Assert.True(cardFill.Rectangle.Width < 600f, "the card must be narrower than the overlay");
+
+        // Close -> hidden again on the next render.
+        component.Modal.Close();
+        host.Render();
+        Assert.False(component.Modal.IsOpen);
+        Assert.True(renderer.LastDisplayList?.Commands.OfType<FillRoundedRectangleCommand>()
+            .All(c => c.Color.A < .01f || c.Rectangle.Width <= 120f) == true,
+            "closed modal must not paint the dark overlay or the card after Close");
+    }
+
+    private static void FixedSizeButtonRendersSquare()
+    {
+        // A page that sizes its close button explicitly (standard UI practice) must get a square
+        // box with the glyph centered — the same 22x22 circle bug class (fixed width must win).
+        const string markup = """
+            <style>body { margin: 0; } .close-btn { width: 32px; height: 32px; background: none; border: none; font-size: 1.5rem; }</style>
+            <body><button class="close-btn" id="c">×</button></body>
+            """;
+        using var renderer = new RecordingRenderer();
+        using var host = new UiDocumentHost(new RawMarkupComponent(markup), new ApproximateTextMeasurer(), renderer, new UiHostOptions());
+        host.SetViewport(320, 200, 1);
+        host.Render();
+        var box = Assert.NotNull(host.Layout?.FindPrimaryBox(Assert.NotNull(host.Document?.GetElementById("c"))));
+        Assert.True(MathF.Abs(box.BorderBox.Width - 32f) < .01f && MathF.Abs(box.BorderBox.Height - 32f) < .01f,
+            $"close button must be square 32x32 (got {box.BorderBox.Width:F1}x{box.BorderBox.Height:F1})");
+    }
+
+    private static void CloseGlyphCenteredInDefiniteBox()
+    {
+        // The 32x32 close button (UA padding shrinks the content box to ~20x27, while the 1.5rem
+        // glyph's line box is ~30 tall — it OVERFLOWS). Chromium still centers the glyph: the
+        // overflow must distribute symmetrically instead of hugging the top.
+        const string markup = """
+            <style>body { margin: 0; } .close-btn { width: 32px; height: 32px; font-size: 1.5rem; background: none; border: none; }</style>
+            <body><button class="close-btn" id="c">×</button></body>
+            """;
+        using var renderer = new RecordingRenderer();
+        using var host = new UiDocumentHost(new RawMarkupComponent(markup), new ApproximateTextMeasurer(), renderer, new UiHostOptions());
+        host.SetViewport(320, 200, 1);
+        host.Render();
+
+        var button = Assert.NotNull(host.Layout?.FindPrimaryBox(Assert.NotNull(host.Document?.GetElementById("c"))));
+        var glyph = Assert.NotNull(renderer.LastDisplayList?.Commands.OfType<DrawTextCommand>().SingleOrDefault(c => c.Text == "×"));
+        var contentCenterX = button.ContentBox.X + button.ContentBox.Width / 2f;
+        var contentCenterY = button.ContentBox.Y + button.ContentBox.Height / 2f;
+        var glyphCenterX = glyph.Rectangle.X + glyph.Rectangle.Width / 2f;
+        var glyphCenterY = glyph.Rectangle.Y + glyph.Rectangle.Height / 2f;
+        Assert.True(MathF.Abs(glyphCenterX - contentCenterX) < 1f,
+            $"glyph horizontal center {glyphCenterX:F2} vs content center {contentCenterX:F2}");
+        Assert.True(MathF.Abs(glyphCenterY - contentCenterY) < 1f,
+            $"glyph vertical center {glyphCenterY:F2} vs content center {contentCenterY:F2} (line box overflows the content box)");
+    }
+
+    private static void ModalControllerThemeViaCssVariables()
+    {
+        // The controller emits --aether-modal-* custom properties with defaults; a page theme
+        // overrides them in its own stylesheet and the open overlay must use the overridden color.
+        // This must survive the full open -> close -> reopen cycle (each render re-emits the
+        // controller's <style> and the native re-compiles the sheets — the theme is a cascade
+        // override of the inherited custom property, not a one-time patch).
+        var component = new ThemedModalPageComponent();
+        using var renderer = new RecordingRenderer();
+        using var host = new UiDocumentHost(component, new ApproximateTextMeasurer(), renderer, new UiHostOptions());
+        host.SetViewport(640, 480, 1);
+        host.Render();
+
+        void AssertThemedOverlay(string stage)
+        {
+            var overlayFill = Assert.NotNull(renderer.LastDisplayList?.Commands.OfType<FillRoundedRectangleCommand>()
+                .FirstOrDefault(c => c.Color.A > .5f && c.Rectangle.Width > 400f));
+            Assert.True(overlayFill.Color.R > .8f && overlayFill.Color.B < .2f,
+                $"[{stage}] themed overlay must use the page's --aether-modal-overlay-bg override (got {overlayFill.Color})");
+        }
+
+        component.OpenModal();
+        host.Render();
+        AssertThemedOverlay("first open");
+
+        component.Modal.Close();
+        host.Render();
+        component.OpenModal();
+        host.Render();
+        AssertThemedOverlay("reopen after close");
+    }
+
+    private sealed class ThemedModalPageComponent : UiComponent
+    {
+        public ModalController Modal { get; } = new();
+
+        public ThemedModalPageComponent()
+        {
+            Modal.Changed += () => StateHasChanged();
+        }
+
+        public void OpenModal() => Modal.Show(w => w.WriteLiteral("<h2>Hola</h2>"));
+
+        protected override void BuildRenderTree(MarkupWriter writer)
+        {
+            writer.WriteLiteral("<style>:root { --aether-modal-overlay-bg: rgba(255, 0, 0, 0.9); } " +
+                "body { margin: 0; }</style><body>");
+            Modal.Render(writer);
+            writer.WriteLiteral("</body>");
+        }
+    }
+
+    private sealed class ModalPageComponent : UiComponent
+    {
+        public ModalController Modal { get; } = new();
+        public int ClickCount { get; private set; }
+
+        public ModalPageComponent()
+        {
+            Modal.Changed += () => StateHasChanged();
+        }
+
+        protected override void BuildRenderTree(MarkupWriter writer)
+        {
+            writer.WriteLiteral("<style>body { margin: 0; } #open { width: 120px; height: 40px; }</style>");
+            writer.WriteLiteral("<body><button id=\"open\"");
+            writer.WriteEventAttribute("onclick", Open);
+            writer.WriteLiteral(">Abrir</button>");
+            Modal.Render(writer);
+            writer.WriteLiteral("</body>");
+        }
+
+        private void Open(UiEvent e)
+        {
+            ClickCount++;
+            Modal.Show(w => w.WriteLiteral("<h2>Hola</h2>"));
+        }
+    }
+
+    private static void ParentOpacityAppliesToDescendantPaint()
+    {
+        // Regression: modal.html's overlay hides itself with opacity:0, but the white modal
+        // card inside it painted at FULL opacity — CSS opacity applies to the whole subtree.
+        // A parent at opacity 0 must make descendants fully transparent too (the builder
+        // omits alpha-0 fills entirely, so "hidden" means the card fill is absent).
+        const string markup = """
+            <style>
+              body { margin: 0; }
+              .overlay { opacity: 0; }
+              .overlay.active { opacity: 1; }
+              .card { width: 100px; height: 60px; background: white; }
+            </style>
+            <body><div class="overlay" id="o"><div class="card" id="c"></div></div></body>
+            """;
+        using var renderer = new RecordingRenderer();
+        using var host = new UiDocumentHost(new RawMarkupComponent(markup), new ApproximateTextMeasurer(), renderer, new UiHostOptions());
+        host.SetViewport(320, 200, 1);
+        host.Render();
+
+        static FillRoundedRectangleCommand? CardFill(DisplayList? displayList) => displayList?.Commands
+            .OfType<FillRoundedRectangleCommand>()
+            .SingleOrDefault(c => MathF.Abs(c.Rectangle.Width - 100f) < .01f && MathF.Abs(c.Rectangle.Height - 60f) < .01f);
+
+        Assert.True(CardFill(renderer.LastDisplayList) is null,
+            "card inside an opacity:0 overlay must not produce a visible fill");
+
+        // Toggle the overlay to .active through a stateful component and re-render.
+        var component = new OverlayToggleComponent();
+        using var renderer2 = new RecordingRenderer();
+        using var host2 = new UiDocumentHost(component, new ApproximateTextMeasurer(), renderer2, new UiHostOptions());
+        host2.SetViewport(320, 200, 1);
+        host2.Render();
+        component.OpenModal();
+        host2.Render();
+        var shown = Assert.NotNull(CardFill(renderer2.LastDisplayList));
+        Assert.True(shown.Color.A > .99f, "card inside an opacity:1 overlay must be opaque");
+    }
+
+    private sealed class OverlayToggleComponent : UiComponent
+    {
+        public bool Open { get; private set; }
+
+        public void OpenModal()
+        {
+            Open = true;
+            StateHasChanged();
+        }
+
+        protected override void BuildRenderTree(MarkupWriter writer)
+        {
+            writer.WriteLiteral("<style>body { margin: 0; } .overlay { opacity: 0; } .overlay.active { opacity: 1; } " +
+                ".card { width: 100px; height: 60px; background: white; }</style><body><div class=\"overlay" +
+                (Open ? " active" : "") + "\" id=\"o\"><div class=\"card\"></div></div></body>");
+        }
+    }
+
+    private static void ShorthandWithCssVariableResolvesToGradient()
+    {
+        // modal.html uses `:root { --bg-gradient: linear-gradient(...) }` + `body { background:
+        // var(--bg-gradient) }`. Shorthands whose values contain var() were silently dropped at
+        // compile time; the body rendered transparent (gray canvas). They must resolve per node
+        // and expand like any other shorthand.
+        using var renderer = new RecordingRenderer();
+        using var host = new UiDocumentHost(new BodyVariableGradientComponent(), new ApproximateTextMeasurer(), renderer, new UiHostOptions());
+        host.SetViewport(640, 480, 1);
+        host.Render();
+
+        var body = Assert.NotNull(host.Document?.Body);
+        var box = Assert.NotNull(host.Layout?.FindPrimaryBox(body));
+        Assert.True(box.Style.BackgroundGradient is { },
+            "background: var(--bg-gradient) must resolve to a gradient (shorthand with var() was dropped)");
+        var gradient = box.Style.BackgroundGradient.GetValueOrDefault();
+        Assert.Equal(2, gradient.Stops.Count);
+        Assert.True(gradient.Stops[0].Color.B > gradient.Stops[0].Color.R,
+            "the resolved gradient must keep the author's 135deg ramp (#667eea -> #764ba2)");
+    }
+
+    private static void BodyMinHeightVhCentersCardAndAnchorsCircle()
+    {
+        // modal.html: body { min-height: 100vh; display: flex; justify-content: center;
+        // align-items: center; position: relative; } with an absolutely positioned bottom
+        // circle. Chrome: card vertically centered, circle anchored to the viewport bottom.
+        const string markup = """
+            <style>
+              * { margin: 0; padding: 0; box-sizing: border-box; }
+              body { min-height: 100vh; display: flex; justify-content: center; align-items: center;
+                     position: relative; overflow: hidden; }
+              .circle { position: absolute; border-radius: 50%; background: rgba(255,255,255,.1); }
+              .circle-2 { width: 200px; height: 200px; bottom: -50px; right: -50px; }
+              .container { position: relative; width: 90%; max-width: 400px; padding: 40px; }
+            </style>
+            <body>
+              <div class="circle circle-2" id="c2"></div>
+              <div class="container" id="card"><h1>Diseño Moderno</h1></div>
+            </body>
+            """;
+        using var renderer = new RecordingRenderer();
+        using var host = new UiDocumentHost(new RawMarkupComponent(markup), new ApproximateTextMeasurer(), renderer, new UiHostOptions());
+        host.SetViewport(320, 200, 1);
+        host.Render();
+
+        var body = Assert.NotNull(host.Layout?.Root);
+        var card = Assert.NotNull(host.Layout?.FindPrimaryBox(Assert.NotNull(host.Document?.GetElementById("card"))));
+        var circle = Assert.NotNull(host.Layout?.FindPrimaryBox(Assert.NotNull(host.Document?.GetElementById("c2"))));
+        // Direct check: the card must be vertically centered in the viewport.
+        var viewportCenter = 200f / 2f;
+        var cardCenter = card.BorderBox.Y + card.BorderBox.Height / 2f;
+        Assert.True(MathF.Abs(cardCenter - viewportCenter) < 2f,
+            $"card center {cardCenter:F2} vs viewport center {viewportCenter:F2} (card y={card.BorderBox.Y:F2} h={card.BorderBox.Height:F2}, body h={body.BorderBox.Height:F2}, circle bottom={circle.BorderBox.Bottom:F2})");
+
+        // The absolutely positioned bottom circle must anchor to the viewport bottom.
+        // The absolutely positioned bottom circle must anchor to the viewport bottom.
+        Assert.True(MathF.Abs(circle.BorderBox.Bottom - (200f + 50f)) < 2f,
+            $"circle bottom {circle.BorderBox.Bottom:F2} vs expected 250 (circle y={circle.BorderBox.Y:F2})");
+    }
+
+    private static void ButtonTextVerticallyCentersInDefiniteHeight()
+    {
+        // Regression: the navbar .menu-item buttons have an explicit height (34px). Chrome
+        // centers in-flow button text vertically in that definite height; the engine used to
+        // hug the line box to the top, shifting the navbar labels upward.
+        const string markup = """
+            <style>
+              body { margin: 0; }
+              .navbar { display: flex; flex-direction: row; align-items: center; height: 56px; }
+              .menu-item { height: 34px; padding: 0 14px; border: none; font-size: 13px; }
+            </style>
+            <body><div class="navbar"><button class="menu-item" id="refresh">Refresh</button></div></body>
+            """;
+        using var renderer = new RecordingRenderer();
+        using var host = new UiDocumentHost(new RawMarkupComponent(markup), new ApproximateTextMeasurer(), renderer, new UiHostOptions());
+        host.SetViewport(320, 200, 1);
+        host.Render();
+
+        var button = Assert.NotNull(host.Layout?.FindPrimaryBox(Assert.NotNull(host.Document?.GetElementById("refresh"))));
+        var text = Assert.NotNull(renderer.LastDisplayList?.Commands.OfType<DrawTextCommand>().SingleOrDefault(c => c.Text == "Refresh"));
+        var textCenter = text.Rectangle.Y + text.Rectangle.Height / 2f;
+        var buttonCenter = button.ContentBox.Y + button.ContentBox.Height / 2f;
+        Assert.True(MathF.Abs(textCenter - buttonCenter) < 1f,
+            $"button text center {textCenter:F2} vs button content center {buttonCenter:F2} (text y={text.Rectangle.Y:F2})");
+    }
+
+    private static void UaFormControlsHaveNoMinWidthFloor()
+    {
+        // Regression: the engine UA stylesheet used to force button { min-width: 84px }
+        // and input { min-width: 180px }. Chromium's UA has no such floor, so a fixed
+        // author width must win; otherwise a 22px round button renders as an 84x22
+        // horizontal ellipse (50% border-radius resolves 42x11).
+        const string markup = """
+            <style>
+              body { margin: 0; }
+              .tile-uninstall { position: absolute; top: 2px; right: 2px; width: 22px; height: 22px;
+                                 padding: 0; border: none; border-radius: 50%; font-size: 14px; line-height: 1; }
+              .holder { position: relative; width: 100px; height: 100px; }
+            </style>
+            <body>
+              <div class="holder"><button class="tile-uninstall" id="x">×</button></div>
+              <input id="i" style="width: 150px">
+            </body>
+            """;
+        using var renderer = new RecordingRenderer();
+        using var host = new UiDocumentHost(new RawMarkupComponent(markup), new ApproximateTextMeasurer(), renderer, new UiHostOptions());
+        host.SetViewport(300, 200, 1);
+        host.Render();
+
+        var button = Assert.NotNull(host.Layout?.FindPrimaryBox(Assert.NotNull(host.Document?.GetElementById("x"))));
+        Assert.Equal(22f, button.BorderBox.Width);
+        Assert.Equal(22f, button.BorderBox.Height);
+
+        var input = Assert.NotNull(host.Layout?.FindPrimaryBox(Assert.NotNull(host.Document?.GetElementById("i"))));
+        Assert.Equal(150f, input.BorderBox.Width);
+    }
+
+    private static void UaStylesheetComesFromNative()
+    {
+        // The engine-defaults sheet used to be the managed EngineDefaultsCss constant; it now
+        // lives in the native core and the host re-applies it from
+        // aether_style_runtime_defaults_css() on every Load. A bare <button>/<input> with no
+        // author rules must still receive the UA widget padding, proving the UA comes from native.
+        const string markup = """
+            <body>
+              <button>OK</button>
+              <input>
+            </body>
+            """;
+        using var renderer = new RecordingRenderer();
+        using var host = new UiDocumentHost(new RawMarkupComponent(markup), new ApproximateTextMeasurer(), renderer, new UiHostOptions());
+        host.SetViewport(300, 200, 1);
+        host.Render();
+
+        var button = Assert.NotNull(host.Document?.GetElementsByTagName("button").SingleOrDefault());
+        var buttonBox = Assert.NotNull(host.Layout?.FindPrimaryBox(button));
+        Assert.Equal(6f, buttonBox.Style.Padding.Left.Value);
+        Assert.Equal(2f, buttonBox.Style.Padding.Top.Value);
+        Assert.Equal(6f, buttonBox.Style.Padding.Right.Value);
+        Assert.Equal(3f, buttonBox.Style.Padding.Bottom.Value);
+
+        var input = Assert.NotNull(host.Document?.GetElementsByTagName("input").SingleOrDefault());
+        var inputBox = Assert.NotNull(host.Layout?.FindPrimaryBox(input));
+        Assert.Equal(1f, inputBox.Style.Padding.Top.Value);
+        Assert.Equal(1f, inputBox.Style.Padding.Bottom.Value);
+        Assert.Equal(0f, inputBox.Style.Padding.Left.Value);
     }
 
     private static void MarkupIsEncodedAndEventsDispatch()
@@ -301,6 +692,43 @@ internal static class Program
                     private global::System.Collections.Generic.IEnumerable<string> Pages => new[] { "One" };
                     private void OpenWindow() { }
                     private void Open(string page) { }
+                }
+            }
+            """;
+        AssertGeneratedSourceCompiles(source, companion);
+    }
+
+    private static void StyleBindingInsideRawTextEmitsLiteral()
+    {
+        // Regression: a binding inside a <style> element (e.g. the launcher's
+        // <style>{{ IconStyles }}</style>) must be emitted verbatim (WriteLiteral).
+        // The old path used the HTML-encoding writer.Write, which turned the quotes in
+        // url('file:///...') into &#39; — raw-text style content is never HTML-decoded,
+        // so the image source arrived corrupted and the icon stayed transparent.
+        const string markup = """
+            <body>
+              <style>#icon { background: url('{{ IconSource }}') center / cover no-repeat; }</style>
+              <span>Count: {{ Count }}</span>
+            </body>
+            """;
+        var compiler = new ViewCompiler("Views/Main.view.html", SourceText.From(markup), "Demo", ViewSyntax.Modern, null);
+        var result = compiler.Compile();
+        Assert.Equal(0, result.Diagnostics.Length);
+        var source = Assert.NotNull(result.Source);
+        Assert.True(source.Contains("writer.WriteLiteral(IconSource)", StringComparison.Ordinal),
+            "a binding inside <style> must be emitted verbatim (WriteLiteral)");
+        Assert.True(!source.Contains("writer.Write(IconSource)", StringComparison.Ordinal),
+            "the style binding must not use the HTML-encoding Write path");
+        Assert.True(source.Contains("writer.Write(Count)", StringComparison.Ordinal),
+            "a binding in normal text content must still use the HTML-encoding Write path");
+
+        const string companion = """
+            namespace Demo
+            {
+                public sealed partial class Main : global::AetherUI.Runtime.UiComponent
+                {
+                    private string IconSource => "file:///C:/icons/app.png";
+                    private int Count => 1;
                 }
             }
             """;
@@ -605,6 +1033,67 @@ internal static class Program
         Assert.True(filter.Radii.TopLeftX > 0);
         Assert.True(index + 1 < commands.Length && commands[index + 1] is FillRoundedRectangleCommand);
     }
+
+    private static void ZIndexReordersPaintAboveDomOrder()
+    {
+        // #high is first in DOM but carries the higher z-index. z-index must
+        // beat DOM order: #low (z-index 1) paints first, #high (5) last.
+        const string reorderMarkup = """
+            <style>
+              body { margin: 0; }
+              #high { position: absolute; width: 100px; height: 100px; background-color: #0000ff; z-index: 5; }
+              #low { position: absolute; width: 100px; height: 100px; background-color: #ff0000; z-index: 1; }
+            </style>
+            <body><div id="high"></div><div id="low"></div></body>
+            """;
+        using (var renderer = new RecordingRenderer())
+        using (var host = new UiDocumentHost(new RawMarkupComponent(reorderMarkup), new ApproximateTextMeasurer(), renderer, new UiHostOptions()))
+        {
+            host.SetViewport(320, 200, 1);
+            host.Render();
+            var fills = ZIndexFillCommands(renderer);
+            Assert.Equal(2, fills.Length);
+            Assert.True(IsRedFill(fills[0]) && IsBlueFill(fills[1]),
+                $"z-index must paint #low (red, 1) before #high (blue, 5); got {DescribeFills(fills)}");
+        }
+
+        // Control: without z-index the same document keeps exact DOM order,
+        // so #high (blue) paints first.
+        const string controlMarkup = """
+            <style>
+              body { margin: 0; }
+              #high { position: absolute; width: 100px; height: 100px; background-color: #0000ff; }
+              #low { position: absolute; width: 100px; height: 100px; background-color: #ff0000; }
+            </style>
+            <body><div id="high"></div><div id="low"></div></body>
+            """;
+        using (var renderer = new RecordingRenderer())
+        using (var host = new UiDocumentHost(new RawMarkupComponent(controlMarkup), new ApproximateTextMeasurer(), renderer, new UiHostOptions()))
+        {
+            host.SetViewport(320, 200, 1);
+            host.Render();
+            var fills = ZIndexFillCommands(renderer);
+            Assert.Equal(2, fills.Length);
+            Assert.True(IsBlueFill(fills[0]) && IsRedFill(fills[1]),
+                $"no z-index must keep DOM order (#high blue first, #low red last); got {DescribeFills(fills)}");
+        }
+    }
+
+    private static FillRoundedRectangleCommand[] ZIndexFillCommands(RecordingRenderer renderer)
+    {
+        var commands = renderer.LastDisplayList?.Commands
+            ?? throw new InvalidOperationException("Native renderer did not produce a display list.");
+        return commands.OfType<FillRoundedRectangleCommand>()
+            .Where(fill => fill.Color.A >= .99f && (fill.Color.R > .5f || fill.Color.B > .5f))
+            .ToArray();
+    }
+
+    private static bool IsRedFill(FillRoundedRectangleCommand fill) => fill.Color.R > .5f && fill.Color.B < .5f;
+
+    private static bool IsBlueFill(FillRoundedRectangleCommand fill) => fill.Color.B > .5f && fill.Color.R < .5f;
+
+    private static string DescribeFills(FillRoundedRectangleCommand[] fills) =>
+        string.Join(", ", fills.Select(fill => $"({fill.Color.R:F2},{fill.Color.G:F2},{fill.Color.B:F2})"));
 
     private static void NativeTextShadowInheritsAndEmitsPaintCommands()
     {
@@ -1828,6 +2317,51 @@ internal static class Program
         Assert.Equal(100f, resolved.DestinationRectangle.Height);
     }
 
+    private static void ImageCommandSurvivesHoverRerender()
+    {
+        // Regression: hovering the launcher tile (a :hover background-color change) rebuilds the
+        // display list; the icon's DrawBackgroundImageCommand must keep its resolved geometry and
+        // attached resource, otherwise the incremental/full repaint drops the image (gray box).
+        const string source = "file:///C:/fake/icon.png";
+        var loader = new ControlledImageResourceLoader();
+        using var resolver = new ImageResourceResolver(loader);
+        using var renderer = new RecordingRenderer();
+        var markup = "<style>body { margin: 0; } .app-tile { width: 96px; height: 96px; cursor: pointer; } " +
+            ".app-tile:hover { background-color: #eef2f7; } " +
+            ".app-icon { width: 56px; height: 56px; background: url('" + source + "') center / cover no-repeat; }" +
+            "</style><body><div class=\"app-tile\" id=\"tile\"><div class=\"app-icon\" id=\"icon\"></div></div></body>";
+        using var host = new UiDocumentHost(new RawMarkupComponent(markup), new ApproximateTextMeasurer(), renderer,
+            new UiHostOptions { ImageResolver = resolver });
+        host.SetViewport(320, 200, 1);
+        host.Render();
+        Assert.Equal(1, loader.LoadCount);
+
+        var ready = new TaskCompletionSource<ImageResourceChangedEventArgs>(TaskCreationOptions.RunContinuationsAsynchronously);
+        resolver.Changed += (_, change) => ready.TrySetResult(change);
+        loader.Complete(new ImageResourceResult(new ImageDimensions(56, 56), new byte[56 * 56 * 4]));
+        WaitFor(ready.Task, "image resource did not complete");
+        host.Render();
+
+        var before = renderer.LastDisplayList?.Commands.OfType<DrawBackgroundImageCommand>().SingleOrDefault()
+            ?? throw new InvalidOperationException("before hover: no DrawBackgroundImageCommand in display list");
+        Assert.True(before.HasResolvedGeometry);
+        Assert.NotNull(before.Resource);
+
+        var tile = Assert.NotNull(host.Layout?.FindPrimaryBox(Assert.NotNull(host.Document?.GetElementById("tile"))));
+        var center = new PointF(tile.BorderBox.X + tile.BorderBox.Width / 2, tile.BorderBox.Y + tile.BorderBox.Height / 2);
+        host.PointerMoved(center);
+        host.Render();
+
+        var after = renderer.LastDisplayList?.Commands.OfType<DrawBackgroundImageCommand>().SingleOrDefault()
+            ?? throw new InvalidOperationException(
+                "after hover: no DrawBackgroundImageCommand in display list. Commands=" +
+                string.Join("|", (renderer.LastDisplayList?.Commands ?? []).Select(c => c.GetType().Name)) +
+                $" metrics=[styleRes={host.Metrics.StyleResolutions} dlBuilds={host.Metrics.DisplayListBuilds} pcBuilds={host.Metrics.PaintChunkBuilds}]");
+        Assert.True(after.HasResolvedGeometry, "image command lost resolved geometry after hover re-render");
+        Assert.NotNull(after.Resource);
+        Assert.Equal(before.DestinationRectangle, after.DestinationRectangle);
+    }
+
     private static T WaitFor<T>(Task<T> task, string message)
     {
         if (!task.Wait(TimeSpan.FromSeconds(2)))
@@ -1835,6 +2369,202 @@ internal static class Program
             throw new InvalidOperationException(message);
         }
         return task.GetAwaiter().GetResult();
+    }
+
+    // Minimal 1x1 opaque red PNG (RGBA 255,0,0,255). Same literal as the native
+    // aether.image-decode test; verified against an independent decoder.
+    private static readonly byte[] RedPngBytes =
+    [
+        0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A,
+        0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44, 0x52,
+        0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01,
+        0x08, 0x06, 0x00, 0x00, 0x00, 0x1F, 0x15, 0xC4, 0x89,
+        0x00, 0x00, 0x00, 0x0D, 0x49, 0x44, 0x41, 0x54,
+        0x78, 0x9C, 0x63, 0xF8, 0xCF, 0xC0, 0xF0, 0x1F,
+        0x00, 0x05, 0x00, 0x01, 0xFF, 0x89, 0x99, 0x3D, 0x1D,
+        0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4E, 0x44,
+        0xAE, 0x42, 0x60, 0x82,
+    ];
+
+    private static void FileImageResourceLoader_DecodesFilePng()
+    {
+        var path = Path.Combine(Path.GetTempPath(), "aetherui-red-" + Guid.NewGuid().ToString("N") + ".png");
+        File.WriteAllBytes(path, RedPngBytes);
+        try
+        {
+            var result = new FileImageResourceLoader()
+                .LoadAsync("file:///" + path.Replace('\\', '/'), CancellationToken.None).AsTask().GetAwaiter().GetResult();
+            Assert.Equal(new ImageDimensions(1, 1), result.Dimensions);
+            AssertPixel(result, 0, 0, 255, 255);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    private static void FileImageResourceLoader_RejectsHttp()
+    {
+        var loader = new FileImageResourceLoader();
+        AssertThrows<UnauthorizedAccessException>(() => loader.LoadAsync("http://example.test/x.png", CancellationToken.None).AsTask());
+    }
+
+    private static void DataImageResourceLoader_DecodesDataUri()
+    {
+        var dataUri = "data:image/png;base64," + Convert.ToBase64String(RedPngBytes);
+        var result = new DataImageResourceLoader().LoadAsync(dataUri, CancellationToken.None).AsTask().GetAwaiter().GetResult();
+        Assert.Equal(new ImageDimensions(1, 1), result.Dimensions);
+        AssertPixel(result, 0, 0, 255, 255);
+    }
+
+    private static void HttpImageResourceLoader_RejectsFilePolicy()
+    {
+        var loader = new HttpImageResourceLoader();
+        AssertThrows<UnauthorizedAccessException>(() => loader.LoadAsync("file:///C:/x.png", CancellationToken.None).AsTask());
+    }
+
+    private static void CompositeImageResourceLoader_FallsThroughSchemes()
+    {
+        var path = Path.Combine(Path.GetTempPath(), "aetherui-red-" + Guid.NewGuid().ToString("N") + ".png");
+        File.WriteAllBytes(path, RedPngBytes);
+        try
+        {
+            var composite = new CompositeImageResourceLoader(new FileImageResourceLoader(), new DataImageResourceLoader());
+
+            var fileResult = composite.LoadAsync("file:///" + path.Replace('\\', '/'), CancellationToken.None).AsTask().GetAwaiter().GetResult();
+            Assert.Equal(new ImageDimensions(1, 1), fileResult.Dimensions);
+            AssertPixel(fileResult, 0, 0, 255, 255);
+
+            var dataResult = composite.LoadAsync("data:image/png;base64," + Convert.ToBase64String(RedPngBytes), CancellationToken.None).AsTask().GetAwaiter().GetResult();
+            Assert.Equal(new ImageDimensions(1, 1), dataResult.Dimensions);
+            AssertPixel(dataResult, 0, 0, 255, 255);
+
+            AssertThrows<UnauthorizedAccessException>(() => composite.LoadAsync("http://example.test/x.png", CancellationToken.None).AsTask());
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    private static void NativeImageDecode_RejectsGarbage()
+    {
+        Assert.False(NativeImageDecode.TryDecode(new byte[] { 1, 2, 3, 4 }, out _, out _, out _));
+    }
+
+    private static void AssertPixel(ImageResourceResult result, byte blue, byte green, byte red, byte alpha)
+    {
+        Assert.Equal(4, result.Pixels.Length);
+        Assert.Equal(blue, result.Pixels.Span[0]);
+        Assert.Equal(green, result.Pixels.Span[1]);
+        Assert.Equal(red, result.Pixels.Span[2]);
+        Assert.Equal(alpha, result.Pixels.Span[3]);
+    }
+
+    private static void AssertThrows<TException>(Func<Task> action) where TException : Exception
+    {
+        try { action().GetAwaiter().GetResult(); }
+        catch (TException) { return; }
+        throw new InvalidOperationException($"Se esperaba {typeof(TException).Name}.");
+    }
+
+    private static void TransitionsAnimateOpacityOnStateChange()
+    {
+        // A state-triggered class change (button -> StateHasChanged rebuild) must start an opacity
+        // transition when the style declares `transition: opacity .3s linear`, animate through the
+        // display list's fill alpha, and paint the exact end value on completion.
+        var component = new TransitionToggleComponent(withTransition: true);
+        using var renderer = new RecordingRenderer();
+        using var host = new UiDocumentHost(component, new ApproximateTextMeasurer(), renderer, new UiHostOptions());
+        host.SetViewport(320, 200, 1);
+        host.Render();
+
+        var box = Assert.NotNull(host.Document?.GetElementById("box"));
+        var boxRect = Assert.NotNull(host.Layout?.FindPrimaryBox(box)).BorderBox;
+        Assert.True(BoxFillAlpha(renderer, boxRect) >= .99f, "initial render must be fully opaque");
+
+        var beforeMs = Environment.TickCount64;
+        component.Toggle();
+        host.Render();
+
+        Assert.True(host.HasActiveTransitions, "observe must start an opacity transition after the .hidden toggle");
+
+        host.TickTransitions(beforeMs + 150);
+        host.Render();
+        var halfAlpha = BoxFillAlpha(renderer, boxRect);
+        Assert.True(MathF.Abs(halfAlpha - .5f) < .15f,
+            $"linear opacity at 150ms/300ms should be ~0.5, got {halfAlpha:F2}");
+        Assert.True(host.HasActiveTransitions, "transition must still be active halfway through");
+
+        host.TickTransitions(beforeMs + 400);
+        host.Render();
+        Assert.True(!host.HasActiveTransitions, "transition must finish once the elapsed time exceeds the duration");
+        Assert.True(!HasVisibleBoxFill(renderer, boxRect),
+            "completed transition must paint the end value (opacity 0): the box fill must be fully transparent and omitted from the display list");
+    }
+
+    private static void TransitionsDoNotAnimateWithoutTransitionProperty()
+    {
+        // Same class toggle without any `transition` declaration must be instant: the runtime never
+        // observes an active transition and the new opacity reaches the paint immediately.
+        var component = new TransitionToggleComponent(withTransition: false);
+        using var renderer = new RecordingRenderer();
+        using var host = new UiDocumentHost(component, new ApproximateTextMeasurer(), renderer, new UiHostOptions());
+        host.SetViewport(320, 200, 1);
+        host.Render();
+
+        var box = Assert.NotNull(host.Document?.GetElementById("box"));
+        var boxRect = Assert.NotNull(host.Layout?.FindPrimaryBox(box)).BorderBox;
+        Assert.True(BoxFillAlpha(renderer, boxRect) >= .99f);
+
+        component.Toggle();
+        host.Render();
+
+        Assert.True(!host.HasActiveTransitions, "a style without transition-property/duration must not start a transition");
+        Assert.True(!HasVisibleBoxFill(renderer, boxRect), "the opacity change must be applied instantly (box fill fully transparent)");
+    }
+
+    private static float BoxFillAlpha(RecordingRenderer renderer, RectF rect)
+    {
+        var fills = renderer.LastDisplayList?.Commands.OfType<FillRoundedRectangleCommand>()
+                .Where(fill => fill.Rectangle == rect && fill.Color.R > .5f && fill.Color.G < .5f && fill.Color.B < .5f)
+                .ToArray()
+            ?? throw new InvalidOperationException("Native renderer did not produce a display list for the transition box.");
+        if (fills.Length != 1)
+        {
+            throw new InvalidOperationException($"Expected exactly one red box fill, got {fills.Length}: " +
+                string.Join("|", fills.Select(fill => $"({fill.Rectangle},{fill.Color.R:F2},{fill.Color.A:F2})")));
+        }
+
+        return fills[0].Color.A;
+    }
+
+    private static bool HasVisibleBoxFill(RecordingRenderer renderer, RectF rect)
+    {
+        var visible = renderer.LastDisplayList?.Commands.OfType<FillRoundedRectangleCommand>()
+            .Where(fill => fill.Rectangle == rect && fill.Color.R > .5f && fill.Color.G < .5f && fill.Color.B < .5f && fill.Color.A >= .05f)
+            .ToArray() ?? [];
+        return visible.Length > 0;
+    }
+
+    private sealed class TransitionToggleComponent(bool withTransition) : UiComponent
+    {
+        public bool Hidden { get; private set; }
+
+        public void Toggle()
+        {
+            Hidden = !Hidden;
+            StateHasChanged();
+        }
+
+        protected override void BuildRenderTree(MarkupWriter writer)
+        {
+            writer.WriteLiteral("<style>body { margin: 0; } #box { width: 100px; height: 100px; background: red; ");
+            writer.WriteLiteral(withTransition ? "transition-property: opacity; transition-duration: .3s; transition-timing-function: linear; " : string.Empty);
+            writer.WriteLiteral("} .hidden { opacity: 0; }</style><body><div id=\"box\" class=\"");
+            writer.Write(Hidden ? "hidden" : string.Empty);
+            writer.WriteLiteral("\"></div></body>");
+        }
     }
 
     private sealed class NestedSolidBackgroundComponent : UiComponent
@@ -1894,6 +2624,17 @@ internal static class Program
     {
         protected override void BuildRenderTree(MarkupWriter writer) => writer.WriteLiteral("""
             <html><head><style>body { margin: 0; background: linear-gradient(45deg, #0f172a, #1e293b, #334155); }</style></head>
+            <body><div>gradient body</div></body></html>
+            """);
+    }
+
+    private sealed class BodyVariableGradientComponent : UiComponent
+    {
+        protected override void BuildRenderTree(MarkupWriter writer) => writer.WriteLiteral("""
+            <html><head><style>
+              :root { --bg-gradient: linear-gradient(135deg, #667eea 0%, #764ba2 100%); }
+              body { margin: 0; background: var(--bg-gradient); }
+            </style></head>
             <body><div>gradient body</div></body></html>
             """);
     }

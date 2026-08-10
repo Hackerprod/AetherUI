@@ -233,6 +233,18 @@ public sealed class ComputedStyle
     public IReadOnlyList<CssTransformOperation> Transforms { get; set; } = [];
     public CssTransformOrigin TransformOrigin { get; set; } = CssTransformOrigin.Center;
 
+    /// <summary>CSS transition bitmask (AetherUI.Core.Native transition-property bits: opacity = 1, transform = 2).</summary>
+    public int TransitionProperties { get; set; }
+
+    /// <summary>CSS transition-duration in seconds; 0 means the element never transitions.</summary>
+    public float TransitionDuration { get; set; }
+
+    /// <summary>CSS transition-delay in seconds.</summary>
+    public float TransitionDelay { get; set; }
+
+    /// <summary>CSS transition-timing-function enum value (0 = linear, see the native timing enum).</summary>
+    public int TransitionTiming { get; set; }
+
     public string FontFamily { get; set; } = "Segoe UI";
     public float FontSize { get; set; } = 16;
     public FontWeight FontWeight { get; set; } = FontWeight.Normal;

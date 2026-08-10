@@ -299,6 +299,16 @@ struct compiled_content_declaration_s {
     int32_t declaration_order = 0;
 };
 
+// A shorthand whose value references custom properties cannot expand at compile
+// time (variables resolve per node). The raw declaration is kept and expanded
+// during resolution against the node's variable scope.
+struct compiled_shorthand_declaration_s {
+    std::string name;
+    std::string source;
+    bool important = false;
+    int32_t declaration_order = 0;
+};
+
 // ═══ StyleSheet layer ══════════════════════════════════════════
 
 enum class style_sheet_layer : uint8_t {
@@ -380,6 +390,7 @@ struct compiled_rule_s {
     std::vector<compiled_property_declaration_s> declarations;
     std::vector<custom_property_declaration_s>   custom_declarations;
     std::vector<compiled_content_declaration_s>  content_declarations;
+    std::vector<compiled_shorthand_declaration_s> shorthand_declarations;
     int32_t source_order = 0;
 };
 

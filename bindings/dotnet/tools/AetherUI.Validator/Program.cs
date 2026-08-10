@@ -15,6 +15,21 @@ internal static class Program
 
         var options = ParseArgs(args);
         var perfReporter = options.Perf ? new PerfReporter("native") : null;
+        if (options.Modal)
+        {
+            WindowsUiApplication.Run(
+                () => new ModalComponent(),
+                new UiHostOptions
+                {
+                    Title = ModalComponent.WindowTitle,
+                    Width = 800,
+                    Height = 640,
+                    ClearColor = new ColorRgba(0.09f, 0.10f, 0.14f, 1f),
+                    MetricsSink = perfReporter is null ? null : perfReporter.Report,
+                });
+            return;
+        }
+
         if (options.HtmlPath is null)
         {
             var pagesDirectory = Path.Combine(AppContext.BaseDirectory, "Pages");
@@ -37,6 +52,7 @@ internal static class Program
     private static ValidatorCommandLineOptions ParseArgs(string[] args)
     {
         var perf = false;
+        var modal = false;
         string? path = null;
         for (var i = 0; i < args.Length; i++)
         {
@@ -44,6 +60,12 @@ internal static class Program
             if (string.Equals(arg, "--perf", StringComparison.OrdinalIgnoreCase))
             {
                 perf = true;
+                continue;
+            }
+
+            if (string.Equals(arg, "--modal", StringComparison.OrdinalIgnoreCase))
+            {
+                modal = true;
                 continue;
             }
 
@@ -61,8 +83,8 @@ internal static class Program
             path ??= arg;
         }
 
-        return new ValidatorCommandLineOptions(path is null ? null : Path.GetFullPath(path), perf);
+        return new ValidatorCommandLineOptions(path is null ? null : Path.GetFullPath(path), perf, modal);
     }
 
-    private sealed record ValidatorCommandLineOptions(string? HtmlPath, bool Perf);
+    private sealed record ValidatorCommandLineOptions(string? HtmlPath, bool Perf, bool Modal);
 }

@@ -17,6 +17,7 @@ add_library(aether_core SHARED
     src/dom/element_node.cpp
     src/dom/document_node.cpp
     src/dom/html_parser.cpp
+    src/images/image_decode.cpp
     src/css/css_length.cpp
     src/css/color_rgba.cpp
     src/css/computed_style.cpp
@@ -41,12 +42,18 @@ add_library(aether_core SHARED
     src/layout/table_layout.cpp
     src/layout/scrollbar_geometry.cpp
     src/layout/layout_engine.cpp
+    src/layout/layout_flex.cpp
+    src/layout/layout_positioned.cpp
+    src/layout/layout_scroll.cpp
+    src/layout/layout_table.cpp
     src/rendering/display_list.cpp
     src/rendering/display_list_builder.cpp
     src/rendering/background_image_geometry.cpp
     src/rendering/transform_matrix.cpp
     src/rendering/border_painter.cpp
     src/rendering/render_plan.cpp
+    src/rendering/stacking.cpp
+    src/animations/transition_runtime.cpp
     src/style_runtime/style_values.cpp
     src/style_runtime/style_computed.cpp
     src/style_runtime/style_property_registry.cpp
@@ -60,6 +67,7 @@ add_library(aether_core SHARED
     src/style_runtime/style_diff.cpp
     src/style_runtime/style_source_compiler.cpp
     src/style_runtime/style_runtime_core.cpp
+    src/style_runtime/ua_stylesheet.cpp
 )
 
 add_library(AetherUI::Core ALIAS aether_core)
@@ -132,6 +140,11 @@ if(AETHERUI_BUILD_TESTS)
     add_executable(aether_margin_adjacency_test tests/test_margin_adjacency.cpp src/layout/margin_adjacency.cpp)
     add_test(NAME aether.margin-adjacency COMMAND aether_margin_adjacency_test)
 
+    add_executable(aether_control_sizing_test tests/test_control_sizing.cpp src/layout/form_controls.cpp src/css/text_transform.cpp)
+    target_include_directories(aether_control_sizing_test PRIVATE src/layout)
+    target_link_libraries(aether_control_sizing_test PRIVATE AetherUI::Core)
+    add_test(NAME aether.control-sizing COMMAND aether_control_sizing_test)
+
     add_executable(aether_linear_gradient_test tests/test_linear_gradient.cpp src/css/linear_gradient.cpp)
     target_link_libraries(aether_linear_gradient_test PRIVATE AetherUI::Core)
     add_test(NAME aether.linear-gradient COMMAND aether_linear_gradient_test)
@@ -143,6 +156,15 @@ if(AETHERUI_BUILD_TESTS)
     add_executable(aether_background_image_display_list_test tests/test_background_image_display_list.cpp)
     target_link_libraries(aether_background_image_display_list_test PRIVATE AetherUI::Core)
     add_test(NAME aether.background-image-display-list COMMAND aether_background_image_display_list_test)
+
+    add_executable(aether_background_value_consistency_test tests/test_background_value_consistency.cpp)
+    target_link_libraries(aether_background_value_consistency_test PRIVATE AetherUI::Core)
+    add_test(NAME aether.background-value-consistency COMMAND aether_background_value_consistency_test)
+
+    add_executable(aether_z_index_test tests/test_z_index.cpp src/rendering/stacking.cpp)
+    target_include_directories(aether_z_index_test PRIVATE src/rendering)
+    target_link_libraries(aether_z_index_test PRIVATE AetherUI::Core)
+    add_test(NAME aether.z-index COMMAND aether_z_index_test)
 
     add_executable(aether_canvas_background_test tests/test_canvas_background.cpp)
     target_link_libraries(aether_canvas_background_test PRIVATE AetherUI::Core)
@@ -157,6 +179,10 @@ if(AETHERUI_BUILD_TESTS)
     add_executable(aether_background_image_geometry_test tests/test_background_image_geometry.cpp src/rendering/background_image_geometry.cpp)
     target_link_libraries(aether_background_image_geometry_test PRIVATE AetherUI::Core)
     add_test(NAME aether.background-image-geometry COMMAND aether_background_image_geometry_test)
+
+    add_executable(aether_image_decode_test tests/test_image_decode.cpp)
+    target_link_libraries(aether_image_decode_test PRIVATE AetherUI::Core)
+    add_test(NAME aether.image-decode COMMAND aether_image_decode_test)
 
     add_executable(aether_background_gradient_tiling_test tests/test_background_gradient_tiling.cpp)
     target_link_libraries(aether_background_gradient_tiling_test PRIVATE AetherUI::Core)
@@ -199,6 +225,11 @@ if(AETHERUI_BUILD_TESTS)
     target_link_libraries(aether_style_impact_test PRIVATE AetherUI::Core)
     add_test(NAME aether.style-impact COMMAND aether_style_impact_test)
 
+    add_executable(aether_shorthand_var_test tests/test_shorthand_var.cpp)
+    target_include_directories(aether_shorthand_var_test PRIVATE src)
+    target_link_libraries(aether_shorthand_var_test PRIVATE AetherUI::Core)
+    add_test(NAME aether.shorthand-var COMMAND aether_shorthand_var_test)
+
     add_executable(aether_render_plan_test tests/test_render_plan.cpp)
     target_link_libraries(aether_render_plan_test PRIVATE AetherUI::Core)
     add_test(NAME aether.render-plan COMMAND aether_render_plan_test)
@@ -224,6 +255,23 @@ if(AETHERUI_BUILD_TESTS)
     add_executable(aether_table_layout_integration_test tests/test_table_layout_integration.cpp)
     target_link_libraries(aether_table_layout_integration_test PRIVATE AetherUI::Core)
     add_test(NAME aether.table-layout-integration COMMAND aether_table_layout_integration_test)
+
+    add_executable(aether_transition_runtime_test tests/test_transition_runtime.cpp)
+    target_include_directories(aether_transition_runtime_test PRIVATE src)
+    target_link_libraries(aether_transition_runtime_test PRIVATE AetherUI::Core)
+    add_test(NAME aether.transition-runtime COMMAND aether_transition_runtime_test)
+
+    add_executable(aether_paint_context_test tests/test_paint_context.cpp)
+    target_link_libraries(aether_paint_context_test PRIVATE AetherUI::Core)
+    add_test(NAME aether.paint-context COMMAND aether_paint_context_test)
+
+    add_executable(aether_ua_stylesheet_test tests/test_ua_stylesheet.cpp)
+    target_link_libraries(aether_ua_stylesheet_test PRIVATE AetherUI::Core)
+    add_test(NAME aether.ua-stylesheet COMMAND aether_ua_stylesheet_test)
+
+    add_executable(aether_style_map_lifetime_test tests/test_style_map_lifetime.cpp)
+    target_link_libraries(aether_style_map_lifetime_test PRIVATE AetherUI::Core)
+    add_test(NAME aether.style-map-lifetime COMMAND aether_style_map_lifetime_test)
 endif()
 
 set(AETHERUI_INSTALL_CMAKEDIR

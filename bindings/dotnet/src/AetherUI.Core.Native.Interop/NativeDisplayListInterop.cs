@@ -55,6 +55,17 @@ public sealed class NativeDisplayListInterop : IDisposable
         return ReadList(list);
     }
 
+    /// <summary>
+    /// Attaches the CSS transition runtime so the builder consumes per-element opacity/transform
+    /// overrides while transitions are active. Called once after builder creation; a null runtime
+    /// restores the byte-identical no-override path.
+    /// </summary>
+    public void SetTransitionRuntime(IntPtr runtime)
+    {
+        ObjectDisposedException.ThrowIf(_builder == IntPtr.Zero, this);
+        NativeMethods.DisplayListBuilderSetTransitionRuntime(_builder, runtime);
+    }
+
     private IReadOnlyList<NativePaintCommand> ReadList(IntPtr list)
     {
         try

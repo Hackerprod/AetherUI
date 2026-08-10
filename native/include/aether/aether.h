@@ -27,7 +27,7 @@ extern "C" {
  * ABI 1.0, a major-version change denotes an incompatible ABI.
  */
 #define AETHER_ABI_VERSION_MAJOR 0u
-#define AETHER_ABI_VERSION_MINOR 30u
+#define AETHER_ABI_VERSION_MINOR 34u
 #define AETHER_ABI_VERSION_PATCH 0u
 
 #define AETHER_ABI_VERSION_MAKE(major, minor, patch) \
@@ -455,6 +455,30 @@ typedef enum {
     AETHER_POINTER_EVENTS_NONE
 } aether_pointer_events_t;
 
+/* ── Transitions (computed style fields) ──────────────────────────── */
+
+/* v1 animatable computed-style properties. The runtime consumes these bits
+   to decide which values may interpolate on a state-triggered style change.
+   Only opacity and transform are animatable in this slice; color and other
+   properties are out of scope and never start a transition. */
+typedef enum {
+    AETHER_TRANSITION_PROPERTY_OPACITY   = 1 << 0,
+    AETHER_TRANSITION_PROPERTY_TRANSFORM = 1 << 1
+} aether_transition_property_e;
+
+/* Standard CSS transition-timing-function keywords, mapped to the cubic
+   bezier curves defined by the spec:
+   linear = linear, ease = cubic-bezier(.25,.1,.25,1),
+   ease-in = cubic-bezier(.42,0,1,1), ease-out = cubic-bezier(0,0,.58,1),
+   ease-in-out = cubic-bezier(.42,0,.58,1). */
+typedef enum {
+    AETHER_TRANSITION_TIMING_LINEAR = 0,
+    AETHER_TRANSITION_TIMING_EASE,
+    AETHER_TRANSITION_TIMING_EASE_IN,
+    AETHER_TRANSITION_TIMING_EASE_OUT,
+    AETHER_TRANSITION_TIMING_EASE_IN_OUT
+} aether_transition_timing_t;
+
 /* ── ComputedStyle (blittable flat struct) ─────────────────────────── */
 
 typedef struct {
@@ -524,7 +548,32 @@ typedef struct {
     int32_t           cursor;
     int32_t           pointer_events;
     aether_bool_t     visible;
+
+    /* Stacking (global z-index paint order). z_index_kind is
+       aether_z_index_kind_t: AUTO means the value is ignored and the element
+       paints in the in-flow phase; INTEGER means z_index participates in the
+       paint-order classification. Defaults are AUTO/0. */
+    int32_t           z_index;
+    int32_t           z_index_kind;
+
+    /* Transitions. Field layout (appended at the end of the struct, ABI 0.33.0):
+         transition_properties  int32   bitmask of aether_transition_property_e
+         transition_duration    float   seconds; 0 = no transition
+         transition_delay       float   seconds
+         transition_timing      int32   aether_transition_timing_t
+       Bindings mirror these four trailing fields in their raw computed-style
+       copy so the managed struct size stays byte-identical. Defaults are
+       none/0s/0s/LINEAR. */
+    int32_t           transition_properties;
+    float             transition_duration;
+    float             transition_delay;
+    int32_t           transition_timing;
 } aether_computed_style_t;
+
+typedef enum {
+    AETHER_Z_INDEX_AUTO = 0,
+    AETHER_Z_INDEX_INTEGER = 1
+} aether_z_index_kind_t;
 
 AETHER_API aether_computed_style_t aether_computed_style_default(void);
 AETHER_API aether_computed_style_t aether_computed_style_inherit_from(const aether_computed_style_t* parent);
@@ -817,6 +866,17 @@ AETHER_API aether_status_t aether_display_list_get_command(aether_display_list_t
 
 AETHER_API void aether_paint_command_free(aether_paint_command_t* cmd);
 
+/* ── Images ──────────────────────────────────────────────────────────── */
+
+/* Decodes arbitrary image bytes (PNG, JPEG, GIF, BMP, ...) into the engine's
+   canonical pixel format: contiguous BGRA8 pixels with premultiplied alpha, in
+   top-to-bottom rows, using Width * 4 bytes per row. The returned buffer is
+   owned by the caller and must be released with aether_image_pixels_free. */
+AETHER_API aether_status_t aether_image_decode(const uint8_t* bytes, size_t byte_count,
+                                               int32_t* out_width, int32_t* out_height,
+                                               uint8_t** out_pixels);
+AETHER_API void          aether_image_pixels_free(uint8_t* pixels);
+
 /* -- Render planning -------------------------------------------------------
  *
  * Bindings own platform rendering backends, but the engine owns the policy
@@ -918,6 +978,12 @@ AETHER_API void aether_style_runtime_set_diagnostics_callback(
     void* user_data);
 
 AETHER_API void aether_style_runtime_destroy(aether_style_runtime_t runtime);
+
+/* Returns the engine's baked-in UA stylesheet text. The returned pointer is a
+   static literal valid for the process lifetime; the caller must not free it.
+   AetherUI ships no implicit UA sheet — the host decides when to apply these
+   defaults by adding them at the engine-defaults layer (layer 0). */
+AETHER_API const char* aether_style_runtime_defaults_css(void);
 
 AETHER_API aether_status_t aether_style_runtime_add_stylesheet(
     aether_style_runtime_t runtime,

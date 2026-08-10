@@ -25,6 +25,9 @@ internal sealed class RenderingInterop : IDisposable
     public DisplayList BuildNode(NativeLayoutResult layout, NativeStyleMap currentStyles, IntPtr element, IntPtr focusedElement) =>
         DecodeList(_native.BuildNode(layout, currentStyles, element, focusedElement));
 
+    /// <summary>Attaches the CSS transition runtime to the native display-list builder (set once after construction).</summary>
+    public void SetTransitionRuntime(IntPtr runtime) => _native.SetTransitionRuntime(runtime);
+
     public void Dispose() => _native.Dispose();
 
     private PaintCommand Decode(NativePaintCommand command)

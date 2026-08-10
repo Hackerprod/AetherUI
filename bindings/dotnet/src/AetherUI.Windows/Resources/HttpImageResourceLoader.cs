@@ -1,6 +1,4 @@
-using System.Drawing;
-using System.Drawing.Imaging;
-using System.Runtime.InteropServices;
+using AetherUI.Core.Native;
 using AetherUI.Runtime;
 
 namespace AetherUI.Windows.Resources;
@@ -56,47 +54,12 @@ public sealed class HttpImageResourceLoader : IImageResourceLoader, IDisposable
             await buffer.WriteAsync(chunk.AsMemory(0, read), cancellationToken).ConfigureAwait(false);
         }
 
-        try
+        if (!NativeImageDecode.TryDecode(buffer.GetBuffer().AsSpan(0, checked((int)buffer.Length)), out var width, out var height, out var pixels))
         {
-            buffer.Position = 0;
-            using var decoded = new Bitmap(buffer);
-            using var bitmap = new Bitmap(decoded);
-            return Decode(bitmap);
-        }
-        catch (ArgumentException exception)
-        {
-            throw new InvalidDataException("The downloaded resource is not a supported image.", exception);
-        }
-        catch (ExternalException exception)
-        {
-            throw new InvalidDataException("The downloaded image could not be decoded.", exception);
-        }
-    }
-
-    private static ImageResourceResult Decode(Bitmap bitmap)
-    {
-        if (bitmap.Width <= 0 || bitmap.Height <= 0)
-        {
-            throw new InvalidDataException("The decoded image has no pixels.");
+            throw new InvalidDataException("The downloaded resource is not a supported image.");
         }
 
-        var rectangle = new Rectangle(0, 0, bitmap.Width, bitmap.Height);
-        var data = bitmap.LockBits(rectangle, ImageLockMode.ReadOnly, PixelFormat.Format32bppPArgb);
-        try
-        {
-            var rowBytes = checked(bitmap.Width * 4);
-            var pixels = new byte[checked(rowBytes * bitmap.Height)];
-            for (var row = 0; row < bitmap.Height; row++)
-            {
-                var sourceRow = IntPtr.Add(data.Scan0, checked(row * data.Stride));
-                Marshal.Copy(sourceRow, pixels, row * rowBytes, rowBytes);
-            }
-            return new ImageResourceResult(new ImageDimensions(bitmap.Width, bitmap.Height), pixels);
-        }
-        finally
-        {
-            bitmap.UnlockBits(data);
-        }
+        return new ImageResourceResult(new ImageDimensions(width, height), pixels);
     }
 
     public void Dispose()

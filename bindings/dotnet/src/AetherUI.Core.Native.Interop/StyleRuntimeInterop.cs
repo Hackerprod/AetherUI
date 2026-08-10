@@ -49,7 +49,8 @@ public sealed record NativeComputedStyle(
     IReadOnlyList<NativeShadow> TextShadows, NativeBorderRadii BorderRadii, float Opacity,
     IReadOnlyList<NativeShadow> BoxShadows,
     string FontFamily, float FontSize, int FontWeight, float LineHeight, int TextAlign, int TextTransform, int WhiteSpace,
-    int OverflowX, int OverflowY, int Cursor, int PointerEvents, bool Visible);
+    int OverflowX, int OverflowY, int Cursor, int PointerEvents, bool Visible,
+    int TransitionProperties, float TransitionDuration, float TransitionDelay, int TransitionTiming);
 
 public sealed record NativeStyleResolution(
     IReadOnlyList<NativeComputedStyle> Styles,
@@ -106,7 +107,9 @@ public sealed unsafe class StyleRuntimeInterop : IDisposable
         Load(_ownedDocument, defaultsCss, authorCss);
     }
 
-    /// <summary>Resolves styles against a caller-owned native DOM; it never reparses markup.</summary>
+    /// <summary>Resolves styles against a caller-owned native DOM; it never reparses markup.
+    /// <paramref name="defaultsCss"/> is ignored: the engine-defaults (UA) text now comes from the
+    /// native runtime via <see cref="NativeMethods.StyleRuntimeDefaultsCss"/>.</summary>
     public void Load(NativeDomDocument document, string defaultsCss, string authorCss)
     {
         ThrowIfDisposed();
@@ -118,7 +121,7 @@ public sealed unsafe class StyleRuntimeInterop : IDisposable
             throw new InvalidOperationException("Native defaults stylesheet could not be removed.");
         if (_author != 0 && NativeMethods.StyleRuntimeRemoveStyleSheet(_runtime, _author) == 0)
             throw new InvalidOperationException("Native author stylesheet could not be removed.");
-        _defaults = AddStyleSheet(defaultsCss, 0, "aether-defaults.css");
+        _defaults = AddStyleSheet(ReadDefaultsCss(), 0, "aether-defaults.css");
         _author = AddStyleSheet(authorCss, 2, "<style>");
         _elements = document.EnumerateElementHandles().ToList();
         _elementIndex.Clear();
@@ -213,6 +216,14 @@ public sealed unsafe class StyleRuntimeInterop : IDisposable
         return handle;
     }
 
+    private static string ReadDefaultsCss()
+    {
+        var pointer = NativeMethods.StyleRuntimeDefaultsCss();
+        if (pointer == IntPtr.Zero)
+            throw new InvalidOperationException("Native UA defaults stylesheet is unavailable.");
+        return Marshal.PtrToStringUTF8(pointer) ?? string.Empty;
+    }
+
     private NativeStyleChangeResolution ResolveUpdates(int count, IntPtr updates)
     {
         var aggregate = NativeStyleImpact.None;
@@ -287,64 +298,64 @@ public sealed unsafe class StyleRuntimeInterop : IDisposable
     }
 
     [StructLayout(LayoutKind.Sequential)]
-    private struct RuntimeOptions
+internal struct RuntimeOptions
     {
         public int ThrowOnInvalid, EnforceThreadAffinity, MaxVariableDepth, MaxVariableExpansionLength;
     }
 
     [StructLayout(LayoutKind.Sequential)]
-    private readonly record struct RuntimeEnvironment(
+internal readonly record struct RuntimeEnvironment(
         float Width, float Height, float DpiScale, float RootFontSize,
         int ColorScheme, int PointerAccuracy, int MotionPreference);
 
     [StructLayout(LayoutKind.Sequential)]
-    private readonly record struct LengthRaw(float Value, int Unit, float Percent, float Em, float Rem, float Vw, float Vh)
+    internal readonly record struct LengthRaw(float Value, int Unit, float Percent, float Em, float Rem, float Vw, float Vh)
     {
         public NativeLength ToPublic() => new(Value, Unit, Percent, Em, Rem, Vw, Vh);
     }
 
     [StructLayout(LayoutKind.Sequential)]
-    private readonly record struct EdgesRaw(LengthRaw Left, LengthRaw Top, LengthRaw Right, LengthRaw Bottom)
+internal readonly record struct EdgesRaw(LengthRaw Left, LengthRaw Top, LengthRaw Right, LengthRaw Bottom)
     {
         public NativeEdges ToPublic() => new(Left.ToPublic(), Top.ToPublic(), Right.ToPublic(), Bottom.ToPublic());
     }
 
     [StructLayout(LayoutKind.Sequential)]
-    private readonly record struct ColorRaw(float R, float G, float B, float A)
+internal readonly record struct ColorRaw(float R, float G, float B, float A)
     {
         public NativeColor ToPublic() => new(R, G, B, A);
     }
 
     [StructLayout(LayoutKind.Sequential)]
-    private readonly record struct ColorEdgesRaw(ColorRaw Left, ColorRaw Top, ColorRaw Right, ColorRaw Bottom)
+internal readonly record struct ColorEdgesRaw(ColorRaw Left, ColorRaw Top, ColorRaw Right, ColorRaw Bottom)
     {
         public NativeColorEdges ToPublic() => new(Left.ToPublic(), Top.ToPublic(), Right.ToPublic(), Bottom.ToPublic());
     }
 
     [StructLayout(LayoutKind.Sequential)]
-    private readonly record struct BorderStyleEdgesRaw(int Left, int Top, int Right, int Bottom)
+internal readonly record struct BorderStyleEdgesRaw(int Left, int Top, int Right, int Bottom)
     {
         public NativeBorderStyleEdges ToPublic() => new(Left, Top, Right, Bottom);
     }
     [StructLayout(LayoutKind.Sequential)]
-    private readonly record struct CornerRadiusRaw(LengthRaw Horizontal, LengthRaw Vertical)
+internal readonly record struct CornerRadiusRaw(LengthRaw Horizontal, LengthRaw Vertical)
     {
         public NativeCornerRadius ToPublic() => new(Horizontal.ToPublic(), Vertical.ToPublic());
     }
     [StructLayout(LayoutKind.Sequential)]
-    private readonly record struct BorderRadiiRaw(CornerRadiusRaw TopLeft, CornerRadiusRaw TopRight, CornerRadiusRaw BottomRight, CornerRadiusRaw BottomLeft)
+internal readonly record struct BorderRadiiRaw(CornerRadiusRaw TopLeft, CornerRadiusRaw TopRight, CornerRadiusRaw BottomRight, CornerRadiusRaw BottomLeft)
     {
         public NativeBorderRadii ToPublic() => new(TopLeft.ToPublic(), TopRight.ToPublic(), BottomRight.ToPublic(), BottomLeft.ToPublic());
     }
 
     [StructLayout(LayoutKind.Sequential)]
-    private struct GradientRaw { public float X, Y; public IntPtr Stops; public int Count; }
+internal struct GradientRaw { public float X, Y; public IntPtr Stops; public int Count; }
     [StructLayout(LayoutKind.Sequential)]
-    private readonly record struct GradientStopRaw(ColorRaw Color, LengthRaw Position, float Offset, int HasPosition);
+internal readonly record struct GradientStopRaw(ColorRaw Color, LengthRaw Position, float Offset, int HasPosition);
     [StructLayout(LayoutKind.Sequential)]
-    private readonly record struct BackgroundLayerListRaw(IntPtr Items, int Count);
+internal readonly record struct BackgroundLayerListRaw(IntPtr Items, int Count);
     [StructLayout(LayoutKind.Sequential)]
-    private struct BackgroundLayerRaw
+internal struct BackgroundLayerRaw
     {
         public int Kind;
         public GradientRaw Gradient;
@@ -362,28 +373,28 @@ public sealed unsafe class StyleRuntimeInterop : IDisposable
             SizeX.ToPublic(), SizeY.ToPublic(), RepeatX, RepeatY);
     }
     [StructLayout(LayoutKind.Sequential)]
-    private struct ShadowRaw
+internal struct ShadowRaw
     {
         public float X, Y, Blur, Spread; public ColorRaw Color; public int Inset;
         public readonly NativeShadow ToPublic() => new(X, Y, Blur, Spread, Color.ToPublic(), Inset != 0);
     }
     [StructLayout(LayoutKind.Sequential)]
-    private readonly record struct ShadowListRaw(IntPtr Items, int Count);
+internal readonly record struct ShadowListRaw(IntPtr Items, int Count);
     [StructLayout(LayoutKind.Sequential)]
-    private struct BackdropFilterRaw
+internal struct BackdropFilterRaw
     {
         public int Kind; public LengthRaw LengthAmount; public float ScalarAmount;
         public readonly NativeBackdropFilter ToPublic() => new(Kind, LengthAmount.ToPublic(), ScalarAmount);
     }
     [StructLayout(LayoutKind.Sequential)]
-    private readonly record struct BackdropFilterListRaw(IntPtr Items, int Count);
+internal readonly record struct BackdropFilterListRaw(IntPtr Items, int Count);
     [StructLayout(LayoutKind.Sequential)]
-    private readonly record struct FlexBasisRaw(int Kind, LengthRaw Length)
+internal readonly record struct FlexBasisRaw(int Kind, LengthRaw Length)
     {
         public NativeFlexBasis ToPublic() => new(Kind, Length.ToPublic());
     }
     [StructLayout(LayoutKind.Sequential)]
-    private readonly record struct TransformOperationRaw(
+    internal readonly record struct TransformOperationRaw(
         int Kind, LengthRaw X, LengthRaw Y, float ScalarX, float ScalarY, float AngleRadians,
         float MatrixA, float MatrixB, float MatrixC, float MatrixD, float MatrixE, float MatrixF)
     {
@@ -392,15 +403,15 @@ public sealed unsafe class StyleRuntimeInterop : IDisposable
             MatrixA, MatrixB, MatrixC, MatrixD, MatrixE, MatrixF);
     }
     [StructLayout(LayoutKind.Sequential)]
-    private readonly record struct TransformListRaw(IntPtr Items, int Count);
+    internal readonly record struct TransformListRaw(IntPtr Items, int Count);
     [StructLayout(LayoutKind.Sequential)]
-    private readonly record struct TransformOriginRaw(LengthRaw X, LengthRaw Y)
+    internal readonly record struct TransformOriginRaw(LengthRaw X, LengthRaw Y)
     {
         public NativeTransformOrigin ToPublic() => new(X.ToPublic(), Y.ToPublic());
     }
 
     [StructLayout(LayoutKind.Sequential)]
-    private unsafe struct ComputedStyleRaw
+    internal unsafe struct ComputedStyleRaw
     {
         public int Display, FlexDirection, JustifyContent, AlignItems, AlignSelf;
         public float FlexGrow, FlexShrink; public FlexBasisRaw FlexBasis; public int FlexWrap; public float Gap;
@@ -417,6 +428,11 @@ public sealed unsafe class StyleRuntimeInterop : IDisposable
         public fixed byte FontFamily[64];
         public float FontSize; public int FontWeight; public float LineHeight; public int TextAlign, TextTransform, WhiteSpace;
         public int OverflowX, OverflowY, Cursor, PointerEvents, Visible;
+        public int ZIndex, ZIndexKind;
+        public int TransitionProperties;
+        public float TransitionDuration;
+        public float TransitionDelay;
+        public int TransitionTiming;
 
         public NativeComputedStyle ToPublic()
         {
@@ -432,7 +448,8 @@ public sealed unsafe class StyleRuntimeInterop : IDisposable
                 ReadShadows(TextShadows), BorderRadii.ToPublic(), Opacity,
                 ReadShadows(BoxShadows),
                 family, FontSize, FontWeight, LineHeight, TextAlign, TextTransform, WhiteSpace,
-                OverflowX, OverflowY, Cursor, PointerEvents, Visible != 0);
+                OverflowX, OverflowY, Cursor, PointerEvents, Visible != 0,
+                TransitionProperties, TransitionDuration, TransitionDelay, TransitionTiming);
         }
     }
 

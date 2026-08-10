@@ -147,6 +147,16 @@ public sealed class PageCatalogComponent : UiComponent
                     border-color: #4a78b9;
                 }
 
+                .demo-card {
+                    border-color: #7c3aed;
+                    background: rgba(54, 34, 92, 0.55);
+                }
+
+                .demo-card:hover {
+                    background: #3d2a73;
+                    border-color: #a78bfa;
+                }
+
                 .page-name {
                     color: #f4f8ff;
                     font-size: 16px;
@@ -184,6 +194,10 @@ public sealed class PageCatalogComponent : UiComponent
         writer.WriteEventAttribute("onclick", Refresh);
         writer.WriteLiteral(">Refresh</button></div>");
 
+        writer.WriteLiteral("<article class=\"page-card demo-card\"><div><div class=\"page-name\">Modal Interactivo (transitions)</div><div class=\"page-file\">ModalComponent.cs — live opacity + transform demo</div></div><button class=\"open\"");
+        writer.WriteEventAttribute("onclick", _ => OpenModalDemo());
+        writer.WriteLiteral(">Open</button></article>");
+
         if (pages.Length == 0)
         {
             writer.WriteLiteral("<div class=\"empty\">No HTML pages were found in the Pages folder.</div>");
@@ -207,7 +221,11 @@ public sealed class PageCatalogComponent : UiComponent
 
     private void Refresh() => StateHasChanged();
 
-    private static void OpenPage(string pagePath)
+    private static void OpenPage(string pagePath) => LaunchValidator("--page", pagePath);
+
+    private static void OpenModalDemo() => LaunchValidator("--modal");
+
+    private static void LaunchValidator(params string[] arguments)
     {
         var executable = Environment.ProcessPath
             ?? throw new InvalidOperationException("The Validator executable path is unavailable.");
@@ -216,8 +234,11 @@ public sealed class PageCatalogComponent : UiComponent
             UseShellExecute = true,
             WorkingDirectory = AppContext.BaseDirectory,
         };
-        startInfo.ArgumentList.Add("--page");
-        startInfo.ArgumentList.Add(pagePath);
+        foreach (var argument in arguments)
+        {
+            startInfo.ArgumentList.Add(argument);
+        }
+
         var validator = Process.Start(startInfo)
             ?? throw new InvalidOperationException("The Validator process could not be started.");
         var catalogWindow = FindWindow(null, WindowTitle);

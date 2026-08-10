@@ -36,6 +36,13 @@ public readonly record struct NativeScrollbarGeometry(
     NativeRect VerticalThumb,
     NativeRect Corner);
 
+/// <summary>Blittable aether_transform_matrix (row-vector affine: x' = x*m11 + y*m21 + dx).</summary>
+[StructLayout(LayoutKind.Sequential)]
+public readonly record struct NativeTransformMatrix(
+    float M11, float M12,
+    float M21, float M22,
+    float Dx, float Dy);
+
 [StructLayout(LayoutKind.Sequential)]
 public readonly record struct NativeRenderPlanInput(
     uint Invalidation,
@@ -309,6 +316,9 @@ internal static unsafe partial class NativeMethods
     [LibraryImport(Lib, EntryPoint = "aether_style_runtime_destroy")]
     internal static partial void StyleRuntimeDestroy(IntPtr handle);
 
+    [LibraryImport(Lib, EntryPoint = "aether_style_runtime_defaults_css")]
+    internal static partial IntPtr StyleRuntimeDefaultsCss();
+
     [LibraryImport(Lib, EntryPoint = "aether_style_runtime_set_diagnostics_callback")]
     internal static partial void StyleRuntimeSetDiagnosticsCallback(
         IntPtr handle,
@@ -363,4 +373,44 @@ internal static unsafe partial class NativeMethods
 
     [LibraryImport(Lib, EntryPoint = "aether_computed_style_handle_destroy")]
     internal static partial void ComputedStyleHandleDestroy(IntPtr handle);
+
+    // ── Transitions ─────────────────────────────────────────────────
+    // Entry points for the native CSS transition runtime. The host clock and
+    // ticker wiring arrive in the next slice; these signatures are kept exact
+    // against transition_runtime.h.
+
+    [LibraryImport(Lib, EntryPoint = "aether_transition_runtime_create")]
+    internal static partial int TransitionRuntimeCreate(out IntPtr handle);
+
+    [LibraryImport(Lib, EntryPoint = "aether_transition_runtime_destroy")]
+    internal static partial void TransitionRuntimeDestroy(IntPtr runtime);
+
+    [LibraryImport(Lib, EntryPoint = "aether_transition_runtime_observe")]
+    internal static partial int TransitionRuntimeObserve(
+        IntPtr runtime, IntPtr node, IntPtr before, IntPtr after, long nowMs);
+
+    [LibraryImport(Lib, EntryPoint = "aether_transition_runtime_tick")]
+    internal static partial int TransitionRuntimeTick(IntPtr runtime, long nowMs);
+
+    [LibraryImport(Lib, EntryPoint = "aether_transition_runtime_has_active")]
+    internal static partial int TransitionRuntimeHasActive(IntPtr runtime);
+
+    [LibraryImport(Lib, EntryPoint = "aether_transition_runtime_opacity_override")]
+    internal static partial int TransitionRuntimeOpacityOverride(
+        IntPtr runtime, IntPtr node, out float opacity);
+
+    [LibraryImport(Lib, EntryPoint = "aether_transition_runtime_transform_override")]
+    internal static partial int TransitionRuntimeTransformOverride(
+        IntPtr runtime, IntPtr node, out NativeTransformMatrix matrix);
+
+    [LibraryImport(Lib, EntryPoint = "aether_display_list_builder_set_transition_runtime")]
+    internal static partial void DisplayListBuilderSetTransitionRuntime(IntPtr builder, IntPtr runtime);
+
+    // ── Images ──────────────────────────────────────────────────────
+
+    [LibraryImport(Lib, EntryPoint = "aether_image_decode")]
+    internal static partial int ImageDecode(byte* bytes, nuint byteCount, out int width, out int height, out byte* pixels);
+
+    [LibraryImport(Lib, EntryPoint = "aether_image_pixels_free")]
+    internal static partial void ImagePixelsFree(byte* pixels);
 }

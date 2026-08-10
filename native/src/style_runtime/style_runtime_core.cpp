@@ -1,6 +1,7 @@
 #include <aether/aether.h>
 #include "../abi/aether_abi.h"
 #include "../css/border_utils.h"
+#include "../css/computed_style_internal.h"
 #include "../css/style_map_types.h"
 #include "../dom/dom_types.h"
 #include "style_property_registry_internal.h"
@@ -228,7 +229,13 @@ static bool style_equal(const aether_computed_style_t& a, const aether_computed_
            a.overflow_y == b.overflow_y &&
            a.cursor == b.cursor &&
            a.pointer_events == b.pointer_events &&
-           a.visible == b.visible;
+            a.visible == b.visible &&
+            a.z_index == b.z_index &&
+            a.z_index_kind == b.z_index_kind &&
+            a.transition_properties == b.transition_properties &&
+            a.transition_duration == b.transition_duration &&
+            a.transition_delay == b.transition_delay &&
+            a.transition_timing == b.transition_timing;
 }
 
 static void rebuild_index(aether_style_runtime_s* runtime) {
@@ -398,6 +405,43 @@ static runtime_node_state_s* compute_node(aether_style_runtime_s* runtime, aethe
             ? custom_property_invalid_value() : pair.second.source;
     }
 
+    // Deferred shorthands: their values reference custom properties, so they were kept
+    // raw at compile time. Resolve each against this node's variable scope and expand it
+    // into the cascade with the rule's own priority, exactly as if the expanded longhands
+    // had been authored inline (e.g. `background: var(--bg-gradient)` on a body).
+    for (const auto* rule : candidates) {
+        if (rule->selector.pseudo_element != node->pseudo_element) continue;
+        if (!media_condition_matches(rule->condition, &runtime->environment) ||
+            !selector_match(rule->selector, node)) continue;
+        if (rule->shorthand_declarations.empty()) continue;
+        for (const auto& declaration : rule->shorthand_declarations) {
+            std::string resolved;
+            if (!variable_resolve(declaration.source.c_str(), &scope,
+                                  runtime->options.max_variable_depth,
+                                  runtime->options.max_variable_expansion_length, resolved)) {
+                report(runtime, "AETHER-CSS-VAR", declaration.name.c_str(),
+                       declaration.source.c_str(), "Unable to resolve CSS variable.");
+                continue;
+            }
+            const auto* shorthand = registry->try_get_shorthand(declaration.name.c_str());
+            if (!shorthand) continue;
+            style_shorthand_writer_s writer;
+            if (!shorthand->expand(resolved.c_str(), writer)) continue;
+            for (const auto& item : writer.items) {
+                const auto* def = registry->try_get(item.name.c_str());
+                if (!def || def->id < 0 || def->id >= registry->property_count()) continue;
+                std::string parsed;
+                if (!def->parse(item.value.c_str(), parsed)) continue;
+                cascade_priority_t priority{
+                    declaration.important, false, rule->layer,
+                    rule->selector.specificity, rule->source_order, declaration.declaration_order
+                };
+                compiled_style_value_s value{compiled_value_mode::value, parsed, {}};
+                cascade[static_cast<size_t>(def->id)].offer(priority, value);
+            }
+        }
+    }
+
     if (generated_content) {
         generated_content->reset();
         if (content_winner.is_set) {
@@ -558,6 +602,18 @@ static runtime_node_state_s* compute_node(aether_style_runtime_s* runtime, aethe
     if (!changed) {
         impact = STYLE_IMPACT_NONE;
         inherited_change_impact = STYLE_IMPACT_NONE;
+        if (!is_new_node) {
+            // No-op recompute: keep the existing state so its owned buffers
+            // (background layers, gradients, shadows, filters) stay alive for
+            // any frame-local resolved style map that borrowed them. Replacing
+            // the state here — even with an identical style — destroys the old
+            // state and frees those buffers, orphaning the map's shallow copies
+            // and leaving descendant paint (e.g. a background image) dangling
+            // after an unrelated ancestor state change (hover).
+            aether_computed_style_free(&next);
+            found->second->inherited_change_impact = inherited_change_impact;
+            return found->second.get();
+        }
     } else if (is_new_node) {
         impact = STYLE_IMPACT_ALL_BITS;
         inherited_change_impact = declared_inherited_impact | inherited_parent_impact;
@@ -940,18 +996,30 @@ AETHER_API aether_status_t aether_style_runtime_create_resolved_style_map(
     auto* map = new (std::nothrow) aether_style_map_s();
     if (!map) return AETHER_ERROR_OUT_OF_MEMORY;
 
-    std::function<void(aether_node_s*)> visit = [&](aether_node_s* node) {
-        if (!node) return;
+    std::function<bool(aether_node_s*)> visit = [&](aether_node_s* node) {
+        if (!node) return true;
         if (node->type == AETHER_NODE_ELEMENT) {
             auto state = runtime->states.find(node);
             if (state != runtime->states.end()) {
-                // Gradient buffers remain owned by runtime->states for this frame.
-                map->styles.emplace(node, state->second->style.style);
+                // The map owns a deep copy of every stored style so it stays
+                // valid across later state recomputation. Styles without owned
+                // buffers copy as a plain struct; only elements with
+                // backgrounds, gradients, filters, or shadows pay list copies.
+                aether_computed_style_t copy{};
+                if (computed_style_deep_copy(state->second->style.style, &copy) != AETHER_OK)
+                    return false;
+                map->styles.emplace(node, std::move(copy));
             }
         }
-        for (auto* child : node->children) visit(child);
+        for (auto* child : node->children) {
+            if (!visit(child)) return false;
+        }
+        return true;
     };
-    visit(doc);
+    if (!visit(doc)) {
+        delete map;
+        return AETHER_ERROR_OUT_OF_MEMORY;
+    }
     *out_map = map;
     return AETHER_OK;
 }
@@ -968,12 +1036,23 @@ AETHER_API aether_status_t aether_style_runtime_update_resolved_style_map(
         if (!node || node->type != AETHER_NODE_ELEMENT) continue;
         auto state = runtime->states.find(node);
         if (state != runtime->states.end()) {
-            // The style map is a frame-local borrowed view. Updating the exact
-            // changed entries preserves its lifetime model without rebuilding
-            // an O(document) map for every state-only hover transition.
-            map->styles[node] = state->second->style.style;
+            aether_computed_style_t copy{};
+            if (computed_style_deep_copy(state->second->style.style, &copy) != AETHER_OK)
+                return AETHER_ERROR_OUT_OF_MEMORY;
+            auto existing = map->styles.find(node);
+            if (existing != map->styles.end()) {
+                // Release the previous owned copy before overwriting it.
+                aether_computed_style_free(&existing->second);
+                existing->second = std::move(copy);
+            } else {
+                map->styles.emplace(node, std::move(copy));
+            }
         } else {
-            map->styles.erase(node);
+            auto existing = map->styles.find(node);
+            if (existing != map->styles.end()) {
+                aether_computed_style_free(&existing->second);
+                map->styles.erase(existing);
+            }
         }
     }
     return AETHER_OK;

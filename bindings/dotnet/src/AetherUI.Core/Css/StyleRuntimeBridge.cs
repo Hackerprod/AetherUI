@@ -83,6 +83,10 @@ public static class StyleRuntimeBridge
             Cursor = (CursorKind)source.Cursor,
             PointerEvents = (PointerEventsKind)source.PointerEvents,
             Visible = source.Visible,
+            TransitionProperties = source.TransitionProperties,
+            TransitionDuration = source.TransitionDuration,
+            TransitionDelay = source.TransitionDelay,
+            TransitionTiming = source.TransitionTiming,
         };
         if (source.BoxShadows.Any(static shadow => shadow.Inset))
         {

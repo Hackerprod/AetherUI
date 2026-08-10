@@ -3,6 +3,7 @@
 #include "../css/css_types.h"
 #include "../dom/dom_types.h"
 
+#include <algorithm>
 #include <string>
 
 enum aether_form_control_content_model_e {
@@ -19,3 +20,16 @@ bool aether_form_control_is_opaque_single_line(const aether_node_s* element);
 std::string aether_opaque_control_display_text(
     const aether_node_s* element,
     const aether_computed_style_t& style);
+
+/* All form-control sizing/displacement rules live here; layout_engine only consults them. */
+float aether_control_min_content_height(float font_size, float line_height);
+float aether_control_opaque_content_height(
+    float measured_height,
+    float font_size,
+    float line_height,
+    bool has_explicit_height,
+    float explicit_height,
+    int32_t box_sizing,
+    float padding_v,
+    float border_v);
+float aether_control_flow_centering_offset(float definite_content_height, float used_content_height);

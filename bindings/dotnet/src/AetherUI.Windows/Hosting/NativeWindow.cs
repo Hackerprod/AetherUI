@@ -365,11 +365,28 @@ internal sealed class NativeWindow : IDisposable
             _paintInvalidated = false;
             ApplyPendingViewport();
             _host?.Render();
+            TickTransitionsIfActive();
         }
         finally
         {
             _ = NativeMethods.EndPaint(_windowHandle, ref paint);
         }
+    }
+
+    /// <summary>
+    /// Drives the CSS transition clock while transitions are active. Each tick advances the runtime
+    /// and requests a fresh frame; the host keeps re-requesting until the last transition finishes,
+    /// then paints its end value exactly once and stops. Any window hosting a UiDocumentHost gets
+    /// this behavior automatically.
+    /// </summary>
+    private void TickTransitionsIfActive()
+    {
+        if (_host is null || !_host.HasActiveTransitions)
+        {
+            return;
+        }
+
+        _host.TickTransitions(Environment.TickCount64);
     }
 
     private void MouseMoved(nint lParam)

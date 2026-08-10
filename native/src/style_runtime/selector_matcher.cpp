@@ -200,7 +200,10 @@ static bool matches_pseudo(const pseudo_selector_s& pseudo, aether_node_s* node)
     case PSEUDO_FORBIDDEN_STATE:
         return (static_cast<uint32_t>(node->state) & static_cast<uint32_t>(pseudo.state)) == 0;
     case PSEUDO_ROOT:
-        return node->parent == nullptr;
+        // :root matches the document element — the node whose parent is the
+        // Document node (the native DOM keeps the document as the html element's
+        // parent, so a bare parent==nullptr check would never match).
+        return node->parent == nullptr || node->parent->type == AETHER_NODE_DOCUMENT;
     case PSEUDO_EMPTY:
         return dom_child_count(node) == 0;
     case PSEUDO_FIRST_CHILD:

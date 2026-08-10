@@ -100,7 +100,9 @@ public sealed class ValidatorForm : Form
         var thread = new Thread(() =>
         {
             _component = new RawHtmlFileComponent(_htmlPath);
-            using var imageLoader = new HttpImageResourceLoader();
+            using var httpLoader = new HttpImageResourceLoader();
+            var fileLoader = new FileImageResourceLoader();
+            var imageLoader = new CompositeImageResourceLoader(httpLoader, new DataImageResourceLoader(), fileLoader);
             using var imageResolver = new ImageResourceResolver(imageLoader);
             var options = new UiHostOptions
             {

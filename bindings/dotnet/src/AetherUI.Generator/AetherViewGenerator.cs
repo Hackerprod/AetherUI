@@ -418,6 +418,9 @@ internal sealed class ViewCompiler
                         builder.Append("            writer.WriteLiteral(").Append(Quote(operation.Value)).AppendLine(");");
                     }
                     break;
+                case RenderOperationKind.ExpressionLiteral:
+                    builder.Append("            writer.WriteLiteral(").Append(operation.Value).AppendLine(");");
+                    break;
                 case RenderOperationKind.Expression:
                     builder.Append("            writer.Write(").Append(operation.Value).AppendLine(");");
                     break;
@@ -607,6 +610,8 @@ internal sealed class MarkupCompiler : IViewMarkupCompiler
         var index = 0;
         var insideTag = false;
         var quote = '\0';
+        var pendingTagName = string.Empty;
+        var inRawTextElement = false;
         while (index < _markup.Length)
         {
             if (insideTag && quote == '\0' && char.IsWhiteSpace(_markup[index]) && TryParseDynamicAttribute(index, out var attribute))
@@ -622,7 +627,9 @@ internal sealed class MarkupCompiler : IViewMarkupCompiler
                 && TryParseMustache(index, out var modernExpression, out var modernEnd))
             {
                 FlushLiteral();
-                _operations.Add(new RenderOperation(RenderOperationKind.Expression, null, modernExpression));
+                _operations.Add(new RenderOperation(
+                    inRawTextElement ? RenderOperationKind.ExpressionLiteral : RenderOperationKind.Expression,
+                    null, modernExpression));
                 index = modernEnd;
                 continue;
             }
@@ -639,7 +646,9 @@ internal sealed class MarkupCompiler : IViewMarkupCompiler
                 if (TryParseExpression(index, out var expression, out var end))
                 {
                     FlushLiteral();
-                    _operations.Add(new RenderOperation(RenderOperationKind.Expression, null, expression));
+                    _operations.Add(new RenderOperation(
+                        inRawTextElement ? RenderOperationKind.ExpressionLiteral : RenderOperationKind.Expression,
+                        null, expression));
                     index = end;
                     continue;
                 }
@@ -659,11 +668,18 @@ internal sealed class MarkupCompiler : IViewMarkupCompiler
                 else if (quote == '\0' && character == '>')
                 {
                     insideTag = false;
+                    // Raw-text elements (style/script) never HTML-decode their content, so
+                    // bindings inside them must be emitted verbatim (ExpressionLiteral).
+                    if (IsRawTextTagName(pendingTagName))
+                    {
+                        inRawTextElement = !pendingTagName.StartsWith("/", StringComparison.Ordinal);
+                    }
                 }
             }
             else if (character == '<' && !StartsWith(index, "<!--"))
             {
                 insideTag = true;
+                pendingTagName = ReadTagName(index);
             }
 
             index++;
@@ -672,6 +688,41 @@ internal sealed class MarkupCompiler : IViewMarkupCompiler
         FlushLiteral();
         return _operations;
     }
+
+    private static bool IsRawTextTagName(string tagName)
+    {
+        var name = tagName.TrimStart('/');
+        return name.Equals("style", StringComparison.OrdinalIgnoreCase) ||
+               name.Equals("script", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private string ReadTagName(int tagStart)
+    {
+        var cursor = tagStart + 1;
+        while (cursor < _markup.Length && char.IsWhiteSpace(_markup[cursor]))
+        {
+            cursor++;
+        }
+
+        // Preserve a leading '/' so callers can distinguish a closing tag (</style>),
+        // but still read the name after it.
+        var isClosing = cursor < _markup.Length && _markup[cursor] == '/';
+        if (isClosing)
+        {
+            cursor++;
+        }
+
+        var nameStart = cursor;
+        while (cursor < _markup.Length && IsTagNameCharacter(_markup[cursor]))
+        {
+            cursor++;
+        }
+
+        return (isClosing ? "/" : string.Empty) + _markup.Substring(nameStart, cursor - nameStart);
+    }
+
+    private static bool IsTagNameCharacter(char character) =>
+        char.IsLetterOrDigit(character) || character == '-' || character == '_';
 
     private bool TryParseDynamicAttribute(int start, out ParsedAttribute parsed)
     {
@@ -1225,6 +1276,10 @@ internal enum RenderOperationKind
 {
     Literal,
     Expression,
+    /// <summary>A binding expression inside a raw-text element (&lt;style&gt;/&lt;script&gt;): its
+    /// content is emitted verbatim (WriteLiteral) because raw-text content is never HTML-decoded —
+    /// encoding it would corrupt CSS URLs containing quotes (e.g. url('file:///...')).</summary>
+    ExpressionLiteral,
     Attribute,
     Event,
     IfStart,

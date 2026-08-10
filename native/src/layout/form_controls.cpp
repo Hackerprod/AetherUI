@@ -2,6 +2,9 @@
 
 #include "../css/text_transform.h"
 
+#include <algorithm>
+#include <cstdint>
+
 namespace {
 struct form_control_descriptor_s {
     const char* tag_name;
@@ -39,4 +42,33 @@ std::string aether_opaque_control_display_text(
     return placeholder != element->attributes.end()
         ? aether_apply_text_transform(placeholder->second, style.text_transform)
         : std::string();
+}
+
+float aether_control_min_content_height(float font_size, float line_height) {
+    return std::max(font_size * line_height, font_size * 1.1f);
+}
+
+float aether_control_opaque_content_height(
+    float measured_height,
+    float font_size,
+    float line_height,
+    bool has_explicit_height,
+    float explicit_height,
+    int32_t box_sizing,
+    float padding_v,
+    float border_v)
+{
+    float natural_height;
+    if (has_explicit_height) {
+        natural_height = (box_sizing == AETHER_BOX_SIZING_CONTENT_BOX)
+            ? explicit_height
+            : std::max(0.f, explicit_height - padding_v - border_v);
+    } else {
+        natural_height = std::max(measured_height, aether_control_min_content_height(font_size, line_height));
+    }
+    return std::max(natural_height, font_size * 1.1f);
+}
+
+float aether_control_flow_centering_offset(float definite_content_height, float used_content_height) {
+    return (definite_content_height - used_content_height) * 0.5f;
 }

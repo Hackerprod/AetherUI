@@ -62,6 +62,7 @@ struct declaration_compilation_result {
     std::vector<compiled_property_declaration_s> properties;
     std::vector<custom_property_declaration_s> custom;
     std::vector<compiled_content_declaration_s> content;
+    std::vector<compiled_shorthand_declaration_s> shorthands;
 };
 
 // ═══ Internal helpers ═══════════════════════════════════════════════════
@@ -289,6 +290,10 @@ static declaration_compilation_result compile_declarations(
         const auto* shorthand = registry->try_get_shorthand(name.c_str());
         if (shorthand) {
             if (contains_variable(value)) {
+                // The shorthand value depends on custom properties that resolve per
+                // node. Keep the raw declaration; resolution expands it against the
+                // node's variable scope (see compute_node in style_runtime_core.cpp).
+                result.shorthands.push_back({name, value, important, declaration_order++});
                 continue;
             }
 
@@ -408,7 +413,8 @@ static void compile_range(
         auto declarations = compile_declarations(declaration_text, registry, diagnostics_callback, diagnostics_user_data);
 
         if (!selectors.empty() &&
-            (!declarations.properties.empty() || !declarations.custom.empty() || !declarations.content.empty()))
+            (!declarations.properties.empty() || !declarations.custom.empty() || !declarations.content.empty() ||
+             !declarations.shorthands.empty()))
         {
             int32_t source_order = rule_id_counter;
             for (auto& sel : selectors) {
@@ -421,6 +427,7 @@ static void compile_range(
                 rule.declarations = declarations.properties;
                 rule.custom_declarations = declarations.custom;
                 rule.content_declarations = declarations.content;
+                rule.shorthand_declarations = declarations.shorthands;
                 rule.source_order = source_order;
                 out_rules.push_back(std::move(rule));
             }

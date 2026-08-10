@@ -225,8 +225,11 @@ int main() {
     updates = nullptr;
     update_count = aether_style_runtime_resolve_subtree(runtime, aether_doc_get_body(doc), &updates);
     aether_style_updates_free(updates, update_count);
-    require(diagnostics.count == 1 && diagnostics.code == "AETHER-CSS-BACKGROUND-IMAGE-URL",
-        "malformed url() must report its dedicated background-image diagnostic");
+    // The background-image validator now delegates to the real CSS parser (single source of
+    // truth): a malformed `url(` is an invalid declaration and is dropped at compile time,
+    // exactly like a browser — the old split (validator accepted, apply diagnosed) is gone.
+    require(diagnostics.count == 0,
+        "malformed url() must be rejected by the parser-backed validator and dropped");
 
     diagnostics = {};
     int64_t invalid_calc_sheet = 0;

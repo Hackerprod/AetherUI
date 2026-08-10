@@ -1,19 +1,5 @@
-/* ── Layout Engine — faithful port from LayoutEngine.cs (868 lines) ─ */
-#include "layout_types.h"
-#include "scrollbar_geometry.h"
-#include "../abi/aether_abi.h"
-#include "../dom/dom_types.h"
-#include "../css/css_types.h"
-#include "../css/border_utils.h"
-#include "../css/text_transform.h"
-#include "box_model.h"
-#include "form_controls.h"
-#include "inline_text.h"
-#include "flex_resolver.h"
-#include "intrinsic_sizing.h"
-#include "margin_adjacency.h"
-#include "text_justify.h"
-#include "table_layout.h"
+/* ── Layout Engine — core box layout, flow, inline, and intrinsic sizing ─ */
+#include "layout_internal.h"
 
 #include <algorithm>
 #include <cctype>
@@ -34,34 +20,16 @@ static bool is_opaque_single_line_control(aether_node_s* element) {
     return aether_form_control_is_opaque_single_line(element);
 }
 
-static std::string normalize_whitespace(const std::string& value) {
-    std::string result;
-    bool prev_space = true; // start true so leading spaces are skipped
-    for (char c : value) {
-        if (std::isspace(static_cast<unsigned char>(c))) {
-            if (!prev_space) {
-                result += ' ';
-                prev_space = true;
-            }
-        } else {
-            result += c;
-            prev_space = false;
-        }
-    }
-    if (!result.empty() && result.back() == ' ')
-        result.pop_back();
-    return result;
-}
-
 static opaque_control_size_s measure_opaque_single_line_control(
     const aether_layout_engine_s* engine,
     aether_node_s* element,
     const aether_computed_style_t& style)
 {
+    const float min_height = aether_control_min_content_height(style.font_size, style.line_height);
     const std::string text = aether_opaque_control_display_text(element, style);
-    if (text.empty()) return {0.f, std::max(style.font_size * style.line_height, style.font_size * 1.1f)};
+    if (text.empty()) return {0.f, min_height};
     const auto metrics = engine_measure_text(engine, text.c_str(), &style, 0.f);
-    return {metrics.width, std::max(metrics.height, style.font_size * 1.1f)};
+    return {metrics.width, std::max(metrics.height, min_height)};
 }
 
 
@@ -71,149 +39,53 @@ static float resolve_length(aether_css_length l, float reference,
     return aether_css_length_resolve(l, reference, font_size, root_font_size, vp_w, vp_h);
 }
 
-static float resolve(const aether_layout_engine_s* e,
-                     aether_css_length value, float reference,
-                     const aether_computed_style_t& style) {
+float resolve(const aether_layout_engine_s* e,
+              aether_css_length value, float reference,
+              const aether_computed_style_t& style) {
     return resolve_length(value, reference, style.font_size,
                           e ? e->root_font_size : 16.f,
                           e ? e->viewport_width : 0.f,
                           e ? e->viewport_height : 0.f);
 }
 
-static aether_thicknessf resolve_padding_edges(const aether_layout_engine_s* e,
-                                               aether_css_edges edges, float reference,
-                                               const aether_computed_style_t& style) {
+aether_thicknessf resolve_padding_edges(const aether_layout_engine_s* e,
+                                        aether_css_edges edges, float reference,
+                                        const aether_computed_style_t& style) {
     return aether_resolve_box_edges(edges, reference, style.font_size, e ? e->root_font_size : 16.f,
                                     e ? e->viewport_width : 0.f, e ? e->viewport_height : 0.f, false);
 }
 
-static aether_thicknessf resolve_margin_edges(const aether_layout_engine_s* e,
-                                              aether_css_edges edges, float reference,
-                                              const aether_computed_style_t& style) {
+aether_thicknessf resolve_margin_edges(const aether_layout_engine_s* e,
+                                       aether_css_edges edges, float reference,
+                                       const aether_computed_style_t& style) {
     return aether_resolve_box_edges(edges, reference, style.font_size, e ? e->root_font_size : 16.f,
                                     e ? e->viewport_width : 0.f, e ? e->viewport_height : 0.f, true);
 }
 
-static aether_thicknessf resolve_border_edges(const aether_layout_engine_s* e,
-                                              const aether_computed_style_t& style,
-                                              float reference) {
+aether_thicknessf resolve_border_edges(const aether_layout_engine_s* e,
+                                       const aether_computed_style_t& style,
+                                       float reference) {
     return aether_resolve_border_edges(style, reference, e ? e->root_font_size : 16.f,
                                        e ? e->viewport_width : 0.f, e ? e->viewport_height : 0.f);
 }
 
-static aether_computed_style_t get_style(aether_style_map_s* styles, aether_node_s* el) {
+aether_computed_style_t get_style(aether_style_map_s* styles, aether_node_s* el) {
     if (!styles || !el) return aether_computed_style_default();
     auto it = styles->styles.find(el);
     return (it != styles->styles.end()) ? it->second : aether_computed_style_default();
 }
 
-// Flexbox §4 wraps each contiguous run of direct in-flow text in an anonymous
-// flex item.  The node is layout-owned, while its text children remain the
-// authored DOM nodes; this preserves DOM order without exposing a synthetic
-// element through the public DOM ABI.
-static aether_node_s* create_anonymous_flex_item(
-    aether_style_map_s* styles,
-    aether_layout_result_s* result,
-    aether_node_s* parent,
-    const aether_computed_style_t& parent_style,
-    const std::vector<aether_node_s*>& text_nodes)
-{
-    bool has_non_collapsible_content = false;
-    for (auto* node : text_nodes) {
-        if (node && node->type == AETHER_NODE_TEXT &&
-            !normalize_whitespace(node->text).empty()) {
-            has_non_collapsible_content = true;
-            break;
-        }
-    }
-    // A whitespace-only anonymous flex item is discarded by Flexbox §4.
-    if (!has_non_collapsible_content || !styles || !result) return nullptr;
-
-    auto* anonymous = new aether_node_s();
-    anonymous->type = AETHER_NODE_ELEMENT;
-    anonymous->parent = parent;
-    anonymous->tag_name = "aether-anonymous-flex-item";
-    anonymous->style_origin = parent;
-    anonymous->children = text_nodes;
-
-    // Anonymous flex items are transparent formatting wrappers: only inherited
-    // text properties transfer from the flex container; box decoration and
-    // flex longhands use their CSS initial values.
-    auto anonymous_style = aether_computed_style_default();
-    anonymous_style.color = parent_style.color;
-    std::strncpy(anonymous_style.font_family, parent_style.font_family,
-                 sizeof(anonymous_style.font_family) - 1);
-    anonymous_style.font_size = parent_style.font_size;
-    anonymous_style.font_weight = parent_style.font_weight;
-    anonymous_style.line_height = parent_style.line_height;
-    anonymous_style.text_align = parent_style.text_align;
-    anonymous_style.text_transform = parent_style.text_transform;
-    anonymous_style.white_space = parent_style.white_space;
-    anonymous_style.cursor = parent_style.cursor;
-    (void)aether_shadow_list_copy(&parent_style.text_shadows, &anonymous_style.text_shadows);
-    anonymous_style.display = AETHER_DISPLAY_BLOCK;
-
-    styles->styles.emplace(anonymous, anonymous_style);
-    result->layout_only_style_map = styles;
-    result->layout_only_nodes.push_back(anonymous);
-    result->layout_only_style_nodes.push_back(anonymous);
-    return anonymous;
-}
-
-static const std::vector<aether_node_s*>& collect_flex_items(
-    aether_style_map_s* styles,
-    aether_layout_result_s* result,
-    aether_node_s* parent,
-    const aether_computed_style_t& parent_style)
-{
-    static const std::vector<aether_node_s*> empty;
-    if (!parent || !result) return empty;
-    const auto existing = result->anonymous_flex_items.find(parent);
-    if (existing != result->anonymous_flex_items.end()) return existing->second;
-
-    auto [entry, inserted] = result->anonymous_flex_items.emplace(parent, std::vector<aether_node_s*>{});
-    (void)inserted;
-    auto& items = entry->second;
-    std::vector<aether_node_s*> direct_text_run;
-    const auto flush_direct_text = [&]() {
-        if (auto* anonymous = create_anonymous_flex_item(
-                styles, result, parent, parent_style, direct_text_run)) {
-            items.push_back(anonymous);
-        }
-        direct_text_run.clear();
-    };
-
-    for (auto* node : parent->children) {
-        if (node->type == AETHER_NODE_TEXT) {
-            direct_text_run.push_back(node);
-            continue;
-        }
-        flush_direct_text();
-        if (node->type != AETHER_NODE_ELEMENT) continue;
-        const auto child_style = get_style(styles, node);
-        const bool out_of_flow = child_style.position == AETHER_POSITION_ABSOLUTE ||
-            child_style.position == AETHER_POSITION_FIXED;
-        if (child_style.display != AETHER_DISPLAY_NONE && child_style.visible && !out_of_flow) {
-            items.push_back(node);
-        }
-    }
-    flush_direct_text();
-    return items;
-}
-
-static bool is_out_of_flow(const aether_computed_style_t& style) {
+bool is_out_of_flow(const aether_computed_style_t& style) {
     return style.position == AETHER_POSITION_ABSOLUTE ||
            style.position == AETHER_POSITION_FIXED;
 }
-
-static void offset_box(aether_layout_box_s* box, float dx, float dy);
 
 static void offset_rect(aether_rectf& r, float dx, float dy) {
     r.x += dx;
     r.y += dy;
 }
 
-static void offset_box(aether_layout_box_s* box, float dx, float dy) {
+void offset_box(aether_layout_box_s* box, float dx, float dy) {
     offset_rect(box->margin_box, dx, dy);
     offset_rect(box->border_box, dx, dy);
     offset_rect(box->padding_box, dx, dy);
@@ -223,62 +95,8 @@ static void offset_box(aether_layout_box_s* box, float dx, float dy) {
     }
 }
 
-static bool overflow_allows_user_scroll(int32_t overflow) {
-    return overflow == AETHER_OVERFLOW_AUTO || overflow == AETHER_OVERFLOW_SCROLL;
-}
-
-// A scroll container owns the overflow of descendants whose corresponding
-// axis remains visible. A nested clipping/scrolling container terminates that
-// axis' contribution, while its own border/margin box still contributes.
-static void accumulate_scrollable_descendant_extent(const aether_layout_box_s* parent,
-                                                    bool include_x,
-                                                    bool include_y,
-                                                    float& right,
-                                                    float& bottom) {
-    for (const auto* child : parent->children) {
-        if (include_x) right = std::max(right, child->margin_box.x + child->margin_box.width);
-        if (include_y) bottom = std::max(bottom, child->margin_box.y + child->margin_box.height);
-
-        const bool descend_x = include_x && child->style.overflow_x == AETHER_OVERFLOW_VISIBLE;
-        const bool descend_y = include_y && child->style.overflow_y == AETHER_OVERFLOW_VISIBLE;
-        if (descend_x || descend_y) {
-            accumulate_scrollable_descendant_extent(child, descend_x, descend_y, right, bottom);
-        }
-    }
-}
-
-static bool is_auto_margin(aether_css_length value) {
+bool is_auto_margin(aether_css_length value) {
     return value.unit == AETHER_CSS_UNIT_AUTO;
-}
-
-static void add_auto_margin_space(aether_layout_box_s* box,
-                                  float left, float top, float right, float bottom) {
-    if (left != 0.f || top != 0.f) offset_box(box, left, top);
-    box->margin_box.x -= left;
-    box->margin_box.y -= top;
-    box->margin_box.width += left + right;
-    box->margin_box.height += top + bottom;
-}
-
-static int auto_margin_count(const aether_computed_style_t& style, bool horizontal) {
-    return horizontal
-        ? static_cast<int>(is_auto_margin(style.margin.left)) + static_cast<int>(is_auto_margin(style.margin.right))
-        : static_cast<int>(is_auto_margin(style.margin.top)) + static_cast<int>(is_auto_margin(style.margin.bottom));
-}
-
-static bool consume_flex_cross_auto_margins(aether_layout_box_s* box,
-                                             const aether_computed_style_t& style,
-                                             bool horizontal_cross_axis,
-                                             float available_cross_size) {
-    const bool before_auto = horizontal_cross_axis ? is_auto_margin(style.margin.left) : is_auto_margin(style.margin.top);
-    const bool after_auto = horizontal_cross_axis ? is_auto_margin(style.margin.right) : is_auto_margin(style.margin.bottom);
-    const float used_size = horizontal_cross_axis ? box->margin_box.width : box->margin_box.height;
-    const auto resolved = aether_resolve_auto_margin_pair(
-        available_cross_size, used_size, 0.f, 0.f, before_auto, after_auto);
-    if (resolved.before <= 0.f && resolved.after <= 0.f) return false;
-    if (horizontal_cross_axis) add_auto_margin_space(box, resolved.before, 0.f, resolved.after, 0.f);
-    else add_auto_margin_space(box, 0.f, resolved.before, 0.f, resolved.after);
-    return true;
 }
 
 /* ── apply line alignment ─────────────────────────────────────────── */
@@ -379,28 +197,6 @@ static void apply_line_alignment(aether_layout_box_s* parent,
    LayoutEngine — core layout methods
    ══════════════════════════════════════════════════════════════════════ */
 
-static aether_layout_box_s* layout_element(
-    const aether_layout_engine_s* engine,
-    aether_style_map_s* styles,
-    aether_node_s* element,
-    aether_rectf containing_block,
-    float normal_flow_y,
-    bool force_available_width,
-    float forced_border_width,
-    bool has_forced_border_width,
-    float forced_border_height,
-    bool has_forced_border_height,
-    bool is_independent_layout_item,
-    aether_layout_result_s* result);
-
-static void layout_positioned_children(
-    const aether_layout_engine_s* engine,
-    aether_style_map_s* styles,
-    aether_layout_box_s* parent_box,
-    aether_node_s* parent,
-    aether_rectf positioning_block,
-    aether_layout_result_s* result);
-
 static float layout_atomic_control(
     const aether_layout_engine_s* engine,
     aether_node_s* element,
@@ -410,66 +206,12 @@ static float layout_atomic_control(
     aether_thicknessf padding,
     aether_thicknessf border);
 
-static float layout_flow_children(
-    const aether_layout_engine_s* engine,
-    aether_style_map_s* styles,
-    aether_layout_box_s* parent_box,
-    aether_node_s* parent,
-    aether_rectf content,
-    const aether_computed_style_t& parent_style,
-    aether_layout_result_s* result);
-
-static float layout_inline_items(
-    const aether_layout_engine_s* engine,
-    aether_style_map_s* styles,
-    aether_layout_box_s* parent_box,
-    const std::vector<inline_item_s>& items,
-    float start_x, float start_y, float available_width,
-    const aether_computed_style_t& parent_style,
-    aether_layout_result_s* result);
-
-static float layout_flex_children(
-    const aether_layout_engine_s* engine,
-    aether_style_map_s* styles,
-    aether_layout_box_s* parent_box,
-    aether_node_s* parent,
-    aether_rectf content,
-    const aether_computed_style_t& style,
-    bool has_definite_height,
-    aether_layout_result_s* result);
-
-struct table_row_s {
-    aether_node_s* element = nullptr;
-    std::vector<aether_node_s*> cells;
-};
-
-static float layout_table_children(
-    const aether_layout_engine_s* engine,
-    aether_style_map_s* styles,
-    aether_layout_box_s* parent_box,
-    aether_node_s* table,
-    aether_rectf content,
-    aether_layout_result_s* result);
-
-static float measure_intrinsic_table_width(
-    const aether_layout_engine_s* engine,
-    aether_style_map_s* styles,
-    aether_node_s* table,
-    float maximum,
-    aether_layout_result_s* result,
-    aether_intrinsic_size_mode_e mode);
-
 static void collect_inline_element(
     const aether_layout_engine_s* engine,
     aether_style_map_s* styles,
     aether_node_s* element,
     const aether_computed_style_t& style,
     std::vector<inline_item_s>& output);
-
-static void collect_text_items(aether_node_s* owner,
-                               const aether_computed_style_t& style,
-                               const std::string& text,
-                               std::vector<inline_item_s>& output);
 
 enum class inline_node_role_e { ignored, inline_content, block_content };
 
@@ -481,24 +223,6 @@ static inline_node_role_e append_inline_node(
     aether_node_s* node,
     std::vector<inline_item_s>& output);
 
-static float measure_intrinsic_width(
-    const aether_layout_engine_s* engine,
-    aether_style_map_s* styles,
-    aether_node_s* element,
-    const aether_computed_style_t& style,
-    aether_thicknessf padding, aether_thicknessf border,
-    float maximum,
-    aether_layout_result_s* result,
-    aether_intrinsic_size_mode_e mode = aether_intrinsic_size_mode_e::max_content);
-
-static float measure_intrinsic_height(
-    const aether_layout_engine_s* engine,
-    aether_style_map_s* styles,
-    aether_node_s* element,
-    const aether_computed_style_t& style,
-    aether_thicknessf padding, aether_thicknessf border,
-    float available_width);
-
 static float measure_intrinsic_flex_width(
     const aether_layout_engine_s* engine,
     aether_style_map_s* styles,
@@ -506,13 +230,6 @@ static float measure_intrinsic_flex_width(
     const aether_computed_style_t& style,
     aether_thicknessf padding, aether_thicknessf border,
     float maximum,
-    aether_layout_result_s* result,
-    aether_intrinsic_size_mode_e mode);
-
-static float measure_child_natural_width(
-    const aether_layout_engine_s* engine,
-    aether_style_map_s* styles,
-    aether_node_s* child, float maximum,
     aether_layout_result_s* result,
     aether_intrinsic_size_mode_e mode);
 
@@ -534,7 +251,7 @@ static float measure_inline_items_height(
 
 /* ── Register ──────────────────────────────────────────────────────── */
 
-static void register_box(aether_layout_result_s* result, aether_layout_box_s* box) {
+void register_box(aether_layout_result_s* result, aether_layout_box_s* box) {
     if (!result->records_boxes) return;
     auto existing = result->primary_boxes.find(box->element);
     if (existing != result->primary_boxes.end()) {
@@ -547,26 +264,9 @@ static void register_box(aether_layout_result_s* result, aether_layout_box_s* bo
     result->paint_order.push_back(box);
 }
 
-class detached_layout_scope_s {
-public:
-    explicit detached_layout_scope_s(aether_layout_result_s* result)
-        : result_(result), previous_(result->records_boxes) {
-        result_->records_boxes = false;
-    }
-
-    ~detached_layout_scope_s() { result_->records_boxes = previous_; }
-
-    detached_layout_scope_s(const detached_layout_scope_s&) = delete;
-    detached_layout_scope_s& operator=(const detached_layout_scope_s&) = delete;
-
-private:
-    aether_layout_result_s* result_;
-    bool previous_;
-};
-
 /* ── LayoutElement ─────────────────────────────────────────────────── */
 
-static aether_layout_box_s* layout_element(
+aether_layout_box_s* layout_element(
     const aether_layout_engine_s* engine,
     aether_style_map_s* styles,
     aether_node_s* element,
@@ -697,6 +397,17 @@ static aether_layout_box_s* layout_element(
         content_height = layout_flow_children(engine, styles, box, element,
                                               {content_x, content_y, content_width, child_containing_height},
                                               style, result);
+        // Chromium centers in-flow content inside form controls that carry it
+        // (buttons): the line block floats in the middle of the control's definite
+        // height instead of hugging the top — even when the line block is TALLER
+        // than the content box (the overflow distributes symmetrically, e.g. a
+        // large glyph in a small fixed-size close button). Ordinary block
+        // containers keep the top-anchored flow position.
+        if (aether_form_control_content_model(element) == AETHER_FORM_CONTROL_FLOW_CONTENT &&
+            std::isfinite(definite_content_height)) {
+            const float dy = aether_control_flow_centering_offset(definite_content_height, content_height);
+            for (auto* child : box->children) offset_box(child, 0.f, dy);
+        }
     }
 
     // Parent/child collapsing is represented as an outward margin on this box and a
@@ -739,39 +450,9 @@ static aether_layout_box_s* layout_element(
         }
     }
 
-    // Absolute and fixed descendants do not take part in normal-flow sizing. Lay them out only
-    // after the in-flow content has established this element's padding box, which is their
-    // containing block for position: absolute.
-    const float positioning_height = std::isfinite(definite_content_height)
-        ? definite_content_height + aether_thicknessf_vertical(padding)
-        : content_height + aether_thicknessf_vertical(padding);
-    layout_positioned_children(engine, styles, box, element,
-                               {border_x + border.left, border_y + border.top,
-                                std::max(0.f, border_width - aether_thicknessf_horizontal(border)),
-                                std::max(0.f, positioning_height)},
-                               result);
-
-    // Scroll metrics are calculated once for both axes from the same
-    // descendant-overflow walk.  This deliberately avoids separate X/Y
-    // implementations drifting apart as the layout model grows.
-    const bool scrolls_x = overflow_allows_user_scroll(style.overflow_x);
-    const bool scrolls_y = overflow_allows_user_scroll(style.overflow_y);
-    if (scrolls_x || (scrolls_y && std::isfinite(definite_content_height))) {
-        float right = content_x + content_width;
-        float bottom = content_y + std::max(0.f, content_height);
-        accumulate_scrollable_descendant_extent(box, scrolls_x, scrolls_y, right, bottom);
-
-        if (scrolls_x) {
-            const float content_extent = std::max(content_width, right - content_x);
-            box->scroll.scrollable_overflow_x = std::max(0.f, content_extent - content_width);
-        }
-        if (scrolls_y && std::isfinite(definite_content_height)) {
-            const float content_extent = std::max(content_height, bottom - content_y);
-            box->scroll.scrollable_overflow_y = std::max(0.f, content_extent - definite_content_height);
-        }
-
-    }
-
+    // Resolve the final border height (content + explicit + min/max clamps) before laying
+    // out positioned descendants: their containing block is the finished padding box, so a
+    // min-height:100vh body anchors bottom-inset descendants to the viewport bottom like Chrome.
     float border_height = has_explicit_height
         ? (style.box_sizing == AETHER_BOX_SIZING_CONTENT_BOX
            ? explicit_height + aether_thicknessf_vertical(padding) + aether_thicknessf_vertical(border)
@@ -796,6 +477,56 @@ static aether_layout_box_s* layout_element(
 
     border_height = std::max(aether_thicknessf_vertical(border) + aether_thicknessf_vertical(padding), border_height);
 
+    // A horizontal flex container whose final height (explicit or min/max-clamped) exceeds its
+    // used content centers its cross axis (align-items center/end) like Chrome, instead of
+    // leaving items pinned to the top of the taller box.
+    if (style.display == AETHER_DISPLAY_FLEX &&
+        style.flex_direction != AETHER_FLEX_DIRECTION_COLUMN &&
+        !box->children.empty()) {
+        const float final_content_height = std::max(0.f,
+            border_height - aether_thicknessf_vertical(padding) - aether_thicknessf_vertical(border));
+        if (content_height < final_content_height) {
+            const float free = final_content_height - content_height;
+            for (auto* child : box->children) {
+                const auto child_style = child->element
+                    ? get_style(styles, child->element)
+                    : child->style;
+                const int32_t alignment = flex_cross_alignment(style, child_style);
+                if (alignment == AETHER_ALIGN_CENTER) offset_box(child, 0.f, free * 0.5f);
+                else if (alignment == AETHER_ALIGN_END) offset_box(child, 0.f, free);
+            }
+        }
+    }
+
+    // Absolute and fixed descendants do not take part in normal-flow sizing. Their containing
+    // block is this element's finished padding box (the final height resolved above).
+    layout_positioned_children(engine, styles, box, element,
+                               {border_x + border.left, border_y + border.top,
+                                std::max(0.f, border_width - aether_thicknessf_horizontal(border)),
+                                std::max(0.f, border_height - aether_thicknessf_vertical(border))},
+                               result);
+
+    // Scroll metrics are calculated once for both axes from the same
+    // descendant-overflow walk.  This deliberately avoids separate X/Y
+    // implementations drifting apart as the layout model grows.
+    const bool scrolls_x = overflow_allows_user_scroll(style.overflow_x);
+    const bool scrolls_y = overflow_allows_user_scroll(style.overflow_y);
+    if (scrolls_x || (scrolls_y && std::isfinite(definite_content_height))) {
+        float right = content_x + content_width;
+        float bottom = content_y + std::max(0.f, content_height);
+        accumulate_scrollable_descendant_extent(box, scrolls_x, scrolls_y, right, bottom);
+
+        if (scrolls_x) {
+            const float content_extent = std::max(content_width, right - content_x);
+            box->scroll.scrollable_overflow_x = std::max(0.f, content_extent - content_width);
+        }
+        if (scrolls_y && std::isfinite(definite_content_height)) {
+            const float content_extent = std::max(content_height, bottom - content_y);
+            box->scroll.scrollable_overflow_y = std::max(0.f, content_extent - definite_content_height);
+        }
+
+    }
+
     box->border_box = { border_x, border_y, border_width, border_height };
     box->padding_box = aether_rectf_deflate(box->border_box, border);
     box->content_box = aether_rectf_deflate(box->padding_box, padding);
@@ -817,139 +548,6 @@ static aether_layout_box_s* layout_element(
     return box;
 }
 
-/* ── Out-of-flow positioned descendants ───────────────────────────── */
-
-static void layout_positioned_children(
-    const aether_layout_engine_s* engine,
-    aether_style_map_s* styles,
-    aether_layout_box_s* parent_box,
-    aether_node_s* parent,
-    aether_rectf positioning_block,
-    aether_layout_result_s* result)
-{
-    auto flex_static_position = [&](const aether_computed_style_t& child_style,
-                                    const aether_rectf& containing,
-                                    const aether_rectf& child_margin_box) {
-        const auto& flex = parent_box->style;
-        const bool horizontal = flex.flex_direction == AETHER_FLEX_DIRECTION_ROW;
-        const float main_extent = horizontal ? containing.width : containing.height;
-        const float cross_extent = horizontal ? containing.height : containing.width;
-        const float child_main = horizontal ? child_margin_box.width : child_margin_box.height;
-        const float child_cross = horizontal ? child_margin_box.height : child_margin_box.width;
-
-        // Absolutely positioned flex children are not flex items and must never influence one
-        // another's anchor. CSS Flexbox §4.1 aligns each child independently inside the flex
-        // container's content box as though it were the sole item.
-        const float main_free = main_extent - child_main;
-        float main_offset = 0.f;
-        if (flex.justify_content == AETHER_JUSTIFY_CENTER) main_offset = main_free / 2.f;
-        else if (flex.justify_content == AETHER_JUSTIFY_END) main_offset = main_free;
-        // space-between has no distributable gap for a sole hypothetical item, so it is start.
-
-        const int32_t cross_alignment = child_style.align_self == AETHER_ALIGN_SELF_AUTO
-            ? flex.align_items
-            : child_style.align_self;
-        const float cross_free = cross_extent - child_cross;
-        float cross_offset = 0.f;
-        if (cross_alignment == AETHER_ALIGN_CENTER) cross_offset = cross_free / 2.f;
-        else if (cross_alignment == AETHER_ALIGN_END) cross_offset = cross_free;
-        // A fixed-size absolutely positioned child with stretch has no free sizing decision at
-        // this stage; its static start edge is the correct alignment anchor. Auto cross-size
-        // stretch is handled by the positioned sizing algorithm before this placement.
-
-        return horizontal
-            ? aether_rectf{containing.x + main_offset, containing.y + cross_offset, 0.f, 0.f}
-            : aether_rectf{containing.x + cross_offset, containing.y + main_offset, 0.f, 0.f};
-    };
-
-    auto static_position = [&](aether_node_s* node) {
-        // A positioned box with an auto inset keeps the position it would have occupied in
-        // normal flow. The laid-out in-flow children give us that anchor without putting the
-        // positioned box back into sizing. In particular this keeps ::after adjacent to the
-        // preceding text even when the parent is center-aligned.
-        if (node->pseudo_element == aether_pseudo_element_t::before) {
-            if (!parent_box->children.empty()) {
-                const auto* first = parent_box->children.front();
-                return aether_rectf{first->margin_box.x, first->margin_box.y, 0.f, 0.f};
-            }
-            return aether_rectf{positioning_block.x, positioning_block.y, 0.f, 0.f};
-        }
-
-        auto node_it = std::find(parent->children.begin(), parent->children.end(), node);
-        if (node_it != parent->children.begin()) {
-            for (auto previous = node_it; previous != parent->children.begin();) {
-                --previous;
-                const auto* previous_node = *previous;
-                for (auto box_it = parent_box->children.rbegin(); box_it != parent_box->children.rend(); ++box_it) {
-                    const auto* candidate = *box_it;
-                    const bool is_previous_element = previous_node->type == AETHER_NODE_ELEMENT &&
-                        candidate->element == previous_node;
-                    const bool is_parent_text = previous_node->type == AETHER_NODE_TEXT &&
-                        candidate->kind == LAYOUT_BOX_TEXT && candidate->element == parent;
-                    if (is_previous_element || is_parent_text) {
-                        return aether_rectf{
-                            candidate->margin_box.x + candidate->margin_box.width,
-                            candidate->margin_box.y,
-                            0.f, 0.f,
-                        };
-                    }
-                }
-            }
-        }
-        return aether_rectf{positioning_block.x, positioning_block.y, 0.f, 0.f};
-    };
-
-    for (auto* node : parent->children) {
-        if (node->type != AETHER_NODE_ELEMENT) continue;
-        const auto style = get_style(styles, node);
-        if (!is_out_of_flow(style) || style.display == AETHER_DISPLAY_NONE || !style.visible) continue;
-
-        // Fixed-position descendants use the viewport; absolute descendants use the nearest
-        // positioned ancestor supplied by their parent layout call.
-        const aether_rectf containing = style.position == AETHER_POSITION_FIXED
-            ? aether_rectf{0.f, 0.f, result->viewport.width, result->viewport.height}
-            : positioning_block;
-        const auto margin = resolve_margin_edges(engine, style.margin, containing.width, style);
-        const float left = resolve(engine, style.inset.left, containing.width, style);
-        const float right = resolve(engine, style.inset.right, containing.width, style);
-        const float top = resolve(engine, style.inset.top, containing.height, style);
-        const float bottom = resolve(engine, style.inset.bottom, containing.height, style);
-
-        const float specified_width = resolve(engine, style.width, containing.width, style);
-        const float specified_height = resolve(engine, style.height, containing.height, style);
-        const bool constrain_width = !std::isfinite(specified_width) &&
-            std::isfinite(left) && std::isfinite(right);
-        const bool constrain_height = !std::isfinite(specified_height) &&
-            std::isfinite(top) && std::isfinite(bottom);
-        const float forced_width = std::max(0.f, containing.width - left - right -
-                                             aether_thicknessf_horizontal(margin));
-        const float forced_height = std::max(0.f, containing.height - top - bottom -
-                                              aether_thicknessf_vertical(margin));
-
-        auto* child_box = layout_element(engine, styles, node, containing, containing.y,
-                                         false, forced_width, constrain_width,
-                                         forced_height, constrain_height, true, result);
-
-        const auto static_anchor = parent_box->style.display == AETHER_DISPLAY_FLEX
-            ? flex_static_position(style, containing, child_box->margin_box)
-            : static_position(node);
-        float x = static_anchor.x;
-        if (std::isfinite(left)) {
-            x = containing.x + left;
-        } else if (std::isfinite(right)) {
-            x = containing.x + containing.width - right - child_box->margin_box.width;
-        }
-        float y = static_anchor.y;
-        if (std::isfinite(top)) {
-            y = containing.y + top;
-        } else if (std::isfinite(bottom)) {
-            y = containing.y + containing.height - bottom - child_box->margin_box.height;
-        }
-        offset_box(child_box, x - child_box->margin_box.x, y - child_box->margin_box.y);
-        parent_box->add_child(child_box);
-    }
-}
-
 /* ── LayoutAtomicControl ───────────────────────────────────────────── */
 
 static float layout_atomic_control(
@@ -962,331 +560,24 @@ static float layout_atomic_control(
     aether_thicknessf border)
 {
     (void)content_width;
-    float natural_height;
-    if (has_explicit_height) {
-        natural_height = (style.box_sizing == AETHER_BOX_SIZING_CONTENT_BOX)
-            ? explicit_height
-            : std::max(0.f, explicit_height - aether_thicknessf_vertical(padding) - aether_thicknessf_vertical(border));
-    } else {
-        natural_height = measure_opaque_single_line_control(engine, element, style).content_height;
+    float measured_height = 0.f;
+    if (!has_explicit_height) {
+        measured_height = measure_opaque_single_line_control(engine, element, style).content_height;
     }
-    return std::max(natural_height, style.font_size * 1.1f);
-}
-
-struct resolved_flex_children_s {
-    std::vector<aether_layout_box_s*> boxes;
-    aether_flex_resolve_result_s resolution;
-};
-
-static bool flex_length_is_definite(aether_css_length length, bool main_size_is_definite) {
-    if (length.unit == AETHER_CSS_UNIT_PERCENT) return main_size_is_definite;
-    if (length.unit == AETHER_CSS_UNIT_LINEAR && std::fabs(length.linear_percent) > .0001f) {
-        return main_size_is_definite;
-    }
-    return length.unit != AETHER_CSS_UNIT_AUTO;
-}
-
-static float resolve_flex_main_border_size(const aether_layout_engine_s* engine,
-                                           const aether_computed_style_t& style,
-                                           const aether_rectf& content,
-                                           bool horizontal, bool main_size_is_definite,
-                                           aether_css_length length) {
-    if (!flex_length_is_definite(length, main_size_is_definite)) return NAN;
-    const float reference = horizontal ? content.width : content.height;
-    const float value = resolve(engine, length, reference, style);
-    if (!std::isfinite(value)) return NAN;
-    const auto padding = resolve_padding_edges(engine, style.padding, content.width, style);
-    const auto border = resolve_border_edges(engine, style, content.width);
-    const float decorations = horizontal
-        ? aether_thicknessf_horizontal(padding) + aether_thicknessf_horizontal(border)
-        : aether_thicknessf_vertical(padding) + aether_thicknessf_vertical(border);
-    return style.box_sizing == AETHER_BOX_SIZING_CONTENT_BOX
-        ? std::max(0.f, value) + decorations
-        : std::max(0.f, value);
-}
-
-static float flex_box_main_size(const aether_layout_box_s* box, bool horizontal) {
-    return horizontal ? box->border_box.width : box->border_box.height;
-}
-
-static float flex_box_outer_main_size(const aether_layout_box_s* box, bool horizontal) {
-    return horizontal ? box->margin_box.width : box->margin_box.height;
-}
-
-static float flex_box_cross_size(const aether_layout_box_s* box, bool horizontal) {
-    return horizontal ? box->margin_box.height : box->margin_box.width;
-}
-
-static float flex_box_border_cross_size(const aether_layout_box_s* box, bool horizontal) {
-    return horizontal ? box->border_box.height : box->border_box.width;
-}
-
-static int32_t flex_cross_alignment(const aether_computed_style_t& container,
-                                    const aether_computed_style_t& item) {
-    return item.align_self == AETHER_ALIGN_SELF_AUTO
-        ? container.align_items
-        : item.align_self;
-}
-
-static bool flex_cross_margins_are_auto(const aether_computed_style_t& style, bool horizontal) {
-    return horizontal
-        ? is_auto_margin(style.margin.top) || is_auto_margin(style.margin.bottom)
-        : is_auto_margin(style.margin.left) || is_auto_margin(style.margin.right);
-}
-
-// CSS Flexbox §4.5 uses a zero automatic minimum for scrollable overflow.
-// Keep this classification separate from the engine's actual scrolling paths:
-// overflow:hidden participates here even though it never creates scroll offsets.
-// Enumerating the values deliberately keeps a future overflow:clip out of this
-// category until that value has its own CSS Overflow semantics implemented.
-static bool flex_automatic_minimum_is_zero_for_overflow(int32_t overflow) {
-    switch (overflow) {
-        case AETHER_OVERFLOW_HIDDEN:
-        case AETHER_OVERFLOW_AUTO:
-        case AETHER_OVERFLOW_SCROLL:
-            return true;
-        case AETHER_OVERFLOW_VISIBLE:
-        default:
-            return false;
-    }
-}
-
-static bool flex_item_stretches_on_cross_axis(const aether_computed_style_t& container,
-                                               const aether_computed_style_t& item,
-                                               bool horizontal) {
-    if (flex_cross_alignment(container, item) != AETHER_ALIGN_STRETCH ||
-        flex_cross_margins_are_auto(item, horizontal)) {
-        return false;
-    }
-    return horizontal ? item.height.unit == AETHER_CSS_UNIT_AUTO
-                      : item.width.unit == AETHER_CSS_UNIT_AUTO;
-}
-
-static resolved_flex_children_s resolve_flex_children(
-    const aether_layout_engine_s* engine,
-    aether_style_map_s* styles,
-    const std::vector<aether_node_s*>& children,
-    const aether_rectf& content,
-    const aether_computed_style_t& parent_style,
-    bool horizontal, bool main_size_is_definite, bool cross_size_is_definite,
-    aether_layout_result_s* result) {
-    resolved_flex_children_s output{};
-    output.boxes.reserve(children.size());
-    std::vector<aether_layout_box_s*> base_boxes;
-    base_boxes.reserve(children.size());
-
-    // CSS Flexbox §9.2.3: a single-line stretched item with an automatic
-    // cross-size measures its flex base size against the container's definite
-    // cross-size. Every other item retains its natural cross-size until §9.4.
-    const bool single_line_container = !parent_style.flex_wrap;
-    {
-        // Base-size measurement is an implementation detail of flex resolution.
-        // Its boxes must neither be visible through the final result nor outlive
-        // this function.
-        detached_layout_scope_s detached(result);
-        for (auto* child : children) {
-            const auto child_style = get_style(styles, child);
-            const bool stretch_base_cross = single_line_container && cross_size_is_definite &&
-                flex_item_stretches_on_cross_axis(parent_style, child_style, horizontal);
-            const auto margin = resolve_margin_edges(engine, child_style.margin, content.width, child_style);
-            const float forced_border_cross = std::max(0.f,
-                (horizontal ? content.height : content.width) -
-                (horizontal ? aether_thicknessf_vertical(margin) : aether_thicknessf_horizontal(margin)));
-            base_boxes.push_back(layout_element(engine, styles, child,
-                {content.x, content.y, content.width, content.height}, content.y,
-                false,
-                horizontal ? 0.f : forced_border_cross, stretch_base_cross && !horizontal,
-                horizontal ? forced_border_cross : 0.f, stretch_base_cross && horizontal,
-                true, result));
-        }
-    }
-
-    std::vector<aether_flex_item_input_s> inputs;
-    inputs.reserve(children.size());
-    for (size_t index = 0; index < children.size(); ++index) {
-        const auto child_style = get_style(styles, children[index]);
-        const auto* base_box = base_boxes[index];
-        aether_flex_item_input_s item{};
-        item.basis.kind = child_style.flex_basis.kind;
-        item.basis.content_main_size = flex_box_main_size(base_box, horizontal);
-        item.basis.specified_main_size = resolve_flex_main_border_size(
-            engine, child_style, content, horizontal, main_size_is_definite,
-            horizontal ? child_style.width : child_style.height);
-        item.basis.resolved_length = resolve_flex_main_border_size(
-            engine, child_style, content, horizontal, main_size_is_definite,
-            child_style.flex_basis.length);
-        item.basis.length_is_definite = child_style.flex_basis.kind == AETHER_FLEX_BASIS_LENGTH &&
-            flex_length_is_definite(child_style.flex_basis.length, main_size_is_definite);
-        item.min_main_size = resolve_flex_main_border_size(
-            engine, child_style, content, horizontal, main_size_is_definite,
-            horizontal ? child_style.min_width : child_style.min_height);
-        item.max_main_size = resolve_flex_main_border_size(
-            engine, child_style, content, horizontal, main_size_is_definite,
-            horizontal ? child_style.max_width : child_style.max_height);
-        const auto child_padding = resolve_padding_edges(engine, child_style.padding, content.width, child_style);
-        const auto child_border = resolve_border_edges(engine, child_style, content.width);
-        // The automatic minimum on a row's main axis is a min-content inline-size.
-        // On a column's main axis it is a block-size at the item's resolved cross-size.
-        // The base layout has already established that cross-size (including nested flex
-        // allocation, controls and real line breaking), so it is the authoritative source
-        // for the latter. Re-measuring through a parallel intrinsic-height walk loses the
-        // horizontal constraints of nested rows and can let a column shrink an item below
-        // its painted descendant extent.
-        const auto main_size_property = horizontal ? child_style.width : child_style.height;
-        const bool automatic_main_size = main_size_property.unit == AETHER_CSS_UNIT_AUTO;
-        const float content_size_suggestion = horizontal
-            ? measure_intrinsic_width(engine, styles, children[index], child_style,
-                                      child_padding, child_border, content.width, result,
-                                      aether_intrinsic_size_mode_e::min_content)
-            : automatic_main_size
-                ? flex_box_main_size(base_box, false)
-                : measure_intrinsic_height(engine, styles, children[index], child_style,
-                                           child_padding, child_border, content.width);
-        const int32_t main_axis_overflow = horizontal ? child_style.overflow_x : child_style.overflow_y;
-        item.automatic_minimum = {
-            flex_automatic_minimum_is_zero_for_overflow(main_axis_overflow),
-            content_size_suggestion, item.basis.specified_main_size, NAN, item.max_main_size
-        };
-        // Unlike every other flex input, explicit margins are signed.  A
-        // negative margin reduces the item's outer main size and must take
-        // part in line formation and free-space resolution (Flexbox §9.7).
-        // Auto margins are still zero here and consumed in their later phase.
-        item.outer_main_size =
-            flex_box_outer_main_size(base_box, horizontal) - flex_box_main_size(base_box, horizontal);
-        item.flex_grow = child_style.flex_grow;
-        item.flex_shrink = child_style.flex_shrink;
-        inputs.push_back(item);
-    }
-
-    const float available_main_size = main_size_is_definite
-        ? (horizontal ? content.width : content.height)
-        : NAN;
-    output.resolution = aether_resolve_flexible_lengths({
-        &inputs, available_main_size, std::max(0.f, parent_style.gap),
-        parent_style.flex_wrap && main_size_is_definite
-    });
-
-    for (auto* base_box : base_boxes) delete base_box;
-    base_boxes.clear();
-
-    for (size_t index = 0; index < children.size(); ++index) {
-        const float target_main_size = output.resolution.items[index].target_main_size;
-        output.boxes.push_back(layout_element(engine, styles, children[index],
-            {content.x, content.y, content.width, content.height}, content.y,
-            false,
-            horizontal ? target_main_size : 0.f, horizontal,
-            horizontal ? 0.f : target_main_size,
-            !horizontal,
-            true, result));
-    }
-    return output;
-}
-
-static float flex_line_used_main_size(const std::vector<aether_layout_box_s*>& boxes,
-                                      const aether_flex_line_s& line,
-                                      bool horizontal, float gap) {
-    float used = gap * static_cast<float>(line.item_indices.empty() ? 0 : line.item_indices.size() - 1);
-    for (const size_t index : line.item_indices) used += flex_box_outer_main_size(boxes[index], horizontal);
-    return used;
-}
-
-static float flex_line_cross_size(const std::vector<aether_layout_box_s*>& boxes,
-                                  const aether_flex_line_s& line, bool horizontal) {
-    float size = 0.f;
-    for (const size_t index : line.item_indices) {
-        size = std::max(size, flex_box_cross_size(boxes[index], horizontal));
-    }
-    return size;
-}
-
-/* CSS Flexbox §9.4 determines a line's cross size from items laid out at their
-   final main size. Stretch then re-lays out only auto-sized items against that
-   line size. Keeping this here, rather than in flex_resolver.cpp, preserves the
-   resolver's pure main-axis contract. */
-static float resolve_flex_line_cross_size(
-    const aether_layout_engine_s* engine,
-    aether_style_map_s* styles,
-    const std::vector<aether_node_s*>& children,
-    resolved_flex_children_s& resolved,
-    const aether_flex_line_s& line,
-    const aether_rectf& content,
-    const aether_computed_style_t& container_style,
-    bool horizontal, bool cross_size_is_definite, bool is_single_line,
-    aether_layout_result_s* result) {
-    float target_cross_size = flex_line_cross_size(resolved.boxes, line, horizontal);
-    if (is_single_line && cross_size_is_definite) {
-        target_cross_size = horizontal ? content.height : content.width;
-    }
-
-    // A min/max cross constraint can expand an auto-sized stretched item beyond
-    // the provisional line. Re-run until that monotonic line size is stable so
-    // every eligible sibling receives the same final line extent.
-    const size_t maximum_passes = line.item_indices.size() + 1;
-    for (size_t pass = 0; pass < maximum_passes; ++pass) {
-        bool line_grew = false;
-        for (const size_t index : line.item_indices) {
-            const auto child_style = get_style(styles, children[index]);
-            if (!flex_item_stretches_on_cross_axis(container_style, child_style, horizontal)) continue;
-
-            auto* previous = resolved.boxes[index];
-            const float main_size = flex_box_main_size(previous, horizontal);
-            const float cross_decoration_and_margins = std::max(0.f,
-                flex_box_cross_size(previous, horizontal) - flex_box_border_cross_size(previous, horizontal));
-            const float forced_border_cross_size = std::max(0.f, target_cross_size - cross_decoration_and_margins);
-            delete previous;
-
-            resolved.boxes[index] = layout_element(engine, styles, children[index],
-                {content.x, content.y, content.width, content.height}, content.y,
-                false,
-                horizontal ? main_size : forced_border_cross_size, true,
-                horizontal ? forced_border_cross_size : main_size, true,
-                true, result);
-
-            if (!(is_single_line && cross_size_is_definite)) {
-                const float actual_cross_size = flex_box_cross_size(resolved.boxes[index], horizontal);
-                if (actual_cross_size > target_cross_size + .0001f) {
-                    target_cross_size = actual_cross_size;
-                    line_grew = true;
-                }
-            }
-        }
-        if (!line_grew) break;
-    }
-    return target_cross_size;
-}
-
-static void consume_flex_main_auto_margins(const std::vector<aether_layout_box_s*>& boxes,
-                                           const std::vector<aether_node_s*>& children,
-                                           aether_style_map_s* styles,
-                                           const aether_flex_line_s& line,
-                                           bool horizontal, float available_main_size,
-                                           float& used_main_size) {
-    const float free = available_main_size - used_main_size;
-    if (free <= 0.f) return;
-    int auto_sides = 0;
-    for (const size_t index : line.item_indices) {
-        auto_sides += auto_margin_count(get_style(styles, children[index]), horizontal);
-    }
-    if (auto_sides == 0) return;
-    const float share = free / static_cast<float>(auto_sides);
-    for (const size_t index : line.item_indices) {
-        const auto child_style = get_style(styles, children[index]);
-        if (horizontal) {
-            add_auto_margin_space(boxes[index],
-                is_auto_margin(child_style.margin.left) ? share : 0.f, 0.f,
-                is_auto_margin(child_style.margin.right) ? share : 0.f, 0.f);
-        } else {
-            add_auto_margin_space(boxes[index], 0.f,
-                is_auto_margin(child_style.margin.top) ? share : 0.f, 0.f,
-                is_auto_margin(child_style.margin.bottom) ? share : 0.f);
-        }
-    }
-    used_main_size += free;
+    return aether_control_opaque_content_height(
+        measured_height,
+        style.font_size,
+        style.line_height,
+        has_explicit_height,
+        explicit_height,
+        style.box_sizing,
+        aether_thicknessf_vertical(padding),
+        aether_thicknessf_vertical(border));
 }
 
 /* ── LayoutFlowChildren ────────────────────────────────────────────── */
 
-static float layout_flow_children(
+float layout_flow_children(
     const aether_layout_engine_s* engine,
     aether_style_map_s* styles,
     aether_layout_box_s* parent_box,
@@ -1364,7 +655,7 @@ static float layout_flow_children(
 
 /* ── LayoutInlineItems ─────────────────────────────────────────────── */
 
-static float layout_inline_items(
+float layout_inline_items(
     const aether_layout_engine_s* engine,
     aether_style_map_s* styles,
     aether_layout_box_s* parent_box,
@@ -1482,153 +773,6 @@ static float layout_inline_items(
     return line_widths.empty() ? 0.f : std::max(0.f, cursor_y - start_y);
 }
 
-/* ── LayoutFlexChildren ────────────────────────────────────────────── */
-
-static float layout_flex_children(
-    const aether_layout_engine_s* engine,
-    aether_style_map_s* styles,
-    aether_layout_box_s* parent_box,
-    aether_node_s* parent,
-    aether_rectf content,
-    const aether_computed_style_t& style,
-    bool has_definite_height,
-    aether_layout_result_s* result)
-{
-    const auto& children = collect_flex_items(styles, result, parent, style);
-
-    if (children.empty()) {
-        // flex container with only text content — fall back to inline flow
-        std::vector<inline_item_s> inline_items;
-        for (auto* node : parent->children) {
-            if (node->type == AETHER_NODE_TEXT) {
-                collect_text_items(parent, style, node->text, inline_items);
-            }
-        }
-        if (inline_items.empty()) return 0.f;
-        // Text nodes are anonymous flex items. In a row they align on the main axis through
-        // justify-content; in a column, align-items controls their horizontal position.
-        auto inline_style = style;
-        if (style.flex_direction == AETHER_FLEX_DIRECTION_ROW) {
-            inline_style.text_align = style.justify_content == AETHER_JUSTIFY_CENTER
-                ? AETHER_TEXT_ALIGN_CENTER
-                : style.justify_content == AETHER_JUSTIFY_END
-                    ? AETHER_TEXT_ALIGN_END
-                    : AETHER_TEXT_ALIGN_START;
-        } else {
-            inline_style.text_align = style.align_items == AETHER_ALIGN_CENTER
-                ? AETHER_TEXT_ALIGN_CENTER
-                : style.align_items == AETHER_ALIGN_END
-                    ? AETHER_TEXT_ALIGN_END
-                    : AETHER_TEXT_ALIGN_START;
-        }
-        float used_height = layout_inline_items(engine, styles, parent_box, inline_items,
-                                                content.x, content.y, content.width, inline_style, result);
-        if (has_definite_height) {
-            float vertical_free = std::max(0.f, content.height - used_height);
-            float dy = 0.f;
-            const int vertical_alignment = style.flex_direction == AETHER_FLEX_DIRECTION_ROW
-                ? style.align_items
-                : style.justify_content;
-            if (vertical_alignment == AETHER_ALIGN_CENTER || vertical_alignment == AETHER_JUSTIFY_CENTER) dy = vertical_free / 2;
-            else if (vertical_alignment == AETHER_ALIGN_END || vertical_alignment == AETHER_JUSTIFY_END) dy = vertical_free;
-            if (dy != 0.f) {
-                for (auto* child : parent_box->children) {
-                    offset_box(child, 0, dy);
-                }
-            }
-        }
-        return used_height;
-    }
-
-    const bool horizontal = style.flex_direction != AETHER_FLEX_DIRECTION_COLUMN;
-    const bool main_size_is_definite = horizontal || has_definite_height;
-    const bool cross_size_is_definite = horizontal ? has_definite_height : true;
-    auto resolved = resolve_flex_children(engine, styles, children, content, style,
-                                          horizontal, main_size_is_definite, cross_size_is_definite, result);
-    const float gap = std::max(0.f, style.gap);
-
-    if (!horizontal) {
-        float cross_cursor = content.x;
-        float total_main_size = 0.f;
-        for (const auto& line : resolved.resolution.lines) {
-            float used_main_size = flex_line_used_main_size(resolved.boxes, line, false, gap);
-            if (main_size_is_definite) {
-                consume_flex_main_auto_margins(resolved.boxes, children, styles, line, false,
-                                               content.height, used_main_size);
-            }
-            const float free = main_size_is_definite ? std::max(0.f, content.height - used_main_size) : 0.f;
-            float spacing = gap;
-            float cursor_y = content.y;
-            if (style.justify_content == AETHER_JUSTIFY_CENTER) cursor_y += free / 2.f;
-            else if (style.justify_content == AETHER_JUSTIFY_END) cursor_y += free;
-            if (style.justify_content == AETHER_JUSTIFY_SPACE_BETWEEN && line.item_indices.size() > 1) {
-                spacing += free / static_cast<float>(line.item_indices.size() - 1);
-            }
-
-            const float cross_extent = resolve_flex_line_cross_size(
-                engine, styles, children, resolved, line, content, style,
-                false, cross_size_is_definite, resolved.resolution.lines.size() == 1, result);
-            for (const size_t index : line.item_indices) {
-                auto* child_box = resolved.boxes[index];
-                const auto child_style = get_style(styles, children[index]);
-                const bool consumed_cross_auto = consume_flex_cross_auto_margins(
-                    child_box, child_style, true, cross_extent);
-                float x = cross_cursor;
-                if (!consumed_cross_auto) {
-                    const int32_t alignment = flex_cross_alignment(style, child_style);
-                    if (alignment == AETHER_ALIGN_CENTER) x += (cross_extent - child_box->margin_box.width) / 2.f;
-                    else if (alignment == AETHER_ALIGN_END) x += cross_extent - child_box->margin_box.width;
-                }
-                offset_box(child_box, x - child_box->margin_box.x, cursor_y - child_box->margin_box.y);
-                parent_box->add_child(child_box);
-                cursor_y += child_box->margin_box.height + spacing;
-            }
-            total_main_size = std::max(total_main_size, used_main_size);
-            cross_cursor += cross_extent + gap;
-        }
-        return has_definite_height ? std::max(total_main_size, content.height) : total_main_size;
-    }
-
-    float cross_cursor = content.y;
-    float total_cross_size = 0.f;
-    for (const auto& line : resolved.resolution.lines) {
-        float used_main_size = flex_line_used_main_size(resolved.boxes, line, true, gap);
-        consume_flex_main_auto_margins(resolved.boxes, children, styles, line, true,
-                                       content.width, used_main_size);
-        const float free = std::max(0.f, content.width - used_main_size);
-        float spacing = gap;
-        float cursor_x = content.x;
-        if (style.justify_content == AETHER_JUSTIFY_CENTER) cursor_x += free / 2.f;
-        else if (style.justify_content == AETHER_JUSTIFY_END) cursor_x += free;
-        if (style.justify_content == AETHER_JUSTIFY_SPACE_BETWEEN && line.item_indices.size() > 1) {
-            spacing += free / static_cast<float>(line.item_indices.size() - 1);
-        }
-
-        const float cross_extent = resolve_flex_line_cross_size(
-            engine, styles, children, resolved, line, content, style,
-            true, cross_size_is_definite, resolved.resolution.lines.size() == 1, result);
-        for (const size_t index : line.item_indices) {
-            auto* child_box = resolved.boxes[index];
-            const auto child_style = get_style(styles, children[index]);
-            const bool consumed_cross_auto = consume_flex_cross_auto_margins(
-                child_box, child_style, false, cross_extent);
-            float y = cross_cursor;
-            if (!consumed_cross_auto) {
-                const int32_t alignment = flex_cross_alignment(style, child_style);
-                if (alignment == AETHER_ALIGN_CENTER) y += (cross_extent - child_box->margin_box.height) / 2.f;
-                else if (alignment == AETHER_ALIGN_END) y += cross_extent - child_box->margin_box.height;
-            }
-            offset_box(child_box, cursor_x - child_box->margin_box.x, y - child_box->margin_box.y);
-            parent_box->add_child(child_box);
-            cursor_x += child_box->margin_box.width + spacing;
-        }
-        total_cross_size += cross_extent;
-        cross_cursor += cross_extent + gap;
-    }
-    total_cross_size += gap * static_cast<float>(resolved.resolution.lines.empty() ? 0 : resolved.resolution.lines.size() - 1);
-    return has_definite_height ? std::max(total_cross_size, content.height) : total_cross_size;
-}
-
 /* ── CollectInlineElement ──────────────────────────────────────────── */
 
 static void collect_inline_element(
@@ -1656,10 +800,10 @@ static void collect_inline_element(
 
 /* ── CollectTextItems ──────────────────────────────────────────────── */
 
-static void collect_text_items(aether_node_s* owner,
-                               const aether_computed_style_t& style,
-                               const std::string& text,
-                               std::vector<inline_item_s>& output)
+void collect_text_items(aether_node_s* owner,
+                        const aether_computed_style_t& style,
+                        const std::string& text,
+                        std::vector<inline_item_s>& output)
 {
     if (!text.empty()) {
         auto* style_origin = owner ? owner->style_origin : nullptr;
@@ -1740,7 +884,7 @@ static float measure_inline_items_intrinsic_width(
 
 /* ── MeasureIntrinsicWidth ─────────────────────────────────────────── */
 
-static float measure_intrinsic_width(
+float measure_intrinsic_width(
     const aether_layout_engine_s* engine,
     aether_style_map_s* styles,
     aether_node_s* element,
@@ -1785,7 +929,7 @@ static float measure_intrinsic_width(
     return content_width + aether_thicknessf_horizontal(padding) + aether_thicknessf_horizontal(border);
 }
 
-static float measure_intrinsic_height(
+float measure_intrinsic_height(
     const aether_layout_engine_s* engine,
     aether_style_map_s* styles,
     aether_node_s* element,
@@ -1940,7 +1084,7 @@ static float measure_intrinsic_flex_width(
     return content + aether_thicknessf_horizontal(padding) + aether_thicknessf_horizontal(border);
 }
 
-static float measure_child_natural_width(
+float measure_child_natural_width(
     const aether_layout_engine_s* engine,
     aether_style_map_s* styles,
     aether_node_s* child, float maximum,
@@ -1971,128 +1115,6 @@ static float measure_child_natural_width(
                                         child_padding, child_border, maximum, result, mode);
     }
     return width + aether_thicknessf_horizontal(child_margin);
-}
-
-/* ── Table layout (phase 1: unspanned automatic columns) ────────────────── */
-
-static void collect_table_rows(aether_style_map_s* styles, aether_node_s* container,
-                               std::vector<table_row_s>& rows)
-{
-    for (auto* child : container->children) {
-        if (child->type != AETHER_NODE_ELEMENT) continue;
-        const auto child_style = get_style(styles, child);
-        if (child_style.display == AETHER_DISPLAY_NONE || !child_style.visible) continue;
-        if (child_style.display == AETHER_DISPLAY_TABLE_ROW) {
-            table_row_s row{};
-            row.element = child;
-            for (auto* candidate : child->children) {
-                if (candidate->type != AETHER_NODE_ELEMENT) continue;
-                const auto cell_style = get_style(styles, candidate);
-                if (cell_style.display == AETHER_DISPLAY_TABLE_CELL && cell_style.visible) {
-                    row.cells.push_back(candidate);
-                }
-            }
-            if (!row.cells.empty()) rows.push_back(std::move(row));
-            continue;
-        }
-
-        // Row groups are transparent in phase 1. This admits ordinary
-        // table/thead/tbody/tfoot markup without claiming row-group sizing.
-        if (child_style.display != AETHER_DISPLAY_TABLE_CELL) {
-            collect_table_rows(styles, child, rows);
-        }
-    }
-}
-
-static std::vector<aether_table_column_contribution_s> measure_table_columns(
-    const aether_layout_engine_s* engine,
-    aether_style_map_s* styles,
-    const std::vector<table_row_s>& rows,
-    float maximum,
-    aether_layout_result_s* result)
-{
-    size_t column_count = 0;
-    for (const auto& row : rows) column_count = std::max(column_count, row.cells.size());
-    std::vector<aether_table_column_contribution_s> columns(column_count);
-    for (const auto& row : rows) {
-        for (size_t column = 0; column < row.cells.size(); ++column) {
-            const float minimum = measure_child_natural_width(
-                engine, styles, row.cells[column], maximum, result,
-                aether_intrinsic_size_mode_e::min_content);
-            const float preferred = measure_child_natural_width(
-                engine, styles, row.cells[column], maximum, result,
-                aether_intrinsic_size_mode_e::max_content);
-            columns[column].min_content = std::max(columns[column].min_content, minimum);
-            columns[column].max_content = std::max(columns[column].max_content, preferred);
-        }
-    }
-    return columns;
-}
-
-static float measure_intrinsic_table_width(
-    const aether_layout_engine_s* engine,
-    aether_style_map_s* styles,
-    aether_node_s* table,
-    float maximum,
-    aether_layout_result_s* result,
-    aether_intrinsic_size_mode_e mode)
-{
-    std::vector<table_row_s> rows;
-    collect_table_rows(styles, table, rows);
-    const auto columns = measure_table_columns(engine, styles, rows, maximum, result);
-    float contribution = 0.f;
-    for (const auto& column : columns) {
-        contribution += mode == aether_intrinsic_size_mode_e::min_content
-            ? column.min_content : column.max_content;
-    }
-    return contribution;
-}
-
-static float layout_table_children(
-    const aether_layout_engine_s* engine,
-    aether_style_map_s* styles,
-    aether_layout_box_s* parent_box,
-    aether_node_s* table,
-    aether_rectf content,
-    aether_layout_result_s* result)
-{
-    std::vector<table_row_s> rows;
-    collect_table_rows(styles, table, rows);
-    if (rows.empty()) return 0.f;
-
-    const auto contributions = measure_table_columns(engine, styles, rows, content.width, result);
-    const auto column_widths = aether_resolve_auto_table_columns(contributions, content.width);
-    float cursor_y = content.y;
-
-    for (const auto& row : rows) {
-        const auto row_style = get_style(styles, row.element);
-        auto* row_box = result->create_box();
-        row_box->kind = LAYOUT_BOX_ELEMENT;
-        row_box->element = row.element;
-        row_box->style = row_style;
-        register_box(result, row_box);
-
-        float cursor_x = content.x;
-        float row_height = 0.f;
-        for (size_t column = 0; column < row.cells.size(); ++column) {
-            const float column_width = column_widths[column];
-            auto* cell_box = layout_element(engine, styles, row.cells[column],
-                                            {cursor_x, cursor_y, column_width, content.height},
-                                            cursor_y, true,
-                                            0.f, false, 0.f, false, true, result);
-            row_height = std::max(row_height, cell_box->margin_box.height);
-            row_box->add_child(cell_box);
-            cursor_x += column_width;
-        }
-
-        row_box->content_box = {content.x, cursor_y, content.width, row_height};
-        row_box->padding_box = row_box->content_box;
-        row_box->border_box = row_box->content_box;
-        row_box->margin_box = row_box->content_box;
-        parent_box->add_child(row_box);
-        cursor_y += row_height;
-    }
-    return std::max(0.f, cursor_y - content.y);
 }
 
 /* ══════════════════════════════════════════════════════════════════════

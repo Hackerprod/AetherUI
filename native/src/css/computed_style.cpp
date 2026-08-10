@@ -1,4 +1,7 @@
 #include <aether/aether.h>
+#include "computed_style_internal.h"
+
+#include <cstdlib>
 #include <cstring>
 
 AETHER_API aether_computed_style_t aether_computed_style_default(void) {
@@ -37,6 +40,12 @@ AETHER_API aether_computed_style_t aether_computed_style_default(void) {
     s.overflow_y = AETHER_OVERFLOW_VISIBLE;
     s.pointer_events = AETHER_POINTER_EVENTS_AUTO;
     s.visible = AETHER_TRUE;
+    s.z_index = 0;
+    s.z_index_kind = AETHER_Z_INDEX_AUTO;
+    s.transition_properties = 0;
+    s.transition_duration = 0.0f;
+    s.transition_delay = 0.0f;
+    s.transition_timing = AETHER_TRANSITION_TIMING_LINEAR;
     const auto zero_radius = aether_corner_radius{aether_css_length_zero(), aether_css_length_zero()};
     s.border_radii = {zero_radius, zero_radius, zero_radius, zero_radius};
     strncpy(s.font_family, "Segoe UI", sizeof(s.font_family) - 1);
@@ -72,4 +81,48 @@ AETHER_API void aether_computed_style_free(aether_computed_style_t* s) {
         aether_shadow_list_free(&s->text_shadows);
         aether_shadow_list_free(&s->box_shadows);
     }
+}
+
+namespace {
+
+bool copy_gradient(const aether_linear_gradient& source, aether_linear_gradient& destination) {
+    destination = source;
+    destination.stops = nullptr;
+    if (source.stop_count < 0 || (source.stop_count > 0 && !source.stops)) return false;
+    if (source.stop_count == 0) return true;
+    const size_t bytes = sizeof(aether_gradient_stop) * static_cast<size_t>(source.stop_count);
+    destination.stops = static_cast<aether_gradient_stop*>(std::malloc(bytes));
+    if (!destination.stops) return false;
+    std::memcpy(destination.stops, source.stops, bytes);
+    return true;
+}
+
+} // namespace
+
+aether_status_t computed_style_deep_copy(const aether_computed_style_t& src,
+                                         aether_computed_style_t* dst) {
+    if (!dst) return AETHER_ERROR_NULL_ARG;
+    aether_computed_style_t copy = src;
+    copy.background_layers.items = nullptr;
+    copy.background_layers.count = 0;
+    copy.backdrop_filters.items = nullptr;
+    copy.backdrop_filters.count = 0;
+    copy.transforms.items = nullptr;
+    copy.transforms.count = 0;
+    copy.text_gradient.stops = nullptr;
+    copy.text_shadows.items = nullptr;
+    copy.text_shadows.count = 0;
+    copy.box_shadows.items = nullptr;
+    copy.box_shadows.count = 0;
+    if (aether_background_layer_list_copy(&src.background_layers, &copy.background_layers) != AETHER_TRUE ||
+        aether_backdrop_filter_list_copy(&src.backdrop_filters, &copy.backdrop_filters) != AETHER_TRUE ||
+        aether_transform_list_copy(&src.transforms, &copy.transforms) != AETHER_TRUE ||
+        !copy_gradient(src.text_gradient, copy.text_gradient) ||
+        aether_shadow_list_copy(&src.text_shadows, &copy.text_shadows) != AETHER_TRUE ||
+        aether_shadow_list_copy(&src.box_shadows, &copy.box_shadows) != AETHER_TRUE) {
+        aether_computed_style_free(&copy);
+        return AETHER_ERROR_OUT_OF_MEMORY;
+    }
+    *dst = copy;
+    return AETHER_OK;
 }
