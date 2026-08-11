@@ -27,9 +27,78 @@ return WindowsUiApplication.Run<RegistrationView>(options);
 
 `RegistrationView` is a generated `.cshtml` component (compiled by `AetherUI.Generator` at build
 time). `WindowsUiApplication.Run` owns the Win32 window, message loop, and input routing; internally
-it drives one `UiDocumentHost`, which is the actual engine coordinator — see
+it drives one `UiDocumentHost`, which is the actual engine coordinator &mdash; see
 [`RegistrationApp`](../../examples/dotnet/RegistrationApp/) for the complete, runnable version of the
 snippet above.
+
+## Modals
+
+`AetherUI.Runtime.ModalController` is the reusable modal host for any `UiComponent`. It owns all the
+modal chrome &mdash; fixed overlay, darken, optional backdrop blur, z-index, opacity/scale transitions,
+backdrop and Escape close &mdash; so a page only supplies the card content:
+
+```csharp
+using AetherUI.Events;
+using AetherUI.Runtime;
+
+public sealed class SettingsPage : UiComponent
+{
+    private readonly ModalController _modal = new();
+
+    public SettingsPage()
+    {
+        // Show/Close re-render through the owning component.
+        _modal.Changed += () => StateHasChanged();
+    }
+
+    protected override void BuildRenderTree(MarkupWriter writer)
+    {
+        writer.WriteLiteral("<button id=\"open\"");
+        writer.WriteEventAttribute("onclick", OpenSettings);
+        writer.WriteLiteral(">Configuración</button>");
+
+        // Renders the <style> + overlay whenever a modal is open.
+        _modal.Render(writer);
+    }
+
+    private void OpenSettings(UiEvent e) => _modal.Show(w =>
+    {
+        w.WriteLiteral("<h2>Ajustes</h2><button id=\"done\"");
+        w.WriteEventAttribute("onclick", CloseSettings);
+        w.WriteLiteral(">Cerrar</button>");
+    });
+
+    private void CloseSettings(UiEvent e) => _modal.Close();
+}
+```
+
+The engine does not execute page `<script>` tags; interactive behavior is authored through the
+component/event model above, exactly like any other AetherUI interaction.
+
+### Theming
+
+The modal's visual tokens are CSS custom properties with defaults, so any page theme can override
+them in its own stylesheet (the cascade resolves them per node; the fallback applies only when the
+variable is undefined):
+
+```css
+:root {
+  --aether-modal-overlay-bg: rgba(0, 0, 0, 0.8);
+  --aether-modal-overlay-blur: 16px;
+  --aether-modal-z-index: 100;
+  --aether-modal-fade-duration: 0.3s;
+  --aether-modal-card-bg: #111827;
+  --aether-modal-card-color: #f9fafb;
+  --aether-modal-card-radius: 15px;
+  --aether-modal-card-padding: 30px;
+  --aether-modal-card-max-width: 500px;
+  --aether-modal-scale-duration: 0.3s;
+  --aether-modal-card-shadow: 0 8px 32px rgba(0, 0, 0, 0.37);
+}
+```
+
+The Validator includes an interactive demo ("Modal Interactivo (transitions)") showing the modal
+fade + scale animation and the close paths (button, backdrop, Escape).
 
 ## Scope
 
