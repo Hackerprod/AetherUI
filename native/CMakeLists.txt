@@ -236,6 +236,22 @@ if(AETHERUI_BUILD_TESTS)
     target_link_libraries(aether_media_percentage_lengths_test PRIVATE AetherUI::Core)
     add_test(NAME aether.media-percentage-lengths COMMAND aether_media_percentage_lengths_test)
 
+    add_executable(aether_media_typed_values_test tests/test_media_typed_values.cpp)
+    target_link_libraries(aether_media_typed_values_test PRIVATE AetherUI::Core)
+    add_test(NAME aether.media-typed-values COMMAND aether_media_typed_values_test)
+
+    # Private AST/diagnostic coverage is separate from the public ABI fixture.
+    add_executable(aether_media_condition_parser_test tests/test_media_condition_parser.cpp
+        src/style_runtime/media_condition.cpp src/style_runtime/css_variable_tokens.cpp
+        src/css/css_length.cpp)
+    target_include_directories(aether_media_condition_parser_test PRIVATE include src/style_runtime)
+    target_compile_definitions(aether_media_condition_parser_test PRIVATE AETHER_CSS_NUMERIC_ONLY)
+    target_link_libraries(aether_media_condition_parser_test PRIVATE AetherUI::Core)
+    if(NOT MSVC)
+        target_compile_options(aether_media_condition_parser_test PRIVATE -ffp-contract=off)
+    endif()
+    add_test(NAME aether.media-condition-parser COMMAND aether_media_condition_parser_test)
+
     add_executable(aether_not_strict_list_test tests/test_not_strict_list.cpp)
     target_link_libraries(aether_not_strict_list_test PRIVATE AetherUI::Core)
     add_test(NAME aether.not-strict-list COMMAND aether_not_strict_list_test)

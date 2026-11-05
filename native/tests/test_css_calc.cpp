@@ -108,7 +108,44 @@ static void check_dimensional_contract() {
     check_dimensional_fixture("--lh:calc(1 - 1);line-height:var(--lh);", 73.f, 0.f);
 }
 
+static void check_numeric_scanner() {
+    for (const auto source : {"1PX", "1pX", "1Em", "1REM", "1vW", "1VH", "1%",
+             "+1px", "-1px", ".5px", "1e2px", "1E+2PX", "1e-2px", "0e-400"})
+        parse(source);
+    for (const auto source : {"calc(+1PX)", "calc(-1pX)", "calc(2 * -1PX)",
+             "calc(1Em + 1REM + 1vW + 1VH)", "calc(50% - 50%)", "calc(0 * 50%)"})
+        parse(source);
+    for (const auto source : {"0x10px", "0x1p3px", "1.px", "1.", "1 px", "1e+px",
+             "--1px", "+ +1px", "- -1px", "1e400", "1e-400", "1e400px", "1e40px",
+             "calc(--1px)", "calc(+ +1px)", "calc(- -1px)", "calc(-(1px))",
+             "calc(0x10px)", "calc(0x1p3px)", "calc(1.px)", "calc(1 px)",
+             "calc(1e-400 * 1px)", "calc((1e-300 * 1e-300) * 1px)",
+             "calc((1e-300 / 1e300) * 1px)", "calc((1e300 * 1e300) * 1px)",
+             "calc(1e30px * 1e30)", "calc(1px / 1e-300)"}) {
+        aether_css_length invalid{};
+        require(aether_css_length_try_parse(source, &invalid) == AETHER_FALSE, source);
+        require(invalid.unit == AETHER_CSS_UNIT_AUTO, "invalid numeric output remains AUTO");
+    }
+    require(parse("100").unit == AETHER_CSS_UNIT_PX && parse("100").value == 100.f,
+        "ordinary wrapper preserves literal Number-to-px coercion");
+    require(parse("1e-46").value == 0.f, "ordinary lengths retain float quantization");
+    require(parse("16777217px").value == 16777216.f, "length literals retain float quantization");
+    require(parse("calc((16777217 - 16777216) * 1px)").value == 1.f,
+        "Number subtraction retains double precision before length construction");
+    require(same(parse("calc((1e-30 * 1e-30) * 1e30 * 1e30 * 1px)").value, 1.f),
+        "small nonzero Number products are not prematurely rounded to float zero");
+    require(same(parse("calc(1e-46 * 1e30 * 1e16 * 1px)").value, 1.f),
+        "small Number literals retain double precision");
+    require(same(parse("calc(1e-30px / 1e-40)").value, 1e10f),
+        "division does not overflow a prematurely narrowed reciprocal");
+    require(parse("calc((1 - 1) * 1px)").value == 0.f,
+        "exact Number cancellation is valid zero");
+    require(parse("calc((0 * 1e-300) * 1px)").value == 0.f,
+        "zero multiplication is not underflow");
+}
+
 int main() {
+    check_numeric_scanner();
     check_dimensional_contract();
     const auto half_minus_eight = parse("calc(50% - 8px)");
     require(half_minus_eight.unit == AETHER_CSS_UNIT_LINEAR &&

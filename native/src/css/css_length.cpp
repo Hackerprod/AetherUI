@@ -1,8 +1,8 @@
 #include "css_length_internal.h"
 #include <cmath>
-#include <cstring>
+#include <cerrno>
+#include <limits>
 #include <cstdlib>
-#include <cctype>
 #include <string>
 #include <string_view>
 
@@ -23,6 +23,76 @@ static bool ascii_iequals(std::string_view left, std::string_view right) {
         };
         if (lower(left[i]) != lower(right[i])) return false;
     }
+    return true;
+}
+
+static bool css_space(char c) {
+    return c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\f';
+}
+
+static bool ascii_digit(char c) { return c >= '0' && c <= '9'; }
+
+static bool store_length_component(double number, float& output) {
+    if (!std::isfinite(number) || std::fabs(number) > std::numeric_limits<float>::max()) return false;
+    output = static_cast<float>(number);
+    return true;
+}
+
+// Fix the CSS token span before invoking the C conversion routine. In
+// particular, C hexadecimal numbers and an incomplete fraction are not CSS.
+static bool parse_numeric_token(std::string_view source, size_t& position, calc_value_s& output) {
+    const size_t start = position;
+    size_t end = start;
+    if (end < source.size() && (source[end] == '+' || source[end] == '-')) ++end;
+    const size_t digits = end;
+    bool nonzero_mantissa = false;
+    while (end < source.size() && ascii_digit(source[end])) {
+        nonzero_mantissa |= source[end] != '0';
+        ++end;
+    }
+    bool has_digits = end != digits;
+    if (end + 1 < source.size() && source[end] == '.' && ascii_digit(source[end + 1])) {
+        ++end;
+        while (end < source.size() && ascii_digit(source[end])) {
+            nonzero_mantissa |= source[end] != '0';
+            ++end;
+        }
+        has_digits = true;
+    }
+    if (!has_digits) return false;
+    if (end < source.size() && (source[end] == 'e' || source[end] == 'E')) {
+        size_t exponent = end + 1;
+        if (exponent < source.size() && (source[exponent] == '+' || source[exponent] == '-')) ++exponent;
+        const size_t exponent_digits = exponent;
+        while (exponent < source.size() && ascii_digit(source[exponent])) ++exponent;
+        if (exponent != exponent_digits) end = exponent;
+    }
+    const std::string token(source.substr(start, end - start));
+    char* parsed_end = nullptr;
+    errno = 0;
+    const double number = std::strtod(token.c_str(), &parsed_end);
+    if (parsed_end != token.c_str() + token.size() || !std::isfinite(number) ||
+        errno == ERANGE || (number == 0.0 && nonzero_mantissa)) return false;
+
+    const size_t unit_start = end;
+    if (end < source.size() && source[end] == '%') ++end;
+    else while (end < source.size() && is_ascii_alpha(source[end])) ++end;
+    const auto unit = source.substr(unit_start, end - unit_start);
+    calc_value_s value{};
+    if (unit.empty()) value.number = number;
+    else {
+        value.kind = calc_value_kind_e::length;
+        if (ascii_iequals(unit, "px")) value.length.unit = AETHER_CSS_UNIT_PX;
+        else if (unit == "%") value.length.unit = AETHER_CSS_UNIT_PERCENT;
+        else if (ascii_iequals(unit, "em")) value.length.unit = AETHER_CSS_UNIT_EM;
+        else if (ascii_iequals(unit, "rem")) value.length.unit = AETHER_CSS_UNIT_REM;
+        else if (ascii_iequals(unit, "vw")) value.length.unit = AETHER_CSS_UNIT_VW;
+        else if (ascii_iequals(unit, "vh")) value.length.unit = AETHER_CSS_UNIT_VH;
+        else return false;
+        if (!store_length_component(number, value.length.value)) return false;
+    }
+    position = end;
+    output = value;
     return true;
 }
 
@@ -64,42 +134,39 @@ static bool calc_add(calc_value_s& left, const calc_value_s& right, float sign) 
            std::isfinite(left.length.linear_vw) && std::isfinite(left.length.linear_vh);
 }
 
+static bool scale_length(aether_css_length& length, double scalar, bool divide) {
+    float* components[] = {&length.value, &length.linear_percent, &length.linear_em,
+        &length.linear_rem, &length.linear_vw, &length.linear_vh};
+    for (auto component : components) {
+        const double value = divide ? *component / scalar : *component * scalar;
+        if (!store_length_component(value, *component)) return false;
+    }
+    return true;
+}
+
 static bool calc_multiply(calc_value_s& left, const calc_value_s& right) {
     if (left.kind == calc_value_kind_e::length && right.kind == calc_value_kind_e::length) return false;
     if (left.kind == calc_value_kind_e::number && right.kind == calc_value_kind_e::number) {
-        left.number *= right.number;
-        return std::isfinite(left.number);
+        const double result = left.number * right.number;
+        if (!std::isfinite(result) || (result == 0.0 && left.number != 0.0 && right.number != 0.0)) return false;
+        left.number = result;
+        return true;
     }
-    const float scale = left.kind == calc_value_kind_e::number ? left.number : right.number;
+    const double scale = left.kind == calc_value_kind_e::number ? left.number : right.number;
     const aether_css_length length = left.kind == calc_value_kind_e::length ? left.length : right.length;
     left = calc_length(length);
-    left.length.value *= scale;
-    left.length.linear_percent *= scale;
-    left.length.linear_em *= scale;
-    left.length.linear_rem *= scale;
-    left.length.linear_vw *= scale;
-    left.length.linear_vh *= scale;
-    return std::isfinite(left.length.value) && std::isfinite(left.length.linear_percent) &&
-           std::isfinite(left.length.linear_em) && std::isfinite(left.length.linear_rem) &&
-           std::isfinite(left.length.linear_vw) && std::isfinite(left.length.linear_vh);
+    return scale_length(left.length, scale, false);
 }
 
 static bool calc_divide(calc_value_s& left, const calc_value_s& right) {
-    if (right.kind != calc_value_kind_e::number || right.number == 0.f || !std::isfinite(right.number)) return false;
+    if (right.kind != calc_value_kind_e::number || right.number == 0.0 || !std::isfinite(right.number)) return false;
     if (left.kind == calc_value_kind_e::number) {
-        left.number /= right.number;
-        return std::isfinite(left.number);
+        const double result = left.number / right.number;
+        if (!std::isfinite(result) || (result == 0.0 && left.number != 0.0)) return false;
+        left.number = result;
+        return true;
     }
-    const float reciprocal = 1.f / right.number;
-    left.length.value *= reciprocal;
-    left.length.linear_percent *= reciprocal;
-    left.length.linear_em *= reciprocal;
-    left.length.linear_rem *= reciprocal;
-    left.length.linear_vw *= reciprocal;
-    left.length.linear_vh *= reciprocal;
-    return std::isfinite(left.length.value) && std::isfinite(left.length.linear_percent) &&
-           std::isfinite(left.length.linear_em) && std::isfinite(left.length.linear_rem) &&
-           std::isfinite(left.length.linear_vw) && std::isfinite(left.length.linear_vh);
+    return scale_length(left.length, right.number, true);
 }
 
 class calc_parser_s {
@@ -138,7 +205,7 @@ private:
     }
 
     bool parse_product(calc_value_s& output) {
-        if (!parse_unary(output)) return false;
+        if (!parse_primary(output)) return false;
         for (;;) {
             const size_t before_whitespace = position_;
             skip_whitespace();
@@ -150,27 +217,9 @@ private:
             }
             const char operation = source_[position_++];
             calc_value_s right{};
-            if (!parse_unary(right)) return false;
+            if (!parse_primary(right)) return false;
             if (operation == '*' ? !calc_multiply(output, right) : !calc_divide(output, right)) return false;
         }
-    }
-
-    bool parse_unary(calc_value_s& output) {
-        skip_whitespace();
-        float sign = 1.f;
-        if (consume('+')) sign = 1.f;
-        else if (consume('-')) sign = -1.f;
-        if (!parse_primary(output)) return false;
-        if (output.kind == calc_value_kind_e::number) output.number *= sign;
-        else {
-            output.length.value *= sign;
-            output.length.linear_percent *= sign;
-            output.length.linear_em *= sign;
-            output.length.linear_rem *= sign;
-            output.length.linear_vw *= sign;
-            output.length.linear_vh *= sign;
-        }
-        return true;
     }
 
     bool parse_primary(calc_value_s& output) {
@@ -181,31 +230,8 @@ private:
             return consume(')');
         }
 
-        const char* begin = source_.data() + position_;
-        char* end = nullptr;
-        const float number = std::strtof(begin, &end);
-        if (end == begin || !std::isfinite(number)) return false;
-        position_ += static_cast<size_t>(end - begin);
-
-        const size_t unit_begin = position_;
-        if (position_ < source_.size() && source_[position_] == '%') ++position_;
-        else while (position_ < source_.size() && is_ascii_alpha(source_[position_])) ++position_;
-        const auto unit = source_.substr(unit_begin, position_ - unit_begin);
-        if (unit.empty()) {
-            output = {calc_value_kind_e::number, number, aether_css_length_zero()};
-            return true;
-        }
-
-        aether_css_length length = aether_css_length_zero();
-        length.value = number;
-        if (unit == "px") length.unit = AETHER_CSS_UNIT_PX;
-        else if (unit == "%") length.unit = AETHER_CSS_UNIT_PERCENT;
-        else if (ascii_iequals(unit, "em")) length.unit = AETHER_CSS_UNIT_EM;
-        else if (ascii_iequals(unit, "rem")) length.unit = AETHER_CSS_UNIT_REM;
-        else if (ascii_iequals(unit, "vw")) length.unit = AETHER_CSS_UNIT_VW;
-        else if (ascii_iequals(unit, "vh")) length.unit = AETHER_CSS_UNIT_VH;
-        else return false;
-        output = calc_length(length);
+        if (!parse_numeric_token(source_, position_, output)) return false;
+        if (output.kind == calc_value_kind_e::length) output = calc_length(output.length);
         return true;
     }
 
@@ -223,7 +249,7 @@ private:
     }
 
     void skip_whitespace() {
-        while (position_ < source_.size() && std::isspace(static_cast<unsigned char>(source_[position_]))) ++position_;
+        while (position_ < source_.size() && css_space(source_[position_])) ++position_;
     }
 
     std::string_view source_;
@@ -232,10 +258,23 @@ private:
 
 } // namespace
 
+bool aether::css::try_parse_numeric_literal(std::string_view source, calc_value_s& output) {
+    while (!source.empty() && css_space(source.front())) source.remove_prefix(1);
+    while (!source.empty() && css_space(source.back())) source.remove_suffix(1);
+    size_t position = 0;
+    calc_value_s value{};
+    if (!parse_numeric_token(source, position, value) || position != source.size()) return false;
+    output = value;
+    return true;
+}
+
 bool aether::css::try_parse_calc(std::string_view source, calc_value_s& output) {
     return calc_parser_s(source).parse(output);
 }
 
+// The private parser regression compiles only the internal helpers and uses
+// the public functions from Core. Avoid defining dllimport functions on Windows.
+#ifndef AETHER_CSS_NUMERIC_ONLY
 AETHER_API aether_css_length aether_css_length_auto(void) {
     aether_css_length l{};
     l.unit = AETHER_CSS_UNIT_AUTO;
@@ -283,7 +322,6 @@ AETHER_API aether_bool_t aether_css_length_try_parse(const char* input, aether_c
     if (first == std::string::npos) return AETHER_FALSE;
     const auto last = source.find_last_not_of(" \t\r\n\f");
     source = source.substr(first, last - first + 1);
-    const char* s = source.c_str();
 
     calc_value_s calculated{};
     if (aether::css::try_parse_calc(source, calculated)) {
@@ -293,50 +331,20 @@ AETHER_API aether_bool_t aether_css_length_try_parse(const char* input, aether_c
     }
     if (source.size() >= 5 && ascii_iequals(std::string_view(source).substr(0, 5), "calc(")) return AETHER_FALSE;
 
-    if (s[0] == 'a' && s[1] == 'u' && s[2] == 't' && s[3] == 'o' && s[4] == '\0') {
+    if (source == "auto") {
         *out = aether_css_length_auto();
         return AETHER_TRUE;
     }
 
-    if (s[0] == '0' && s[1] == '\0') {
-        *out = aether_css_length_zero();
-        return AETHER_TRUE;
+    calc_value_s literal{};
+    if (!aether::css::try_parse_numeric_literal(source, literal)) return AETHER_FALSE;
+    if (literal.kind == calc_value_kind_e::length) *out = literal.length;
+    else {
+        // Preserve the ordinary-property API's historical unitless-to-px policy.
+        aether_css_length length = aether_css_length_zero();
+        if (!store_length_component(literal.number, length.value)) return AETHER_FALSE;
+        *out = length;
     }
-
-    aether_css_unit_t unit = AETHER_CSS_UNIT_PX;
-    size_t len = strlen(s);
-
-    if (len >= 3 && s[len - 3] == 'r' && s[len - 2] == 'e' && s[len - 1] == 'm') {
-        unit = AETHER_CSS_UNIT_REM;
-        len -= 3;
-    } else if (len >= 2 && s[len - 2] == 'e' && s[len - 1] == 'm') {
-        unit = AETHER_CSS_UNIT_EM;
-        len -= 2;
-    } else if (len >= 2 && s[len - 2] == 'v' && s[len - 1] == 'w') {
-        unit = AETHER_CSS_UNIT_VW;
-        len -= 2;
-    } else if (len >= 2 && s[len - 2] == 'v' && s[len - 1] == 'h') {
-        unit = AETHER_CSS_UNIT_VH;
-        len -= 2;
-    } else if (len >= 2 && s[len - 2] == 'p' && s[len - 1] == 'x') {
-        unit = AETHER_CSS_UNIT_PX;
-        len -= 2;
-    } else if (len >= 1 && s[len - 1] == '%') {
-        unit = AETHER_CSS_UNIT_PERCENT;
-        len -= 1;
-    }
-
-    char buf[64];
-    if (len >= sizeof(buf)) return AETHER_FALSE;
-    memcpy(buf, s, len);
-    buf[len] = '\0';
-
-    char* end = nullptr;
-    float number = strtof(buf, &end);
-    if (end == buf || *end != '\0' || !std::isfinite(number)) return AETHER_FALSE;
-
-    out->value = number;
-    out->unit = unit;
     return AETHER_TRUE;
 }
 
@@ -344,3 +352,5 @@ AETHER_API aether_css_edges aether_css_edges_zero(void) {
     const auto zero = aether_css_length_zero();
     return {zero, zero, zero, zero};
 }
+
+#endif // AETHER_CSS_NUMERIC_ONLY

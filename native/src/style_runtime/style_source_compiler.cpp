@@ -1,5 +1,5 @@
 #include "style_runtime_types.h"
-#include "css_variable_tokens.h"
+#include "css_component_tokens.h"
 #include "style_property_registry_internal.h"
 #include <string_view>
 #include <cctype>
@@ -8,51 +8,16 @@
 // ═══ Comment removal (port of TextSplitter.RemoveComments) ════════════
 
 std::string text_splitter_remove_comments(const std::string& source) {
-    std::string output;
-    output.reserve(source.size());
-    int32_t index = 0;
-    int32_t len = static_cast<int32_t>(source.size());
-    char quote = '\0';
-    bool escaped = false;
-
-    while (index < len) {
-        char c = source[index];
-        if (quote != '\0') {
-            output += c;
-            if (escaped) {
-                escaped = false;
-            } else if (c == '\\') {
-                escaped = true;
-            } else if (c == quote) {
-                quote = '\0';
-            }
-            index++;
-            continue;
-        }
-        if (c == '\'' || c == '"') {
-            quote = c;
-            output += c;
-            index++;
-            continue;
-        }
-        if (c == '/' && index + 1 < len && source[index + 1] == '*') {
-            output += ' ';
-            output += ' ';
-            index += 2;
-            while (index < len &&
-                   !(source[index] == '*' && index + 1 < len && source[index + 1] == '/')) {
-                output += (source[index] == '\n') ? '\n' : ' ';
-                index++;
-            }
-            if (index + 1 < len) {
-                output += ' ';
-                output += ' ';
-                index += 2;
-            }
-            continue;
-        }
-        output += c;
-        index++;
+    std::string output = source;
+    css_component_lexer lexer(source.data(), source.size());
+    for (;;) {
+        const auto token = lexer.next();
+        if (token.kind == css_variable_token_kind::end) break;
+        // Include an EOF comment (the lexer reports it as error for variables).
+        // Atomic strings and URL tokens protect comment-looking bytes inside.
+        if (token.begin + 1 < source.size() && source[token.begin] == '/' && source[token.begin + 1] == '*')
+            for (size_t i = token.begin; i < token.end; ++i)
+                if (output[i] != '\n') output[i] = ' ';
     }
     return output;
 }
@@ -75,80 +40,51 @@ static void skip_whitespace(const std::string& source, int32_t& index, int32_t e
 }
 
 static int32_t find_open_brace(const std::string& source, int32_t start, int32_t end) {
-    int32_t parens = 0;
-    int32_t brackets = 0;
-    char quote = '\0';
-    bool escaped = false;
-    for (int32_t i = start; i < end; i++) {
-        char c = source[i];
-        if (quote != '\0') {
-            if (escaped) {
-                escaped = false;
-            } else if (c == '\\') {
-                escaped = true;
-            } else if (c == quote) {
-                quote = '\0';
-            }
-            continue;
+    css_component_lexer lexer(source.data(), static_cast<size_t>(end), static_cast<size_t>(start));
+    std::vector<char> blocks;
+    for (;;) {
+        const auto token = lexer.next();
+        if (token.kind == css_variable_token_kind::end) return -1;
+        if (blocks.empty() && token.delimiter == '{') return static_cast<int32_t>(token.begin);
+        if (token.kind == css_variable_token_kind::open || token.kind == css_variable_token_kind::function)
+            blocks.push_back(token.delimiter);
+        else if (token.kind == css_variable_token_kind::close && !blocks.empty()) {
+            const char opening = blocks.back();
+            const char closing = opening == '(' ? ')' : opening == '[' ? ']' : '}';
+            if (token.delimiter == closing) blocks.pop_back();
         }
-        if (c == '\'' || c == '"') { quote = c; continue; }
-        if (c == '(') { parens++; continue; }
-        if (c == ')') { parens = std::max(0, parens - 1); continue; }
-        if (c == '[') { brackets++; continue; }
-        if (c == ']') { brackets = std::max(0, brackets - 1); continue; }
-        if (parens == 0 && brackets == 0 && c == '{') return i;
     }
-    return -1;
 }
 
 static int32_t find_matching_brace(const std::string& source, int32_t opening, int32_t end) {
+    css_component_lexer lexer(source.data(), static_cast<size_t>(end), static_cast<size_t>(opening + 1));
     int32_t depth = 1;
-    char quote = '\0';
-    bool escaped = false;
-    for (int32_t i = opening + 1; i < end; i++) {
-        char c = source[i];
-        if (quote != '\0') {
-            if (escaped) {
-                escaped = false;
-            } else if (c == '\\') {
-                escaped = true;
-            } else if (c == quote) {
-                quote = '\0';
-            }
-            continue;
-        }
-        if (c == '\'' || c == '"') { quote = c; continue; }
-        if (c == '{') { depth++; continue; }
-        if (c == '}' && --depth == 0) return i;
+    for (;;) {
+        const auto token = lexer.next();
+        if (token.kind == css_variable_token_kind::end) return -1;
+        if (token.delimiter == '{') ++depth;
+        if (token.delimiter == '}' && --depth == 0) return static_cast<int32_t>(token.begin);
     }
-    return -1;
 }
 
 static int32_t find_at_rule_delimiter(const std::string& source, int32_t start, int32_t end) {
-    int32_t parens = 0;
-    int32_t brackets = 0;
-    char quote = '\0';
-    bool escaped = false;
-    for (int32_t i = start; i < end; i++) {
-        char c = source[i];
-        if (quote != '\0') {
-            if (escaped) {
-                escaped = false;
-            } else if (c == '\\') {
-                escaped = true;
-            } else if (c == quote) {
-                quote = '\0';
-            }
-            continue;
+    css_component_lexer lexer(source.data(), static_cast<size_t>(end), static_cast<size_t>(start));
+    std::vector<char> blocks;
+    for (;;) {
+        const auto token = lexer.next();
+        if (token.kind == css_variable_token_kind::end) return -1;
+        // Use component tokens rather than raw characters: a bad-string ends
+        // at newline, and even a bad-url is consumed as one atomic token.
+        if (blocks.empty() && (token.delimiter == ';' || token.delimiter == '{'))
+            return static_cast<int32_t>(token.begin);
+        if (token.kind == css_variable_token_kind::open || token.kind == css_variable_token_kind::function)
+            blocks.push_back(token.delimiter);
+        else if (token.kind == css_variable_token_kind::close && !blocks.empty()) {
+            const char opening = blocks.back();
+            const char closing = opening == '(' ? ')' : opening == '[' ? ']' : '}';
+            if (token.delimiter == closing) blocks.pop_back();
         }
-        if (c == '\'' || c == '"') { quote = c; continue; }
-        if (c == '(') { parens++; continue; }
-        if (c == ')') { parens = std::max(0, parens - 1); continue; }
-        if (c == '[') { brackets++; continue; }
-        if (c == ']') { brackets = std::max(0, brackets - 1); continue; }
-        if (parens == 0 && brackets == 0 && (c == ';' || c == '{')) return i;
     }
-    return -1;
 }
 
 static bool contains_variable(const std::string& s) {
