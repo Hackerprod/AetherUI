@@ -4,6 +4,7 @@
 #include <cstring>
 #include <algorithm>
 #include <stack>
+#include <string_view>
 
 static bool is_name_char(char c) {
     return std::isalnum(static_cast<unsigned char>(c)) ||
@@ -24,11 +25,23 @@ static bool is_void_element(const std::string& tag) {
     return false;
 }
 
-static std::string to_lower_copy(const std::string& s) {
-    std::string r = s;
-    std::transform(r.begin(), r.end(), r.begin(),
-        [](unsigned char c) -> char { return static_cast<char>(std::tolower(c)); });
-    return r;
+static char ascii_lower(char c) {
+    return c >= 'A' && c <= 'Z' ? static_cast<char>(c + ('a' - 'A')) : c;
+}
+
+static bool ascii_equal_ignore_case(std::string_view a, std::string_view b) {
+    if (a.size() != b.size()) return false;
+    for (size_t i = 0; i < a.size(); ++i) {
+        if (ascii_lower(a[i]) != ascii_lower(b[i])) return false;
+    }
+    return true;
+}
+
+static bool is_raw_text_end_boundary(char c) {
+    // HTML whitespace, not locale-sensitive isspace (which also accepts VT).
+    // Unlike a browser tokenizer, this byte parser has not normalized CR to LF.
+    return c == '>' || c == '/' || c == ' ' || c == '\t' || c == '\n' ||
+           c == '\f' || c == '\r';
 }
 
 /* ── Parser ───────────────────────────────────────────────────────── */
@@ -161,7 +174,7 @@ class HtmlParser {
         (void)doc;
         pos += 2;
         skip_whitespace();
-        std::string name = to_lower_copy(read_name());
+        std::string name = read_name();
         skip_until_tag_end();
 
         if (name.empty()) return;
@@ -170,49 +183,43 @@ class HtmlParser {
             aether_node_s* node = stack.top();
             stack.pop();
             if (node->type == AETHER_NODE_ELEMENT &&
-                to_lower_copy(node->tag_name) == name) {
+                ascii_equal_ignore_case(node->tag_name, name)) {
                 break;
             }
         }
     }
 
     void parse_raw_text(aether_node_s* element, aether_doc_s* doc) {
-        std::string close_tag = "</" + to_lower_copy(element->tag_name);
+        const std::string_view input(src, len);
+        const std::string_view name(element->tag_name);
         size_t search = pos;
+        size_t text_end = len;
 
         while (search < len) {
-            std::string_view sv(src, len);
-            size_t candidate = sv.find(close_tag.c_str(), search);
-            if (candidate == std::string_view::npos) {
-                if (pos < len) {
-                    element->children.push_back(
-                        create_text(std::string(src + pos, len - pos), doc));
-                    element->children.back()->parent = element;
-                }
-                pos = len;
-                return;
-            }
+            const size_t candidate = input.find('<', search);
+            if (candidate == std::string_view::npos) break;
 
-            size_t after = candidate + close_tag.length();
-            if (after >= len || src[after] == '>' ||
-                std::isspace(static_cast<unsigned char>(src[after]))) {
-                if (candidate > pos) {
-                    element->children.push_back(
-                        create_text(std::string(src + pos, candidate - pos), doc));
-                    element->children.back()->parent = element;
-                }
-                pos = candidate;
-                return;
+            // Require </name plus a real delimiter: EOF is not a boundary.
+            // The remaining-length check bounds every subsequent access.
+            if (len - candidate > name.size() + 2 && src[candidate + 1] == '/' &&
+                ascii_equal_ignore_case(input.substr(candidate + 2, name.size()), name) &&
+                is_raw_text_end_boundary(src[candidate + 2 + name.size()])) {
+                text_end = candidate;
+                break;
             }
-            search = after;
+            // Retain rejected candidates verbatim, including overlapping '<'.
+            // Names have fixed length (style/script), so the scan is O(n).
+            search = candidate + 1;
         }
 
-        if (pos < len) {
+        if (pos < text_end) {
             element->children.push_back(
-                create_text(std::string(src + pos, len - pos), doc));
+                create_text(std::string(src + pos, text_end - pos), doc));
             element->children.back()->parent = element;
         }
-        pos = len;
+        // The existing end-tag parser consumes the accepted close and pops the
+        // stack. This shared scan does not implement escaped ScriptData states.
+        pos = text_end;
     }
 
     void parse_start_tag(std::stack<aether_node_s*>& stack, aether_doc_s* doc) {
@@ -270,7 +277,8 @@ class HtmlParser {
             return;
 
         stack.push(element);
-        if (element->tag_name == "style" || element->tag_name == "script") {
+        if (ascii_equal_ignore_case(element->tag_name, "style") ||
+            ascii_equal_ignore_case(element->tag_name, "script")) {
             parse_raw_text(element, doc);
         }
     }

@@ -162,6 +162,32 @@ a claim of general HTML5 conformance: the existing entity decoder, `std::isspace
 behavior (including vertical tab), incomplete-start-tag recovery at EOF, and
 self-closing behavior for non-void elements remain unchanged.
 
+## HTML style and script text
+
+`style` and `script` names are matched ASCII case-insensitively when entering
+their text mode and recognizing the matching end tag. Public DOM tag names keep
+their original spelling. Their content is one literal text child (or no child
+when empty): entities, apparent markup, UTF-8 and CR/LF bytes are preserved.
+A matching `</name` ends the text only when followed by `>`, `/`, or HTML
+whitespace (space, tab, LF, FF, CR). Suffixes such as `</styleX>` and a name at
+EOF without a delimiter remain text. Once a delimiter is present, an unfinished
+end tag is consumed by the existing end-tag parser. A real closing tag inside a
+CSS or JavaScript string still closes the element.
+
+`aether.html-raw-text` verifies the original regression corpus, all 5,120 opening
+and closing case combinations, exact DOM/text, byte boundaries, EOF, overlapping
+false candidates, and replacement of a previously parsed document through the
+public ABI. The scanner is linear and uses constant auxiliary space apart from
+the resulting text.
+
+This is a bounded contract, not full HTML tokenization. ScriptData escaped and
+double-escaped states, RCDATA (`title`/`textarea`), other raw-text elements,
+foreign content and browser newline normalization are not implemented here.
+The existing end-tag consumer does not honor quoted `>` in attributes. Existing
+start-tag self-closing and attribute behavior remain unchanged. The C-string
+input ABI does not support embedded NUL. Parsing does not execute scripts or
+automatically apply the embedded styles; hosts supply CSS to the style runtime.
+
 ## Custom properties
 
 Custom-property names use decoded CSS identifier values with exact case and Unicode
