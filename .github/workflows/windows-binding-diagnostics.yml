@@ -1,0 +1,63 @@
+# Temporary branch-only diagnostics. This does not replace or relax ci.yml.
+# The full solution currently fails in Validator because PerfReporter is absent.
+name: Windows binding diagnostics (temporary)
+
+on:
+  push:
+    branches:
+      - fix/flex-visibility-windows-validation
+
+permissions:
+  contents: read
+
+jobs:
+  isolated-windows:
+    name: Isolated Windows ${{ matrix.suite }} checks
+    runs-on: windows-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - suite: managed
+            project: bindings/dotnet/tests/AetherUI.Tests/AetherUI.Tests.csproj
+          - suite: WARP
+            project: bindings/dotnet/tests/AetherUI.Windows.RegressionTests/AetherUI.Windows.RegressionTests.csproj
+
+    steps:
+      - name: Checkout exact branch commit
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.302
+
+      - name: Configure native core
+        run: >-
+          cmake
+          -S native
+          -B artifacts/build/native/win-x64
+          -A x64
+          -DAETHERUI_BUILD_TESTS=OFF
+          -DCMAKE_INSTALL_PREFIX=${{ github.workspace }}/artifacts/native/win-x64
+
+      - name: Build native core
+        run: cmake --build artifacts/build/native/win-x64 --config Release --parallel
+
+      - name: Install native core
+        run: cmake --install artifacts/build/native/win-x64 --config Release
+
+      - name: Build isolated test project and dependencies
+        run: >-
+          dotnet build ${{ matrix.project }}
+          -c Release
+          -p:AetherNativeRuntimeIdentifier=win-x64
+
+      - name: Run isolated tests
+        run: >-
+          dotnet run
+          --project ${{ matrix.project }}
+          -c Release
+          --no-build
+          -p:AetherNativeRuntimeIdentifier=win-x64
