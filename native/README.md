@@ -188,6 +188,25 @@ start-tag self-closing and attribute behavior remain unchanged. The C-string
 input ABI does not support embedded NUL. Parsing does not execute scripts or
 automatically apply the embedded styles; hosts supply CSS to the style runtime.
 
+## Empty-element selectors
+
+`:empty` matches an element with no direct DOM element children and no nonempty
+text children. Comments, zero-length text and generated `::before`/`::after`
+content do not affect the result. Whitespace text, including a single space,
+does prevent matching, as does an element with `display:none`. Comments and
+empty text remain observable through the DOM API; generated nodes remain
+excluded from public child enumeration.
+
+After a DOM mutation, explicitly resolve a subtree that includes every affected
+subject. For ancestor `:has()` or sibling dependencies, resolve their common
+ancestor, not only the changed leaf. This does not add automatic DOM invalidation
+or change the generation/lifetime of pseudo-elements.
+
+`aether.selector-empty` covers the public ABI, nested selectors, generated content
+across repeated passes, and append/remove/move transitions. `aether.selector-empty-text`
+adds a private fixture for zero-length text, evaluated by the production runtime
+without extending the ABI. Both tests keep their checks active with `NDEBUG`.
+
 ## Custom properties
 
 Custom-property names use decoded CSS identifier values with exact case and Unicode

@@ -41,12 +41,19 @@ static bool is_element(aether_node_s* node) {
     return node && node->type == AETHER_NODE_ELEMENT;
 }
 
-// :empty is deliberately based on every DOM child: whitespace text is content
-// for that pseudo-class. Structural child pseudos and sibling combinators use
-// the element-only helpers below instead.
-static int dom_child_count(aether_node_s* node) {
+// :empty considers direct DOM elements and nonempty text (including whitespace),
+// not comments or generated content. Pseudos share children with DOM nodes, so
+// skip them before testing their ELEMENT type, even during pseudo regeneration.
+static bool is_empty_for_selector(aether_node_s* node) {
     node = selector_subject(node);
-    return node ? static_cast<int>(node->children.size()) : 0;
+    if (!node) return true;
+    for (const auto* child : node->children) {
+        if (child->is_generated) continue;
+        if (child->type == AETHER_NODE_ELEMENT ||
+            (child->type == AETHER_NODE_TEXT && !child->text.empty()))
+            return false;
+    }
+    return true;
 }
 
 static int element_sibling_index(aether_node_s* node) {
@@ -213,7 +220,7 @@ static bool matches_pseudo(const pseudo_selector_s& pseudo, aether_node_s* node)
         // parent, so a bare parent==nullptr check would never match).
         return node->parent == nullptr || node->parent->type == AETHER_NODE_DOCUMENT;
     case PSEUDO_EMPTY:
-        return dom_child_count(node) == 0;
+        return is_empty_for_selector(node);
     case PSEUDO_FIRST_CHILD:
         return element_sibling_index(node) == 0;
     case PSEUDO_LAST_CHILD:

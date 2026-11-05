@@ -289,6 +289,15 @@ if(AETHERUI_BUILD_TESTS)
     target_link_libraries(aether_selector_structure_test PRIVATE AetherUI::Core)
     add_test(NAME aether.selector-structure COMMAND aether_selector_structure_test)
 
+    add_executable(aether_selector_empty_test tests/test_selector_empty.cpp)
+    target_link_libraries(aether_selector_empty_test PRIVATE AetherUI::Core)
+    add_test(NAME aether.selector-empty COMMAND aether_selector_empty_test)
+
+    # Empty text nodes are representable internally, but need no new public ABI.
+    add_executable(aether_selector_empty_text_test tests/test_selector_empty_text.cpp)
+    target_link_libraries(aether_selector_empty_text_test PRIVATE AetherUI::Core)
+    add_test(NAME aether.selector-empty-text COMMAND aether_selector_empty_text_test)
+
     add_executable(aether_generated_pseudo_updates_test tests/test_generated_pseudo_updates.cpp)
     target_link_libraries(aether_generated_pseudo_updates_test PRIVATE AetherUI::Core)
     add_test(NAME aether.generated-pseudo-updates COMMAND aether_generated_pseudo_updates_test)
