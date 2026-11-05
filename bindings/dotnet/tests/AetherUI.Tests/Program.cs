@@ -21,6 +21,7 @@ internal static class Program
 {
     private static readonly (string Name, Action Test)[] Tests =
     [
+        ("Has arguments keep their implicit descendant anchor local", HasRelativeAnchorTests.Run),
         ("Positioned auto margins use final sizes and preserve prepared layout", PositionedAutoMarginTests.Run),
         ("Flex alignment preserves signed residual space", FlexNegativeSpaceTests.Run),
         ("Nth-child parses finite An+B expressions and matches safely", NthExpressionTests.Run),

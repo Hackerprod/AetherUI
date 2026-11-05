@@ -96,13 +96,17 @@ static aether_node_s* previous_element_sibling(aether_node_s* node) {
 
 /* ── Forward declarations ─────────────────────────────────────────── */
 
-static bool match_step(const compiled_selector_s& sel, int step_index, aether_node_s* node);
+static bool match_step(const compiled_selector_s& sel, int step_index, aether_node_s* node,
+                       aether_node_s* relative_anchor = nullptr);
 static bool matches_compound(const compound_selector_s& compound, aether_node_s* node);
 static bool matches_attribute(const attribute_selector_s& attr, aether_node_s* node);
 static bool matches_pseudo(const pseudo_selector_s& pseudo, aether_node_s* node);
-static bool match_ancestor(const compiled_selector_s& sel, int step_index, aether_node_s* node);
-static bool match_previous_siblings(const compiled_selector_s& sel, int step_index, aether_node_s* node);
-static bool has_matching_descendant(aether_node_s* node, const std::vector<compiled_selector_s>& selectors);
+static bool match_ancestor(const compiled_selector_s& sel, int step_index, aether_node_s* node,
+                           aether_node_s* relative_anchor);
+static bool match_previous_siblings(const compiled_selector_s& sel, int step_index, aether_node_s* node,
+                           aether_node_s* relative_anchor);
+static bool has_matching_descendant(aether_node_s* node, const std::vector<compiled_selector_s>& selectors,
+                                    aether_node_s* relative_anchor);
 
 /* ── Attribute matching ───────────────────────────────────────────── */
 
@@ -230,7 +234,7 @@ static bool matches_pseudo(const pseudo_selector_s& pseudo, aether_node_s* node)
             if (match_step(sel, 0, node)) return false;
         return true;
     case PSEUDO_HAS:
-        return pseudo.nested && has_matching_descendant(node, *pseudo.nested);
+        return pseudo.nested && has_matching_descendant(node, *pseudo.nested, node);
     default:
         return false;
     }
@@ -260,7 +264,8 @@ static bool matches_compound(const compound_selector_s& compound, aether_node_s*
 
 /* ── Step matching (recursive, right-to-left) ─────────────────────── */
 
-static bool match_step(const compiled_selector_s& sel, int step_index, aether_node_s* node) {
+static bool match_step(const compiled_selector_s& sel, int step_index, aether_node_s* node,
+                           aether_node_s* relative_anchor) {
     if (step_index < 0 || step_index >= static_cast<int>(sel.steps.size()))
         return false;
     if (!is_element(selector_subject(node)))
@@ -268,20 +273,26 @@ static bool match_step(const compiled_selector_s& sel, int step_index, aether_no
     auto& step = sel.steps[step_index];
     if (!matches_compound(step.compound, node))
         return false;
-    if (step.relation_to_next == COMB_NONE)
-        return true;
+    if (step.relation_to_next == COMB_NONE) {
+        if (!relative_anchor) return true;
+        // The implicit descendant edge of :has() starts at the leftmost
+        // compound's parent: the subject itself cannot satisfy this edge.
+        for (auto* parent = selector_parent(node); parent; parent = selector_parent(parent))
+            if (parent == relative_anchor) return true;
+        return false;
+    }
     int next = step_index + 1;
     switch (step.relation_to_next) {
     case COMB_CHILD:
-        return selector_parent(node) && match_step(sel, next, selector_parent(node));
+        return selector_parent(node) && match_step(sel, next, selector_parent(node), relative_anchor);
     case COMB_DESCENDANT:
-        return match_ancestor(sel, next, selector_parent(node));
+        return match_ancestor(sel, next, selector_parent(node), relative_anchor);
     case COMB_ADJACENT_SIBLING: {
         auto* prev = previous_element_sibling(node);
-        return prev && match_step(sel, next, prev);
+        return prev && match_step(sel, next, prev, relative_anchor);
     }
     case COMB_GENERAL_SIBLING:
-        return match_previous_siblings(sel, next, node);
+        return match_previous_siblings(sel, next, node, relative_anchor);
     default:
         return false;
     }
@@ -289,9 +300,10 @@ static bool match_step(const compiled_selector_s& sel, int step_index, aether_no
 
 /* ── Ancestor walk (descendant combinator) ────────────────────────── */
 
-static bool match_ancestor(const compiled_selector_s& sel, int step_index, aether_node_s* node) {
+static bool match_ancestor(const compiled_selector_s& sel, int step_index, aether_node_s* node,
+                           aether_node_s* relative_anchor) {
     while (node) {
-        if (match_step(sel, step_index, node))
+        if (match_step(sel, step_index, node, relative_anchor))
             return true;
         node = node->parent;
     }
@@ -300,14 +312,15 @@ static bool match_ancestor(const compiled_selector_s& sel, int step_index, aethe
 
 /* ── Previous-sibling walk (general sibling combinator) ───────────── */
 
-static bool match_previous_siblings(const compiled_selector_s& sel, int step_index, aether_node_s* node) {
+static bool match_previous_siblings(const compiled_selector_s& sel, int step_index, aether_node_s* node,
+                           aether_node_s* relative_anchor) {
     node = selector_subject(node);
     auto* parent = node ? node->parent : nullptr;
     if (!parent) return false;
     for (auto* sibling : parent->children) {
         if (sibling == node) return false;
         if (!is_element(sibling)) continue;
-        if (match_step(sel, step_index, sibling)) return true;
+        if (match_step(sel, step_index, sibling, relative_anchor)) return true;
     }
     return false;
 }
@@ -315,11 +328,12 @@ static bool match_previous_siblings(const compiled_selector_s& sel, int step_ind
 /* ── :has() descendant search ─────────────────────────────────────── */
 
 static bool has_matching_descendant(aether_node_s* node,
-                                    const std::vector<compiled_selector_s>& selectors) {
+                                    const std::vector<compiled_selector_s>& selectors,
+                                    aether_node_s* relative_anchor) {
     for (auto* child : node->children) {
         for (auto& sel : selectors)
-            if (match_step(sel, 0, child)) return true;
-        if (has_matching_descendant(child, selectors)) return true;
+            if (match_step(sel, 0, child, relative_anchor)) return true;
+        if (has_matching_descendant(child, selectors, relative_anchor)) return true;
     }
     return false;
 }

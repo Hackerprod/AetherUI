@@ -232,6 +232,10 @@ if(AETHERUI_BUILD_TESTS)
     target_link_libraries(aether_scroll_model_test PRIVATE AetherUI::Core)
     add_test(NAME aether.scroll-model COMMAND aether_scroll_model_test)
 
+    add_executable(aether_has_relative_anchor_test tests/test_has_relative_anchor.cpp)
+    target_link_libraries(aether_has_relative_anchor_test PRIVATE AetherUI::Core)
+    add_test(NAME aether.has-relative-anchor COMMAND aether_has_relative_anchor_test)
+
     add_executable(aether_selector_attributes_test tests/test_selector_attributes.cpp)
     target_link_libraries(aether_selector_attributes_test PRIVATE AetherUI::Core)
     add_test(NAME aether.selector-attributes COMMAND aether_selector_attributes_test)
