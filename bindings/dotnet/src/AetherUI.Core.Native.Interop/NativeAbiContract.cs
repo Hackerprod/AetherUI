@@ -8,7 +8,7 @@ public static class NativeAbiContract
 {
     public const uint ExpectedVersion = (0u << 24) | (34u << 16) | 0u;
     public const ulong RequiredCapabilities =
-        (1UL << 0) | (1UL << 1) | (1UL << 2) | (1UL << 3) | (1UL << 4);
+        (1UL << 0) | (1UL << 1) | (1UL << 2) | (1UL << 3) | (1UL << 4) | (1UL << 5);
 
     /// <summary>Validates the loaded runtime before native resources are created.</summary>
     public static int EnsureCompatible()

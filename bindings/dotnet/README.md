@@ -182,8 +182,13 @@ install step, or `AetherNativeRuntimeIdentifier`) is misconfigured.
 ## ABI and lifetime rules
 
 `AetherUI.Core.Native.Interop` validates `aether_abi_version()` and the capability bits the managed
-pipeline requires before any native handle is created — a mismatch fails at startup, not partway
-through a render. Display-list decoding (`NativeDisplayListInterop`) sizes its native buffer from
+pipeline requires (including input-hit-test bit 5, required mask `0x3F`) before any native handle is created — a mismatch fails at startup, not partway
+through a render. ABI 0.34 and structure sizes remain unchanged; an older 0.34
+runtime reporting `0x1F` fails the capability check before the new symbol is called.
+Scrollbar presses use the native input-part query with current styles and offsets.
+A selected thumb/track consumes through release, even at a limit or when its native
+owner cannot be projected; corner retains normal DOM routing without capturing.
+Display-list decoding (`NativeDisplayListInterop`) sizes its native buffer from
 `aether_paint_command_size()`; it never assumes a hard-coded struct layout, so a native ABI update that
 grows the paint-command union cannot silently corrupt a managed read past the end of a stale buffer.
 

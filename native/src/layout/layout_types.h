@@ -267,6 +267,28 @@ struct aether_layout_engine_s {
     float                   viewport_height = 0.f;
 };
 
+bool aether_overflow_is_scroll_container(int32_t overflow);
+
+// Shared paint/input scope policy. Geometry and dynamic-scroll eligibility use
+// the layout snapshot, including propagated viewport overflow.
+inline bool layout_box_clips(const aether_computed_style_t& style) {
+    return style.overflow_x != AETHER_OVERFLOW_VISIBLE || style.overflow_y != AETHER_OVERFLOW_VISIBLE;
+}
+inline int32_t layout_scroll_overflow_axis(const aether_layout_result_s* layout,
+    const aether_layout_box_s* box, bool horizontal) {
+    if (layout && layout->root == box)
+        return horizontal ? layout->viewport_overflow_x : layout->viewport_overflow_y;
+    return horizontal ? box->style.overflow_x : box->style.overflow_y;
+}
+inline bool layout_box_has_dynamic_scroll(const aether_layout_result_s* layout,
+    const aether_layout_box_s* box) {
+    return box->element &&
+        ((aether_overflow_is_scroll_container(layout_scroll_overflow_axis(layout, box, true)) &&
+          box->scroll.scrollable_overflow_x > 0.f) ||
+         (aether_overflow_is_scroll_container(layout_scroll_overflow_axis(layout, box, false)) &&
+          box->scroll.scrollable_overflow_y > 0.f));
+}
+
 /* Internal text measurement wrapper */
 inline aether_text_metrics_t engine_measure_text(
     const aether_layout_engine_s* e,

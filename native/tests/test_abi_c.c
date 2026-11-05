@@ -13,7 +13,9 @@ int main(void) {
         AETHER_CAPABILITY_DOM |
         AETHER_CAPABILITY_STYLE_RUNTIME |
         AETHER_CAPABILITY_LAYOUT |
-        AETHER_CAPABILITY_DISPLAY_LIST;
+        AETHER_CAPABILITY_DISPLAY_LIST |
+        AETHER_CAPABILITY_RENDER_PLAN |
+        AETHER_CAPABILITY_INPUT_HIT_TEST;
 
     if (version != AETHER_ABI_VERSION_CURRENT) {
         return fail("runtime ABI version differs from the C header");
@@ -25,6 +27,15 @@ int main(void) {
     }
     if ((aether_abi_capabilities() & required_capabilities) != required_capabilities) {
         return fail("runtime capability mask is incomplete");
+    }
+    {
+        aether_input_hit_part_t part = AETHER_INPUT_HIT_CONTENT;
+        aether_node_t owner = (aether_node_t)(uintptr_t)1;
+        if (aether_layout_result_hit_test_input(NULL, NULL, 0.f, 0.f, NULL, NULL,
+                                               &part, &owner) != AETHER_ERROR_NULL_ARG ||
+            part != AETHER_INPUT_HIT_NONE || owner != NULL) {
+            return fail("C input-hit API must validate and initialize outputs");
+        }
     }
     if (aether_paint_command_size() != sizeof(aether_paint_command_t)) {
         return fail("runtime paint-command size differs from the C header");

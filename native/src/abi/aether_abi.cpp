@@ -87,7 +87,8 @@ AETHER_API aether_capabilities_t aether_abi_capabilities(void) {
            AETHER_CAPABILITY_STYLE_RUNTIME |
            AETHER_CAPABILITY_LAYOUT |
            AETHER_CAPABILITY_DISPLAY_LIST |
-           AETHER_CAPABILITY_RENDER_PLAN;
+           AETHER_CAPABILITY_RENDER_PLAN |
+           AETHER_CAPABILITY_INPUT_HIT_TEST;
 }
 
 AETHER_API size_t aether_computed_style_size(void) {

@@ -58,7 +58,7 @@ size_t paint_command_size = aether_paint_command_size();
 `sizeof(aether_paint_command_t)`. The display-list command union grows as paint features are added;
 allocate command buffers from this call, not from a literal.
 
-ABI 0.1.0 advertises DOM, style-runtime, layout, and display-list capabilities through
+The ABI advertises DOM, style-runtime, layout, display-list, render-plan and input-hit-test capabilities through
 `aether_abi_capabilities()`. Treat unset bits as "not available in this build," and ignore bits you
 don't recognize — a newer library may set capability bits an older binding has never heard of.
 
@@ -155,12 +155,19 @@ transform, clip, scroll and opacity scopes. Visibility is inherited. Changing
 only its computed value on a stable DOM topology requires paint/hit updates,
 not layout; pass a current style map for live hit testing and display lists.
 The hit APIs without a style map intentionally use the layout's captured styles.
+`aether_layout_result_hit_test_input` (capability bit 5) returns the frontmost
+eligible content, thumb, track or corner plus a borrowed native owner, in reverse
+local paint order. Own chrome precedes children and uses snapshot geometry with
+live thumb offsets. A null offset callback uses snapshot scroll offsets for this
+new API; the three DOM hit APIs retain their previous behavior. Outputs are
+initialized to NONE/null before argument validation; a valid miss is OK/NONE/null.
+The query preserves generated owners even when a binding cannot project them.
 
 `visibility:collapse` is currently an alias of `hidden` for all displays,
 including table rows/cells and flex items. CSS table/flex geometric collapse is
 not implemented. Tables retain their existing unspanned phase-1 layout, and
 flattened inline ancestors and table groups do not gain new paint scopes.
-Hit testing retains the existing rectangular clipping, margin-box candidates,
+DOM hit testing retains the existing rectangular clipping, margin-box candidates,
 and traversal order; this change does not add inverse-transform hit testing.
 Generated pseudo-elements are still recreated by the runtime, so their identity
 changes require layout even when triggered by a visibility declaration.

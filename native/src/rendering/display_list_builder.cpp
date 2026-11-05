@@ -263,35 +263,6 @@ static void paint_background_and_border(aether_display_list_builder_s* builder, 
 static bool box_has_scrollbar_chrome(const aether_display_list_builder_s* builder,
                                      aether_layout_box_s* box);
 
-static bool is_scroll_container_axis(int32_t overflow)
-{
-    return aether_overflow_is_scroll_container(overflow);
-}
-
-// The root box represents the viewport scroll: its scroll semantics follow the
-// propagated viewport overflow while its own used overflow stays visible.
-// Every other box uses its own style.
-static int32_t scroll_overflow_axis(const aether_display_list_builder_s* builder,
-                                    const aether_layout_box_s* box,
-                                    bool horizontal)
-{
-    if (builder->layout && builder->layout->root == box) {
-        return horizontal ? builder->layout->viewport_overflow_x
-                          : builder->layout->viewport_overflow_y;
-    }
-    return horizontal ? box->style.overflow_x : box->style.overflow_y;
-}
-
-static bool box_has_dynamic_scroll(const aether_display_list_builder_s* builder,
-                                   aether_layout_box_s* box)
-{
-    return box->element &&
-        ((is_scroll_container_axis(scroll_overflow_axis(builder, box, true)) &&
-          box->scroll.scrollable_overflow_x > 0.f) ||
-         (is_scroll_container_axis(scroll_overflow_axis(builder, box, false)) &&
-          box->scroll.scrollable_overflow_y > 0.f));
-}
-
 static void paint_control(aether_display_list_builder_s* builder,
                            aether_layout_box_s* box,
                            aether_node_s* focused_element,
@@ -417,7 +388,7 @@ static void paint_box(aether_display_list_builder_s* builder,
                                     ctx, cmds);
     }
 
-    bool clips = style.overflow_x != AETHER_OVERFLOW_VISIBLE || style.overflow_y != AETHER_OVERFLOW_VISIBLE;
+    bool clips = layout_box_clips(style);
     if (clips) {
         const auto outer = aether_border_radii_resolve(style.border_radii, box->border_box, style.font_size);
         const auto clip = aether_corner_radii_inset(outer,
@@ -427,7 +398,7 @@ static void paint_box(aether_display_list_builder_s* builder,
         emit_push_clip(cmds, box->padding_box, clip);
     }
 
-    const bool dynamic_scroll = box_has_dynamic_scroll(builder, box);
+    const bool dynamic_scroll = layout_box_has_dynamic_scroll(builder->layout, box);
     const bool scrollbar_chrome = visible && box->element && !empty_border_box && box_has_scrollbar_chrome(builder, box);
     if (dynamic_scroll) emit_push_scroll_offset(cmds, box->element->style_node_id);
     // Children (or atomic control paint)

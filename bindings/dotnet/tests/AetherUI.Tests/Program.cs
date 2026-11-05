@@ -30,6 +30,8 @@ internal static class Program
         ("Blur hiding the next target suppresses focus and press", BlurHidingTargetSuppressesFocusAndPress),
         ("Active hiding the first press suppresses focus and press", ActiveHidingFirstPressSuppressesFocus),
         ("Event handlers hiding controls cancel keyboard defaults", HiddenDuringKeyHandlerCancelsDefaults),
+        ("Scrollbar input follows local paint, clips, chrome and content", ScrollbarInputFollowsPaint),
+        ("Scrollbar input preserves generated authority and live eligibility", ScrollbarInputGeneratedAndLiveStyles),
         ("Hidden scrollbar cancels drag and preserves capture", HiddenScrollbarCancelsDrag),
         ("Native clipped miss is authoritative", NativeClippedMissIsAuthoritative),
         ("HTML parser", HtmlParserBuildsDocument),
@@ -126,6 +128,239 @@ internal static class Program
 
         Console.WriteLine($"\n{Tests.Length - failures}/{Tests.Length} pruebas superadas.");
         return failures == 0 ? 0 : 1;
+    }
+
+    private const System.Reflection.BindingFlags ScrollFlags = System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic;
+    private static bool ScrollCaptured(UiDocumentHost host) => (bool)typeof(UiDocumentHost).GetField("_scrollbarPointerCaptured", ScrollFlags)!.GetValue(host)!;
+    private static ElementNode? ScrollDragOwner(UiDocumentHost host)
+    {
+        var drag = typeof(UiDocumentHost).GetField("_scrollbarDrag", ScrollFlags)!.GetValue(host);
+        return (ElementNode?)drag?.GetType().GetProperty("Container")!.GetValue(drag);
+    }
+
+    private static ScrollbarGeometry PointerScrollbar(UiDocumentHost host, ElementNode owner) => (ScrollbarGeometry)typeof(UiDocumentHost).GetMethod("ScrollbarGeometryForPointer", ScrollFlags)!.Invoke(host, [host.Layout!.FindPrimaryBox(owner)!])!;
+    private static (NativeInputHitPart Part, ElementNode? Owner) InputHit(UiDocumentHost host, PointF point)
+    {
+        var interop = typeof(UiDocumentHost).GetField("_layoutInterop", ScrollFlags)!.GetValue(host)!;
+        object? Field(string name) => typeof(UiDocumentHost).GetField(name, ScrollFlags)!.GetValue(host);
+        return ((NativeInputHitPart, ElementNode?))interop.GetType().GetMethod("HitTestInput")!.Invoke(interop, [Field("_nativeLayout"), Field("_nativeVisualStyleMap"), Field("_nativeDom"), point, (Func<ElementNode, ScrollOffset>)host.GetScrollOffset])!;
+    }
+
+    private static void ScrollbarInputFollowsPaint()
+    {
+        var cases = new[]
+        {
+            new Scenario("early-high", "z-index:10", "z-index:0", true),
+            new Scenario("early-low", "z-index:-1", "z-index:0", true),
+            new Scenario("early-equal", "z-index:0", "z-index:0", true),
+            new Scenario("early-auto", "", "", true),
+            new Scenario("late-equal", "z-index:0", "z-index:0", false),
+            new Scenario("late-low", "z-index:-1", "z-index:0", false),
+            new Scenario("early-hidden", "z-index:10;visibility:hidden", "z-index:0", true),
+            new Scenario("early-none", "z-index:10;pointer-events:none", "z-index:0", true),
+            new Scenario("two-early-high", "z-index:10", "z-index:0", true, true),
+            new Scenario("two-late-high", "z-index:10", "z-index:0", false, true),
+            new Scenario("nested-same-geometry", "z-index:0;left:0;top:0", "z-index:0", false, true, Nested: true),
+            new Scenario("ancestor-clip", "z-index:-1", "z-index:0", false, Clipped: true),
+            new Scenario("ancestor-scroll-high", "z-index:10", "z-index:0", true, Scrolled: true),
+        };
+        foreach (var scenario in cases)
+            foreach (var horizontal in new[]
+            {
+                false,
+                true
+            }
+
+            )
+                foreach (var isThumb in new[]
+                {
+                    false,
+                    true
+                }
+
+                )
+                {
+                    var component = new ProbeComponent(scenario);
+                    using var renderer = new RecordingRenderer();
+                    using var host = new UiDocumentHost(component, new ApproximateTextMeasurer(), renderer, new UiHostOptions());
+                    host.SetViewport(260, 220, 1);
+                    host.Render();
+                    if (scenario.Scrolled)
+                        host.SetScrollOffset(host.Document!.GetElementById("wrapper")!, new ScrollOffset(15, 10));
+                    var lower = host.Document!.GetElementById("scroller")!;
+                    var upper = host.Document.GetElementById("overlay")!;
+                    var g = PointerScrollbar(host, lower);
+                    var thumb = horizontal ? g.HorizontalThumb : g.VerticalThumb;
+                    var track = horizontal ? g.HorizontalTrack : g.VerticalTrack;
+                    var point = isThumb ? new PointF(thumb.X + thumb.Width / 2, thumb.Y + thumb.Height / 2) : horizontal ? new PointF(track.Right - 3, track.Y + track.Height / 2) : new PointF(track.X + track.Width / 2, track.Bottom - 3);
+                    var destination = horizontal ? new PointF(track.Right - 4, point.Y) : new PointF(point.X, track.Bottom - 4);
+                    bool blocked = scenario.Name is "early-high" or "late-equal" or "ancestor-scroll-high";
+                    var winner = scenario.TwoScrollers && !scenario.Nested ? upper : lower;
+                    host.PointerPressed(point);
+                    Assert.Equal(!blocked && !scenario.Clipped, ScrollCaptured(host));
+                    Assert.True(ReferenceEquals(ScrollDragOwner(host), !blocked && !scenario.Clipped && isThumb ? winner : null), scenario.Name + " drag owner");
+                    if (blocked)
+                        Assert.True(component.Downs.SequenceEqual(new[] { "overlay" }), scenario.Name + " delivers front content mousedown");
+                    else
+                        Assert.Equal(0, component.Downs.Count);
+                    host.PointerMoved(destination);
+                    var lo = host.GetScrollOffset(lower);
+                    var up = host.GetScrollOffset(upper);
+                    if (blocked || scenario.Clipped)
+                    {
+                        Assert.Equal(default(ScrollOffset), lo);
+                        Assert.Equal(default(ScrollOffset), up);
+                    }
+                    else
+                    {
+                        var moved = host.GetScrollOffset(winner);
+                        Assert.True(horizontal ? moved.X > 0 && moved.Y == 0 : moved.Y > 0 && moved.X == 0, scenario.Name + " winner axis");
+                        Assert.Equal(default(ScrollOffset), host.GetScrollOffset(ReferenceEquals(winner, lower) ? upper : lower));
+                    }
+
+                    host.PointerReleased(destination);
+                    Assert.True(!ScrollCaptured(host) && ScrollDragOwner(host) is null);
+                    if (!blocked)
+                    {
+                        Assert.Equal(0, component.Ups.Count);
+                        Assert.Equal(0, component.Clicks.Count);
+                    }
+                }
+
+        // The outer corner stops chrome selection and retains the normal DOM path.
+        {
+            var component = new ProbeComponent(new Scenario("corner", "left:0;top:0", "", false, true, Nested: true));
+            using var renderer = new RecordingRenderer();
+            using var host = new UiDocumentHost(component, new ApproximateTextMeasurer(), renderer, new UiHostOptions());
+            host.SetViewport(260, 220, 1);
+            host.Render();
+            var lower = host.Document!.GetElementById("scroller")!;
+            var upper = host.Document.GetElementById("overlay")!;
+            var corner = PointerScrollbar(host, lower).Corner;
+            var point = new PointF(corner.X + 1, corner.Y + 1);
+            host.PointerPressed(point);
+            Assert.True(!ScrollCaptured(host) && ScrollDragOwner(host) is null);
+            host.PointerMoved(new PointF(point.X + 40, point.Y + 40));
+            host.PointerReleased(point);
+            Assert.Equal(default(ScrollOffset), host.GetScrollOffset(lower));
+            Assert.Equal(default(ScrollOffset), host.GetScrollOffset(upper));
+        }
+
+        // Tiny positive overflow leaves a real track sliver outside the thumb,
+        // but paging is below the host's .001 offset-change threshold.
+        {
+            var component = new ProbeComponent(new Scenario("track-limit", "visibility:hidden", "", true, TinyOverflow: true));
+            using var renderer = new RecordingRenderer();
+            using var host = new UiDocumentHost(component, new ApproximateTextMeasurer(), renderer, new UiHostOptions());
+            host.SetViewport(260, 220, 1);
+            host.Render();
+            var lower = host.Document!.GetElementById("scroller")!;
+            var box = host.Layout!.FindPrimaryBox(lower)!;
+            Assert.True(box.ScrollableOverflowY > 0 && box.ScrollableOverflowY < .001f);
+            var g = PointerScrollbar(host, lower);
+            var point = new PointF(g.VerticalTrack.X + 1, (g.VerticalThumb.Bottom + g.VerticalTrack.Bottom) / 2);
+            Assert.Equal(NativeInputHitPart.VerticalTrack, InputHit(host, point).Part);
+            host.PointerPressed(point);
+            Assert.True(ScrollCaptured(host) && ScrollDragOwner(host) is null);
+            Assert.Equal(default(ScrollOffset), host.GetScrollOffset(lower));
+            host.PointerReleased(point);
+            Assert.True(!ScrollCaptured(host));
+            Assert.Equal(0, component.Ups.Count);
+            Assert.Equal(0, component.Clicks.Count);
+        }
+    }
+
+    private static void ScrollbarInputGeneratedAndLiveStyles()
+    {
+        foreach (var change in new[] { "z-index:20", "visibility:hidden", "pointer-events:none" })
+        {
+            string initial = change == "z-index:20" ? "z-index:1" : "z-index:20";
+            using var renderer = new RecordingRenderer();
+            using var host = new UiDocumentHost(new RawMarkupComponent("<style>html,body{margin:0}#a,#b{position:absolute;left:10px;top:10px;width:80px;height:70px}#a{overflow:scroll;z-index:9}#large{width:300px;height:300px}#b{" + initial + "}#b:invalid{" + change + "}</style><body><div id='a'><div id='large'></div></div><div id='b'></div></body>"), new ApproximateTextMeasurer(), renderer, new UiHostOptions());
+            host.SetViewport(200, 120, 1);
+            host.Render();
+            var a = host.Document!.GetElementById("a")!;
+            var b = host.Document.GetElementById("b")!;
+            var g = PointerScrollbar(host, a);
+            var point = new PointF(g.VerticalThumb.X + 1, g.VerticalThumb.Y + 1);
+            SetTestState(host, b, ElementState.Invalid, true);
+            host.PointerPressed(point); // no Render
+            Assert.Equal(change != "z-index:20", ScrollCaptured(host));
+            host.PointerReleased(point);
+        }
+
+        using (var renderer = new RecordingRenderer())
+        using (var host = new UiDocumentHost(new RawMarkupComponent("<style>html,body{margin:0}#a,#b{position:absolute;left:10px;top:10px;width:80px;height:70px}#a{overflow:scroll}#large{width:300px;height:300px}#b{z-index:9}#b::before{content:'';position:absolute;left:0;top:0;width:80px;height:70px;overflow:scroll}</style><body><div id='a'><div id='large'></div></div><div id='b'></div></body>"), new ApproximateTextMeasurer(), renderer, new UiHostOptions()))
+        {
+            host.SetViewport(200, 120, 1);
+            host.Render();
+            var a = host.Document!.GetElementById("a")!;
+            var g = PointerScrollbar(host, a);
+            var point = new PointF(g.VerticalThumb.X + 1, g.VerticalThumb.Y + 1);
+            host.PointerPressed(point);
+            Assert.True(ScrollCaptured(host));
+            Assert.True(ScrollDragOwner(host) is null, "Generated chrome consumes without projected owner");
+            host.PointerMoved(new PointF(point.X, point.Y + 40));
+            host.PointerReleased(point);
+            Assert.True(!ScrollCaptured(host));
+            Assert.Equal(default(ScrollOffset), host.GetScrollOffset(a));
+        }
+
+        using var native = new NativeLayoutInterop((_, _, _) => default);
+        Assert.Throws<ArgumentNullException>(() => native.HitTestInput(null!, null, 0, 0, _ => default));
+        using var errorRenderer = new RecordingRenderer();
+        using var errorHost = new UiDocumentHost(new RawMarkupComponent("<body><div>content</div></body>"), new ApproximateTextMeasurer(), errorRenderer, new UiHostOptions());
+        errorHost.SetViewport(200, 120, 1);
+        errorHost.Render();
+        var disposedLayout = (NativeLayoutResult)typeof(UiDocumentHost).GetField("_nativeLayout", ScrollFlags)!.GetValue(errorHost)!;
+        disposedLayout.Dispose();
+        Assert.Throws<ObjectDisposedException>(() => errorHost.PointerPressed(new PointF(1, 1)));
+        Assert.True(!ScrollCaptured(errorHost), "Interop errors propagate without selecting a substitute scrollbar.");
+    }
+
+    sealed record Scenario(string Name, string OverlayCss, string ScrollerCss, bool OverlayFirst, bool TwoScrollers = false, bool Nested = false, bool Clipped = false, bool Scrolled = false, bool TinyOverflow = false);
+    sealed class ProbeComponent(Scenario scenario) : UiComponent
+    {
+        public List<string> Downs = new();
+        public List<string> Ups = new();
+        public List<string> Clicks = new();
+        protected override void BuildRenderTree(MarkupWriter w)
+        {
+            w.WriteLiteral("<style>html,body {margin:0;} #wrapper{position:absolute;left:10px;top:10px;width:" + (scenario.Clipped ? "80" : "210") + "px;height:" + (scenario.Clipped ? "80" : "190") + "px;overflow:" + (scenario.Clipped ? "hidden" : "scroll") + ";} .layer {position:absolute;left:20px;top:20px;width:160px;height:140px;} #scroller{overflow:scroll;background:#0000ff;" + scenario.ScrollerCss + "} #overlay{background:#ff0000;" + (scenario.TwoScrollers ? "overflow:scroll;" : "") + scenario.OverlayCss + "} .large{" + (scenario.TinyOverflow ? "width:160px;height:140.0005px;" : "width:500px;height:500px;") + "}</style><body>");
+            void Layer(string id)
+            {
+                w.WriteLiteral("<div class='layer' id='" + id + "'");
+                w.WriteEventAttribute("onmousedown", () => Downs.Add(id));
+                w.WriteEventAttribute("onmouseup", () => Ups.Add(id));
+                w.WriteEventAttribute("onclick", () => Clicks.Add(id));
+                w.WriteLiteral(">" + (id == "scroller" || scenario.TwoScrollers ? "<div class='large'></div>" : "") + "</div>");
+            }
+
+            if (scenario.Clipped || scenario.Scrolled)
+                w.WriteLiteral("<div id='wrapper'>");
+            if (scenario.Nested)
+            {
+                w.WriteLiteral("<div class='layer' id='scroller'>");
+                Layer("overlay");
+                w.WriteLiteral("<div class='large'></div></div>");
+            }
+            else if (scenario.OverlayFirst)
+            {
+                Layer("overlay");
+                Layer("scroller");
+            }
+            else
+            {
+                Layer("scroller");
+                Layer("overlay");
+            }
+
+            if (scenario.Scrolled)
+                w.WriteLiteral("<div class='large'></div>");
+            if (scenario.Clipped || scenario.Scrolled)
+                w.WriteLiteral("</div>");
+            w.WriteLiteral("</body>");
+        }
     }
 
     private static void HtmlParserBuildsDocument()
@@ -914,6 +1149,17 @@ internal static class Program
         Assert.Throws<InvalidOperationException>(() => NativeAbiContract.Validate(
             NativeAbiContract.ExpectedVersion, NativeAbiContract.RequiredCapabilities,
             (nuint)(NativePaintCommandLayout.MinimumBufferSize - 1)));
+        Assert.Equal(0x3FUL, NativeAbiContract.RequiredCapabilities);
+        try
+        {
+            NativeAbiContract.Validate(NativeAbiContract.ExpectedVersion, 0x1FUL,
+                (nuint)NativePaintCommandLayout.MinimumBufferSize);
+            throw new Exception("Old 0.34 runtime must reject before input symbol lookup.");
+        }
+        catch (InvalidOperationException error)
+        {
+            Assert.True(error.Message.Contains("capabilities") && error.Message.Contains("0x3F") && error.Message.Contains("0x1F"));
+        }
         NativeAbiContract.ValidateComputedStyleSize(512, 512);
         Assert.Throws<InvalidOperationException>(() => NativeAbiContract.ValidateComputedStyleSize(512, 511));
     }
@@ -1810,14 +2056,24 @@ internal static class Program
         Assert.True(host.GetScrollOffset(inner.Element).X > 0, "Dragging a horizontal thumb must update only its horizontal offset.");
         Assert.Equal(0, component.ClickCount);
 
-        var verticalTrack = inner.Scrollbar.VerticalTrack;
-        var verticalThumb = inner.Scrollbar.VerticalThumb;
-        host.PointerPressed(new PointF(verticalTrack.X + verticalTrack.Width / 2, verticalThumb.Bottom + 1));
-        host.PointerReleased(new PointF(verticalTrack.X + verticalTrack.Width / 2, verticalThumb.Bottom + 1));
+        // Reveal the inner vertical chrome inside the outer padding clip.
+        // Its snapshot x=294 is otherwise outside the 120px viewport.
+        host.SetScrollOffset(outer.Element, new ScrollOffset(outer.ScrollableOverflowX, 0));
+        var visibleInnerChrome = PointerScrollbar(host, inner.Element);
+        var verticalTrack = visibleInnerChrome.VerticalTrack;
+        var verticalThumb = visibleInnerChrome.VerticalThumb;
+        var verticalPress = new PointF(verticalTrack.X + verticalTrack.Width / 2, verticalThumb.Bottom + 1);
+        Assert.True(outer.PaddingBox.Contains(verticalPress), "The track probe must be inside its ancestor clip.");
+        var input = InputHit(host, verticalPress);
+        Assert.Equal(NativeInputHitPart.VerticalTrack, input.Part);
+        Assert.True(ReferenceEquals(inner.Element, input.Owner));
+        host.PointerPressed(verticalPress);
+        host.PointerReleased(verticalPress);
         host.Render();
         Assert.True(host.GetScrollOffset(inner.Element).Y > 0, "Clicking a vertical track must move by one viewport page.");
         Assert.Equal(0, component.ClickCount);
 
+        host.SetScrollOffset(outer.Element, default);
         var contentPoint = new PointF(inner.BorderBox.X + 10, inner.BorderBox.Y + 10);
         host.MouseHorizontalWheelScrolled(contentPoint, 100);
         host.Render();
@@ -1825,11 +2081,19 @@ internal static class Program
         Assert.True(host.GetScrollOffset(outer.Element).X > 0,
             "When the nested scroller reaches its horizontal limit, wheel input must chain to its ancestor.");
 
+        host.SetScrollOffset(outer.Element, default);
+        host.SetScrollOffset(inner.Element, default);
         inner = Box("inner");
-        thumb = inner.Scrollbar.HorizontalThumb;
-        host.PointerPressed(new PointF(thumb.X + 1, thumb.Y + 1));
+        thumb = PointerScrollbar(host, inner.Element).HorizontalThumb;
+        var resizePress = new PointF(thumb.X + 1, thumb.Y + 1);
+        Assert.True(outer.PaddingBox.Contains(resizePress));
+        Assert.Equal(NativeInputHitPart.HorizontalThumb, InputHit(host, resizePress).Part);
+        host.PointerPressed(resizePress);
+        Assert.True(ScrollCaptured(host) && ReferenceEquals(inner.Element, ScrollDragOwner(host)));
         host.SetViewport(360, 220, 1);
-        host.PointerReleased(new PointF(thumb.X + 1, thumb.Y + 1));
+        Assert.True(ScrollCaptured(host) && ScrollDragOwner(host) is null);
+        host.PointerReleased(resizePress);
+        Assert.True(!ScrollCaptured(host));
         Assert.Equal(0, component.ClickCount);
     }
 

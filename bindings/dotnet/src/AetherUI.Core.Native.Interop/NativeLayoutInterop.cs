@@ -16,6 +16,14 @@ public readonly record struct NativeLayoutBox(
     NativeScrollbarGeometry ScrollbarGeometry,
     int ChildCount);
 
+public enum NativeInputHitPart
+{
+    None = 0, Content = 1, HorizontalThumb = 2, VerticalThumb = 3,
+    HorizontalTrack = 4, VerticalTrack = 5, ScrollbarCorner = 6,
+}
+
+public readonly record struct NativeInputHit(NativeInputHitPart Part, IntPtr Owner);
+
 public sealed class NativeLayoutInterop : IDisposable
 {
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
@@ -72,6 +80,23 @@ public sealed class NativeLayoutInterop : IDisposable
         {
             _scroll = previous;
         }
+    }
+
+    public NativeInputHit HitTestInput(NativeLayoutResult result, NativeStyleMap? currentStyles,
+        float x, float y, Func<IntPtr, NativeScrollOffset> scroll)
+    {
+        ArgumentNullException.ThrowIfNull(result);
+        ObjectDisposedException.ThrowIf(_engine == IntPtr.Zero, this);
+        var previous = _scroll;
+        _scroll = scroll ?? throw new ArgumentNullException(nameof(scroll));
+        try
+        {
+            Throw(NativeMethods.LayoutResultHitTestInput(result.Handle, currentStyles?.Handle ?? IntPtr.Zero,
+                x, y, Marshal.GetFunctionPointerForDelegate(_scrollDelegate), GCHandle.ToIntPtr(_self),
+                out var part, out var owner));
+            return new NativeInputHit(part, owner);
+        }
+        finally { _scroll = previous; }
     }
 
     public NativeScrollbarGeometry GetScrollbarGeometryAtOffset(IntPtr box, NativeScrollOffset offset) =>

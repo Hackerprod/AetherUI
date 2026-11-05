@@ -225,6 +225,11 @@ internal static unsafe partial class NativeMethods
     internal static partial IntPtr LayoutResultHitTestWithStylesAndScrollOffsets(
         IntPtr result, IntPtr styles, float x, float y, IntPtr scrollCallback, IntPtr scrollData);
 
+    [LibraryImport(Lib, EntryPoint = "aether_layout_result_hit_test_input")]
+    [UnmanagedCallConv(CallConvs = [typeof(System.Runtime.CompilerServices.CallConvCdecl)])]
+    internal static partial int LayoutResultHitTestInput(IntPtr result, IntPtr currentStyles,
+        float x, float y, IntPtr scrollCallback, IntPtr scrollData, out NativeInputHitPart part, out IntPtr owner);
+
     [LibraryImport(Lib, EntryPoint = "aether_layout_box_get_kind")]
     internal static partial int LayoutBoxGetKind(IntPtr box);
 

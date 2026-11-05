@@ -49,6 +49,15 @@ internal sealed class LayoutInterop : IDisposable
         return handle == IntPtr.Zero ? null : dom.GetManagedElement(handle);
     }
 
+    public (NativeInputHitPart Part, ElementNode? Owner) HitTestInput(NativeLayoutResult nativeResult,
+        NativeStyleMap? currentStyles, DomInterop dom, PointF point, Func<ElementNode, ScrollOffset> scrollOffsetFor)
+    {
+        var hit = _native.HitTestInput(nativeResult, currentStyles, point.X, point.Y,
+            nativeElement => dom.GetManagedElement(nativeElement) is { } element
+                ? new NativeScrollOffset(scrollOffsetFor(element).X, scrollOffsetFor(element).Y) : default);
+        return (hit.Part, hit.Owner == IntPtr.Zero ? null : dom.GetManagedElement(hit.Owner));
+    }
+
     public ScrollbarGeometry GetScrollbarGeometryAtOffset(LayoutBox box, ScrollOffset offset) =>
         ToScrollbarGeometry(_native.GetScrollbarGeometryAtOffset(
             box.NativeHandle,

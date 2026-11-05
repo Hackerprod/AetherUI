@@ -139,32 +139,35 @@ public sealed partial class UiDocumentHost
 
     private bool TryBeginScrollbarInteraction(PointF point)
     {
-        foreach (var box in _layout!.PaintOrder.Reverse())
+        var hit = _layoutInterop.HitTestInput(_nativeLayout!, _nativeVisualStyleMap, _nativeDom!, point, ScrollOffsetFor);
+        switch (hit.Part)
         {
-            if (!IsCurrentlyVisible(box.Element)) continue;
-            var scrollbar = ScrollbarGeometryForPointer(box);
-            if (scrollbar.HorizontalVisible && scrollbar.HorizontalThumb.Contains(point))
-            {
-                BeginScrollbarDrag(box, ScrollAxis.Horizontal, point.X - scrollbar.HorizontalThumb.X);
+            case NativeInputHitPart.HorizontalThumb:
+            case NativeInputHitPart.VerticalThumb:
+            case NativeInputHitPart.HorizontalTrack:
+            case NativeInputHitPart.VerticalTrack:
+                // A chrome hit is authoritative even for a generated owner that
+                // cannot be projected. Consume the entire gesture through release.
+                _scrollbarPointerCaptured = true;
+                if (hit.Owner is not { } owner || _layout!.FindPrimaryBox(owner) is not { } box) return true;
+                var scrollbar = ScrollbarGeometryForPointer(box);
+                switch (hit.Part)
+                {
+                    case NativeInputHitPart.HorizontalThumb:
+                        BeginScrollbarDrag(box, ScrollAxis.Horizontal, point.X - scrollbar.HorizontalThumb.X); break;
+                    case NativeInputHitPart.VerticalThumb:
+                        BeginScrollbarDrag(box, ScrollAxis.Vertical, point.Y - scrollbar.VerticalThumb.Y); break;
+                    case NativeInputHitPart.HorizontalTrack:
+                        PageScroll(box, ScrollAxis.Horizontal, point.X); break;
+                    case NativeInputHitPart.VerticalTrack:
+                        PageScroll(box, ScrollAxis.Vertical, point.Y); break;
+                }
                 return true;
-            }
-            if (scrollbar.VerticalVisible && scrollbar.VerticalThumb.Contains(point))
-            {
-                BeginScrollbarDrag(box, ScrollAxis.Vertical, point.Y - scrollbar.VerticalThumb.Y);
-                return true;
-            }
-            if (scrollbar.HorizontalVisible && scrollbar.HorizontalTrack.Contains(point))
-            {
-                PageScroll(box, ScrollAxis.Horizontal, point.X);
-                return true;
-            }
-            if (scrollbar.VerticalVisible && scrollbar.VerticalTrack.Contains(point))
-            {
-                PageScroll(box, ScrollAxis.Vertical, point.Y);
-                return true;
-            }
+            default:
+                // Content, miss and corner retain normal DOM routing. Corner
+                // already stopped the native search for any lower chrome.
+                return false;
         }
-        return false;
     }
 
     private void BeginScrollbarDrag(LayoutBox box, ScrollAxis axis, float grabOffset)

@@ -1,5 +1,6 @@
 /* ── Layout Engine — core box layout, flow, inline, and intrinsic sizing ─ */
 #include "layout_internal.h"
+#include "input_hit_test.h"
 
 #include <algorithm>
 #include <cctype>
@@ -1262,6 +1263,19 @@ AETHER_API aether_node_t aether_layout_result_hit_test_with_styles_and_scroll_of
     aether_scroll_offset_fn offsets, void* user_data) {
     if (!result) return nullptr;
     return result->hit_test(x, y, styles, offsets, user_data);
+}
+
+AETHER_API aether_status_t aether_layout_result_hit_test_input(
+    aether_layout_result_t result, aether_style_map_t current_styles, float x, float y,
+    aether_scroll_offset_fn offsets, void* user_data,
+    aether_input_hit_part_t* out_part, aether_node_t* out_owner) {
+    if (out_part) *out_part = AETHER_INPUT_HIT_NONE;
+    if (out_owner) *out_owner = nullptr;
+    if (!result || !out_part || !out_owner) return AETHER_ERROR_NULL_ARG;
+    const auto hit = layout_hit_test_input(result, result->root, current_styles, x, y, offsets, user_data);
+    *out_part = hit.part;
+    *out_owner = hit.owner;
+    return AETHER_OK;
 }
 
 AETHER_API int32_t aether_layout_result_get_paint_order_count(aether_layout_result_t result) {

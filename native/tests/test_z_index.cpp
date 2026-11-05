@@ -274,7 +274,9 @@ static aether_scroll_offset_t offset(aether_node_t n, void* data) {
 static aether_scroll_offset_t excessive_offset(aether_node_t n, void* data) {
     return n == data ? aether_scroll_offset_t{-500, 5000} : aether_scroll_offset_t{0, 0};
 }
+static void input_hit_checks();
 static void run() {
+    input_hit_checks();
     struct Case { const char* label; const char* css; const char* target; std::vector<int> fills; };
     const Case cases[] = {
         {"positive", "#a{z-index:9}#b{z-index:1}", "a", {1,0}},
@@ -400,6 +402,95 @@ static void run() {
         a->kind = a_kind; b->is_atomic_control = false;
     }
     std::puts("PASS: shared local paint/hit order, three APIs, retained styles, clipping, scroll, pseudo and anonymous ownership");
+}
+static void input_hit_checks() {
+    require((aether_abi_capabilities() & AETHER_CAPABILITY_INPUT_HIT_TEST) != 0, "input capability advertised");
+    const char* html = "<body><div id='a'><div class='large'></div></div><div id='b'></div></body>";
+    const std::string css = "#a,#b{position:absolute;left:10px;top:10px;width:80px;height:70px}#a{overflow:scroll} .large{width:300px;height:300px}";
+    const auto query = [](Fixture& f, float x, float y, int part, aether_node_t owner,
+        aether_style_map_t styles = nullptr, aether_scroll_offset_fn callback = nullptr, void* data = nullptr) {
+        aether_input_hit_part_t actual = -1; aether_node_t found = reinterpret_cast<aether_node_t>(1);
+        ok(aether_layout_result_hit_test_input(f.layout, styles, x, y, callback, data, &actual, &found));
+        if (actual != part || found != owner) std::fprintf(stderr,"input (%g,%g) expected part=%d actual=%d expectedOwner=%p actualOwner=%p\n",x,y,part,actual,owner,found);
+        require(actual == part && found == owner, "public input part and owner identity");
+    };
+    {
+        Fixture f(html, css + "#b{display:none}");
+        auto* box = aether_layout_result_find_primary_box(f.layout, f.node("a"));
+        const auto g = aether_layout_box_get_scrollbar_geometry(box);
+        query(f, g.horizontal_thumb.x+1,g.horizontal_thumb.y+1,2,f.node("a"));
+        query(f, g.vertical_thumb.x+1,g.vertical_thumb.y+1,3,f.node("a"));
+        query(f, g.horizontal_track.x+g.horizontal_track.width-1,g.horizontal_track.y+1,4,f.node("a"));
+        query(f, g.vertical_track.x+1,g.vertical_track.y+g.vertical_track.height-1,5,f.node("a"));
+        query(f, g.corner.x+1,g.corner.y+1,6,f.node("a"));
+        query(f, -100,-100,0,nullptr);
+        query(f, 12,12,1,layout_box_hit_owner(box->children.front()));
+        aether_input_hit_part_t part=99; aether_node_t owner=f.node("a");
+        require(aether_layout_result_hit_test_input(nullptr,nullptr,0,0,nullptr,nullptr,&part,&owner)==AETHER_ERROR_NULL_ARG && part==0 && !owner,"null result initializes outputs");
+        owner=f.node("a"); require(aether_layout_result_hit_test_input(f.layout,nullptr,0,0,nullptr,nullptr,nullptr,&owner)==AETHER_ERROR_NULL_ARG && !owner,"null part initializes owner");
+        part=99; require(aether_layout_result_hit_test_input(f.layout,nullptr,0,0,nullptr,nullptr,&part,nullptr)==AETHER_ERROR_NULL_ARG && part==0,"null owner initializes part");
+        require(aether_layout_result_hit_test_input(f.layout,nullptr,0,0,nullptr,nullptr,nullptr,nullptr)==AETHER_ERROR_NULL_ARG,"both outputs required");
+        const auto old0=f.hit(0,g.vertical_thumb.x+1,g.vertical_thumb.y+1);
+        const auto old1=f.hit(1,g.vertical_thumb.x+1,g.vertical_thumb.y+1);
+        const auto old2=f.hit(2,g.vertical_thumb.x+1,g.vertical_thumb.y+1);
+        // Re-layout with real snapshot offsets; no callback uses those offsets only for the new API.
+        aether_layout_result_destroy(f.layout); f.layout=nullptr;
+        ok(aether_layout_layout(f.engine,f.document,f.styles,200,100,offset,f.node("a"),&f.layout));
+        box=aether_layout_result_find_primary_box(f.layout,f.node("a"));
+        const auto live=aether_layout_box_get_scrollbar_geometry(box);
+        query(f,live.vertical_thumb.x+1,live.vertical_thumb.y+1,3,f.node("a"));
+        query(f,g.vertical_thumb.x+1,g.vertical_thumb.y+1,3,f.node("a"),nullptr,[](aether_node_t,void*){return aether_scroll_offset_t{0,0};});
+        query(f,g.vertical_track.x+1,g.vertical_track.y+g.vertical_track.height-1,5,f.node("a"));
+        require(f.hit(0,g.vertical_thumb.x+1,g.vertical_thumb.y+1)==old0 && f.hit(1,g.vertical_thumb.x+1,g.vertical_thumb.y+1)==old1 && f.hit(2,g.vertical_thumb.x+1,g.vertical_thumb.y+1)==old2,"legacy DOM queries unchanged by input query snapshot default");
+    }
+    for (const auto& rules : {"#a{z-index:1}#b{z-index:9}","#a{z-index:-9}#b{z-index:-1}","#a,#b{z-index:0}","#a,#b{z-index:auto}"}) {
+        Fixture f(html,css+rules); query(f,85,12,1,f.node("b"));
+    }
+    for (const auto& rules : {"#a{z-index:9}#b{z-index:1}","#a{z-index:-1}#b{z-index:-9}","#b{visibility:hidden}","#b{pointer-events:none}"}) {
+        Fixture f(html,css+rules); query(f,85,12,3,f.node("a"));
+    }
+    for (const auto& prop : {"z-index:20", "visibility:hidden", "pointer-events:none", "display:none"}) {
+        Fixture f(html,css+"#a{z-index:9}#b{z-index:1}#b:hover{"+prop+"}");
+        aether_element_set_state(f.node("b"),AETHER_STATE_HOVER);f.resolve(f.node("b"));
+        const bool content=std::string(prop)=="z-index:20";
+        query(f,85,12,content?1:3,f.node(content?"b":"a"),f.styles);
+        query(f,85,12,3,f.node("a")); // snapshot fallback; no display list was built
+    }
+    for (const auto& prop : {"visibility:hidden", "pointer-events:none"}) {
+        Fixture f("<body><div id='b'><div id='a'><div class='large'></div></div></div></body>",css+"#b{"+prop+";z-index:9}#a{left:0;top:0;visibility:visible;pointer-events:auto}");
+        auto g=aether_layout_box_get_scrollbar_geometry(aether_layout_result_find_primary_box(f.layout,f.node("a")));
+        query(f,g.vertical_thumb.x+1,g.vertical_thumb.y+1,3,f.node("a"),f.styles);
+    }
+    {
+        Fixture f("<body><div id='a'><div id='b'><div class='large'></div></div><div class='large'></div></div></body>",css+"#b{left:0;top:0;height:80px;overflow:scroll}");
+        auto* box=aether_layout_result_find_primary_box(f.layout,f.node("a"));auto g=aether_layout_box_get_scrollbar_geometry(box);
+        for(auto entry : {std::pair<aether_rectf,int>{g.horizontal_thumb,2},{g.vertical_thumb,3},{g.horizontal_track,4},{g.vertical_track,5},{g.corner,6}}) {
+            auto rect=entry.first; query(f,rect.x+(entry.second==4?rect.width-1:1),rect.y+(entry.second==5?rect.height-1:1),entry.second,f.node("a"));
+        }
+    }
+    {
+        Fixture f("<body><div id='parent'><div id='a'><div class='large'></div></div></div></body>",css+"#parent{width:30px;height:30px;overflow:hidden}");
+        query(f,85,12,1,aether_doc_get_body(f.document)); // ancestor clip rejects invisible chrome
+    }
+    {
+        Fixture f("<body><div id='parent'><div id='a'><div class='large'></div></div><div class='large'></div></div></body>",css+"#parent{width:180px;height:90px;overflow:hidden}");
+        query(f,85,12,3,f.node("a"));
+        query(f,85,25,5,f.node("a"),nullptr,offset,f.node("parent"));
+        query(f,85,-8,0,nullptr,nullptr,offset,f.node("parent"));
+    }
+    {
+        Fixture f("<body><div id='a'><div class='large'></div></div></body>",css+"#a{pointer-events:none}#a::after{content:'';position:absolute;left:0;top:0;width:80px;height:70px;overflow:scroll;z-index:9;pointer-events:auto}");
+        aether_node_t pseudo=nullptr;for(auto entry:f.z_values)if(entry.first->is_generated)pseudo=entry.first;
+        require(pseudo,"generated fixture exists");
+        auto* pb=aether_layout_result_find_primary_box(f.layout,pseudo);require(pb,"pseudo box exists");
+        auto g=aether_layout_box_get_scrollbar_geometry(pb);
+        query(f,g.vertical_thumb.x+1,g.vertical_thumb.y+1,3,pseudo);
+    }
+    {
+        Fixture f("<body><div id='parent'>ANON<div id='b'></div></div></body>",std::string(common)+"#parent{display:flex;z-index:99}#b{z-index:-1}");
+        query(f,.5f,.5f,1,f.node("parent"));
+    }
+    std::puts("PASS: public input hit parts, output validation, local order, live styles, offsets, clip and ownership");
 }
 } // namespace hit_stacking_tests
 

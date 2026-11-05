@@ -50,6 +50,7 @@ typedef uint64_t aether_capabilities_t;
 #define AETHER_CAPABILITY_LAYOUT        (UINT64_C(1) << 2)
 #define AETHER_CAPABILITY_DISPLAY_LIST  (UINT64_C(1) << 3)
 #define AETHER_CAPABILITY_RENDER_PLAN   (UINT64_C(1) << 4)
+#define AETHER_CAPABILITY_INPUT_HIT_TEST (UINT64_C(1) << 5)
 
 AETHER_API uint32_t              aether_abi_version(void);
 AETHER_API aether_capabilities_t aether_abi_capabilities(void);
@@ -738,6 +739,26 @@ AETHER_API aether_node_t       aether_layout_result_hit_test_with_scroll_offsets
 AETHER_API aether_node_t       aether_layout_result_hit_test_with_styles_and_scroll_offsets(
     aether_layout_result_t result, aether_style_map_t styles, float x, float y,
     aether_scroll_offset_fn offsets, void* user_data);
+/* Frontmost eligible input contribution in reverse local paint order. Chrome
+   uses snapshot geometry; current_styles optionally updates input eligibility and
+   child order. Without offsets, snapshot scroll offsets are used (unlike the
+   older DOM hit queries). With offsets, live offsets are clamped to the snapshot
+   scroll ranges. Clips are rectangular; transforms are not inverted.
+   result/out_part/out_owner are required. Every non-null output is initialized
+   to NONE/null even on error. A valid miss returns OK/NONE/null. The owner is
+   borrowed for the layout/document lifetime and may be a generated node. */
+typedef int32_t aether_input_hit_part_t;
+#define AETHER_INPUT_HIT_NONE             0
+#define AETHER_INPUT_HIT_CONTENT          1
+#define AETHER_INPUT_HIT_HORIZONTAL_THUMB 2
+#define AETHER_INPUT_HIT_VERTICAL_THUMB   3
+#define AETHER_INPUT_HIT_HORIZONTAL_TRACK 4
+#define AETHER_INPUT_HIT_VERTICAL_TRACK   5
+#define AETHER_INPUT_HIT_SCROLLBAR_CORNER 6
+AETHER_API aether_status_t aether_layout_result_hit_test_input(
+    aether_layout_result_t result, aether_style_map_t current_styles, float x, float y,
+    aether_scroll_offset_fn offsets, void* user_data,
+    aether_input_hit_part_t* out_part, aether_node_t* out_owner);
 AETHER_API int32_t             aether_layout_result_get_paint_order_count(aether_layout_result_t result);
 AETHER_API aether_layout_box_t aether_layout_result_get_paint_order_box(aether_layout_result_t result, int32_t index);
 /* CSS Overflow 3.3: the viewport's used overflow, propagated from the root
