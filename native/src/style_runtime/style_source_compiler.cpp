@@ -1,9 +1,9 @@
 #include "style_runtime_types.h"
 #include "css_component_tokens.h"
+#include "css_important.h"
 #include "style_property_registry_internal.h"
 #include <string_view>
 #include <cctype>
-#include <cstring>
 
 // ═══ Comment removal (port of TextSplitter.RemoveComments) ════════════
 
@@ -89,28 +89,6 @@ static int32_t find_at_rule_delimiter(const std::string& source, int32_t start, 
 
 static bool contains_variable(const std::string& s) {
     return variable_has_reference(s);
-}
-
-static bool try_strip_important(std::string& value) {
-    std::string trimmed = str_trim(value);
-    const char marker[] = "!important";
-    size_t marker_len = std::strlen(marker);
-    if (trimmed.size() < marker_len) {
-        value = trimmed;
-        return false;
-    }
-    std::string tail = trimmed.substr(trimmed.size() - marker_len);
-    if (!str_iequals(tail, marker)) {
-        value = trimmed;
-        return false;
-    }
-    size_t marker_start = trimmed.size() - marker_len;
-    if (marker_start > 0 && trimmed[marker_start - 1] == '\\') {
-        value = trimmed;
-        return false;
-    }
-    value = str_trim(trimmed.substr(0, marker_start));
-    return true;
 }
 
 struct declaration_span {
@@ -231,10 +209,11 @@ static declaration_compilation_result compile_declarations(
         if (!segment.valid || segment.colon == std::string::npos) continue;
         std::string name;
         if (!declaration_name(source, segment, name)) continue;
-        std::string value = str_trim(source.substr(segment.colon + 1, segment.end - segment.colon - 1));
-        if (name.empty() || value.empty()) continue;
-
-        bool important = try_strip_important(value);
+        std::string value = source.substr(segment.colon + 1, segment.end - segment.colon - 1);
+        const bool important = css_strip_important(value);
+        // An annotation may leave an empty custom value. Only skip a value
+        // that was empty before extraction, without trimming inside tokens.
+        if (name.empty() || (value.empty() && !important)) continue;
 
         if (name.size() > 2 && name[0] == '-' && name[1] == '-') {
             custom_property_declaration_s custom;

@@ -375,6 +375,17 @@ if(AETHERUI_BUILD_TESTS)
     endif()
     add_test(NAME aether.custom-property-case COMMAND aether_custom_property_case_test)
 
+    add_executable(aether_important_tokens_test
+        tests/test_important_tokens.cpp
+        src/style_runtime/css_variable_tokens.cpp)
+    target_include_directories(aether_important_tokens_test PRIVATE src/style_runtime)
+    target_compile_features(aether_important_tokens_test PRIVATE cxx_std_20)
+    add_test(NAME aether.important-tokens COMMAND aether_important_tokens_test)
+
+    add_executable(aether_important_test tests/test_important.cpp)
+    target_link_libraries(aether_important_test PRIVATE AetherUI::Core)
+    add_test(NAME aether.important COMMAND aether_important_test)
+
     add_executable(aether_style_map_lifetime_test tests/test_style_map_lifetime.cpp)
     target_link_libraries(aether_style_map_lifetime_test PRIVATE AetherUI::Core)
     add_test(NAME aether.style-map-lifetime COMMAND aether_style_map_lifetime_test)
