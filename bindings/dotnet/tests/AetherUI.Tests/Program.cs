@@ -43,6 +43,7 @@ internal static class Program
         ("Scrollbar input preserves generated authority and live eligibility", ScrollbarInputGeneratedAndLiveStyles),
         ("Hidden scrollbar cancels drag and preserves capture", HiddenScrollbarCancelsDrag),
         ("Native clipped miss is authoritative", NativeClippedMissIsAuthoritative),
+        ("Managed duplicate IDs follow connected preorder", DomIdOrderTests.Run),
         ("HTML parser", HtmlParserBuildsDocument),
         ("CSS cascade and pseudo classes", CssCascadeUsesState),
         ("Layout and hit testing", LayoutProducesHitTargets),

@@ -68,6 +68,14 @@ los tags de composición de la ABI 0.34.0; los tags no reconocidos siguen siendo
 
 ## Contrato de mutación DOM y vistas prestadas
 
+`getElementById(id)` devuelve la primera coincidencia conectada en preorden del árbol
+actual, también con IDs duplicados y después de mover, desconectar o renombrar nodos.
+La comparación de IDs es exacta (sin normalizar case, espacios ni Unicode) y no depende
+de visibilidad. Las vistas son prestadas: dos consultas pueden crear wrappers JS distintos
+para el mismo nodo; para comparar identidad nativa usa `ffi.address(view.handle)`.
+Un ID vacío o no string produce `TypeError`; un documento disposed o una vista de una
+generación anterior al reparseo falla antes de acceder a su handle nativo.
+
 `appendChild` y `removeChild` delegan la integridad estructural a la ABI nativa.
 Con handles vivos, un bosque DOM inicialmente coherente y acceso serializado:
 
@@ -176,6 +184,11 @@ La regresión DOM nativa es opt-in explícita y aparece como omitida sin `AETHER
 AETHERUI_TEST_NATIVE=1 AETHERUI_TEST_LIBRARY=/ruta/libaether_core.so npm test
 # Alternativa: AETHERUI_TEST_NATIVE=1 AETHERUI_INSTALL_PREFIX=/ruta/instalada npm test
 ```
+
+El caso aislado `id-order` usa la biblioteca real y compara direcciones con expectativas
+obtenidas de navegación de hijos. Cubre duplicados, movimientos, IDs modificados,
+desconexión/reconexión, reparseo, búsquedas exactas y errores de contrato. Una vez activado
+el opt-in, falta de Koffi, biblioteca o ABI compatible es un fallo, no una omisión.
 
 La suite opt-in incluye contraste de los 55 offsets, tamaño y alineación de ComputedStyle
 contra un probe compilado del header C, copias profundas repetidas, y el callback real de

@@ -87,7 +87,68 @@ try {
   const get = (id) => { const node = document.getElementById(id); assert.ok(node, id); return node; };
   const root = get("root"), left = get("left"), deep = get("deep"), leaf = get("leaf"), right = get("right"), last = get("last");
   const scenario = process.argv[2];
-  if (scenario === "hierarchy") {
+  if (scenario === "id-order") {
+    document.parse('<main><section><div id="dup"><b id="dup">nested</b></div></section>text<!-- gap --><aside id="dup">second</aside><i id="dup">third</i></main>');
+    const main = document.body.child(0);
+    assert.equal(main.tagName, "main");
+    const branch = main.child(0), first = branch.child(0), nested = first.child(0);
+    const second = main.child(3), third = main.child(4);
+    assert.equal(second.tagName, "aside");
+    assert.equal(third.tagName, "i");
+    const expect = (id, node) => assert.equal(handle(document.getElementById(id)), handle(node), `lookup ${JSON.stringify(id)}`);
+    // All expected identities originate in public child navigation, not lookup.
+    const before = snapshot(document, collect(document.documentElement));
+    for (let repeat = 0; repeat < 3; repeat++) expect("dup", first);
+    assert.deepEqual(snapshot(document, collect(document.documentElement)), before, "lookup does not mutate DOM/version");
+    expect("missing", null);
+    main.appendChild(branch);
+    assert.equal(handle(main.child(main.childCount - 1)), handle(branch));
+    expect("dup", second);
+    main.appendChild(second);
+    expect("dup", third);
+    main.appendChild(second); // already last
+    expect("dup", third);
+    branch.appendChild(third); // move into earlier subtree
+    expect("dup", first);
+    first.setAttribute("id", "other");
+    expect("dup", nested);
+    expect("other", first);
+    nested.setAttribute("id", "");
+    expect("dup", third);
+    first.setAttribute("id", "dup");
+    first.setAttribute("id", "dup");
+    expect("dup", first);
+    expect("other", null);
+    main.removeChild(branch); // disconnect several duplicates together
+    expect("dup", second);
+    first.setAttribute("id", "detached");
+    expect("detached", null);
+    main.removeChild(second);
+    expect("dup", null);
+    main.appendChild(branch);
+    expect("dup", third);
+    expect("detached", first);
+    main.appendChild(second); // reconnect every detached subtree before reparse
+    expect("dup", third);
+    reject(document, collect(document.documentElement), third, branch);
+    expect("dup", third);
+    for (const invalid of ["", null, undefined, 0, {}, ["dup"]]) {
+      assert.throws(() => document.getElementById(invalid), TypeError);
+    }
+    const previous = first;
+    document.parse('<div id="A" style="display:none">first</div><div id="&#65;">second</div><div id="a"></div><div id=" A "></div><div id=" "></div><div id="é"></div><div id="é"></div><div id="é"></div><aether-anonymous-flex-item id="named"></aether-anonymous-flex-item>');
+    const body = document.body;
+    for (const [id, index] of [["A", 0], ["a", 2], [" A ", 3], [" ", 4], ["é", 5], ["é", 7], ["named", 8]]) expect(id, body.child(index));
+    expect("dup", null);
+    expect("detached", null);
+    assert.throws(() => previous.handle, /reparsed/); // no stale native dereference
+    const fresh = body.child(0);
+    document.parse("");
+    expect("A", null);
+    assert.throws(() => fresh.handle, /reparsed/);
+    document.dispose();
+    assert.throws(() => document.getElementById("A"), /disposed/);
+  } else if (scenario === "hierarchy") {
     const nodes = collect(document.documentElement);
     for (let repeat = 0; repeat < 3; repeat++) {
       reject(document, nodes, root, root);

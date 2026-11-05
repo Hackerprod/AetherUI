@@ -128,6 +128,26 @@ See the per-binding READMEs under `bindings/` for how each language enforces the
 idiom (`SafeHandle` in .NET, `AutoCloseable` in Java, an explicit `Close()` plus cgo pointer rules in
 Go).
 
+### ID lookup
+
+`aether_doc_get_element_by_id` returns the first connected element with the exact,
+nonempty ID in current tree preorder: a parent precedes its descendants, and an
+entire subtree precedes the next sibling. Duplicate IDs are not rejected or
+rewritten. Visibility does not affect the result. Case, whitespace and UTF-8
+identity are preserved; HTML entities have already been decoded by the parser.
+No match, an empty ID, a null ID or a null document returns null.
+
+The borrowed result reflects moves, disconnect/reconnect, ID changes and reparsing
+on the next query. Generated pseudo-elements and layout-only wrappers never win;
+an authored element named `aether-anonymous-flex-item` still participates. Lookup
+does not change nodes, attributes, relationships or document version. It rebuilds
+the index on each call, without adding a version-based cache or new lifetime rules.
+
+`aether.dom-id-order` checks these rules through the public ABI with explicit
+checks active under `NDEBUG`, independently enumerated expected handles, and
+before/after DOM snapshots. `aether.dom-mutation-integrity` also checks duplicate
+lookup around real pseudo-elements and flex layouts, including rejected mutations.
+
 ### Structural DOM mutation
 
 With live handles, an initially coherent editable DOM forest and serialized access,

@@ -613,6 +613,9 @@ AETHER_API aether_status_t aether_doc_parse_html(aether_doc_t doc, const char* h
 AETHER_API int64_t         aether_doc_get_version(aether_doc_t doc);
 AETHER_API aether_node_t   aether_doc_get_body(aether_doc_t doc);
 AETHER_API aether_node_t   aether_doc_get_document_element(aether_doc_t doc);
+/* Borrowed first connected element in current tree preorder with this exact,
+   nonempty ID. Generated/layout-only nodes do not participate. Returns NULL for
+   no match, NULL doc/id or empty id. Queries do not mutate the DOM or its version. */
 AETHER_API aether_node_t   aether_doc_get_element_by_id(aether_doc_t doc, const char* id);
 
 /* Node queries */

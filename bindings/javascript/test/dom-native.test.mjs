@@ -5,7 +5,7 @@ import test from "node:test";
 
 // Opt-in is explicit: once requested, missing koffi/library/ABI is a failure,
 // never a skip or a mock substitute. Each case gets a separate native process.
-for (const scenario of ["hierarchy", "synthetic", "cross-document", "stale", "disposed"]) {
+for (const scenario of ["id-order", "hierarchy", "synthetic", "cross-document", "stale", "disposed"]) {
   test(`real native DOM: ${scenario}`, {
     skip: process.env.AETHERUI_TEST_NATIVE !== "1" && "set AETHERUI_TEST_NATIVE=1 to run against the real native library",
   }, () => {

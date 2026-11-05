@@ -8,7 +8,8 @@ static void rebuild_id_index(aether_doc_s* doc) {
             if (!child->is_generated && child->type == AETHER_NODE_ELEMENT) {
                 auto it = child->attributes.find("id");
                 if (it != child->attributes.end() && !it->second.empty()) {
-                    doc->id_index[it->second] = child;
+                    // Preorder visits the first connected match before duplicates.
+                    doc->id_index.try_emplace(it->second, child);
                 }
             }
             walk(child);

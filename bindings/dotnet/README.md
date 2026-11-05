@@ -142,6 +142,18 @@ equivalent projection for layout boxes and paint commands, decoding the native t
 the existing `LayoutBox`/`PaintCommand` record types so `Direct2DRenderBackend` needed zero changes
 when the engine moved from managed to native.
 
+### ID lookup contract and managed parity
+
+`DocumentNode.GetElementById` returns the first connected element in current preorder
+for an exact, ordinal ID match, including duplicates after tree or attribute changes.
+It returns null for empty/missing IDs and throws `ArgumentNullException` for null.
+`DomIdOrderTests` checks object identity, duplicate ordering, moves, disconnection,
+attribute changes, managed tree replacement and exact Unicode/case/space matching.
+This is managed parity only: its separate `TryAdd` index does not call or validate the
+C ABI lookup. Native ABI regression and opt-in JavaScript tests validate that function.
+Run the existing test runner on its supported Windows/.NET 10 target; this managed
+parity test does not make that runner portable or replace native ABI integration.
+
 ## Native runtime prerequisite
 
 Build and install the matching native runtime **before** building this binding — it is not built for

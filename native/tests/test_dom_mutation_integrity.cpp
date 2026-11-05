@@ -382,11 +382,65 @@ static void synthetic_boundary() {
     Layout final_layout(f, runtime);
     require(!geometry(final_layout).empty() && !display_list(final_layout, runtime).empty(), "fresh consumers after valid mutations");
 }
+static void duplicate_ids_with_synthetic_nodes() {
+    Fixture f("<body><div id=dup class=host>authored<span id=dup>leaf</span></div>"
+              "<section id=dup></section></body>", {"dup", "synthetic-only"});
+    // Expected identities come from public child enumeration, never ID lookup.
+    auto host = aether_node_get_child(f.body, 0), later = aether_node_get_child(f.body, 1);
+    auto leaf = aether_node_get_child(host, 1);
+    require(host && later && leaf, "duplicate synthetic fixture children");
+    require(f.id("dup") == host, "first duplicate before style resolution");
+    Runtime runtime("body{margin:0} .host{display:flex;width:300px;height:40px}"
+                    ".host::before{content:'before'} .host::after{content:'after'}");
+    for (int pass = 0; pass != 3; ++pass) {
+        runtime.resolve(f);
+        require(f.id("dup") == host, "first duplicate after pseudo generation");
+        {
+            Layout layout(f, runtime);
+            std::vector<aether_node_t> synthetic;
+            int pseudos = 0, wrappers = 0;
+            for (auto box : layout.boxes()) {
+                auto node = aether_layout_box_get_element(box);
+                if (!node || aether_node_get_type(node) != AETHER_NODE_ELEMENT ||
+                    std::find(f.authored.begin(), f.authored.end(), node) != f.authored.end()) continue;
+                add_unique(synthetic, node);
+            }
+            for (auto node : synthetic) {
+                const auto tag = owned_string(aether_element_get_tag_name(node));
+                if (tag == "aether-anonymous-flex-item") ++wrappers;
+                else {
+                    ++pseudos;
+                    require(owned_string(aether_element_get_attribute(node, "id")) == "dup",
+                            "real pseudo copied host's duplicate ID");
+                }
+                require(f.id("dup") == host, "synthetic duplicate never displaces host");
+                require(aether_element_set_attribute(node, "id", "synthetic-only") == AETHER_OK,
+                        "existing live synthetic attribute setter");
+                require(f.id("synthetic-only") == nullptr, "unique synthetic ID excluded from document");
+                require(f.id("dup") == host, "synthetic setter does not change authored winner");
+                require(aether_element_set_attribute(node, "id", "dup") == AETHER_OK, "restore synthetic ID");
+                f.reject(node, leaf, false, "duplicate lookup after synthetic-parent rejection");
+                f.reject(f.body, node, false, "duplicate lookup after synthetic-child rejection");
+                require(f.id("dup") == host, "winner unchanged after synthetic rejection");
+            }
+            require(pseudos == 2 && wrappers == 1, "real before/after and anonymous flex wrapper observed");
+            f.append(f.body, host);
+            require(f.id("dup") == later, "authored move with live layout changes first duplicate");
+            f.append(f.body, later);
+            require(f.id("dup") == host, "restored authored order with live layout");
+        }
+        require(f.id("dup") == host, "layout destruction preserves first duplicate");
+        // Synthetic handles went out of scope before the next resolution.
+    }
+}
 int main(int argc, char** argv) {
     // Isolate the public wrapper regression when checking an unfixed baseline.
     const bool synthetic_only = argc == 2 && std::string(argv[1]) == "--synthetic-only";
     require(argc == 1 || synthetic_only, "usage: test_dom_mutation_integrity [--synthetic-only]");
-    if (!synthetic_only) ordinary_dom();
+    if (!synthetic_only) {
+        ordinary_dom();
+        duplicate_ids_with_synthetic_nodes();
+    }
     for (int cycle = 0; cycle != 3; ++cycle) synthetic_boundary();
     std::puts("PASS: public DOM mutation integrity, synthetic endpoints, consumers and lifetime ordering");
 }
