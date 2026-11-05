@@ -36,9 +36,9 @@ still consume directly. Don't add new cascade logic there; extend `style_runtime
 ## ABI contract
 
 The current ABI is **0.1.0**: flat C functions, opaque handles, fixed-width value types, integer
-status codes, and plain C callbacks. No C++ classes, STL containers, or exceptions cross the boundary
-— every public function is a `noexcept`-equivalent that converts any internal exception into a status
-code before returning.
+status codes, and plain C callbacks. No C++ classes or STL containers are part of the public interface.
+Do not assume that every allocation failure is translated into a status code; in particular, DOM
+append does not currently guarantee rollback if its final child-vector allocation fails.
 
 Every consumer must inspect the loaded library before creating a single handle:
 
@@ -78,6 +78,35 @@ safe fallback value instead.
 See the per-binding READMEs under `bindings/` for how each language enforces these rules in its own
 idiom (`SafeHandle` in .NET, `AutoCloseable` in Java, an explicit `Close()` plus cgo pointer rules in
 Go).
+
+### Structural DOM mutation
+
+With live handles, an initially coherent editable DOM forest and serialized access,
+`aether_node_append_child` rejects self-insertion and inserting an ancestor beneath its descendant
+with `AETHER_ERROR_INVALID_STATE`, before disconnecting the child. Both append and remove also reject
+an endpoint that is a generated pseudo-element, its descendant, an anonymous layout wrapper, or a
+descendant of that wrapper. The check uses internal provenance, not tag spelling or style aliases.
+Remove requires both membership in the parent's child list and the matching child-to-parent link.
+Null arguments retain `AETHER_ERROR_NULL_ARG` precedence. These rejections leave parents, child order,
+contents, IDs and document version unchanged.
+
+Valid append still moves the child to the end: moving upward, moving between branches, reordering in
+the same parent and reattaching a disconnected subtree remain supported. Authored hosts with generated
+children and authored text referenced by layout wrappers remain mutable. Layout getters still expose
+their existing borrowed nodes; a mutation is never silently redirected from a wrapper to its host.
+Old layout results remain snapshots after valid authored mutations, not automatically updated views.
+
+These structural guards do not validate freed handles, extend a wrapper's lifetime beyond its layout
+result, make other setters immutable, repair an already corrupt tree, implement cross-document
+adoption, change ownership of disconnected nodes, or provide allocation-failure rollback. Release
+layout results before their borrowed style maps and documents, and do not retain synthetic handles
+across owner destruction or style resolution that regenerates pseudo-elements.
+
+`aether.dom-mutation-integrity` covers the public C ABI, real wrappers/pseudo-elements returned by
+layout, and deterministic geometry/display-list consumers without a browser. Its bounded checks and
+explicit failures stay active in Release. `aether.dom-mutation-boundary` complements it with private
+provenance and nonreciprocal-remove fixtures. The JavaScript native integration regression is described
+in its binding README; negotiation-only/mock tests do not establish native DOM integrity.
 
 ## Build, test, and install
 

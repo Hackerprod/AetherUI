@@ -2,10 +2,9 @@ import { createRequire } from "node:module";
 import path from "node:path";
 import { existsSync } from "node:fs";
 
-// The command union and computed-style layout include retained scroll commands
-// typed two-axis scroll metrics and pointer-events through ABI 0.26; accepting an older minor
-// would read invalid offsets or miss command tags.
-export const SUPPORTED_ABI = Object.freeze({ major: 0, minor: 26, patch: 0 });
+// This is a fixed binary-layout profile, not a minimum version. Pre-1.0 minors
+// may break ABI, and even an equal struct size does not establish equal offsets.
+export const SUPPORTED_ABI = Object.freeze({ major: 0, minor: 34, patch: 0 });
 
 export const CAPABILITIES = Object.freeze({
   DOM: 1n << 0n,
@@ -31,21 +30,21 @@ export function parseAbiVersion(version) {
 }
 
 export function checkAbiCompatibility(version, capabilities, paintCommandSize, options = {}) {
-  const expected = {
-    ...SUPPORTED_ABI,
-    ...(options.expectedAbi ?? {}),
-  };
   const parsed = parseAbiVersion(version);
-  if (parsed.major !== expected.major) {
+  const parts = ["major", "minor", "patch"];
+  const describe = (abi) => `${abi.major}.${abi.minor}.${abi.patch}`;
+  if (parts.some((part) => parsed[part] !== SUPPORTED_ABI[part])) {
     throw new Error(
-      `Incompatible AetherUI ABI major version ${parsed.major}; ` +
-        `this binding requires ${expected.major}.${expected.minor}.x.`,
+      `Unsupported AetherUI ABI ${describe(parsed)}; ` +
+        `this binding supports exactly ${describe(SUPPORTED_ABI)}.`,
     );
   }
-  if (parsed.minor < expected.minor) {
+  // A caller may further restrict compatibility, never substitute an untested
+  // raw schema by setting expectedAbi to the version of an arbitrary library.
+  const expected = { ...SUPPORTED_ABI, ...(options.expectedAbi ?? {}) };
+  if (parts.some((part) => parsed[part] !== expected[part])) {
     throw new Error(
-      `AetherUI ABI ${parsed.major}.${parsed.minor}.${parsed.patch} is older than ` +
-        `the binding requirement ${expected.major}.${expected.minor}.0.`,
+      `AetherUI ABI ${describe(parsed)} does not match expectedAbi ${describe(expected)}.`,
     );
   }
 
@@ -354,11 +353,18 @@ function createTypes(ffi) {
     line_height: "float",
     text_align: "int32_t",
     text_transform: "int32_t",
+    white_space: "int32_t",
     overflow_x: "int32_t",
     overflow_y: "int32_t",
     cursor: "int32_t",
     pointer_events: "int32_t",
     visible: "int32_t",
+    z_index: "int32_t",
+    z_index_kind: "int32_t",
+    transition_properties: "int32_t",
+    transition_duration: "float",
+    transition_delay: "float",
+    transition_timing: "int32_t",
   });
   const TextMetrics = ffi.struct("aether_text_metrics", {
     width: "float",
@@ -428,8 +434,10 @@ function createTypes(ffi) {
     stroke_width: "float",
     color: Color,
   });
+  // These fields belong to a copied paint command. Koffi copies the borrowed
+  // UTF-8 strings while decoding; only paintCommandFree releases their storage.
   const DrawText = ffi.struct("aether_paint_draw_text", {
-    text: ffi.pointer("char"),
+    text: "str",
     rect: Rect,
     font_family: ffi.array("char", 64, "String"),
     font_size: "float",
@@ -439,7 +447,7 @@ function createTypes(ffi) {
     wrap: "int32_t",
   });
   const DrawTextGradient = ffi.struct("aether_paint_draw_text_gradient", {
-    text: ffi.pointer("char"),
+    text: "str",
     rect: Rect,
     font_family: ffi.array("char", 64, "String"),
     font_size: "float",
@@ -449,7 +457,7 @@ function createTypes(ffi) {
     opacity: "float",
   });
   const DrawTextShadow = ffi.struct("aether_paint_draw_text_shadow", {
-    text: ffi.pointer("char"),
+    text: "str",
     rect: Rect,
     font_family: ffi.array("char", 64, "String"),
     font_size: "float",
@@ -473,7 +481,7 @@ function createTypes(ffi) {
     color: Color,
   });
   const DrawBackgroundImage = ffi.struct("aether_paint_draw_background_image", {
-    source: ffi.pointer("char"),
+    source: "str",
     paint_rect: Rect,
     position_x: CssLength,
     position_y: CssLength,
@@ -574,7 +582,9 @@ function createTypes(ffi) {
     ApplyBackdropFilter,
     PaintDataOffset: ffi.offsetof(PaintCommand, "data"),
     VoidPointer: voidPointer,
-    CharPointer: ffi.pointer("char"),
+    // char* is auto-converted to String by Koffi, losing its owned address.
+    // Getter returns and aether_string_free must share this raw pointer type.
+    OwnedUtf8Pointer: pointer("aether_owned_utf8_ptr"),
     DocOut: ffi.out(ffi.pointer(Doc)),
     StylesheetOut: ffi.out(ffi.pointer(Stylesheet)),
     StyleMapOut: ffi.out(ffi.pointer(StyleMap)),
@@ -598,7 +608,7 @@ export function createNativeApi({ ffi, library }) {
     paintCommandSize: f("aether_paint_command_size", "size_t", []),
     computedStyleSize: f("aether_computed_style_size", "size_t", []),
     statusMessage: f("aether_status_message", "str", ["int32_t"]),
-    stringFree: f("aether_string_free", "void", [types.CharPointer]),
+    stringFree: f("aether_string_free", "void", [types.OwnedUtf8Pointer]),
 
     docCreate: f("aether_doc_create", "int32_t", [types.DocOut]),
     docDestroy: f("aether_doc_destroy", "void", [types.Doc]),
@@ -611,12 +621,12 @@ export function createNativeApi({ ffi, library }) {
     nodeGetParent: f("aether_node_get_parent", types.Node, [types.Node]),
     nodeGetChildCount: f("aether_node_get_child_count", "int32_t", [types.Node]),
     nodeGetChild: f("aether_node_get_child", types.Node, [types.Node, "int32_t"]),
-    nodeGetTextContent: f("aether_node_get_text_content", types.CharPointer, [types.Node]),
-    elementGetTagName: f("aether_element_get_tag_name", types.CharPointer, [types.Node]),
-    elementGetAttribute: f("aether_element_get_attribute", types.CharPointer, [types.Node, "str"]),
+    nodeGetTextContent: f("aether_node_get_text_content", types.OwnedUtf8Pointer, [types.Node]),
+    elementGetTagName: f("aether_element_get_tag_name", types.OwnedUtf8Pointer, [types.Node]),
+    elementGetAttribute: f("aether_element_get_attribute", types.OwnedUtf8Pointer, [types.Node, "str"]),
     elementGetAttributeCount: f("aether_element_get_attribute_count", "int32_t", [types.Node]),
-    elementGetAttributeName: f("aether_element_get_attribute_name", types.CharPointer, [types.Node, "int32_t"]),
-    elementGetAttributeValue: f("aether_element_get_attribute_value", types.CharPointer, [types.Node, "int32_t"]),
+    elementGetAttributeName: f("aether_element_get_attribute_name", types.OwnedUtf8Pointer, [types.Node, "int32_t"]),
+    elementGetAttributeValue: f("aether_element_get_attribute_value", types.OwnedUtf8Pointer, [types.Node, "int32_t"]),
     elementSetAttribute: f("aether_element_set_attribute", "int32_t", [types.Node, "str", "str"]),
     elementHasAttribute: f("aether_element_has_attribute", "int32_t", [types.Node, "str"]),
     elementHasClass: f("aether_element_has_class", "int32_t", [types.Node, "str"]),
@@ -656,7 +666,7 @@ export function createNativeApi({ ffi, library }) {
     layoutBoxGetPaddingBox: f("aether_layout_box_get_padding_box", types.Rect, [types.LayoutBox]),
     layoutBoxGetContentBox: f("aether_layout_box_get_content_box", types.Rect, [types.LayoutBox]),
     layoutBoxIsAtomic: f("aether_layout_box_is_atomic", "int32_t", [types.LayoutBox]),
-    layoutBoxGetText: f("aether_layout_box_get_text", types.CharPointer, [types.LayoutBox]),
+    layoutBoxGetText: f("aether_layout_box_get_text", types.OwnedUtf8Pointer, [types.LayoutBox]),
     layoutBoxGetScrollMetrics: f("aether_layout_box_get_scroll_metrics", types.ScrollMetrics, [types.LayoutBox]),
     layoutBoxGetScrollbarGeometry: f("aether_layout_box_get_scrollbar_geometry", types.ScrollbarGeometry, [types.LayoutBox]),
     layoutBoxGetScrollableOverflowY: f("aether_layout_box_get_scrollable_overflow_y", "float", [types.LayoutBox]),

@@ -120,6 +120,16 @@ if(AETHERUI_BUILD_TESTS)
     target_link_libraries(aether_html_raw_text_test PRIVATE AetherUI::Core)
     add_test(NAME aether.html-raw-text COMMAND aether_html_raw_text_test)
 
+    add_executable(aether_dom_mutation_integrity_test tests/test_dom_mutation_integrity.cpp)
+    target_link_libraries(aether_dom_mutation_integrity_test PRIVATE AetherUI::Core)
+    add_test(NAME aether.dom-mutation-integrity COMMAND aether_dom_mutation_integrity_test)
+
+    # Complement public layout/DOM fixtures with an intentionally nonreciprocal
+    # private relation and provenance flags independent of tag names.
+    add_executable(aether_dom_mutation_boundary_test tests/test_dom_mutation_boundary.cpp)
+    target_link_libraries(aether_dom_mutation_boundary_test PRIVATE AetherUI::Core)
+    add_test(NAME aether.dom-mutation-boundary COMMAND aether_dom_mutation_boundary_test)
+
     add_executable(aether_border_radii_test tests/test_border_radii.cpp src/css/border_radii.cpp src/rendering/border_painter.cpp)
     target_link_libraries(aether_border_radii_test PRIVATE AetherUI::Core)
     add_test(NAME aether.border-radii COMMAND aether_border_radii_test)

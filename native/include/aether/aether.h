@@ -639,6 +639,13 @@ AETHER_API int32_t         aether_element_get_state(aether_node_t element);
 AETHER_API void            aether_element_set_state(aether_node_t element, int32_t state);
 
 /* Tree mutation */
+/* Structural mutation requires live handles and an initially coherent editable
+   DOM, with serialized access. NULL_ARG and INVALID_STATE rejections leave the
+   tree unchanged. Both operations reject generated/layout-only endpoints and
+   their descendants. Append also rejects self/ancestor insertion before detach;
+   remove requires a reciprocal parent/child relationship. Valid append moves the
+   child to the end, including when its parent is unchanged. These checks do not
+   validate released handles, adopt document ownership, or guarantee OOM rollback. */
 AETHER_API aether_status_t aether_node_append_child(aether_node_t parent, aether_node_t child);
 AETHER_API aether_status_t aether_node_remove_child(aether_node_t parent, aether_node_t child);
 

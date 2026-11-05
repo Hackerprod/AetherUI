@@ -38,6 +38,7 @@ export interface AbiInfo {
 export interface CreateAetherOptions {
   libraryPath?: string;
   installPrefix?: string;
+  /** Additional exact-version constraint; cannot enable an unsupported ABI profile. */
   expectedAbi?: { major?: number; minor?: number; patch?: number };
   requiredCapabilities?: bigint | number;
   /** Advanced testing/embedding hook. The object must implement the Koffi API. */
@@ -168,6 +169,7 @@ export interface ComputedStyle {
   lineHeight: number;
   textAlign: number;
   textTransform: number;
+  whiteSpace: number;
   /** Computed horizontal overflow behavior. */
   overflowX: number;
   /** Computed vertical overflow behavior. */
@@ -175,6 +177,16 @@ export interface ComputedStyle {
   cursor: number;
   pointerEvents: number;
   visible: boolean;
+  /** Integer value, meaningful when zIndexKind is 1 (integer), not 0 (auto). */
+  zIndex: number;
+  zIndexKind: number;
+  /** Bitmask of the native transition property enum; style data, not an animation API. */
+  transitionProperties: number;
+  /** Seconds. */
+  transitionDuration: number;
+  /** Seconds; negative delays are valid. */
+  transitionDelay: number;
+  transitionTiming: number;
 }
 
 export interface Attribute { name: string; value: string }
@@ -200,6 +212,9 @@ export interface StylesheetOptions { layer?: number; sourceName?: string }
 export interface StylesheetInfo { readonly handle: bigint; readonly ruleCount: number }
 export interface StyleUpdate { node: NodeView | null; style: ComputedStyle | null; impact: number }
 
+/** Borrowed view. Document/generation checks do not guarantee the lifetime of
+ * layout-owned synthetic nodes after their LayoutResult is disposed.
+ * Structural mutation restrictions do not make other setters read-only. */
 export class NodeView {
   readonly handle: bigint;
   readonly document: Document;
@@ -219,7 +234,11 @@ export class NodeView {
   readonly disabled: boolean;
   readonly focusable: boolean;
   state: number;
+  /** Rejects self/ancestor cycles and synthetic endpoints without mutation.
+   * Native rejection: NativeStatusError(-2), operation aether_node_append_child. */
   appendChild(child: NodeView): void;
+  /** Rejects synthetic endpoints and invalid relationships without mutation.
+   * Native rejection: NativeStatusError(-2), operation aether_node_remove_child. */
   removeChild(child: NodeView): void;
 }
 export class ElementView extends NodeView {}
@@ -285,6 +304,8 @@ export class LayoutBox {
   readonly scrollableOverflowY: number;
   readonly scrollOffsetX: number;
   readonly scrollOffsetY: number;
+  /** May be a borrowed synthetic node. Keep its layout/style/document owners alive;
+   * the NodeView does not fully check the shorter lifetime of layout-owned wrappers. */
   readonly element: NodeView | null;
   readonly childCount: number;
   child(index: number): LayoutBox | null;
@@ -307,7 +328,13 @@ export class LayoutEngine {
   [Symbol.dispose](): void;
 }
 
-export interface PaintCommandBase { tag: number; raw: Uint8Array; kind: string }
+export interface PaintCommandBase {
+  tag: number;
+  /** Diagnostic byte snapshot only. Embedded native pointers have expired;
+   * do not decode or reuse raw as a native command. */
+  raw: Uint8Array;
+  kind: string;
+}
 export interface CornerRadii {
   top_left_x: number; top_left_y: number; top_right_x: number; top_right_y: number;
   bottom_right_x: number; bottom_right_y: number; bottom_left_x: number; bottom_left_y: number;

@@ -1,4 +1,5 @@
 import path from "node:path";
+import { types as nodeTypes } from "node:util";
 import { fileURLToPath } from "node:url";
 import {
   CAPABILITIES,
@@ -83,21 +84,24 @@ function assertInteger(value, name) {
 
 function readOwnedString(api, pointer) {
   if (isNullHandle(pointer)) return null;
+  // Koffi must preserve the original Aether allocation, never auto-convert it
+  // to a JS string. Validate before the finally block to avoid freeing a
+  // temporary string conversion or an arbitrary mock value.
+  if (!nodeTypes.isExternal(pointer)) {
+    throw new TypeError("Expected a raw owned UTF-8 pointer from the native getter.");
+  }
   try {
-    return api.ffi.decode(pointer, "const char *");
+    // pointer addresses the UTF-8 bytes directly; it is not a char** slot.
+    return api.ffi.decode(pointer, "char", -1);
   } finally {
     api.functions.stringFree(pointer);
   }
 }
 
-function readBorrowedString(api, pointer) {
-  if (isNullHandle(pointer)) return null;
-  return api.ffi.decode(pointer, "const char *");
-}
-
 function decodeStruct(api, pointer, type) {
-  if (pointer && typeof pointer === "object" && typeof pointer !== "bigint") return pointer;
   if (isNullHandle(pointer)) return null;
+  // Koffi callback pointers are External objects, not decoded structs. Decode
+  // the borrowed pointer and clone its dynamic fields before the callback ends.
   return api.ffi.decode(pointer, type);
 }
 
@@ -288,11 +292,18 @@ function cloneComputedStyle(api, style) {
     lineHeight: Number(style.line_height),
     textAlign: Number(style.text_align),
     textTransform: Number(style.text_transform),
+    whiteSpace: Number(style.white_space),
     overflowX: Number(style.overflow_x),
     overflowY: Number(style.overflow_y),
     cursor: Number(style.cursor),
     pointerEvents: Number(style.pointer_events),
     visible: Boolean(style.visible),
+    zIndex: Number(style.z_index),
+    zIndexKind: Number(style.z_index_kind),
+    transitionProperties: Number(style.transition_properties),
+    transitionDuration: Number(style.transition_duration),
+    transitionDelay: Number(style.transition_delay),
+    transitionTiming: Number(style.transition_timing),
   };
 }
 
@@ -937,11 +948,11 @@ function decodePaintCommand(api, buffer) {
     case PaintCommandTag.STROKE_ROUNDED_RECT:
       { const data = readData(api.types.StrokeRoundedRect); return { ...command, kind: "strokeRoundedRect", rect: { ...data.rect }, radii: { ...data.radii }, strokeWidth: Number(data.stroke_width), color: cloneColor(data.color) }; }
     case PaintCommandTag.DRAW_TEXT:
-      { const data = readData(api.types.DrawText); return { ...command, kind: "drawText", text: readBorrowedString(api, data.text), rect: { ...data.rect }, fontFamily: normalizeCharArray(data.font_family), fontSize: Number(data.font_size), fontWeight: Number(data.font_weight), textAlign: Number(data.text_align), color: cloneColor(data.color), wrap: Boolean(data.wrap) }; }
+      { const data = readData(api.types.DrawText); return { ...command, kind: "drawText", text: (data.text ?? null), rect: { ...data.rect }, fontFamily: normalizeCharArray(data.font_family), fontSize: Number(data.font_size), fontWeight: Number(data.font_weight), textAlign: Number(data.text_align), color: cloneColor(data.color), wrap: Boolean(data.wrap) }; }
     case PaintCommandTag.DRAW_TEXT_GRADIENT:
-      { const data = readData(api.types.DrawTextGradient); return { ...command, kind: "drawTextGradient", text: readBorrowedString(api, data.text), rect: { ...data.rect }, fontFamily: normalizeCharArray(data.font_family), fontSize: Number(data.font_size), fontWeight: Number(data.font_weight), textAlign: Number(data.text_align), gradient: copyPaintGradient(api, data.gradient), opacity: Number(data.opacity) }; }
+      { const data = readData(api.types.DrawTextGradient); return { ...command, kind: "drawTextGradient", text: (data.text ?? null), rect: { ...data.rect }, fontFamily: normalizeCharArray(data.font_family), fontSize: Number(data.font_size), fontWeight: Number(data.font_weight), textAlign: Number(data.text_align), gradient: copyPaintGradient(api, data.gradient), opacity: Number(data.opacity) }; }
     case PaintCommandTag.DRAW_TEXT_SHADOW:
-      { const data = readData(api.types.DrawTextShadow); return { ...command, kind: "drawTextShadow", text: readBorrowedString(api, data.text), rect: { ...data.rect }, fontFamily: normalizeCharArray(data.font_family), fontSize: Number(data.font_size), fontWeight: Number(data.font_weight), textAlign: Number(data.text_align), shadow: { ...data.shadow, color: cloneColor(data.shadow.color), inset: Boolean(data.shadow.inset) }, wrap: Boolean(data.wrap) }; }
+      { const data = readData(api.types.DrawTextShadow); return { ...command, kind: "drawTextShadow", text: (data.text ?? null), rect: { ...data.rect }, fontFamily: normalizeCharArray(data.font_family), fontSize: Number(data.font_size), fontWeight: Number(data.font_weight), textAlign: Number(data.text_align), shadow: { ...data.shadow, color: cloneColor(data.shadow.color), inset: Boolean(data.shadow.inset) }, wrap: Boolean(data.wrap) }; }
     case PaintCommandTag.PUSH_CLIP:
       { const data = readData(api.types.PushClip); return { ...command, kind: "pushClip", rect: { ...data.rect }, radii: { ...data.radii } }; }
     case PaintCommandTag.POP_CLIP:
@@ -949,7 +960,7 @@ function decodePaintCommand(api, buffer) {
     case PaintCommandTag.FILL_BORDER_SIDE:
       { const data = readData(api.types.FillBorderSide); return { ...command, kind: "fillBorderSide", outerRect: { ...data.outer_rect }, outerRadii: { ...data.outer_radii }, innerRect: { ...data.inner_rect }, innerRadii: { ...data.inner_radii }, side: Number(data.side), style: Number(data.style), color: cloneColor(data.color) }; }
     case PaintCommandTag.DRAW_BACKGROUND_IMAGE:
-      { const data = readData(api.types.DrawBackgroundImage); return { ...command, kind: "drawBackgroundImage", source: readBorrowedString(api, data.source), paintRect: { ...data.paint_rect }, positionX: { ...data.position_x }, positionY: { ...data.position_y }, sizeKind: Number(data.size_kind), sizeX: { ...data.size_x }, sizeY: { ...data.size_y }, repeatX: Number(data.repeat_x), repeatY: Number(data.repeat_y), opacity: Number(data.opacity), sourceRect: { ...data.source_rect }, destinationRect: { ...data.destination_rect }, hasResolvedGeometry: Boolean(data.has_resolved_geometry) }; }
+      { const data = readData(api.types.DrawBackgroundImage); return { ...command, kind: "drawBackgroundImage", source: (data.source ?? null), paintRect: { ...data.paint_rect }, positionX: { ...data.position_x }, positionY: { ...data.position_y }, sizeKind: Number(data.size_kind), sizeX: { ...data.size_x }, sizeY: { ...data.size_y }, repeatX: Number(data.repeat_x), repeatY: Number(data.repeat_y), opacity: Number(data.opacity), sourceRect: { ...data.source_rect }, destinationRect: { ...data.destination_rect }, hasResolvedGeometry: Boolean(data.has_resolved_geometry) }; }
     case PaintCommandTag.APPLY_BACKDROP_FILTER:
       { const data = readData(api.types.ApplyBackdropFilter); return { ...command, kind: "applyBackdropFilter", rect: { ...data.rect }, radii: { ...data.radii }, filters: cloneBackdropFilters(api, data.filters) }; }
     case PaintCommandTag.PUSH_TRANSFORM:
