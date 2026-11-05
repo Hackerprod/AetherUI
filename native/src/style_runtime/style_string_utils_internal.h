@@ -24,4 +24,3 @@ inline bool str_iequals(const std::string& a, const std::string& b) {
     }
     return true;
 }
-
