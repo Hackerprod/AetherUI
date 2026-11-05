@@ -21,6 +21,7 @@ internal static class Program
 {
     private static readonly (string Name, Action Test)[] Tests =
     [
+        ("Positioned auto margins use final sizes and preserve prepared layout", PositionedAutoMarginTests.Run),
         ("Flex alignment preserves signed residual space", FlexNegativeSpaceTests.Run),
         ("Nth-child parses finite An+B expressions and matches safely", NthExpressionTests.Run),
         ("CSS variables respect string tokens and bounded expansion", CssVariableStringTests.Run),

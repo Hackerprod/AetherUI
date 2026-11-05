@@ -5,6 +5,39 @@
 #include <string>
 #include <vector>
 
+namespace {
+struct positioned_margin_axis {
+    float span;
+    float start;
+    float end;
+    bool auto_start;
+    bool auto_end;
+    bool eligible;
+
+    positioned_margin_axis(float extent, float inset_start, float inset_end,
+                           float fixed_start, float fixed_end,
+                           aether_css_length css_start, aether_css_length css_end)
+        : span(std::max(0.f, extent - inset_start - inset_end)),
+          start(fixed_start), end(fixed_end),
+          auto_start(is_auto_margin(css_start)), auto_end(is_auto_margin(css_end)),
+          eligible(std::isfinite(inset_start) && std::isfinite(inset_end) &&
+                   (auto_start || auto_end)) {}
+
+    void resolve_used(float border_size, bool horizontal) {
+        if (!eligible) return;
+        const float residual = span - border_size - start - end;
+        if (auto_start && auto_end) {
+            start = horizontal && residual <= 0.f ? 0.f : residual / 2.f;
+            end = residual - start;
+        } else if (auto_start) {
+            start = residual;
+        } else {
+            end = residual;
+        }
+    }
+};
+}
+
 void layout_positioned_children(
     const aether_layout_engine_s* engine,
     aether_style_map_s* styles,
@@ -103,20 +136,40 @@ void layout_positioned_children(
         const float top = resolve(engine, style.inset.top, containing.height, style);
         const float bottom = resolve(engine, style.inset.bottom, containing.height, style);
 
+        positioned_margin_axis horizontal(containing.width, left, right, margin.left, margin.right,
+                                          style.margin.left, style.margin.right);
+        positioned_margin_axis vertical(containing.height, top, bottom, margin.top, margin.bottom,
+                                        style.margin.top, style.margin.bottom);
+
         const float specified_width = resolve(engine, style.width, containing.width, style);
         const float specified_height = resolve(engine, style.height, containing.height, style);
         const bool constrain_width = !std::isfinite(specified_width) &&
             std::isfinite(left) && std::isfinite(right);
         const bool constrain_height = !std::isfinite(specified_height) &&
             std::isfinite(top) && std::isfinite(bottom);
-        const float forced_width = std::max(0.f, containing.width - left - right -
+        // Clamp the inset-modified span before subtracting fixed margins: a negative
+        // fixed margin can still provide size when the two insets cross.
+        const float forced_width = std::max(0.f, (horizontal.eligible ? horizontal.span : containing.width - left - right) -
                                              aether_thicknessf_horizontal(margin));
-        const float forced_height = std::max(0.f, containing.height - top - bottom -
+        const float forced_height = std::max(0.f, (vertical.eligible ? vertical.span : containing.height - top - bottom) -
                                               aether_thicknessf_vertical(margin));
 
         auto* child_box = layout_element(engine, styles, node, containing, containing.height, containing.y,
                                          false, forced_width, constrain_width,
                                          forced_height, constrain_height ? forced_height_kind_e::definite : forced_height_kind_e::none, true, result);
+
+        // Sizing owns min/max and the decoration floor. Resolve positioned auto
+        // margins only after that single layout call has produced the final border box.
+        horizontal.resolve_used(child_box->border_box.width, true);
+        vertical.resolve_used(child_box->border_box.height, false);
+        if (horizontal.eligible || vertical.eligible) {
+            const auto& border = child_box->border_box;
+            child_box->margin_box = {border.x - horizontal.start, border.y - vertical.start,
+                border.width + horizontal.start + horizontal.end,
+                border.height + vertical.start + vertical.end};
+            child_box->collapsed_margin_before = vertical.start;
+            child_box->collapsed_margin_after = vertical.end;
+        }
 
         const auto static_anchor = parent_box->style.display == AETHER_DISPLAY_FLEX
             ? flex_static_position(style, containing, child_box->margin_box)

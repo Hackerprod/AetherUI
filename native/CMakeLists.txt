@@ -214,6 +214,11 @@ if(AETHERUI_BUILD_TESTS)
     target_include_directories(aether_flex_negative_space_test PRIVATE src/layout)
     add_test(NAME aether.flex-negative-space COMMAND aether_flex_negative_space_test)
 
+    add_executable(aether_positioned_auto_margins_test tests/test_positioned_auto_margins.cpp)
+    target_link_libraries(aether_positioned_auto_margins_test PRIVATE AetherUI::Core)
+    target_include_directories(aether_positioned_auto_margins_test PRIVATE src)
+    add_test(NAME aether.positioned-auto-margins COMMAND aether_positioned_auto_margins_test)
+
     add_executable(aether_auto_margins_test tests/test_auto_margins.cpp)
     target_link_libraries(aether_auto_margins_test PRIVATE AetherUI::Core)
     target_include_directories(aether_auto_margins_test PRIVATE src/layout)

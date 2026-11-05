@@ -29,8 +29,13 @@ void accumulate_scrollable_descendant_extent(const aether_layout_box_s* parent,
                                              float& right,
                                              float& bottom) {
     for (const auto* child : parent->children) {
-        if (include_x) right = std::max(right, child->margin_box.x + child->margin_box.width);
-        if (include_y) bottom = std::max(bottom, child->margin_box.y + child->margin_box.height);
+        // Positioned margins are algebraic spacing, not scrollable area: negative
+        // margins may hide border overflow and positive margins may add empty space.
+        // Text fragments can copy an owner's style without themselves being out of flow.
+        const bool child_is_out_of_flow = child->kind == LAYOUT_BOX_ELEMENT && is_out_of_flow(child->style);
+        const auto& own_extent = child_is_out_of_flow ? child->border_box : child->margin_box;
+        if (include_x) right = std::max(right, own_extent.x + own_extent.width);
+        if (include_y) bottom = std::max(bottom, own_extent.y + own_extent.height);
 
         const bool descend_x = include_x && child->style.overflow_x == AETHER_OVERFLOW_VISIBLE;
         const bool descend_y = include_y && child->style.overflow_y == AETHER_OVERFLOW_VISIBLE;
