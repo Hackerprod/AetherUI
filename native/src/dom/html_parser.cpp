@@ -3,7 +3,7 @@
 #include <cctype>
 #include <cstring>
 #include <algorithm>
-#include <stack>
+#include <vector>
 #include <string_view>
 
 static bool is_name_char(char c) {
@@ -170,7 +170,7 @@ class HtmlParser {
         pos = (end_pos == std::string_view::npos) ? len : end_pos + 2;
     }
 
-    void parse_end_tag(std::stack<aether_node_s*>& stack, aether_doc_s* doc) {
+    void parse_end_tag(std::vector<aether_node_s*>& stack, aether_doc_s* doc) {
         (void)doc;
         pos += 2;
         skip_whitespace();
@@ -179,12 +179,14 @@ class HtmlParser {
 
         if (name.empty()) return;
 
-        while (stack.size() > 1) {
-            aether_node_s* node = stack.top();
-            stack.pop();
+        // Find the nearest open match before changing insertion context. A
+        // stray close must not discard ancestors; index 0 is the document.
+        for (size_t count = stack.size(); count > 1; --count) {
+            aether_node_s* node = stack[count - 1];
             if (node->type == AETHER_NODE_ELEMENT &&
                 ascii_equal_ignore_case(node->tag_name, name)) {
-                break;
+                stack.resize(count - 1);
+                return;
             }
         }
     }
@@ -222,14 +224,14 @@ class HtmlParser {
         pos = text_end;
     }
 
-    void parse_start_tag(std::stack<aether_node_s*>& stack, aether_doc_s* doc) {
+    void parse_start_tag(std::vector<aether_node_s*>& stack, aether_doc_s* doc) {
         size_t tag_start = pos;
         pos++;
         skip_whitespace();
         std::string tag_name = read_name();
         if (tag_name.empty()) {
-            stack.top()->children.push_back(create_text("<", doc));
-            stack.top()->children.back()->parent = stack.top();
+            stack.back()->children.push_back(create_text("<", doc));
+            stack.back()->children.back()->parent = stack.back();
             pos = std::min(tag_start + 1, len);
             return;
         }
@@ -270,13 +272,13 @@ class HtmlParser {
             element->attributes[attr_name] = decoded_val;
         }
 
-        stack.top()->children.push_back(element);
-        element->parent = stack.top();
+        stack.back()->children.push_back(element);
+        element->parent = stack.back();
 
         if (self_closing || is_void_element(element->tag_name))
             return;
 
-        stack.push(element);
+        stack.push_back(element);
         if (ascii_equal_ignore_case(element->tag_name, "style") ||
             ascii_equal_ignore_case(element->tag_name, "script")) {
             parse_raw_text(element, doc);
@@ -288,17 +290,17 @@ public:
         : src(source), len(length), pos(0) {}
 
     aether_node_s* parse_document(aether_doc_s* doc) {
-        std::stack<aether_node_s*> stack;
-        stack.push(doc);
+        std::vector<aether_node_s*> stack;
+        stack.push_back(doc);
 
         while (!end()) {
             if (current() != '<') {
-                parse_text(stack.top(), doc);
+                parse_text(stack.back(), doc);
                 continue;
             }
 
             if (starts_with("<!--")) {
-                parse_comment(stack.top(), doc);
+                parse_comment(stack.back(), doc);
                 continue;
             }
 

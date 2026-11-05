@@ -262,6 +262,26 @@ a claim of general HTML5 conformance: the existing entity decoder, `std::isspace
 behavior (including vertical tab), incomplete-start-tag recovery at EOF, and
 self-closing behavior for non-void elements remain unchanged.
 
+## HTML unmatched end tags
+
+An end tag with no matching open element leaves the insertion context intact.
+A matching tag closes the nearest open element with that name and its open
+descendants, using ASCII case-insensitive comparison while preserving the DOM's
+original tag spelling. Previously closed, void and self-closed elements cannot
+satisfy a later end tag. The document sentinel is never removed.
+
+`aether.html-end-tags` checks literal public-ABI trees, parent/ancestor relations,
+child order, text/comments, repeated closes, document boundaries, reparsing and
+bounded deep nesting. A numerical style check resolves from body and verifies
+the retained container's descendant rule. Checks remain active with `NDEBUG`.
+
+This preserves AetherUI's simplified matched-tag behavior, not full HTML tree
+construction. HTML scope barriers, special end-tag rules (such as `p` and `br`),
+implied elements, formatting adoption, tables, templates and foreign content
+remain outside this recovery fix. Searching uses O(depth) node visits and O(1)
+auxiliary space, plus name-comparison cost; repeated unmatched closes can take
+O(depth × closes) visits. Token consumption and EOF recovery are unchanged.
+
 ## HTML style and script text
 
 `style` and `script` names are matched ASCII case-insensitively when entering
