@@ -212,8 +212,9 @@ struct nth_expression_s {
 
     bool matches(int one_based_index) const {
         if (step == 0) return one_based_index == offset;
-        int diff = one_based_index - offset;
-        return diff == 0 || (diff % step == 0 && diff / step >= 0);
+        const int64_t diff = static_cast<int64_t>(one_based_index) - static_cast<int64_t>(offset);
+        const int64_t step64 = static_cast<int64_t>(step);
+        return diff % step64 == 0 && diff / step64 >= 0;
     }
 };
 

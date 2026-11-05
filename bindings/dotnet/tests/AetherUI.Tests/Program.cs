@@ -21,6 +21,7 @@ internal static class Program
 {
     private static readonly (string Name, Action Test)[] Tests =
     [
+        ("Nth-child parses finite An+B expressions and matches safely", NthExpressionTests.Run),
         ("CSS variables respect string tokens and bounded expansion", CssVariableStringTests.Run),
         ("Calc retains dimensional types in length and line-height contexts", CalcDimensionalTests.Run),
         ("Relative percentages use the initial containing block height", RelativePercentageTests.Run),

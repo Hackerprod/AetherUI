@@ -123,7 +123,7 @@ struct parser_s {
         return start == index ? std::string() : unescape_string(source.substr(start, index - start));
     }
 
-    std::string_view peek_balanced_body() {
+    std::string_view peek_balanced_body(bool trim_body = true) {
         size_t saved = index;
         ++index; /* skip '(' */
         size_t body_start = index;
@@ -142,7 +142,7 @@ struct parser_s {
                 ++depth;
             } else if (c == ')' && --depth == 0) {
                 auto body = source.substr(body_start, index - body_start);
-                trim(body);
+                if (trim_body) trim(body);
                 ++index; /* advance past ')' */
                 return body;
             }
@@ -277,40 +277,65 @@ static bool try_map_state(std::string_view name,
 /* ── :nth-child expression parser ─────────────────────────────────── */
 
 static bool try_parse_nth(std::string_view source, nth_expression_s& expr) {
-    /* strip whitespace, lowercase */
-    std::string normalized;
-    normalized.reserve(source.size());
-    for (char c : source)
-        if (!std::isspace(static_cast<unsigned char>(c)))
-            normalized += static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    const auto is_space = [](char c) {
+        return c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\f';
+    };
+    const auto is_digit = [](char c) { return c >= '0' && c <= '9'; };
+    while (!source.empty() && is_space(source.front())) source.remove_prefix(1);
+    while (!source.empty() && is_space(source.back())) source.remove_suffix(1);
+    const auto equals_ascii = [&](std::string_view word) {
+        if (source.size() != word.size()) return false;
+        for (size_t i = 0; i < word.size(); ++i) {
+            char c = source[i];
+            if (c >= 'A' && c <= 'Z') c = static_cast<char>(c + ('a' - 'A'));
+            if (c != word[i]) return false;
+        }
+        return true;
+    };
+    if (equals_ascii("odd")) { expr = {2, 1}; return true; }
+    if (equals_ascii("even")) { expr = {2, 0}; return true; }
 
-    if (normalized == "odd")  { expr = {2, 1}; return true; }
-    if (normalized == "even") { expr = {2, 0}; return true; }
-
-    auto npos = normalized.find('n');
-    if (npos == std::string::npos) {
-        int val = 0;
-        auto [ptr, ec] = std::from_chars(normalized.data(), normalized.data() + normalized.size(), val);
-        if (ec != std::errc{}) return false;
-        expr = {0, val};
+    size_t cursor = 0;
+    // Signs belong to the coefficient/scalar or offset, never to the digits.
+    const auto read_digits = [&](bool negative, int& value) {
+        const size_t start = cursor;
+        const uint64_t limit = negative ? 2147483648ULL : 2147483647ULL;
+        uint64_t magnitude = 0;
+        while (cursor < source.size() && is_digit(source[cursor])) {
+            const auto digit = static_cast<unsigned>(source[cursor] - '0');
+            if (magnitude > (limit - digit) / 10) return false;
+            magnitude = magnitude * 10 + digit;
+            ++cursor;
+        }
+        if (cursor == start) return false;
+        const int64_t signed_value = negative ? -static_cast<int64_t>(magnitude)
+                                              : static_cast<int64_t>(magnitude);
+        value = static_cast<int>(signed_value);
+        return true;
+    };
+    bool negative = false;
+    if (cursor < source.size() && (source[cursor] == '+' || source[cursor] == '-'))
+        negative = source[cursor++] == '-';
+    int coefficient = negative ? -1 : 1;
+    bool has_digits = cursor < source.size() && is_digit(source[cursor]);
+    if (has_digits && !read_digits(negative, coefficient)) return false;
+    if (cursor == source.size()) {
+        if (!has_digits) return false;
+        expr = {0, coefficient};
         return true;
     }
-
-    auto step_str = normalized.substr(0, npos);
-    auto off_str  = normalized.substr(npos + 1);
-    int step = 0;
-    if (step_str.empty() || step_str == "+") { step = 1; }
-    else if (step_str == "-") { step = -1; }
-    else {
-        auto [ptr, ec] = std::from_chars(step_str.data(), step_str.data() + step_str.size(), step);
-        if (ec != std::errc{}) return false;
+    if (source[cursor] != 'n' && source[cursor] != 'N') return false;
+    ++cursor;
+    while (cursor < source.size() && is_space(source[cursor])) ++cursor;
+    int offset = 0;
+    if (cursor < source.size()) {
+        if (source[cursor] != '+' && source[cursor] != '-') return false;
+        negative = source[cursor++] == '-';
+        while (cursor < source.size() && is_space(source[cursor])) ++cursor;
+        if (!read_digits(negative, offset)) return false;
     }
-    int off = 0;
-    if (!off_str.empty()) {
-        auto [ptr, ec] = std::from_chars(off_str.data(), off_str.data() + off_str.size(), off);
-        if (ec != std::errc{}) return false;
-    }
-    expr = {step, off};
+    if (cursor != source.size()) return false;
+    expr = {coefficient, offset};
     return true;
 }
 
@@ -327,7 +352,7 @@ static bool try_parse_pseudo(parser_s& p, pseudo_selector_s& pseudo,
     std::string_view body;
     bool has_body = false;
     if (!p.eof() && p.peek() == '(') {
-        body = p.peek_balanced_body();
+        body = p.peek_balanced_body(name != "nth-child");
         if (body.empty()) return false;
         has_body = true;
     }
