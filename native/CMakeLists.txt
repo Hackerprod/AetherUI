@@ -232,6 +232,10 @@ if(AETHERUI_BUILD_TESTS)
     target_link_libraries(aether_scroll_model_test PRIVATE AetherUI::Core)
     add_test(NAME aether.scroll-model COMMAND aether_scroll_model_test)
 
+    add_executable(aether_media_percentage_lengths_test tests/test_media_percentage_lengths.cpp)
+    target_link_libraries(aether_media_percentage_lengths_test PRIVATE AetherUI::Core)
+    add_test(NAME aether.media-percentage-lengths COMMAND aether_media_percentage_lengths_test)
+
     add_executable(aether_not_strict_list_test tests/test_not_strict_list.cpp)
     target_link_libraries(aether_not_strict_list_test PRIVATE AetherUI::Core)
     add_test(NAME aether.not-strict-list COMMAND aether_not_strict_list_test)

@@ -6,8 +6,8 @@
 //   And(Always, X) = X     Or(Never, X) = X
 //   And(Never, X)  = Never  Or(Always, X) = Always
 //
-// All composite nodes are heap-allocated. The two static constants
-// (Always / Never) are never freed.
+// All composite nodes are heap-allocated. The three static constants
+// (Always / Never / Unknown) are never freed.
 
 media_condition_s* media_condition_and(media_condition_s* left, media_condition_s* right) {
     if (left  == media_condition_always()) return right;
@@ -44,22 +44,28 @@ media_condition_s* media_condition_not(media_condition_s* value) {
 
 // ═══ Media condition matching ══════════════════════════════════
 
-bool media_condition_matches(const media_condition_s* node, const aether_style_environment_t* env) {
-    if (!node) return true;
+namespace {
+enum class media_match { false_, true_, unknown };
 
+media_match match_and(media_match left, media_match right) {
+    if (left == media_match::false_ || right == media_match::false_) return media_match::false_;
+    if (left == media_match::unknown || right == media_match::unknown) return media_match::unknown;
+    return media_match::true_;
+}
+
+media_match match_or(media_match left, media_match right) {
+    if (left == media_match::true_ || right == media_match::true_) return media_match::true_;
+    if (left == media_match::unknown || right == media_match::unknown) return media_match::unknown;
+    return media_match::false_;
+}
+
+media_match match_not(media_match value) {
+    if (value == media_match::unknown) return value;
+    return value == media_match::true_ ? media_match::false_ : media_match::true_;
+}
+
+static bool media_feature_matches(const media_condition_s* node, const aether_style_environment_t* env) {
     switch (node->kind) {
-    case media_condition_s::kind_t::always_true:
-        return true;
-    case media_condition_s::kind_t::always_false:
-        return false;
-    case media_condition_s::kind_t::and_:
-        return media_condition_matches(node->left, env) &&
-               media_condition_matches(node->right, env);
-    case media_condition_s::kind_t::or_:
-        return media_condition_matches(node->left, env) ||
-               media_condition_matches(node->right, env);
-    case media_condition_s::kind_t::not_:
-        return !media_condition_matches(node->inner, env);
     case media_condition_s::kind_t::length_feature: {
         bool is_width =
             node->length_feature == media_condition_s::length_feature_t::min_width ||
@@ -99,6 +105,33 @@ bool media_condition_matches(const media_condition_s* node, const aether_style_e
     default:
         return false;
     }
+}
+
+media_match media_condition_evaluate(const media_condition_s* node, const aether_style_environment_t* env) {
+    if (!node) return media_match::true_;
+    switch (node->kind) {
+    case media_condition_s::kind_t::always_true:
+        return media_match::true_;
+    case media_condition_s::kind_t::always_false:
+        return media_match::false_;
+    case media_condition_s::kind_t::unknown:
+        return media_match::unknown;
+    case media_condition_s::kind_t::and_:
+        return match_and(media_condition_evaluate(node->left, env),
+                         media_condition_evaluate(node->right, env));
+    case media_condition_s::kind_t::or_:
+        return match_or(media_condition_evaluate(node->left, env),
+                        media_condition_evaluate(node->right, env));
+    case media_condition_s::kind_t::not_:
+        return match_not(media_condition_evaluate(node->inner, env));
+    default:
+        return media_feature_matches(node, env) ? media_match::true_ : media_match::false_;
+    }
+}
+} // namespace
+
+bool media_condition_matches(const media_condition_s* node, const aether_style_environment_t* env) {
+    return media_condition_evaluate(node, env) == media_match::true_;
 }
 
 // ═══ Media condition parser ════════════════════════════════════
@@ -187,6 +220,14 @@ static media_condition_s* parse_term(
             emit_diag(diag, diag_data, "AUIMED003", name.c_str(), value.c_str(),
                       ("Invalid media length '" + value + "'.").c_str());
             return media_condition_never();
+        }
+        // Inspect the accepted source value: calc simplification can erase a
+        // percentage coefficient through cancellation or multiplication by zero.
+        // The shared length parser and ordinary CSS properties still allow %.
+        if (value.find('%') != std::string::npos) {
+            emit_diag(diag, diag_data, "AUIMED003", name.c_str(), value.c_str(),
+                      ("Invalid media length '" + value + "'.").c_str());
+            return media_condition_unknown();
         }
         auto* node = new media_condition_s();
         node->kind = media_condition_s::kind_t::length_feature;

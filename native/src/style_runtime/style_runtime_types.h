@@ -341,6 +341,7 @@ struct media_condition_s {
     enum class kind_t : uint8_t {
         always_true,
         always_false,
+        unknown,
         and_,
         or_,
         not_,
@@ -382,9 +383,15 @@ inline media_condition_s* media_condition_never() {
     return &node;
 }
 
+inline media_condition_s* media_condition_unknown() {
+    static media_condition_s node{ media_condition_s::kind_t::unknown };
+    return &node;
+}
+
 inline void media_condition_destroy(media_condition_s* node) {
     if (!node) return;
-    if (node == media_condition_always() || node == media_condition_never()) return;
+    if (node == media_condition_always() || node == media_condition_never() ||
+        node == media_condition_unknown()) return;
     media_condition_destroy(node->left);
     media_condition_destroy(node->right);
     media_condition_destroy(node->inner);
