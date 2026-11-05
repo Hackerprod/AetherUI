@@ -218,9 +218,18 @@ public sealed partial class UiDocumentHost : IDisposable
             _invalidation |= VisualInvalidation.DisplayList;
         }
 
+        // ResolveStyles has consumed and cleared only the previous state changes.
+        // Blur can now enqueue :focus changes without losing them to that cleanup.
+        if (_focused is not null && !IsEligibleForFocus(_focused))
+        {
+            Focus(null);
+            EnsureVisualTree();
+            return;
+        }
+
         if ((_invalidation & VisualInvalidation.PaintChunks) != 0)
         {
-            if (!TryPatchPaintChunks())
+            if ((_invalidation & VisualInvalidation.DisplayList) == 0 && !TryPatchPaintChunks())
             {
                 _invalidation |= VisualInvalidation.DisplayList;
             }

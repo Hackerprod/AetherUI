@@ -666,7 +666,8 @@ void builtin_properties_register(style_property_registry_s* reg) {
             });
     }
 
-    // visibility
+    // visibility: collapse intentionally uses the hidden presentation fallback
+    // for every display. Table/flex geometric collapse is not implemented.
     {
         static const char* kw[] = { "visible", "hidden", "collapse" };
         reg->register_property("visibility", true,

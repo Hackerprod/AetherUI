@@ -27,9 +27,22 @@ public sealed partial class UiDocumentHost
         var displayListBuildsBefore = Interlocked.Read(ref _displayListBuildCount);
         var paintChunkBuildsBefore = Interlocked.Read(ref _paintChunkBuildCount);
         EnsureVisualTree();
-        if (ApplyPendingPointerMove())
+        // Visibility can change again when hover selectors resolve. Settle those
+        // queued targets before publishing the frame, not on a hypothetical move.
+        const int maxHoverPasses = 8;
+        var hoverPasses = 0;
+        while (_hasPendingPointerMove)
         {
-            scrollOnly = false;
+            if (hoverPasses++ >= maxHoverPasses)
+            {
+                // CSS such as :hover { visibility:hidden } has no fixed point.
+                // Clear hover until new input or a visibility invalidation.
+                // The cursor still reflects the final resolved hit target.
+                ResetUnstableHover();
+                scrollOnly = false;
+                break;
+            }
+            if (ApplyPendingPointerMove()) scrollOnly = false;
             EnsureVisualTree();
         }
         var renderPlan = EvaluateRenderPlan();
@@ -77,7 +90,7 @@ public sealed partial class UiDocumentHost
     private ScrollVisualState ScrollVisualStateFor(long styleNodeId)
     {
         var offset = _scrollOffsetsByStyleNode.GetValueOrDefault(styleNodeId);
-        var chrome = _scrollBoxesByStyleNode.TryGetValue(styleNodeId, out var box)
+        var chrome = _scrollBoxesByStyleNode.TryGetValue(styleNodeId, out var box) && IsCurrentlyVisible(box.Element)
             ? ToScrollbarChrome(_layoutInterop.GetScrollbarGeometryAtOffset(
                 box,
                 new ScrollOffset(offset.X, offset.Y)))

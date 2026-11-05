@@ -145,3 +145,23 @@ against the installed package, calls `aether_abi_version()`/`aether_abi_capabili
 `aether_paint_command_size()`, and fails the build if the loaded ABI's major version doesn't match
 what it was compiled against. Copy that project's `CMakeLists.txt` as the starting point for a new
 native or cgo consumer.
+
+## Visibility
+
+`visibility:hidden` preserves layout and overflow geometry. It suppresses the
+node's own paint and hit eligibility, while descendants with computed
+`visibility:visible` remain visible and interactive within the existing ancestor
+transform, clip, scroll and opacity scopes. Visibility is inherited. Changing
+only its computed value on a stable DOM topology requires paint/hit updates,
+not layout; pass a current style map for live hit testing and display lists.
+The hit APIs without a style map intentionally use the layout's captured styles.
+
+`visibility:collapse` is currently an alias of `hidden` for all displays,
+including table rows/cells and flex items. CSS table/flex geometric collapse is
+not implemented. Tables retain their existing unspanned phase-1 layout, and
+flattened inline ancestors and table groups do not gain new paint scopes.
+Hit testing retains the existing rectangular clipping, margin-box candidates,
+and traversal order; this change does not add inverse-transform hit testing.
+Generated pseudo-elements are still recreated by the runtime, so their identity
+changes require layout even when triggered by a visibility declaration.
+Canvas background propagation remains separate from a box's own visibility.

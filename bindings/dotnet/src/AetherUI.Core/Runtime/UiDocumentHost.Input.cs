@@ -21,6 +21,7 @@ public sealed partial class UiDocumentHost
     public void TextInput(char character)
     {
         ThrowIfDisposed();
+        EnsureVisualTree();
         if (_focused is not { TagName: "input" } input || input.IsDisabled || char.IsControl(character))
         {
             return;
@@ -46,15 +47,15 @@ public sealed partial class UiDocumentHost
     public void KeyPressed(UiKey key)
     {
         ThrowIfDisposed();
-        if (_focused is null)
+        EnsureVisualTree();
+        var target = _focused;
+        if (target is not null)
         {
-            return;
-        }
-
-        var keyEvent = Dispatch("keydown", _focused, default, key);
-        if (keyEvent.IsDefaultPrevented)
-        {
-            return;
+            var keyEvent = Dispatch("keydown", target, default, key);
+            if (keyEvent.IsDefaultPrevented) return;
+            // A handler may hide, disable or replace the focused node before
+            // the key's default editing/activation action runs.
+            EnsureVisualTree();
         }
 
         if (key == UiKey.Tab)
@@ -63,22 +64,26 @@ public sealed partial class UiDocumentHost
             return;
         }
 
-        if (_focused.TagName != "input" || _focused.IsDisabled)
+        if (target is null || !ReferenceEquals(target, _focused) || !IsEligibleForFocus(target))
+            return;
+
+        if (target.TagName != "input" || target.IsDisabled)
         {
-            if (key is UiKey.Enter or UiKey.Space && _focused.TagName == "button")
+            if (key is UiKey.Enter or UiKey.Space && target.TagName == "button")
             {
-                var click = Dispatch("click", _focused, default, key);
-                if (!click.IsDefaultPrevented &&
-                    !string.Equals(_focused.GetAttribute("type"), "button", StringComparison.OrdinalIgnoreCase))
+                var click = Dispatch("click", target, default, key);
+                EnsureVisualTree();
+                if (!click.IsDefaultPrevented && ReferenceEquals(target, _focused) && IsEligibleForFocus(target) &&
+                    !string.Equals(target.GetAttribute("type"), "button", StringComparison.OrdinalIgnoreCase))
                 {
-                    SubmitClosestForm(_focused);
+                    SubmitClosestForm(target);
                 }
             }
 
             return;
         }
 
-        var input = _focused;
+        var input = target;
         var current = input.RuntimeValue ?? input.GetAttribute("value") ?? string.Empty;
         if (key is UiKey.Backspace or UiKey.Delete)
         {

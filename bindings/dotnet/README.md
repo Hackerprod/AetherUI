@@ -7,6 +7,20 @@ generation in managed code; every one of those responsibilities lives in `native
 through P/Invoke. What lives here is strictly what's genuinely host-specific: how a .NET app boots the
 engine, how it authors components, how it puts pixels on a Windows screen.
 
+## Visibility and input
+
+`visibility:hidden` retains layout and scroll offsets. The host rebuilds the complete
+paint list when computed visibility changes, and resolves current styles before focus,
+keyboard defaults, scrollbar interaction, and visibility-driven hover retargeting.
+A visible descendant remains eligible even when its parent is hidden.
+
+Hover changes caused by visibility settle within the same frame, with a maximum of
+8 target applications. CSS without a stable target, such as `:hover { visibility:hidden }`,
+falls back to an empty hover chain after that budget. The final styles are resolved,
+the cursor comes from their current hit target, and no additional frame is requested
+solely to repeat the oscillation. New pointer input or a later visibility invalidation
+can reconsider the target. This does not change pointer-events-only hover scheduling.
+
 ## Minimal usage
 
 ```csharp

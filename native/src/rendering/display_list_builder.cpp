@@ -243,9 +243,7 @@ static const aether_computed_style_t* style_for_node(const aether_style_map_s* s
 
 static const aether_computed_style_t& style_for_box(const aether_display_list_builder_s* builder,
                                                      const aether_layout_box_s* box) {
-    if (const auto* style = style_for_node(builder ? builder->current_style_map : nullptr, box ? box->element : nullptr))
-        return *style;
-    return box->style;
+    return layout_box_style(box, builder ? builder->current_style_map : nullptr);
 }
 
 static void paint_box(aether_display_list_builder_s* builder,
@@ -361,9 +359,8 @@ static void paint_box(aether_display_list_builder_s* builder,
                       std::vector<aether_paint_command_t>& cmds)
 {
     const auto& style = style_for_box(builder, box);
-    if (!style.visible || style.display == AETHER_DISPLAY_NONE) {
-        return;
-    }
+    if (style.display == AETHER_DISPLAY_NONE) return;
+    const bool visible = layout_box_presentation_style(box, builder->current_style_map).visible;
     const bool empty_border_box = rect_is_empty(box->border_box);
     const bool has_paint_chunk = box->kind == LAYOUT_BOX_ELEMENT &&
         box->element && box->element->style_node_id > 0;
@@ -414,7 +411,7 @@ static void paint_box(aether_display_list_builder_s* builder,
 
     // Text box → emit text command and return
     if (box->kind == LAYOUT_BOX_TEXT) {
-        if (!empty_border_box && !box->text.empty()) {
+        if (visible && !empty_border_box && !box->text.empty()) {
             emit_text_shadows(cmds, style, box->text.c_str(), box->content_box,
                               AETHER_TEXT_ALIGN_START, false, ctx.effective_opacity);
             if (style.has_text_gradient) {
@@ -437,7 +434,7 @@ static void paint_box(aether_display_list_builder_s* builder,
         return;
     }
 
-    if (!empty_border_box) {
+    if (visible && !empty_border_box) {
         // Box shadows (paint behind background)
         paint_box_shadows(builder, box, cmds);
 
@@ -457,11 +454,11 @@ static void paint_box(aether_display_list_builder_s* builder,
     }
 
     const bool dynamic_scroll = box_has_dynamic_scroll(builder, box);
-    const bool scrollbar_chrome = box->element && !empty_border_box && box_has_scrollbar_chrome(builder, box);
+    const bool scrollbar_chrome = visible && box->element && !empty_border_box && box_has_scrollbar_chrome(builder, box);
     if (dynamic_scroll) emit_push_scroll_offset(cmds, box->element->style_node_id);
     // Children (or atomic control paint)
     if (box->is_atomic_control) {
-        paint_control(builder, box, focused_element, ctx, cmds);
+        if (visible) paint_control(builder, box, focused_element, ctx, cmds);
     } else {
         paint_children(builder, box, focused_element, ctx, cmds);
     }
@@ -477,7 +474,7 @@ static void paint_box(aether_display_list_builder_s* builder,
     }
 
     // Focus ring
-    if (!empty_border_box && box->element == focused_element) {
+    if (visible && !empty_border_box && box->element == focused_element) {
         auto focus_radii = aether_border_radii_resolve(style.border_radii, box->border_box, style.font_size);
         float* values = &focus_radii.top_left_x;
         for (int i = 0; i < 8; ++i) values[i] += 2.f;

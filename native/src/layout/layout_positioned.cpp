@@ -88,7 +88,7 @@ void layout_positioned_children(
     for (auto* node : parent->children) {
         if (node->type != AETHER_NODE_ELEMENT) continue;
         const auto style = get_style(styles, node);
-        if (!is_out_of_flow(style) || style.display == AETHER_DISPLAY_NONE || !style.visible) continue;
+        if (!is_out_of_flow(style) || style.display == AETHER_DISPLAY_NONE) continue;
 
         // Fixed-position descendants use the viewport; absolute descendants use the nearest
         // positioned ancestor supplied by their parent layout call.

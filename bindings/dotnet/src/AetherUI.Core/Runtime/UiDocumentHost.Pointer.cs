@@ -20,6 +20,8 @@ public sealed partial class UiDocumentHost
     private ElementNode? _focused;
 
     private PointF _pendingPointerMove;
+    private PointF _lastPointerPosition;
+    private bool _hasPointerPosition;
     private ElementNode? _pendingPointerTarget;
 
     private bool _hasPendingPointerMove;
@@ -31,7 +33,9 @@ public sealed partial class UiDocumentHost
     public CursorKind PointerMoved(PointF point)
     {
         ThrowIfDisposed();
-        if (_scrollbarDrag is not null)
+        _lastPointerPosition = point;
+        _hasPointerPosition = true;
+        if (_scrollbarPointerCaptured)
         {
             EnsureVisualTree();
             UpdateScrollbarDrag(point);
@@ -67,7 +71,7 @@ public sealed partial class UiDocumentHost
 
     private bool CanHitTestCurrentVisualTree() =>
         !_markupDirty &&
-        (_invalidation & VisualInvalidation.Layout) == 0 &&
+        (_invalidation & (VisualInvalidation.Style | VisualInvalidation.Layout)) == 0 &&
         _layout is not null &&
         _styles is not null;
 
@@ -89,7 +93,7 @@ public sealed partial class UiDocumentHost
 
     private bool UpdateHoverTarget(ElementNode? target, PointF point, bool requestRender)
     {
-        if (ReferenceEquals(target, _hovered))
+        if (ReferenceEquals(target, _hovered) && (target is not null || _hoverChain.Count == 0))
         {
             return false;
         }
@@ -122,9 +126,25 @@ public sealed partial class UiDocumentHost
             }
         }
 
+        if (stateChanged) InvalidateVisual(requestRender: false);
         if (previous is not null)
         {
+            // The outgoing handler can hide/replace the incoming target. Resolve
+            // its effects before delivering mouseover to that candidate.
+            _hovered = null;
             Dispatch("mouseout", previous, point);
+            EnsureVisualTree();
+            // Only reject a stale/hidden candidate here. Do not broaden the
+            // visibility fix into resettling pointer-events hover semantics.
+            if (target is not null && !IsCurrentlyVisible(target))
+            {
+                _pendingPointerMove = point;
+                _pendingPointerTarget = null;
+                _hasPendingPointerTarget = false;
+                _hasPendingPointerMove = true;
+                _currentCursor = CursorFor(HitTest(point));
+                return true;
+            }
         }
 
         _hovered = target;
@@ -133,17 +153,16 @@ public sealed partial class UiDocumentHost
             Dispatch("mouseover", _hovered, point);
         }
 
-        if (stateChanged)
-        {
-            InvalidateVisual(requestRender);
-        }
-
+        // State changes were invalidated before callbacks; do not enqueue a
+        // redundant style pass after the outgoing handler's revalidation.
+        if (stateChanged && requestRender) RequestRender();
         return stateChanged;
     }
 
     public void PointerLeft()
     {
         ThrowIfDisposed();
+        _hasPointerPosition = false;
         _hasPendingPointerMove = false;
         _hasPendingPointerTarget = false;
         _pendingPointerTarget = null;
@@ -190,7 +209,22 @@ public sealed partial class UiDocumentHost
 
         _active = target;
         SetElementState(_active, ElementState.Active, enabled: true);
+        // :active can hide this candidate even on the first press, before any
+        // previous focus exists to trigger blur-time style revalidation.
+        InvalidateVisual(requestRender: false);
+        EnsureVisualTree();
         Focus(target.IsFocusable ? target : null);
+        EnsureVisualTree();
+        if (!IsCurrentlyVisible(target) || target.IsDisabled)
+        {
+            if (ReferenceEquals(_active, target))
+            {
+                SetElementState(target, ElementState.Active, enabled: false);
+                _active = null;
+                InvalidateVisual();
+            }
+            return;
+        }
         Dispatch("mousedown", target, point);
         InvalidateVisual();
     }
@@ -211,14 +245,18 @@ public sealed partial class UiDocumentHost
         if (pressed is not null)
         {
             SetElementState(pressed, ElementState.Active, enabled: false);
+            InvalidateVisual(requestRender: false);
             Dispatch("mouseup", pressed, point);
+            EnsureVisualTree();
+            target = HitTest(point);
         }
 
         _active = null;
         if (pressed is not null && ReferenceEquals(pressed, target) && !pressed.IsDisabled)
         {
             var click = Dispatch("click", pressed, point);
-            if (!click.IsDefaultPrevented && pressed.TagName == "button" &&
+            EnsureVisualTree();
+            if (!click.IsDefaultPrevented && IsCurrentlyVisible(pressed) && !pressed.IsDisabled && pressed.TagName == "button" &&
                 !string.Equals(pressed.GetAttribute("type"), "button", StringComparison.OrdinalIgnoreCase))
             {
                 SubmitClosestForm(pressed);
@@ -324,27 +362,42 @@ public sealed partial class UiDocumentHost
         }
 
         var previous = _focused;
+        // Clear the old identity before callbacks can reenter. Do not install the
+        // new target until blur has resolved its possible DOM/style changes.
+        _focused = null;
         if (previous is not null)
         {
             SetElementState(previous, ElementState.Focus, enabled: false);
+            InvalidateVisual(requestRender: false);
             Dispatch("blur", previous, default);
+            EnsureVisualTree();
+            if (_focused is not null) return; // A reentrant handler chose focus.
         }
 
-        _focused = target;
-        if (_focused is not null)
+        if (target is not null && IsEligibleForFocus(target))
         {
-            SetElementState(_focused, ElementState.Focus, enabled: true);
-            Dispatch("focus", _focused, default);
+            _focused = target;
+            SetElementState(target, ElementState.Focus, enabled: true);
+            InvalidateVisual(requestRender: false);
+            Dispatch("focus", target, default);
         }
 
         InvalidateVisual();
     }
 
+    private bool IsCurrentlyVisible(ElementNode element) =>
+        _styles is not null && _styles.TryGetValue(element, out var style) &&
+        style.Visible && style.Display != DisplayKind.None;
+
+    private bool IsEligibleForFocus(ElementNode element) =>
+        element.IsFocusable && !element.IsDisabled && IsCurrentlyVisible(element) &&
+        _layout?.FindPrimaryBox(element) is { } box && !box.BorderBox.IsEmpty;
+
     private void FocusNext()
     {
         EnsureVisualTree();
         var focusable = _document!.DescendantElements()
-            .Where(static element => element.IsFocusable && !element.IsDisabled)
+            .Where(IsEligibleForFocus)
             .ToArray();
         if (focusable.Length == 0)
         {
@@ -354,6 +407,7 @@ public sealed partial class UiDocumentHost
 
         var index = Array.IndexOf(focusable, _focused);
         Focus(focusable[(index + 1 + focusable.Length) % focusable.Length]);
+        EnsureVisualTree();
     }
 
     private bool SetElementState(ElementNode element, ElementState flag, bool enabled)
@@ -374,11 +428,29 @@ public sealed partial class UiDocumentHost
     {
         if (_nativeLayout is not null && _nativeDom is not null)
         {
-            var nativeHit = _layoutInterop.HitTest(_nativeLayout, _nativeVisualStyleMap, _nativeDom, point, ScrollOffsetFor);
-            if (nativeHit is not null) return nativeHit;
+            // A native miss is authoritative, including a rejection by an ancestor clip.
+            return _layoutInterop.HitTest(_nativeLayout, _nativeVisualStyleMap, _nativeDom, point, ScrollOffsetFor);
         }
 
         return _layout?.HitTest(point, ScrollOffsetFor);
+    }
+
+    private void ResetUnstableHover()
+    {
+        var previous = _hovered;
+        _hovered = null;
+        foreach (var element in _hoverChain)
+            SetElementState(element, ElementState.Hover, enabled: false);
+        _hoverChain.Clear();
+        InvalidateVisual(requestRender: false);
+        if (previous is not null) Dispatch("mouseout", previous, _lastPointerPosition);
+        EnsureVisualTree();
+        // The final resolve may have queued a visibility-driven move. Deliberately
+        // discard it: an unchanged physical pointer must not cause endless frames.
+        _hasPendingPointerMove = false;
+        _hasPendingPointerTarget = false;
+        _pendingPointerTarget = null;
+        _currentCursor = CursorFor(HitTest(_lastPointerPosition));
     }
 
     private void RequestPointerRender()

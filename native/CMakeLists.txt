@@ -229,6 +229,10 @@ if(AETHERUI_BUILD_TESTS)
     target_link_libraries(aether_generated_pseudo_updates_test PRIVATE AetherUI::Core)
     add_test(NAME aether.generated-pseudo-updates COMMAND aether_generated_pseudo_updates_test)
 
+    add_executable(aether_visibility_test tests/test_visibility.cpp)
+    target_link_libraries(aether_visibility_test PRIVATE AetherUI::Core)
+    add_test(NAME aether.visibility COMMAND aether_visibility_test)
+
     add_executable(aether_style_impact_test tests/test_style_impact.cpp)
     target_link_libraries(aether_style_impact_test PRIVATE AetherUI::Core)
     add_test(NAME aether.style-impact COMMAND aether_style_impact_test)

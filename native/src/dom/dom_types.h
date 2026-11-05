@@ -24,6 +24,9 @@ struct aether_node_s {
     // The originating element is kept separately from parent: generated nodes inherit from their
     // host, while selector combinators must navigate from the host's real DOM position.
     aether_node_s* style_origin = nullptr;
+    // Layout-only anonymous flex wrappers resolve visibility/pointer-events
+    // from this DOM owner. Unlike style_origin, this is never set for pseudos.
+    aether_node_s* anonymous_flex_owner = nullptr;
     virtual ~aether_node_s() = default;
 };
 

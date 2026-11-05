@@ -8,6 +8,7 @@
 #include <vector>
 #include <unordered_map>
 #include "../css/style_map_types.h"
+#include "../dom/dom_types.h"
 
 /* ── Internal layout types (mirrors C# LayoutBox/LayoutResult) ──── */
 
@@ -50,6 +51,39 @@ struct aether_layout_box_s {
         return n;
     }
 };
+
+// Normal boxes, including pseudo-elements, use their own current computed
+// style and fall back to the layout snapshot when the map has no entry.
+inline const aether_computed_style_t& layout_box_style(
+    const aether_layout_box_s* box, const aether_style_map_s* styles)
+{
+    if (styles && box->element) {
+        const auto found = styles->styles.find(box->element);
+        if (found != styles->styles.end()) return found->second;
+    }
+    return box->style;
+}
+
+// Only visibility and pointer-events use this selection. Anonymous wrappers
+// must not borrow their owner's decorations, transforms, opacity or flex style.
+inline const aether_computed_style_t& layout_box_presentation_style(
+    const aether_layout_box_s* box, const aether_style_map_s* styles)
+{
+    if (box->element && box->element->anonymous_flex_owner) {
+        if (styles) {
+            const auto found = styles->styles.find(box->element->anonymous_flex_owner);
+            if (found != styles->styles.end()) return found->second;
+        }
+        return box->style;
+    }
+    return layout_box_style(box, styles);
+}
+
+inline aether_node_s* layout_box_hit_owner(const aether_layout_box_s* box)
+{
+    return box->element && box->element->anonymous_flex_owner
+        ? box->element->anonymous_flex_owner : box->element;
+}
 
 struct inline_item_s {
     aether_node_s*        element = nullptr;
@@ -135,7 +169,7 @@ struct aether_layout_result_s {
 
     aether_node_s* hit_test(float x, float y) const {
         if (!root) return nullptr;
-        return hit_test_recursive(root, x, y, nullptr);
+        return hit_test_recursive(root, x, y, nullptr, nullptr, nullptr);
     }
 
     aether_node_s* hit_test(float x, float y, aether_scroll_offset_fn offsets, void* data) const {
@@ -150,32 +184,12 @@ struct aether_layout_result_s {
     }
 
 private:
-    static const aether_computed_style_t& hit_style(const aether_layout_box_s* box, const aether_style_map_s* styles) {
-        if (styles && box && box->element) {
-            const auto found = styles->styles.find(box->element);
-            if (found != styles->styles.end()) return found->second;
-        }
-        return box->style;
-    }
-
-    static aether_node_s* hit_test_recursive(aether_layout_box_s* box, float x, float y,
-                                             const aether_style_map_s* styles) {
-        const auto& style = hit_style(box, styles);
-        for (int i = static_cast<int>(box->children.size()) - 1; i >= 0; --i) {
-            auto* found = hit_test_recursive(box->children[i], x, y, styles);
-            if (found) return found;
-        }
-        if (style.pointer_events != AETHER_POINTER_EVENTS_NONE &&
-            aether_rectf_contains(box->margin_box, {x, y})) {
-            return box->element;
-        }
-        return nullptr;
-    }
-
     static aether_node_s* hit_test_recursive(aether_layout_box_s* box, float x, float y,
                                               const aether_style_map_s* styles,
                                               aether_scroll_offset_fn offsets, void* data) {
-        const auto& style = hit_style(box, styles);
+        const auto& style = layout_box_style(box, styles);
+        if (style.display == AETHER_DISPLAY_NONE) return nullptr;
+        const auto& presentation = layout_box_presentation_style(box, styles);
         // A scroll offset moves only descendants; the scroll container's own
         // border/padding box remains in viewport coordinates.
         float child_x = x;
@@ -196,8 +210,8 @@ private:
                 if (found) return found;
             }
         }
-        if (style.pointer_events != AETHER_POINTER_EVENTS_NONE &&
-            aether_rectf_contains(box->margin_box, {x, y})) return box->element;
+        if (presentation.visible && presentation.pointer_events != AETHER_POINTER_EVENTS_NONE &&
+            aether_rectf_contains(box->margin_box, {x, y})) return layout_box_hit_owner(box);
         return nullptr;
     }
 };

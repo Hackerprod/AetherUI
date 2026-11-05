@@ -286,7 +286,7 @@ aether_layout_box_s* layout_element(
     box->style = style;
     register_box(result, box);
 
-    if (style.display == AETHER_DISPLAY_NONE || !style.visible) {
+    if (style.display == AETHER_DISPLAY_NONE) {
         return box;
     }
 
@@ -804,7 +804,7 @@ static void collect_inline_element(
                 output.push_back(inline_item_s::line_break(node, child_style));
             } else if (is_opaque_single_line_control(node) || child_style.display == AETHER_DISPLAY_INLINE_BLOCK) {
                 output.push_back(inline_item_s::atomic(node, child_style));
-            } else if (child_style.display != AETHER_DISPLAY_NONE && child_style.visible) {
+            } else if (child_style.display != AETHER_DISPLAY_NONE) {
                 collect_inline_element(engine, styles, node, child_style, output);
             }
         }
@@ -849,7 +849,7 @@ static inline_node_role_e append_inline_node(
     if (node->type != AETHER_NODE_ELEMENT) return inline_node_role_e::ignored;
 
     const auto child_style = get_style(styles, node);
-    if (child_style.display == AETHER_DISPLAY_NONE || !child_style.visible || is_out_of_flow(child_style)) {
+    if (child_style.display == AETHER_DISPLAY_NONE || is_out_of_flow(child_style)) {
         return inline_node_role_e::ignored;
     }
     if (child_style.display == AETHER_DISPLAY_BLOCK || child_style.display == AETHER_DISPLAY_FLEX ||

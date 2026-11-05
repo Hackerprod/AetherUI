@@ -15,14 +15,14 @@ static void collect_table_rows(aether_style_map_s* styles, aether_node_s* contai
     for (auto* child : container->children) {
         if (child->type != AETHER_NODE_ELEMENT) continue;
         const auto child_style = get_style(styles, child);
-        if (child_style.display == AETHER_DISPLAY_NONE || !child_style.visible) continue;
+        if (child_style.display == AETHER_DISPLAY_NONE) continue;
         if (child_style.display == AETHER_DISPLAY_TABLE_ROW) {
             table_row_s row{};
             row.element = child;
             for (auto* candidate : child->children) {
                 if (candidate->type != AETHER_NODE_ELEMENT) continue;
                 const auto cell_style = get_style(styles, candidate);
-                if (cell_style.display == AETHER_DISPLAY_TABLE_CELL && cell_style.visible) {
+                if (cell_style.display == AETHER_DISPLAY_TABLE_CELL) {
                     row.cells.push_back(candidate);
                 }
             }

@@ -631,6 +631,19 @@ static runtime_node_state_s* compute_node(aether_style_runtime_s* runtime, aethe
     } else if (is_new_node) {
         impact = STYLE_IMPACT_ALL_BITS;
         inherited_change_impact = declared_inherited_impact | inherited_parent_impact;
+    } else if (found->second->style.style.visible != next.visible) {
+        // Compare the final computed delta, not the declarations still present.
+        // Removing visibility can otherwise reuse historical geometric impacts;
+        // removing width alongside visibility can miss those same impacts.
+        // This shallow copy only compares borrowed buffers. Never free it or
+        // store it as an owning style, and only change its local scalar.
+        auto comparison = found->second->style.style;
+        comparison.visible = next.visible;
+        const auto* visibility = registry->try_get("visibility");
+        impact = visibility && style_equal(comparison, next)
+            ? visibility->impact
+            : STYLE_IMPACT_ALL_BITS;
+        inherited_change_impact = impact;
     } else {
         impact = declared_impact | inherited_parent_impact;
         if (impact == STYLE_IMPACT_NONE) {

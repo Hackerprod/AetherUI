@@ -141,6 +141,7 @@ public sealed partial class UiDocumentHost
     {
         foreach (var box in _layout!.PaintOrder.Reverse())
         {
+            if (!IsCurrentlyVisible(box.Element)) continue;
             var scrollbar = ScrollbarGeometryForPointer(box);
             if (scrollbar.HorizontalVisible && scrollbar.HorizontalThumb.Contains(point))
             {
@@ -175,7 +176,8 @@ public sealed partial class UiDocumentHost
     private void UpdateScrollbarDrag(PointF point)
     {
         var drag = _scrollbarDrag;
-        if (drag is null || _layout?.FindPrimaryBox(drag.Container) is not { } box)
+        if (drag is null || !IsCurrentlyVisible(drag.Container) ||
+            _layout?.FindPrimaryBox(drag.Container) is not { } box)
         {
             CancelScrollbarDrag();
             return;

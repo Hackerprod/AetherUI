@@ -121,6 +121,7 @@ public sealed partial class UiDocumentHost
 
         var styleResolutionStart = Stopwatch.GetTimestamp();
         NativeStyleImpact impact;
+        var visibilityChanged = false;
         var paintDirtyNodes = new Dictionary<long, IntPtr>();
         var updatedNativeNodes = new List<IntPtr>();
         var changedHandles = Array.Empty<IntPtr>();
@@ -154,6 +155,7 @@ public sealed partial class UiDocumentHost
                 {
                     _computedStyles.TryGetValue(managed, out var previousStyle);
                     var nextStyle = StyleRuntimeBridge.ToComputedStyle(update.Style, managed);
+                    visibilityChanged |= previousStyle is not null && previousStyle.Visible != nextStyle.Visible;
                     _computedStyles[managed] = nextStyle;
                     if (previousStyle is not null)
                         ObserveTransition(update.Node, previousStyle, nextStyle);
@@ -179,6 +181,7 @@ public sealed partial class UiDocumentHost
                 if (previousStyle is null)
                     _previousStyleSnapshot.TryGetValue(ElementIdentityKey(element), out previousStyle);
                 var nextStyle = StyleRuntimeBridge.ToComputedStyle(nativeStyles[i], element);
+                visibilityChanged |= previousStyle is not null && previousStyle.Visible != nextStyle.Visible;
                 _computedStyles[element] = nextStyle;
                 if (previousStyle is not null)
                     ObserveTransition(_nativeDom!.GetNativeHandle(element), previousStyle, nextStyle);
@@ -219,6 +222,23 @@ public sealed partial class UiDocumentHost
         Interlocked.Increment(ref _styleResolutionCount);
         _invalidation &= ~VisualInvalidation.Style;
         _invalidation |= InvalidationForStyleImpact(impact);
+        if (visibilityChanged)
+        {
+            // Isolated chunks do not carry ancestor opacity/clip/transform context.
+            // Rebuild paint only, retaining native layout and its geometry snapshot.
+            _paintChunkDirtyNodes.Clear();
+            _invalidation &= ~VisualInvalidation.PaintChunks;
+            _invalidation |= VisualInvalidation.DisplayList;
+            _pendingPointerTarget = null;
+            _hasPendingPointerTarget = false;
+            if (_hasPointerPosition)
+            {
+                _pendingPointerMove = _lastPointerPosition;
+                _hasPendingPointerMove = true;
+            }
+        }
+        if (_scrollbarDrag is { } drag && !IsCurrentlyVisible(drag.Container))
+            CancelScrollbarDrag();
     }
 
 }

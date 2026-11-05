@@ -65,6 +65,7 @@ AETHER_API aether_computed_style_t aether_computed_style_inherit_from(const aeth
         s.white_space = parent->white_space;
         s.cursor = parent->cursor;
         s.pointer_events = parent->pointer_events;
+        s.visible = parent->visible;
         // text-shadow is inherited. Keep an owned copy so parent and child
         // style handles never alias list storage.
         (void)aether_shadow_list_copy(&parent->text_shadows, &s.text_shadows);

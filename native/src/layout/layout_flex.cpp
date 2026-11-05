@@ -54,6 +54,7 @@ static aether_node_s* create_anonymous_flex_item(
     anonymous->parent = parent;
     anonymous->tag_name = "aether-anonymous-flex-item";
     anonymous->style_origin = parent;
+    anonymous->anonymous_flex_owner = parent;
     anonymous->children = text_nodes;
 
     // Anonymous flex items are transparent formatting wrappers: only inherited
@@ -70,6 +71,8 @@ static aether_node_s* create_anonymous_flex_item(
     anonymous_style.text_transform = parent_style.text_transform;
     anonymous_style.white_space = parent_style.white_space;
     anonymous_style.cursor = parent_style.cursor;
+    anonymous_style.visible = parent_style.visible;
+    anonymous_style.pointer_events = parent_style.pointer_events;
     (void)aether_shadow_list_copy(&parent_style.text_shadows, &anonymous_style.text_shadows);
     anonymous_style.display = AETHER_DISPLAY_BLOCK;
 
@@ -113,7 +116,7 @@ const std::vector<aether_node_s*>& collect_flex_items(
         const auto child_style = get_style(styles, node);
         const bool out_of_flow = child_style.position == AETHER_POSITION_ABSOLUTE ||
             child_style.position == AETHER_POSITION_FIXED;
-        if (child_style.display != AETHER_DISPLAY_NONE && child_style.visible && !out_of_flow) {
+        if (child_style.display != AETHER_DISPLAY_NONE && !out_of_flow) {
             items.push_back(node);
         }
     }
