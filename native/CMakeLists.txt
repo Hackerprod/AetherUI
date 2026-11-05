@@ -62,6 +62,7 @@ add_library(aether_core SHARED
     src/style_runtime/selector_matcher.cpp
     src/style_runtime/selector_parser.cpp
     src/style_runtime/rule_index.cpp
+    src/style_runtime/css_variable_tokens.cpp
     src/style_runtime/variable_resolver.cpp
     src/style_runtime/media_condition.cpp
     src/style_runtime/style_diff.cpp
@@ -240,6 +241,11 @@ if(AETHERUI_BUILD_TESTS)
     add_executable(aether_style_impact_test tests/test_style_impact.cpp)
     target_link_libraries(aether_style_impact_test PRIVATE AetherUI::Core)
     add_test(NAME aether.style-impact COMMAND aether_style_impact_test)
+
+    add_executable(aether_css_variable_strings_test tests/test_css_variable_strings.cpp src/style_runtime/css_variable_tokens.cpp src/style_runtime/variable_resolver.cpp)
+    target_include_directories(aether_css_variable_strings_test PRIVATE src)
+    target_link_libraries(aether_css_variable_strings_test PRIVATE AetherUI::Core)
+    add_test(NAME aether.css-variable-strings COMMAND aether_css_variable_strings_test)
 
     add_executable(aether_shorthand_var_test tests/test_shorthand_var.cpp)
     target_include_directories(aether_shorthand_var_test PRIVATE src)

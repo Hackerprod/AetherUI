@@ -6,6 +6,7 @@
 #include "../dom/dom_types.h"
 #include "style_property_registry_internal.h"
 #include "style_runtime_types.h"
+#include "css_variable_tokens.h"
 
 #include <algorithm>
 #include <cctype>
@@ -460,7 +461,7 @@ static runtime_node_state_s* compute_node(aether_style_runtime_s* runtime, aethe
         generated_content->reset();
         if (content_winner.is_set) {
             std::string content_source = content_winner.source;
-            if (str_to_lower(content_source).find("var(") != std::string::npos &&
+            if (variable_has_reference(content_source) &&
                 !variable_resolve(content_source.c_str(), &scope,
                                   runtime->options.max_variable_depth,
                                   runtime->options.max_variable_expansion_length, content_source)) {

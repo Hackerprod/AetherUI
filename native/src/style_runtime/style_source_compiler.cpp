@@ -1,4 +1,5 @@
 #include "style_runtime_types.h"
+#include "css_variable_tokens.h"
 #include "style_property_registry_internal.h"
 #include <string_view>
 #include <cctype>
@@ -151,8 +152,7 @@ static int32_t find_at_rule_delimiter(const std::string& source, int32_t start, 
 }
 
 static bool contains_variable(const std::string& s) {
-    std::string lower = str_to_lower(s);
-    return lower.find("var(") != std::string::npos;
+    return variable_has_reference(s);
 }
 
 static bool try_strip_important(std::string& value) {
