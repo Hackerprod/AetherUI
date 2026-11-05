@@ -9,6 +9,7 @@
 #include <unordered_map>
 #include "../css/style_map_types.h"
 #include "../dom/dom_types.h"
+#include "../rendering/stacking.h"
 
 /* ── Internal layout types (mirrors C# LayoutBox/LayoutResult) ──── */
 
@@ -62,6 +63,38 @@ inline const aether_computed_style_t& layout_box_style(
         if (found != styles->styles.end()) return found->second;
     }
     return box->style;
+}
+
+// Empty means exact DOM order. Classification is shared by paint and hit testing,
+// including children later omitted for visibility, display or pointer events.
+inline std::vector<aether::stacking::stack_item_t> layout_children_paint_order(
+    const aether_layout_box_s* box, const aether_style_map_s* styles)
+{
+    using namespace aether::stacking;
+    const auto classify = [styles](const aether_layout_box_s* child) {
+        return child->kind == LAYOUT_BOX_TEXT || child->is_atomic_control
+            ? paint_classification_t{} : classify_element_paint(layout_box_style(child, styles));
+    };
+    bool needs_order = false;
+    for (auto* child : box->children) {
+        if (classify(child).has_explicit_z_index) { needs_order = true; break; }
+    }
+    if (!needs_order) return {};
+    std::vector<stack_item_t> items;
+    items.reserve(box->children.size());
+    for (size_t index = 0; index < box->children.size(); ++index) {
+        auto* child = box->children[index];
+        const auto classification = classify(child);
+        stack_item_t item;
+        item.dom_index = static_cast<int32_t>(index);
+        item.is_inline_content = child->kind == LAYOUT_BOX_TEXT || child->is_atomic_control;
+        item.cls = classification.cls;
+        item.z_value = classification.z_value;
+        item.has_explicit_z_index = classification.has_explicit_z_index;
+        items.push_back(item);
+    }
+    stable_sort_stack_items(items);
+    return items;
 }
 
 // Only visibility and pointer-events use this selection. Anonymous wrappers
@@ -205,9 +238,15 @@ private:
             style.overflow_x != AETHER_OVERFLOW_VISIBLE ||
             style.overflow_y != AETHER_OVERFLOW_VISIBLE;
         if (!clips_children || aether_rectf_contains(box->padding_box, {x, y})) {
-            for (int i = static_cast<int>(box->children.size()) - 1; i >= 0; --i) {
-                auto* found = hit_test_recursive(box->children[i], child_x, child_y, styles, offsets, data);
-                if (found) return found;
+            const auto order = layout_children_paint_order(box, styles);
+            if (order.empty()) {
+                for (auto it = box->children.rbegin(); it != box->children.rend(); ++it) {
+                    if (auto* found = hit_test_recursive(*it, child_x, child_y, styles, offsets, data)) return found;
+                }
+            } else {
+                for (auto it = order.rbegin(); it != order.rend(); ++it) {
+                    if (auto* found = hit_test_recursive(box->children[it->dom_index], child_x, child_y, styles, offsets, data)) return found;
+                }
             }
         }
         if (presentation.visible && presentation.pointer_events != AETHER_POINTER_EVENTS_NONE &&

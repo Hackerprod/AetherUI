@@ -305,46 +305,20 @@ static void paint_control(aether_display_list_builder_s* builder,
    to the pre-z-index pipeline. Otherwise they are reordered by CSS paint
    class (negative -> in-flow -> auto -> positive), ascending z-index within
    the negative/positive classes, and DOM order everywhere else.
-   NOTE: this reorders visual paint only. Hit-testing keeps its own
-   back-to-front DOM traversal; z-aware hit-testing is a future slice. */
+   Hit testing traverses the same local order in reverse. */
 static void paint_children(aether_display_list_builder_s* builder,
                            aether_layout_box_s* box,
                            aether_node_s* focused_element,
                            const paint_context_s& ctx,
                            std::vector<aether_paint_command_t>& cmds)
 {
-    using namespace aether::stacking;
-
-    std::vector<stack_item_t> items;
-    items.reserve(box->children.size());
-    int32_t dom_index = 0;
-    for (auto* child : box->children) {
-        stack_item_t item;
-        item.dom_index = dom_index;
-        if (child->kind == LAYOUT_BOX_TEXT || child->is_atomic_control) {
-            // Inline content (text runs and atomic inline controls) stays in
-            // the IN_FLOW class at its DOM position regardless of styles.
-            item.is_inline_content = true;
-            item.cls = paint_class_t::in_flow;
-        } else {
-            const paint_classification_t classification =
-                classify_element_paint(style_for_box(builder, child));
-            item.cls = classification.cls;
-            item.z_value = classification.z_value;
-            item.has_explicit_z_index = classification.has_explicit_z_index;
-        }
-        items.push_back(item);
-        ++dom_index;
-    }
-
-    if (!needs_stacking_order(items)) {
+    const auto items = layout_children_paint_order(box, builder->current_style_map);
+    if (items.empty()) {
         for (auto* child : box->children) {
             paint_box(builder, child, focused_element, ctx, cmds);
         }
         return;
     }
-
-    stable_sort_stack_items(items);
     for (const auto& item : items) {
         paint_box(builder, box->children[item.dom_index], focused_element, ctx, cmds);
     }

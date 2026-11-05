@@ -4,7 +4,7 @@
 #include <cstdint>
 #include <vector>
 
-/* Global z-index stacking: the generic engine capability that reorders paint
+/* Local child z-index stacking: the generic engine capability that reorders paint
    emission within a box's children according to the CSS stacking rules.
    The module is self-contained (only the public aether.h types + the STL) so
    it can be unit-tested standalone. When no child carries an explicit

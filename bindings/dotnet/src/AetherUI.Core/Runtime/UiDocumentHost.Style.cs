@@ -122,6 +122,7 @@ public sealed partial class UiDocumentHost
         var styleResolutionStart = Stopwatch.GetTimestamp();
         NativeStyleImpact impact;
         var visibilityChanged = false;
+        var stackingOrderChanged = false;
         var paintDirtyNodes = new Dictionary<long, IntPtr>();
         var updatedNativeNodes = new List<IntPtr>();
         var changedHandles = Array.Empty<IntPtr>();
@@ -147,6 +148,7 @@ public sealed partial class UiDocumentHost
             incrementalStateResolution = true;
             var resolution = _nativeStyleRuntime.ResolveStateChanges(changedHandles, changedStates);
             impact = resolution.Impact;
+            stackingOrderChanged = resolution.StackingOrderChanged;
             foreach (var update in resolution.Updates)
             {
                 updatedNativeNodes.Add(update.Node);
@@ -173,6 +175,7 @@ public sealed partial class UiDocumentHost
             var states = elements.Select(static element => (int)element.State).ToArray();
             var resolution = _nativeStyleRuntime.Resolve(states, _viewport.Width, _viewport.Height, _dpiScale);
             impact = resolution.Impact;
+            stackingOrderChanged = resolution.StackingOrderChanged;
             var nativeStyles = resolution.Styles;
             for (var i = 0; i < elements.Length; i++)
             {
@@ -222,9 +225,9 @@ public sealed partial class UiDocumentHost
         Interlocked.Increment(ref _styleResolutionCount);
         _invalidation &= ~VisualInvalidation.Style;
         _invalidation |= InvalidationForStyleImpact(impact);
-        if (visibilityChanged)
+        if (visibilityChanged || stackingOrderChanged)
         {
-            // Isolated chunks do not carry ancestor opacity/clip/transform context.
+            // Isolated chunks cannot change sibling order or carry ancestor opacity/clip/transform context.
             // Rebuild paint only, retaining native layout and its geometry snapshot.
             _paintChunkDirtyNodes.Clear();
             _invalidation &= ~VisualInvalidation.PaintChunks;

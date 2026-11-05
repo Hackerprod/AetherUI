@@ -50,11 +50,19 @@ public sealed record NativeComputedStyle(
     IReadOnlyList<NativeShadow> BoxShadows,
     string FontFamily, float FontSize, int FontWeight, float LineHeight, int TextAlign, int TextTransform, int WhiteSpace,
     int OverflowX, int OverflowY, int Cursor, int PointerEvents, bool Visible,
-    int TransitionProperties, float TransitionDuration, float TransitionDelay, int TransitionTiming);
+    int TransitionProperties, float TransitionDuration, float TransitionDelay, int TransitionTiming)
+{
+    public int? ZIndex { get; init; }
+}
 
 public sealed record NativeStyleResolution(
     IReadOnlyList<NativeComputedStyle> Styles,
-    NativeStyleImpact Impact);
+    NativeStyleImpact Impact)
+{
+    // Reports a z-index delta only when an existing entry can be compared.
+    // Newly created nodes, including recreated pseudos, rely on native layout impact.
+    public bool StackingOrderChanged { get; init; }
+}
 
 public sealed record NativeStyleUpdate(
     IntPtr Node,
@@ -63,7 +71,12 @@ public sealed record NativeStyleUpdate(
 
 public sealed record NativeStyleChangeResolution(
     IReadOnlyList<NativeStyleUpdate> Updates,
-    NativeStyleImpact Impact);
+    NativeStyleImpact Impact)
+{
+    // Reports a z-index delta only when an existing entry can be compared.
+    // Newly created nodes, including recreated pseudos, rely on native layout impact.
+    public bool StackingOrderChanged { get; init; }
+}
 
 public sealed unsafe class StyleRuntimeInterop : IDisposable
 {
@@ -147,7 +160,8 @@ public sealed unsafe class StyleRuntimeInterop : IDisposable
             Marshal.StructureToPtr(environment, envPtr, false);
             var resolution = ResolveUpdates(NativeMethods.StyleRuntimeSetEnvironment(
                 _runtime, envPtr, _document, out var updates), updates);
-            return new NativeStyleResolution(_elements.Select(element => _styles[element]).ToArray(), resolution.Impact);
+            return new NativeStyleResolution(_elements.Select(element => _styles[element]).ToArray(), resolution.Impact)
+            { StackingOrderChanged = resolution.StackingOrderChanged };
         }
         finally { Marshal.FreeHGlobal(envPtr); }
     }
@@ -227,6 +241,7 @@ public sealed unsafe class StyleRuntimeInterop : IDisposable
     private NativeStyleChangeResolution ResolveUpdates(int count, IntPtr updates)
     {
         var aggregate = NativeStyleImpact.None;
+        var stackingOrderChanged = false;
         var records = count > 0 ? new List<NativeStyleUpdate>(count) : new List<NativeStyleUpdate>();
         try
         {
@@ -239,6 +254,7 @@ public sealed unsafe class StyleRuntimeInterop : IDisposable
                 try
                 {
                     var publicStyle = ReadStyle(style);
+                    stackingOrderChanged |= _styles.TryGetValue(node, out var previous) && previous.ZIndex != publicStyle.ZIndex;
                     _styles[node] = publicStyle;
                     records.Add(new NativeStyleUpdate(node, publicStyle, nativeImpact));
                 }
@@ -246,7 +262,7 @@ public sealed unsafe class StyleRuntimeInterop : IDisposable
             }
         }
         finally { NativeMethods.StyleUpdatesFree(updates, count); }
-        return new NativeStyleChangeResolution(records, aggregate);
+        return new NativeStyleChangeResolution(records, aggregate) { StackingOrderChanged = stackingOrderChanged };
     }
 
     internal static NativeComputedStyle ReadStyle(IntPtr handle)
@@ -449,7 +465,8 @@ internal readonly record struct FlexBasisRaw(int Kind, LengthRaw Length)
                 ReadShadows(BoxShadows),
                 family, FontSize, FontWeight, LineHeight, TextAlign, TextTransform, WhiteSpace,
                 OverflowX, OverflowY, Cursor, PointerEvents, Visible != 0,
-                TransitionProperties, TransitionDuration, TransitionDelay, TransitionTiming);
+                TransitionProperties, TransitionDuration, TransitionDelay, TransitionTiming)
+            { ZIndex = ZIndexKind == 1 ? ZIndex : null };
         }
     }
 

@@ -98,6 +98,11 @@ internal static class Program
         ("Composite image loader falls through schemes", CompositeImageResourceLoader_FallsThroughSchemes),
         ("Native image decode rejects garbage bytes", NativeImageDecode_RejectsGarbage),
         ("Native z-index reorders paint above DOM order", ZIndexReordersPaintAboveDomOrder),
+        ("Native stacking routes cursor and exclusive pointer events", NativeStackingRoutesExclusiveInput),
+        ("Native stacking restyle rebuilds paint and retargets pointer without layout", NativeStackingRestyleRebuildsAndRetargets),
+        ("Pseudo stacking updates preserve canonical order through existing relayout", NativePseudoStackingChangeForcesFullPaint),
+        ("Stacking metadata distinguishes auto and zero on persistent nodes", NativeStackingMetadataTracksPersistentNodes),
+        ("Native stacking wheel uses the top container", NativeStackingWheelUsesTopContainer),
         ("Opacity animates on state-triggered class change", TransitionsAnimateOpacityOnStateChange),
         ("No transition property means no animation", TransitionsDoNotAnimateWithoutTransitionProperty),
     ];
@@ -1080,6 +1085,186 @@ internal static class Program
         Assert.Equal(5f, filter.Filters[1].LengthAmount.Value);
         Assert.True(filter.Radii.TopLeftX > 0);
         Assert.True(index + 1 < commands.Length && commands[index + 1] is FillRoundedRectangleCommand);
+    }
+
+    private static void NativeStackingRoutesExclusiveInput()
+    {
+        var cases = new (string Css, string Target, string Paint)[]
+        {
+            ("#a{z-index:9}#b{z-index:1}", "a", "ba"),
+            ("#a{z-index:-1}#b{z-index:-9}", "a", "ba"),
+            ("#a{z-index:0}#b{z-index:-1}", "a", "ba"),
+            ("#a,#b{z-index:3}", "b", "ab"),
+            ("", "b", "ab"),
+            ("#a{z-index:9;pointer-events:none}#b{z-index:1}", "b", "ba"),
+            ("#a{z-index:9;visibility:hidden}#b{z-index:1}", "b", "b"),
+            ("#a{z-index:9;opacity:0}#b{z-index:1}", "a", "b"),
+        };
+        foreach (var sample in cases)
+        {
+            var component = new StackingInputComponent(sample.Css);
+            using var renderer = new RecordingRenderer();
+            using var host = new UiDocumentHost(component, new ApproximateTextMeasurer(), renderer, new UiHostOptions());
+            host.SetViewport(200, 160, 1); host.Render();
+            AssertStackingPaint(renderer, sample.Paint);
+            AssertStackingInput(host, component, sample.Target);
+        }
+    }
+
+    private static void NativeStackingRestyleRebuildsAndRetargets()
+    {
+        var samples = new (string Css, bool Flips)[]
+        {
+            ("#a{z-index:1}#b{z-index:2}#parent:invalid #a{z-index:9}", true),
+            ("#a,#b{z-index:auto}#parent:invalid #a{z-index:0}", false),
+        };
+        foreach (var sample in samples)
+        {
+            var component = new StackingInputComponent(sample.Css);
+            using var renderer = new RecordingRenderer();
+            using var host = new UiDocumentHost(component, new ApproximateTextMeasurer(), renderer, new UiHostOptions());
+            host.SetViewport(200, 160, 1); host.Render();
+            var parent = Assert.NotNull(host.Document?.GetElementById("parent"));
+            var a = Assert.NotNull(host.Document?.GetElementById("a"));
+            var b = Assert.NotNull(host.Document?.GetElementById("b"));
+            var layout = host.Layout;
+            var point = new PointF(10, 10);
+            Assert.True(host.Layout!.FindPrimaryBox(a)!.MarginBox.Contains(point) && host.Layout.FindPrimaryBox(b)!.MarginBox.Contains(point),
+                "Both hit rectangles must contain the overlap probe.");
+            AssertStackingPaint(renderer, "ab");
+            AssertStackingInput(host, component, "b", point);
+            for (var i = 0; i < 4; ++i)
+            {
+                // Queue the old target, then invalidate styles before processing
+                // it. An ancestor state is stable while overlap targets change.
+                host.PointerMoved(point);
+                host.ResetMetrics();
+                SetTestState(host, parent, ElementState.Invalid, i % 2 == 0);
+                host.Render();
+                Assert.True(ReferenceEquals(layout, host.Layout), "Persistent z-only updates retain layout.");
+                Assert.Equal(0L, host.Metrics.LayoutBuilds);
+                Assert.Equal(0L, host.Metrics.PaintChunkBuilds);
+                Assert.Equal(1L, host.Metrics.DisplayListBuilds);
+                // auto and integer zero share a paint class, but the type delta
+                // must still invalidate sibling ordering and bypass patching.
+                var high = sample.Flips && i % 2 == 0;
+                AssertStackingPaint(renderer, high ? "ba" : "ab");
+                Assert.True(((a.State & ElementState.Hover) != 0) == high, "Known pointer must retarget a in the same frame.");
+                Assert.True(((b.State & ElementState.Hover) != 0) == !high, "Known pointer must clear the former hover target.");
+                AssertStackingInput(host, component, high ? "a" : "b", point);
+            }
+        }
+    }
+
+    private static void NativePseudoStackingChangeForcesFullPaint()
+    {
+        const string markup = """
+            <style>body{margin:0}#parent{position:relative;width:100px;height:100px}
+            #parent::before{content:'';position:absolute;left:0;top:0;width:80px;height:80px;background:red;z-index:1}
+            #b{position:absolute;left:0;top:0;width:80px;height:80px;background:blue;z-index:2}
+            #parent:invalid::before{z-index:9}</style>
+            <body><div id='parent'><div id='b'></div></div></body>
+            """;
+        using var renderer = new RecordingRenderer();
+        using var host = new UiDocumentHost(new RawMarkupComponent(markup), new ApproximateTextMeasurer(), renderer, new UiHostOptions());
+        host.SetViewport(200, 160, 1); host.Render();
+        var parent = Assert.NotNull(host.Document?.GetElementById("parent"));
+        AssertStackingPaint(renderer, "ab");
+        for (var i = 0; i < 4; ++i)
+        {
+            host.ResetMetrics();
+            SetTestState(host, parent, ElementState.Invalid, i % 2 == 0); host.Render();
+            AssertStackingPaint(renderer, i % 2 == 0 ? "ba" : "ab");
+            // The current runtime recreates generated nodes on resolution and
+            // already requests layout for them. Preserve that existing path;
+            // correctness here is canonical order and no isolated patching.
+            Assert.Equal(0L, host.Metrics.PaintChunkBuilds);
+            Assert.Equal(1L, host.Metrics.DisplayListBuilds);
+        }
+    }
+
+    private static void NativeStackingMetadataTracksPersistentNodes()
+    {
+        using var document = NativeDomDocument.Parse("<body><div></div></body>");
+        using var runtime = new StyleRuntimeInterop(200, 160, 1);
+        runtime.Load(document, "", "body{position:relative;z-index:auto}body:invalid{z-index:0}");
+        var elements = document.EnumerateElementHandles().ToArray();
+        var bodyIndex = Array.IndexOf(elements, document.Body);
+        var normal = new int[elements.Length];
+        var changed = new int[elements.Length]; changed[bodyIndex] = (int)ElementState.Invalid;
+        var initial = runtime.Resolve(normal, 200, 160, 1);
+        Assert.True(!initial.StackingOrderChanged, "Initial values have no comparable previous entry.");
+        Assert.Equal<int?>(null, initial.Styles[bodyIndex].ZIndex);
+        var zero = runtime.ResolveStateChanges([document.Body], [(int)ElementState.Invalid]);
+        Assert.True(zero.StackingOrderChanged, "Incremental auto to integer zero sets the flag.");
+        Assert.Equal<int?>(0, zero.Updates.Single(u => u.Node == document.Body).Style.ZIndex);
+        var unchanged = runtime.ResolveStateChanges([document.Body], [(int)ElementState.Invalid]);
+        Assert.True(!unchanged.StackingOrderChanged, "Unchanged incremental values clear the flag.");
+        var auto = runtime.ResolveStateChanges([document.Body], [0]);
+        Assert.True(auto.StackingOrderChanged, "Incremental integer zero to auto sets the flag.");
+        Assert.Equal<int?>(null, auto.Updates.Single(u => u.Node == document.Body).Style.ZIndex);
+        var fullZero = runtime.Resolve(changed, 200, 160, 1);
+        Assert.True(fullZero.StackingOrderChanged, "Full resolve propagates auto to zero.");
+        Assert.Equal<int?>(0, fullZero.Styles[bodyIndex].ZIndex);
+        var fullUnchanged = runtime.Resolve(changed, 200, 160, 1);
+        Assert.True(!fullUnchanged.StackingOrderChanged, "Unchanged full values clear the flag.");
+        var fullAuto = runtime.Resolve(normal, 200, 160, 1);
+        Assert.True(fullAuto.StackingOrderChanged, "Full resolve propagates zero to auto.");
+        Assert.Equal<int?>(null, fullAuto.Styles[bodyIndex].ZIndex);
+    }
+
+    private static void NativeStackingWheelUsesTopContainer()
+    {
+        const string markup = """
+            <style>body{margin:0}#a,#b{position:absolute;left:0;top:0;width:90px;height:60px;overflow:auto}
+            #a{z-index:9;background:red;cursor:pointer}#b{z-index:1;background:blue;cursor:text}
+            .content{height:300px;width:40px}</style>
+            <body><div id='a'><div class='content'></div></div><div id='b'><div class='content'></div></div></body>
+            """;
+        using var renderer = new RecordingRenderer();
+        using var host = new UiDocumentHost(new RawMarkupComponent(markup), new ApproximateTextMeasurer(), renderer, new UiHostOptions());
+        host.SetViewport(200, 160, 1); host.Render();
+        var a = Assert.NotNull(host.Document?.GetElementById("a"));
+        var b = Assert.NotNull(host.Document?.GetElementById("b"));
+        host.ResetMetrics();
+        host.MouseWheelScrolled(new PointF(10, 10), -1); host.Render();
+        Assert.True(host.GetScrollOffset(a).Y > 0, "Wheel must route through the visually top native hit.");
+        Assert.Equal(0f, host.GetScrollOffset(b).Y);
+        Assert.Equal(0L, host.Metrics.LayoutBuilds);
+    }
+
+    private static void AssertStackingPaint(RecordingRenderer renderer, string expected)
+    {
+        var actual = string.Concat(ZIndexFillCommands(renderer).Select(fill => IsRedFill(fill) ? "a" : IsBlueFill(fill) ? "b" : "?"));
+        Assert.Equal(expected, actual);
+    }
+
+    private static void AssertStackingInput(UiDocumentHost host, StackingInputComponent component, string expected, PointF? position = null)
+    {
+        var point = position ?? new PointF(10, 10);
+        host.PointerMoved(point); host.Render();
+        Assert.Equal(expected == "a" ? CursorKind.Pointer : CursorKind.Text, host.CursorAt(point));
+        component.Events.Clear();
+        host.PointerPressed(point); host.PointerReleased(point); host.Render();
+        Assert.Equal($"{expected}:down,{expected}:up,{expected}:click", string.Join(",", component.Events));
+    }
+
+    private sealed class StackingInputComponent(string css) : UiComponent
+    {
+        public List<string> Events { get; } = [];
+        protected override void BuildRenderTree(MarkupWriter writer)
+        {
+            writer.WriteLiteral("<style>body{margin:0}#parent{position:relative;width:100px;height:100px}#a,#b{position:absolute;left:0;top:0;width:80px;height:80px}#a{background:red;cursor:pointer}#b{background:blue;cursor:text}" + css + "</style><body><div id='parent'>");
+            foreach (var id in new[] { "a", "b" })
+            {
+                writer.WriteLiteral("<div id='" + id + "'");
+                writer.WriteEventAttribute("onmousedown", _ => Events.Add(id + ":down"));
+                writer.WriteEventAttribute("onmouseup", _ => Events.Add(id + ":up"));
+                writer.WriteEventAttribute("onclick", _ => Events.Add(id + ":click"));
+                writer.WriteLiteral("></div>");
+            }
+            writer.WriteLiteral("</div></body>");
+        }
     }
 
     private static void ZIndexReordersPaintAboveDomOrder()
