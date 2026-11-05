@@ -20,6 +20,7 @@
 #include "text_justify.h"
 #include "table_layout.h"
 
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -45,17 +46,23 @@ private:
    modules; linkage is ordinary external (hidden by the shared-library
    visibility preset). */
 
+// Available space remains numeric; percentage heights preserve initial definiteness.
+using percentage_height_s = std::optional<float>;
+enum class forced_height_kind_e { none, definite, indefinite };
+bool length_depends_on_percentage(aether_css_length value);
+
 aether_layout_box_s* layout_element(
     const aether_layout_engine_s* engine,
     aether_style_map_s* styles,
     aether_node_s* element,
     aether_rectf containing_block,
+    percentage_height_s containing_height,
     float normal_flow_y,
     bool force_available_width,
     float forced_border_width,
     bool has_forced_border_width,
     float forced_border_height,
-    bool has_forced_border_height,
+    forced_height_kind_e forced_height_kind,
     bool is_independent_layout_item,
     aether_layout_result_s* result,
     /* CSS Overflow 3.3: propagated viewport overflow used ONLY for the root
@@ -69,6 +76,7 @@ float layout_flow_children(
     aether_layout_box_s* parent_box,
     aether_node_s* parent,
     aether_rectf content,
+    percentage_height_s containing_height,
     const aether_computed_style_t& parent_style,
     aether_layout_result_s* result);
 
@@ -78,6 +86,7 @@ float layout_inline_items(
     aether_layout_box_s* parent_box,
     const std::vector<inline_item_s>& items,
     float start_x, float start_y, float available_width,
+    float available_height, percentage_height_s containing_height,
     const aether_computed_style_t& parent_style,
     aether_layout_result_s* result);
 
@@ -87,6 +96,7 @@ float layout_flex_children(
     aether_layout_box_s* parent_box,
     aether_node_s* parent,
     aether_rectf content,
+    percentage_height_s containing_height,
     const aether_computed_style_t& style,
     bool has_definite_height,
     aether_layout_result_s* result);
@@ -97,6 +107,7 @@ float layout_table_children(
     aether_layout_box_s* parent_box,
     aether_node_s* table,
     aether_rectf content,
+    percentage_height_s containing_height,
     aether_layout_result_s* result);
 
 void layout_positioned_children(

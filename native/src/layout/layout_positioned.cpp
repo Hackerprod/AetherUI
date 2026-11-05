@@ -114,9 +114,9 @@ void layout_positioned_children(
         const float forced_height = std::max(0.f, containing.height - top - bottom -
                                               aether_thicknessf_vertical(margin));
 
-        auto* child_box = layout_element(engine, styles, node, containing, containing.y,
+        auto* child_box = layout_element(engine, styles, node, containing, containing.height, containing.y,
                                          false, forced_width, constrain_width,
-                                         forced_height, constrain_height, true, result);
+                                         forced_height, constrain_height ? forced_height_kind_e::definite : forced_height_kind_e::none, true, result);
 
         const auto static_anchor = parent_box->style.display == AETHER_DISPLAY_FLEX
             ? flex_static_position(style, containing, child_box->margin_box)

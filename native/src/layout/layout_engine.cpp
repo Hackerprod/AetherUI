@@ -312,15 +312,49 @@ void register_box(aether_layout_result_s* result, aether_layout_box_s* box) {
 
 /* ── LayoutElement ─────────────────────────────────────────────────── */
 
+bool length_depends_on_percentage(aether_css_length value) {
+    return value.unit == AETHER_CSS_UNIT_PERCENT ||
+        (value.unit == AETHER_CSS_UNIT_LINEAR && value.linear_percent != 0.f);
+}
+
+// An unresolved percent acts as auto before opposing-inset precedence. A finite
+// zero reference also keeps percentage-free LINEAR values free of NaN * 0.
+static float resolve_semantic_height(const aether_layout_engine_s* engine,
+                                     aether_css_length value,
+                                     percentage_height_s height,
+                                     const aether_computed_style_t& style) {
+    if (length_depends_on_percentage(value) && !height) return NAN;
+    return resolve(engine, value, height.value_or(0.f), style);
+}
+
+static float clamp_border_height(const aether_layout_engine_s* engine,
+                                 const aether_computed_style_t& style,
+                                 float height, float reference, float decorations,
+                                 bool semantic_reference) {
+    const auto constraint = [&](aether_css_length value) {
+        if (semantic_reference && length_depends_on_percentage(value) && !std::isfinite(reference))
+            return NAN;
+        return resolve(engine, value, std::isfinite(reference) ? reference : 0.f, style);
+    };
+    const float minimum = constraint(style.min_height);
+    if (std::isfinite(minimum)) height = std::max(height,
+        minimum + (style.box_sizing == AETHER_BOX_SIZING_CONTENT_BOX ? decorations : 0.f));
+    const float maximum = constraint(style.max_height);
+    if (std::isfinite(maximum)) height = std::min(height,
+        maximum + (style.box_sizing == AETHER_BOX_SIZING_CONTENT_BOX ? decorations : 0.f));
+    return std::max(decorations, height);
+}
+
 aether_layout_box_s* layout_element(
     const aether_layout_engine_s* engine,
     aether_style_map_s* styles,
     aether_node_s* element,
     aether_rectf containing_block,
+    percentage_height_s containing_height,
     float normal_flow_y,
     bool force_available_width,
     float forced_border_width, bool has_forced_border_width,
-    float forced_border_height, bool has_forced_border_height,
+    float forced_border_height, forced_height_kind_e forced_height_kind,
     bool is_independent_layout_item,
     aether_layout_result_s* result,
     const int32_t* viewport_overflow_override)
@@ -399,7 +433,7 @@ aether_layout_box_s* layout_element(
 
     float explicit_height;
     bool has_explicit_height;
-    if (has_forced_border_height) {
+    if (forced_height_kind != forced_height_kind_e::none) {
         explicit_height = (style.box_sizing == AETHER_BOX_SIZING_CONTENT_BOX)
             ? std::max(0.f, forced_border_height - aether_thicknessf_vertical(padding) - aether_thicknessf_vertical(border))
             : forced_border_height;
@@ -424,6 +458,25 @@ aether_layout_box_s* layout_element(
     float child_containing_height = std::isfinite(definite_content_height)
         ? definite_content_height : containing_block.height;
 
+    // Certify only the initial, content-independent height, before children.
+    // A final numeric auto size or a min-height on auto is not such a proof.
+    const float height_decorations = aether_thicknessf_vertical(padding) + aether_thicknessf_vertical(border);
+    percentage_height_s child_percentage_height;
+    float semantic_border_height = NAN;
+    if (forced_height_kind == forced_height_kind_e::definite) {
+        semantic_border_height = forced_border_height;
+    } else if (forced_height_kind == forced_height_kind_e::none) {
+        const float specified = resolve_semantic_height(engine, style.height, containing_height, style);
+        if (std::isfinite(specified)) semantic_border_height = specified +
+            (style.box_sizing == AETHER_BOX_SIZING_CONTENT_BOX ? height_decorations : 0.f);
+    }
+    if (std::isfinite(semantic_border_height)) {
+        semantic_border_height = clamp_border_height(engine, style, semantic_border_height,
+            containing_height.value_or(NAN), height_decorations, true);
+        child_percentage_height = std::max(0.f, semantic_border_height - height_decorations);
+    }
+    if (child_percentage_height) child_containing_height = *child_percentage_height;
+
     float content_height;
     if (intrinsic_control) {
         content_height = layout_atomic_control(engine, element, style,
@@ -433,16 +486,19 @@ aether_layout_box_s* layout_element(
     } else if (style.display == AETHER_DISPLAY_FLEX) {
         content_height = layout_flex_children(engine, styles, box, element,
                                               {content_x, content_y, content_width, child_containing_height},
+                                              child_percentage_height,
                                               style,
                                               std::isfinite(definite_content_height),
                                               result);
     } else if (style.display == AETHER_DISPLAY_TABLE) {
         content_height = layout_table_children(engine, styles, box, element,
                                                {content_x, content_y, content_width, child_containing_height},
+                                              child_percentage_height,
                                                result);
     } else {
         content_height = layout_flow_children(engine, styles, box, element,
                                               {content_x, content_y, content_width, child_containing_height},
+                                              child_percentage_height,
                                               style, result);
         // Chromium centers in-flow content inside form controls that carry it
         // (buttons): the line block floats in the middle of the control's definite
@@ -506,23 +562,8 @@ aether_layout_box_s* layout_element(
            : explicit_height)
         : content_height + aether_thicknessf_vertical(padding) + aether_thicknessf_vertical(border);
 
-    float min_height = resolve(engine, style.min_height, containing_block.height, style);
-    if (std::isfinite(min_height)) {
-        float min_border = (style.box_sizing == AETHER_BOX_SIZING_CONTENT_BOX)
-            ? min_height + aether_thicknessf_vertical(padding) + aether_thicknessf_vertical(border)
-            : min_height;
-        border_height = std::max(border_height, min_border);
-    }
-
-    float max_height = resolve(engine, style.max_height, containing_block.height, style);
-    if (std::isfinite(max_height)) {
-        float max_border = (style.box_sizing == AETHER_BOX_SIZING_CONTENT_BOX)
-            ? max_height + aether_thicknessf_vertical(padding) + aether_thicknessf_vertical(border)
-            : max_height;
-        border_height = std::min(border_height, max_border);
-    }
-
-    border_height = std::max(aether_thicknessf_vertical(border) + aether_thicknessf_vertical(padding), border_height);
+    border_height = clamp_border_height(engine, style, border_height,
+        containing_block.height, height_decorations, false);
 
     // A horizontal flex container whose final height (explicit or min/max-clamped) exceeds its
     // used content centers its cross axis (align-items center/end) like Chrome, instead of
@@ -598,8 +639,8 @@ aether_layout_box_s* layout_element(
     if (style.position == AETHER_POSITION_RELATIVE) {
         const float left = resolve(engine, style.inset.left, containing_block.width, style);
         const float right = resolve(engine, style.inset.right, containing_block.width, style);
-        const float top = resolve(engine, style.inset.top, containing_block.height, style);
-        const float bottom = resolve(engine, style.inset.bottom, containing_block.height, style);
+        const float top = resolve_semantic_height(engine, style.inset.top, containing_height, style);
+        const float bottom = resolve_semantic_height(engine, style.inset.bottom, containing_height, style);
         const float dx = std::isfinite(left) ? left : (std::isfinite(right) ? -right : 0.f);
         const float dy = std::isfinite(top) ? top : (std::isfinite(bottom) ? -bottom : 0.f);
         box->own_relative_dx = dx;
@@ -644,6 +685,7 @@ float layout_flow_children(
     aether_layout_box_s* parent_box,
     aether_node_s* parent,
     aether_rectf content,
+    percentage_height_s containing_height,
     const aether_computed_style_t& parent_style,
     aether_layout_result_s* result)
 {
@@ -661,7 +703,7 @@ float layout_flow_children(
         }
         const float used = layout_inline_items(engine, styles, parent_box, inline_items,
                                                content.x, cursor_y, content.width,
-                                               parent_style, result);
+                                               content.height, containing_height, parent_style, result);
         cursor_y += used;
         // A non-empty inline line separates adjacent block margins. Whitespace
         // alone has zero height and must not prevent the normal CSS collapse.
@@ -678,9 +720,9 @@ float layout_flow_children(
             const auto child_style = get_style(styles, node);
                 flush_inline();
                 auto* child_box = layout_element(engine, styles, node,
-                                                 {content.x, cursor_y, content.width, content.height},
+                                                 {content.x, cursor_y, content.width, content.height}, containing_height,
                                                  cursor_y, true,
-                                                 0, false, 0, false, false, result);
+                                                 0, false, 0, forced_height_kind_e::none, false, result);
                 // A pending margin exists only when no in-flow separator has been
                 // laid out since the preceding block. Inline content flushes it, so
                 // the remaining siblings are adjoining at this point.
@@ -723,6 +765,7 @@ float layout_inline_items(
     aether_layout_box_s* parent_box,
     const std::vector<inline_item_s>& items,
     float start_x, float start_y, float available_width,
+    float available_height, percentage_height_s containing_height,
     const aether_computed_style_t& parent_style,
     aether_layout_result_s* result)
 {
@@ -775,9 +818,9 @@ float layout_inline_items(
 
         if (item.is_atomic) {
             auto* provisional = layout_element(engine, styles, item.element,
-                                              {start_x, cursor_y, available_width, result->viewport.height},
+                                              {start_x, cursor_y, available_width, available_height}, containing_height,
                                               cursor_y, false,
-                                              0, false, 0, false, true, result);
+                                              0, false, 0, forced_height_kind_e::none, true, result);
             float w = provisional->margin_box.width;
             if (cursor_x > start_x && cursor_x + w > start_x + available_width) {
                 const float old_y = normal_flow_margin_box(provisional).y;
@@ -1301,9 +1344,9 @@ AETHER_API aether_status_t aether_layout_layout(
 
     const int32_t viewport_overflow[2] = {result->viewport_overflow_x, result->viewport_overflow_y};
     auto* root_box = layout_element(engine, styles, root_el,
-                                    {0, 0, viewport_width, viewport_height},
+                                    {0, 0, viewport_width, viewport_height}, viewport_height,
                                     0, true,
-                                    0, false, 0, false, false, result,
+                                    0, false, 0, forced_height_kind_e::none, false, result,
                                     viewport_overflow);
     result->root = root_box;
     *out_result = result;

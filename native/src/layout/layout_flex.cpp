@@ -164,6 +164,7 @@ int32_t flex_cross_alignment(const aether_computed_style_t& container,
 struct resolved_flex_children_s {
     std::vector<aether_layout_box_s*> boxes;
     aether_flex_resolve_result_s resolution;
+    std::vector<bool> definite_main_heights;
 };
 
 static bool flex_length_is_definite(aether_css_length length, bool main_size_is_definite) {
@@ -248,6 +249,7 @@ static resolved_flex_children_s resolve_flex_children(
     aether_style_map_s* styles,
     const std::vector<aether_node_s*>& children,
     const aether_rectf& content,
+    percentage_height_s containing_height,
     const aether_computed_style_t& parent_style,
     bool horizontal, bool main_size_is_definite, bool cross_size_is_definite,
     aether_layout_result_s* result) {
@@ -274,10 +276,11 @@ static resolved_flex_children_s resolve_flex_children(
                 (horizontal ? content.height : content.width) -
                 (horizontal ? aether_thicknessf_vertical(margin) : aether_thicknessf_horizontal(margin)));
             base_boxes.push_back(layout_element(engine, styles, child,
-                {content.x, content.y, content.width, content.height}, content.y,
+                {content.x, content.y, content.width, content.height}, containing_height, content.y,
                 false,
                 horizontal ? 0.f : forced_border_cross, stretch_base_cross && !horizontal,
-                horizontal ? forced_border_cross : 0.f, stretch_base_cross && horizontal,
+                horizontal ? forced_border_cross : 0.f, stretch_base_cross && horizontal
+                    ? forced_height_kind_e::definite : forced_height_kind_e::none,
                 true, result));
         }
     }
@@ -298,6 +301,20 @@ static resolved_flex_children_s resolve_flex_children(
             child_style.flex_basis.length);
         item.basis.length_is_definite = child_style.flex_basis.kind == AETHER_FLEX_BASIS_LENGTH &&
             flex_length_is_definite(child_style.flex_basis.length, main_size_is_definite);
+        // Follow the used basis: auto can transfer a definite specified main size;
+        // content and unresolved percentage bases remain content-dependent.
+        const auto semantic_main_is_definite = [&](aether_css_length length, float resolved) {
+            return std::isfinite(resolved) &&
+                (!length_depends_on_percentage(length) || horizontal || containing_height.has_value());
+        };
+        const bool used_basis_is_definite =
+            (item.basis.kind == AETHER_FLEX_BASIS_LENGTH &&
+             semantic_main_is_definite(child_style.flex_basis.length, item.basis.resolved_length)) ||
+            (item.basis.kind == AETHER_FLEX_BASIS_AUTO &&
+             semantic_main_is_definite(horizontal ? child_style.width : child_style.height,
+                                       item.basis.specified_main_size));
+        output.definite_main_heights.push_back(!horizontal &&
+            (containing_height.has_value() || used_basis_is_definite));
         item.min_main_size = resolve_flex_main_border_size(
             engine, child_style, content, horizontal, main_size_is_definite,
             horizontal ? child_style.min_width : child_style.min_height);
@@ -353,11 +370,12 @@ static resolved_flex_children_s resolve_flex_children(
     for (size_t index = 0; index < children.size(); ++index) {
         const float target_main_size = output.resolution.items[index].target_main_size;
         output.boxes.push_back(layout_element(engine, styles, children[index],
-            {content.x, content.y, content.width, content.height}, content.y,
+            {content.x, content.y, content.width, content.height}, containing_height, content.y,
             false,
             horizontal ? target_main_size : 0.f, horizontal,
             horizontal ? 0.f : target_main_size,
-            !horizontal,
+            horizontal ? forced_height_kind_e::none : output.definite_main_heights[index]
+                ? forced_height_kind_e::definite : forced_height_kind_e::indefinite,
             true, result));
     }
     return output;
@@ -391,6 +409,7 @@ static float resolve_flex_line_cross_size(
     resolved_flex_children_s& resolved,
     const aether_flex_line_s& line,
     const aether_rectf& content,
+    percentage_height_s containing_height,
     const aether_computed_style_t& container_style,
     bool horizontal, bool cross_size_is_definite, bool is_single_line,
     aether_layout_result_s* result) {
@@ -417,10 +436,12 @@ static float resolve_flex_line_cross_size(
             delete previous;
 
             resolved.boxes[index] = layout_element(engine, styles, children[index],
-                {content.x, content.y, content.width, content.height}, content.y,
+                {content.x, content.y, content.width, content.height}, containing_height, content.y,
                 false,
                 horizontal ? main_size : forced_border_cross_size, true,
-                horizontal ? forced_border_cross_size : main_size, true,
+                horizontal ? forced_border_cross_size : main_size,
+                horizontal || resolved.definite_main_heights[index]
+                    ? forced_height_kind_e::definite : forced_height_kind_e::indefinite,
                 true, result);
 
             if (!(is_single_line && cross_size_is_definite)) {
@@ -473,6 +494,7 @@ float layout_flex_children(
     aether_layout_box_s* parent_box,
     aether_node_s* parent,
     aether_rectf content,
+    percentage_height_s containing_height,
     const aether_computed_style_t& style,
     bool has_definite_height,
     aether_layout_result_s* result)
@@ -505,7 +527,7 @@ float layout_flex_children(
                     : AETHER_TEXT_ALIGN_START;
         }
         float used_height = layout_inline_items(engine, styles, parent_box, inline_items,
-                                                content.x, content.y, content.width, inline_style, result);
+                                                content.x, content.y, content.width, content.height, containing_height, inline_style, result);
         if (has_definite_height) {
             float vertical_free = std::max(0.f, content.height - used_height);
             float dy = 0.f;
@@ -526,7 +548,7 @@ float layout_flex_children(
     const bool horizontal = style.flex_direction != AETHER_FLEX_DIRECTION_COLUMN;
     const bool main_size_is_definite = horizontal || has_definite_height;
     const bool cross_size_is_definite = horizontal ? has_definite_height : true;
-    auto resolved = resolve_flex_children(engine, styles, children, content, style,
+    auto resolved = resolve_flex_children(engine, styles, children, content, containing_height, style,
                                           horizontal, main_size_is_definite, cross_size_is_definite, result);
     const float gap = std::max(0.f, style.gap);
 
@@ -549,7 +571,7 @@ float layout_flex_children(
             }
 
             const float cross_extent = resolve_flex_line_cross_size(
-                engine, styles, children, resolved, line, content, style,
+                engine, styles, children, resolved, line, content, containing_height, style,
                 false, cross_size_is_definite, resolved.resolution.lines.size() == 1, result);
             for (const size_t index : line.item_indices) {
                 auto* child_box = resolved.boxes[index];
@@ -589,7 +611,7 @@ float layout_flex_children(
         }
 
         const float cross_extent = resolve_flex_line_cross_size(
-            engine, styles, children, resolved, line, content, style,
+            engine, styles, children, resolved, line, content, containing_height, style,
             true, cross_size_is_definite, resolved.resolution.lines.size() == 1, result);
         for (const size_t index : line.item_indices) {
             auto* child_box = resolved.boxes[index];

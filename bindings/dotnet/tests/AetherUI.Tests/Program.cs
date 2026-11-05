@@ -21,6 +21,7 @@ internal static class Program
 {
     private static readonly (string Name, Action Test)[] Tests =
     [
+        ("Relative percentages use the initial containing block height", RelativePercentageTests.Run),
         ("Prepared fixed context follows static and transition boundaries", FixedViewportContextBoundaries),
         ("Visibility retains layout and rebuilds contextual paint", VisibilityRetainsLayoutAndContext),
         ("Hidden focus rejects input and Tab finds a visible child", HiddenFocusRejectsInput),

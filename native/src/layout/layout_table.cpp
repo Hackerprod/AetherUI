@@ -88,6 +88,7 @@ float layout_table_children(
     aether_layout_box_s* parent_box,
     aether_node_s* table,
     aether_rectf content,
+    percentage_height_s containing_height,
     aether_layout_result_s* result)
 {
     std::vector<table_row_s> rows;
@@ -111,9 +112,9 @@ float layout_table_children(
         for (size_t column = 0; column < row.cells.size(); ++column) {
             const float column_width = column_widths[column];
             auto* cell_box = layout_element(engine, styles, row.cells[column],
-                                            {cursor_x, cursor_y, column_width, content.height},
+                                            {cursor_x, cursor_y, column_width, content.height}, containing_height,
                                             cursor_y, true,
-                                            0.f, false, 0.f, false, true, result);
+                                            0.f, false, 0.f, forced_height_kind_e::none, true, result);
             row_height = std::max(row_height, cell_box->margin_box.height);
             row_box->add_child(cell_box);
             cursor_x += column_width;
