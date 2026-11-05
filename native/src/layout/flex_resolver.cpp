@@ -12,14 +12,14 @@ float non_negative(float value) {
     return std::isfinite(value) ? std::max(0.f, value) : 0.f;
 }
 
-float clamp_main_size(float value, const aether_flex_item_input_s& item) {
-    const float minimum = std::isfinite(item.min_main_size)
+double clamp_main_size(double value, const aether_flex_item_input_s& item) {
+    const double minimum = std::isfinite(item.min_main_size)
         ? non_negative(item.min_main_size)
         : aether_flex_resolve_automatic_minimum(item.automatic_minimum);
-    const float maximum = std::isfinite(item.max_main_size)
-        ? std::max(minimum, item.max_main_size)
+    const double maximum = std::isfinite(item.max_main_size)
+        ? std::max(minimum, static_cast<double>(item.max_main_size))
         : std::numeric_limits<float>::infinity();
-    return std::clamp(std::max(0.f, value), minimum, maximum);
+    return std::clamp(std::max(0.0, value), minimum, maximum);
 }
 
 float outer_size(float main_size, const aether_flex_item_input_s& item) {
@@ -29,15 +29,20 @@ float outer_size(float main_size, const aether_flex_item_input_s& item) {
     return main_size + (std::isfinite(item.outer_main_size) ? item.outer_main_size : 0.f);
 }
 
-float line_outer_size(const std::vector<aether_flex_item_input_s>& items,
-                      const std::vector<aether_flex_item_result_s>& results,
-                      const aether_flex_line_s& line, bool use_target, float gap) {
-    float total = gap * static_cast<float>(line.item_indices.empty() ? 0 : line.item_indices.size() - 1);
+double line_free_space(const std::vector<aether_flex_item_input_s>& items,
+                       const std::vector<aether_flex_item_result_s>& results,
+                       const aether_flex_line_s& line, float available_main_size, float gap) {
+    double free_space = available_main_size;
+    free_space -= static_cast<double>(gap) *
+        static_cast<double>(line.item_indices.empty() ? 0 : line.item_indices.size() - 1);
     for (const size_t index : line.item_indices) {
         const auto& result = results[index];
-        total += outer_size(use_target ? result.target_main_size : result.flex_base_size, items[index]);
+        // Both initial and remaining space use the frozen target, or the
+        // original base for an active item. Margins remain signed.
+        free_space -= result.frozen ? result.target_main_size : result.flex_base_size;
+        if (std::isfinite(items[index].outer_main_size)) free_space -= items[index].outer_main_size;
     }
-    return total;
+    return free_space;
 }
 
 void resolve_line(const std::vector<aether_flex_item_input_s>& items,
@@ -50,62 +55,69 @@ void resolve_line(const std::vector<aether_flex_item_input_s>& items,
         auto& result = results[index];
         result.target_main_size = result.flex_base_size;
         const float factor = using_grow ? items[index].flex_grow
-                                        : items[index].flex_shrink * result.flex_base_size;
+                                        : items[index].flex_shrink;
         // Flexbox §9.7's initial freeze applies the hypothetical size, not the
-        // flex base. This matters for flex:1 (0% base) whose automatic minimum
-        // is positive: in a negative-free-space line it is inflexible because
-        // scaled shrink is zero, but it must retain that minimum.
+        // flex base. A zero base with a positive automatic minimum freezes
+        // under shrink because the base is below the hypothetical size, not
+        // because its scaled shrink weight is zero.
         const bool violates_hypothetical = using_grow
             ? result.flex_base_size > result.hypothetical_main_size + epsilon
             : result.flex_base_size < result.hypothetical_main_size - epsilon;
-        result.frozen = factor <= epsilon || violates_hypothetical;
+        result.frozen = factor <= 0.f || violates_hypothetical;
         if (result.frozen) result.target_main_size = result.hypothetical_main_size;
     }
 
-    const float initial_free_space = available_main_size -
-        line_outer_size(items, results, line, false, gap);
+    // This budget is measured after the initial freeze and never changes as
+    // later min/max violations freeze more items.
+    const double initial_free_space = line_free_space(items, results, line, available_main_size, gap);
+    std::vector<double> violations(line.item_indices.size(), 0.0);
 
     while (true) {
-        float remaining_free_space = available_main_size;
-        remaining_free_space -= gap * static_cast<float>(line.item_indices.empty() ? 0 : line.item_indices.size() - 1);
-        float factor_sum = 0.f;
-        int unfrozen_count = 0;
+        double remaining_free_space = line_free_space(items, results, line, available_main_size, gap);
+        double factor_sum = 0.0;
+        double weight_sum = 0.0;
+        size_t unfrozen_count = 0;
         for (const size_t index : line.item_indices) {
             const auto& item = items[index];
             const auto& result = results[index];
-            remaining_free_space -= outer_size(result.frozen ? result.target_main_size : result.flex_base_size, item);
             if (!result.frozen) {
                 ++unfrozen_count;
-                factor_sum += using_grow ? item.flex_grow : item.flex_shrink * result.flex_base_size;
+                const double factor = using_grow ? item.flex_grow : item.flex_shrink;
+                factor_sum += factor;
+                weight_sum += using_grow ? factor : factor * result.flex_base_size;
             }
         }
         if (unfrozen_count == 0) return;
 
-        if (using_grow && factor_sum < 1.f) {
-            const float scaled_initial_free_space = initial_free_space * factor_sum;
+        // The partial budget uses unscaled factors in BOTH modes. A zero-base
+        // shrink item still contributes its factor, even though its weight is zero.
+        if (factor_sum < 1.0) {
+            const double scaled_initial_free_space = initial_free_space * factor_sum;
             if (std::fabs(scaled_initial_free_space) < std::fabs(remaining_free_space)) {
                 remaining_free_space = scaled_initial_free_space;
             }
         }
 
-        if (factor_sum <= epsilon) {
-            for (const size_t index : line.item_indices) results[index].frozen = true;
-            return;
-        }
-
-        float total_violation = 0.f;
-        std::vector<float> unclamped(items.size(), 0.f);
-        for (const size_t index : line.item_indices) {
+        double total_violation = 0.0;
+        for (size_t position = 0; position < line.item_indices.size(); ++position) {
+            const size_t index = line.item_indices[position];
             auto& result = results[index];
             if (result.frozen) continue;
             const auto& item = items[index];
-            const float factor = using_grow ? item.flex_grow : item.flex_shrink * result.flex_base_size;
-            const float candidate = using_grow
-                ? result.flex_base_size + remaining_free_space * factor / factor_sum
-                : result.flex_base_size - std::fabs(remaining_free_space) * factor / factor_sum;
-            unclamped[index] = candidate;
-            result.target_main_size = clamp_main_size(candidate, item);
-            total_violation += result.target_main_size - candidate;
+            const double weight = using_grow ? static_cast<double>(item.flex_grow)
+                : static_cast<double>(item.flex_shrink) * result.flex_base_size;
+            // Zero weights leave the original base intact, then still clamp.
+            // Factors/weights are not pixel distances: no geometric epsilon.
+            const double share = weight_sum > 0.0 ? weight / weight_sum : 0.0;
+            const double candidate = using_grow
+                ? result.flex_base_size + remaining_free_space * share
+                : result.flex_base_size - std::fabs(remaining_free_space) * share;
+            const double clamped = clamp_main_size(candidate, item);
+            // Measure only constraint violations, never float rounding when
+            // publishing the target. Rounding alone must not freeze an item.
+            violations[position] = clamped - candidate;
+            result.target_main_size = static_cast<float>(clamped);
+            total_violation += violations[position];
         }
 
         if (std::fabs(total_violation) <= epsilon) {
@@ -114,10 +126,10 @@ void resolve_line(const std::vector<aether_flex_item_input_s>& items,
         }
 
         bool froze_any = false;
-        for (const size_t index : line.item_indices) {
-            auto& result = results[index];
+        for (size_t position = 0; position < line.item_indices.size(); ++position) {
+            auto& result = results[line.item_indices[position]];
             if (result.frozen) continue;
-            const float violation = result.target_main_size - unclamped[index];
+            const double violation = violations[position];
             if ((total_violation > 0.f && violation > epsilon) ||
                 (total_violation < 0.f && violation < -epsilon)) {
                 result.frozen = true;
@@ -175,7 +187,7 @@ aether_flex_resolve_result_s aether_resolve_flexible_lengths(
     for (size_t index = 0; index < items.size(); ++index) {
         auto& result = output.items[index];
         result.flex_base_size = aether_flex_resolve_base_size(items[index].basis);
-        result.hypothetical_main_size = clamp_main_size(result.flex_base_size, items[index]);
+        result.hypothetical_main_size = static_cast<float>(clamp_main_size(result.flex_base_size, items[index]));
         result.target_main_size = result.flex_base_size;
     }
 
