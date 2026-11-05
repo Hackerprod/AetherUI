@@ -302,6 +302,29 @@ if(AETHERUI_BUILD_TESTS)
     target_link_libraries(aether_generated_pseudo_updates_test PRIVATE AetherUI::Core)
     add_test(NAME aether.generated-pseudo-updates COMMAND aether_generated_pseudo_updates_test)
 
+    # Private malformed/synthetic-node boundary checks, with no ABI extension.
+    add_executable(aether_selector_dom_boundary_test tests/test_selector_dom_boundary.cpp
+        src/style_runtime/selector_parser.cpp src/style_runtime/selector_matcher.cpp)
+    target_include_directories(aether_selector_dom_boundary_test PRIVATE include src/style_runtime)
+    add_test(NAME aether.selector-dom-boundary COMMAND aether_selector_dom_boundary_test)
+
+    # Generated content must never change the logical DOM used by selectors.
+    add_executable(aether_generated_selector_metamorphic_test tests/test_generated_selector_metamorphic.cpp)
+    target_link_libraries(aether_generated_selector_metamorphic_test PRIVATE AetherUI::Core)
+    add_test(NAME aether.generated-selector-metamorphic COMMAND aether_generated_selector_metamorphic_test)
+
+    add_executable(aether_generated_selector_origin_test tests/test_generated_selector_origin.cpp)
+    target_link_libraries(aether_generated_selector_origin_test PRIVATE AetherUI::Core)
+    add_test(NAME aether.generated-selector-origin COMMAND aether_generated_selector_origin_test)
+
+    add_executable(aether_generated_selector_lifecycle_test tests/test_generated_selector_lifecycle.cpp)
+    target_link_libraries(aether_generated_selector_lifecycle_test PRIVATE AetherUI::Core)
+    add_test(NAME aether.generated-selector-lifecycle COMMAND aether_generated_selector_lifecycle_test)
+
+    add_executable(aether_generated_selector_display_list_test tests/test_generated_selector_display_list.cpp)
+    target_link_libraries(aether_generated_selector_display_list_test PRIVATE AetherUI::Core)
+    add_test(NAME aether.generated-selector-display-list COMMAND aether_generated_selector_display_list_test)
+
     add_executable(aether_visibility_test tests/test_visibility.cpp)
     target_link_libraries(aether_visibility_test PRIVATE AetherUI::Core)
     add_test(NAME aether.visibility COMMAND aether_visibility_test)

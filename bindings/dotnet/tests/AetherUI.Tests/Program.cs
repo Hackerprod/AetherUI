@@ -70,6 +70,7 @@ internal static class Program
         ("Native layout positions absolute children and anonymous flex text", NativeLayoutPositionsAbsoluteChildrenAndAnonymousFlexText),
         ("Native text alignment preserves CSS semantics and control overrides", NativeTextAlignmentPreservesSemanticsAndControlOverrides),
         ("Native runtime renders generated pseudo-elements", NativeRuntimeRendersGeneratedPseudoElements),
+        ("Native runtime renders structural pseudo-elements", NativeRuntimeRendersStructuralPseudoElements),
         ("Native CSS typography, side borders, and column flex grow", NativeCssTypographySideBordersAndColumnFlexGrow),
         ("Native root scrolls overflowing content", NativeRootScrollsOverflowingContent),
         ("Native visible overflow does not become a scroll container", NativeVisibleOverflowDoesNotBecomeScrollContainer),
@@ -3183,6 +3184,32 @@ internal static class Program
         var temperature = commands.Single(command => command.Text == "24");
         var degree = commands.Single(command => command.Text == "\u00B0");
         Assert.True(degree.Rectangle.X >= temperature.Rectangle.Right - 1f);
+    }
+
+    private static void NativeRuntimeRendersStructuralPseudoElements()
+    {
+        const string markup = """
+            <style>
+              body { margin: 0; }
+              .weather::before { content: "["; }
+              .weather::after { content: "]"; }
+              #temperature { font-size: 23px; }
+              #temperature:first-child::before { content: "B"; }
+              #temperature:last-child::after { content: "°"; }
+            </style>
+            <body><div class="weather"><div id="temperature">24</div></div></body>
+            """;
+        using var renderer = new RecordingRenderer();
+        using var host = new UiDocumentHost(new RawMarkupComponent(markup), new ApproximateTextMeasurer(), renderer, new UiHostOptions());
+        for (var pass = 0; pass < 3; pass++)
+        {
+            host.SetViewport(640 + pass, 480, 1);
+            host.Render();
+            var text = renderer.LastDisplayList?.Commands.OfType<DrawTextCommand>().Select(command => command.Text).ToArray()
+                ?? throw new InvalidOperationException("Native renderer did not produce text commands.");
+            foreach (var expected in new[] { "[", "B", "24", "\u00B0", "]" })
+                Assert.Equal(1, text.Count(value => value == expected));
+        }
     }
 
     private static void NativeCssTypographySideBordersAndColumnFlexGrow()

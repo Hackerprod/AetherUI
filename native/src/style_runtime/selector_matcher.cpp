@@ -2,19 +2,39 @@
 #include "../dom/dom_types.h"
 #include <cctype>
 
-static aether_node_s* selector_subject(aether_node_s* node) {
-    return node && node->is_generated && node->style_origin ? node->style_origin : node;
+// Layout and paint share storage with generated content, but selector traversal
+// sees only the DOM. Never turn a generated traversal candidate into its host.
+static bool is_selector_dom_element(const aether_node_s* node) {
+    return node && node->type == AETHER_NODE_ELEMENT && !node->is_generated &&
+           !node->anonymous_flex_owner;
 }
 
-static aether_node_s* selector_parent(aether_node_s* node) {
-    node = selector_subject(node);
-    return node ? node->parent : nullptr;
+// Normalize only the styled subject at selector_match's entry. The cascade
+// independently selects before/after rules; their selector prefix uses the
+// host's current identity and position, not the generated node's copied data.
+static aether_node_s* selector_subject(aether_node_s* node) {
+    if (!node || node->anonymous_flex_owner) return nullptr;
+    if (node->is_generated) {
+        if (node->type != AETHER_NODE_ELEMENT ||
+            (node->pseudo_element != aether_pseudo_element_t::before &&
+             node->pseudo_element != aether_pseudo_element_t::after) ||
+            node->style_origin == node)
+            return nullptr;
+        node = node->style_origin;
+    }
+    return is_selector_dom_element(node) ? node : nullptr;
+}
+
+// The document parent is retained for root/child-position semantics, but cannot
+// itself match an element selector. Generated/layout-only parents are a boundary.
+static aether_node_s* dom_parent(aether_node_s* node) {
+    auto* parent = node ? node->parent : nullptr;
+    return parent && !parent->is_generated && !parent->anonymous_flex_owner ? parent : nullptr;
 }
 
 /* ── Internal helpers for DOM navigation ──────────────────────────── */
 
 static bool has_class(aether_node_s* node, const std::string& name) {
-    node = selector_subject(node);
     auto it = node->attributes.find("class");
     if (it == node->attributes.end()) return false;
     const auto& classes = it->second;
@@ -29,74 +49,60 @@ static bool has_class(aether_node_s* node, const std::string& name) {
     return false;
 }
 
-static const std::string empty_string;
-
-static const std::string& get_attribute(aether_node_s* node, const std::string& name) {
-    node = selector_subject(node);
-    auto it = node->attributes.find(name);
-    return (it != node->attributes.end()) ? it->second : empty_string;
-}
-
-static bool is_element(aether_node_s* node) {
-    return node && node->type == AETHER_NODE_ELEMENT;
-}
-
 // :empty considers direct DOM elements and nonempty text (including whitespace),
 // not comments or generated content. Pseudos share children with DOM nodes, so
 // skip them before testing their ELEMENT type, even during pseudo regeneration.
 static bool is_empty_for_selector(aether_node_s* node) {
-    node = selector_subject(node);
     if (!node) return true;
     for (const auto* child : node->children) {
-        if (child->is_generated) continue;
-        if (child->type == AETHER_NODE_ELEMENT ||
+        if (child->is_generated || child->anonymous_flex_owner) continue;
+        if (is_selector_dom_element(child) ||
             (child->type == AETHER_NODE_TEXT && !child->text.empty()))
             return false;
     }
     return true;
 }
 
-static int element_sibling_index(aether_node_s* node) {
-    node = selector_subject(node);
-    auto* parent = node ? node->parent : nullptr;
-    if (!parent) return 0;
+static int dom_element_sibling_index(aether_node_s* node) {
+    if (!is_selector_dom_element(node)) return -1;
+    if (!node->parent) return 0; // Preserve existing disconnected-element behavior.
+    auto* parent = dom_parent(node);
+    if (!parent) return -1;
     int element_index = 0;
     for (auto* sibling : parent->children) {
-        if (!is_element(sibling)) continue;
+        if (!is_selector_dom_element(sibling)) continue;
         if (sibling == node) return element_index;
         ++element_index;
     }
     return -1;
 }
 
-static int element_child_count(aether_node_s* node) {
-    node = selector_subject(node);
+static int dom_element_child_count(aether_node_s* node) {
     if (!node) return 0;
     int count = 0;
     for (auto* child : node->children)
-        if (is_element(child)) ++count;
+        if (is_selector_dom_element(child)) ++count;
     return count;
 }
 
-static bool is_last_element_child(aether_node_s* node) {
-    node = selector_subject(node);
-    auto* parent = node ? node->parent : nullptr;
-    if (!parent) return true;
+static bool is_last_dom_element_child(aether_node_s* node) {
+    if (!node->parent) return true;
+    auto* parent = dom_parent(node);
+    if (!parent) return false;
     for (auto it = parent->children.rbegin(); it != parent->children.rend(); ++it) {
-        if (!is_element(*it)) continue;
+        if (!is_selector_dom_element(*it)) continue;
         return *it == node;
     }
     return false;
 }
 
-static aether_node_s* previous_element_sibling(aether_node_s* node) {
-    node = selector_subject(node);
-    auto* parent = node ? node->parent : nullptr;
+static aether_node_s* dom_previous_element_sibling(aether_node_s* node) {
+    auto* parent = dom_parent(node);
     if (!parent) return nullptr;
     aether_node_s* prev = nullptr;
     for (auto* child : parent->children) {
         if (child == node) return prev;
-        if (is_element(child)) prev = child;
+        if (is_selector_dom_element(child)) prev = child;
     }
     return nullptr;
 }
@@ -144,7 +150,6 @@ static bool ci_contains(std::string_view hay, std::string_view needle) {
 }
 
 static bool matches_attribute(const attribute_selector_s& attr, aether_node_s* node) {
-    node = selector_subject(node);
     auto it = node->attributes.find(attr.name);
     if (it == node->attributes.end()) return false;
     if (attr.op == ATTR_EXISTS) return true;
@@ -207,7 +212,6 @@ static bool matches_attribute(const attribute_selector_s& attr, aether_node_s* n
 /* ── Pseudo matching ──────────────────────────────────────────────── */
 
 static bool matches_pseudo(const pseudo_selector_s& pseudo, aether_node_s* node) {
-    node = selector_subject(node);
     switch (pseudo.kind) {
     case PSEUDO_REQUIRED_STATE:
         return (static_cast<uint32_t>(node->state) & static_cast<uint32_t>(pseudo.state)) ==
@@ -222,13 +226,16 @@ static bool matches_pseudo(const pseudo_selector_s& pseudo, aether_node_s* node)
     case PSEUDO_EMPTY:
         return is_empty_for_selector(node);
     case PSEUDO_FIRST_CHILD:
-        return element_sibling_index(node) == 0;
+        return dom_element_sibling_index(node) == 0;
     case PSEUDO_LAST_CHILD:
-        return is_last_element_child(node);
+        return is_last_dom_element_child(node);
     case PSEUDO_ONLY_CHILD:
-        return node->parent != nullptr && element_child_count(node->parent) == 1;
-    case PSEUDO_NTH_CHILD:
-        return pseudo.nth.matches(element_sibling_index(node) + 1);
+        return dom_parent(node) && dom_element_sibling_index(node) == 0 &&
+               dom_element_child_count(dom_parent(node)) == 1;
+    case PSEUDO_NTH_CHILD: {
+        const int index = dom_element_sibling_index(node);
+        return index >= 0 && pseudo.nth.matches(index + 1);
+    }
     case PSEUDO_IS:
     case PSEUDO_WHERE:
         if (!pseudo.nested) return false;
@@ -250,7 +257,6 @@ static bool matches_pseudo(const pseudo_selector_s& pseudo, aether_node_s* node)
 /* ── Compound matching ────────────────────────────────────────────── */
 
 static bool matches_compound(const compound_selector_s& compound, aether_node_s* node) {
-    node = selector_subject(node);
     if (!compound.type_name.empty()) {
         if (node->type != AETHER_NODE_ELEMENT) return false;
         if (!ci_equals(std::string_view(node->tag_name), std::string_view(compound.type_name)))
@@ -275,7 +281,7 @@ static bool match_step(const compiled_selector_s& sel, int step_index, aether_no
                            aether_node_s* relative_anchor) {
     if (step_index < 0 || step_index >= static_cast<int>(sel.steps.size()))
         return false;
-    if (!is_element(selector_subject(node)))
+    if (!is_selector_dom_element(node))
         return false;
     auto& step = sel.steps[step_index];
     if (!matches_compound(step.compound, node))
@@ -284,18 +290,18 @@ static bool match_step(const compiled_selector_s& sel, int step_index, aether_no
         if (!relative_anchor) return true;
         // The implicit descendant edge of :has() starts at the leftmost
         // compound's parent: the subject itself cannot satisfy this edge.
-        for (auto* parent = selector_parent(node); parent; parent = selector_parent(parent))
+        for (auto* parent = dom_parent(node); parent; parent = dom_parent(parent))
             if (parent == relative_anchor) return true;
         return false;
     }
     int next = step_index + 1;
     switch (step.relation_to_next) {
     case COMB_CHILD:
-        return selector_parent(node) && match_step(sel, next, selector_parent(node), relative_anchor);
+        return match_step(sel, next, dom_parent(node), relative_anchor);
     case COMB_DESCENDANT:
-        return match_ancestor(sel, next, selector_parent(node), relative_anchor);
+        return match_ancestor(sel, next, dom_parent(node), relative_anchor);
     case COMB_ADJACENT_SIBLING: {
-        auto* prev = previous_element_sibling(node);
+        auto* prev = dom_previous_element_sibling(node);
         return prev && match_step(sel, next, prev, relative_anchor);
     }
     case COMB_GENERAL_SIBLING:
@@ -312,7 +318,7 @@ static bool match_ancestor(const compiled_selector_s& sel, int step_index, aethe
     while (node) {
         if (match_step(sel, step_index, node, relative_anchor))
             return true;
-        node = node->parent;
+        node = dom_parent(node);
     }
     return false;
 }
@@ -321,13 +327,13 @@ static bool match_ancestor(const compiled_selector_s& sel, int step_index, aethe
 
 static bool match_previous_siblings(const compiled_selector_s& sel, int step_index, aether_node_s* node,
                            aether_node_s* relative_anchor) {
-    node = selector_subject(node);
-    auto* parent = node ? node->parent : nullptr;
+    auto* parent = dom_parent(node);
     if (!parent) return false;
+    bool matched = false;
     for (auto* sibling : parent->children) {
-        if (sibling == node) return false;
-        if (!is_element(sibling)) continue;
-        if (match_step(sel, step_index, sibling, relative_anchor)) return true;
+        if (sibling == node) return matched;
+        if (!is_selector_dom_element(sibling)) continue;
+        if (!matched && match_step(sel, step_index, sibling, relative_anchor)) matched = true;
     }
     return false;
 }
@@ -338,6 +344,10 @@ static bool has_matching_descendant(aether_node_s* node,
                                     const std::vector<compiled_selector_s>& selectors,
                                     aether_node_s* relative_anchor) {
     for (auto* child : node->children) {
+        // Prune the whole generated subtree before matching or recursing. Its
+        // text children need not carry is_generated, and stale pseudos can still
+        // exist while an ancestor is being resolved earlier in the same pass.
+        if (child->is_generated || child->anonymous_flex_owner) continue;
         for (auto& sel : selectors)
             if (match_step(sel, 0, child, relative_anchor)) return true;
         if (has_matching_descendant(child, selectors, relative_anchor)) return true;
@@ -348,6 +358,7 @@ static bool has_matching_descendant(aether_node_s* node,
 /* ── Public API ───────────────────────────────────────────────────── */
 
 bool selector_match(const compiled_selector_s& sel, aether_node_s* element) {
+    element = selector_subject(element);
     if (!element || sel.steps.empty()) return false;
     return match_step(sel, 0, element);
 }

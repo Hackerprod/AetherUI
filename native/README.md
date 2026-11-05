@@ -207,6 +207,37 @@ across repeated passes, and append/remove/move transitions. `aether.selector-emp
 adds a private fixture for zero-length text, evaluated by the production runtime
 without extending the ABI. Both tests keep their checks active with `NDEBUG`.
 
+## Structural selectors and generated content
+
+Structural selectors use the logical DOM, not the mixed storage consumed by
+layout and paint. `::before` and `::after`, including their entire generated
+subtrees, are excluded from element positions, sibling combinators and `:has()`
+searches. Text and comments do not occupy element indices; real elements with
+`display:none` still do. `:empty` retains its separate text-aware rule above.
+
+The subject of a pseudo-element rule is different from a traversal candidate:
+`.item:first-child::before` checks the originating element's DOM position while
+the cascade still selects the `before` rule. Only the matcher entry normalizes
+this subject. Anonymous flex wrappers are not DOM subjects and are not aliases
+for their style origins. Generated content remains available to layout/paint,
+and the public DOM ABI is unchanged.
+
+Adding/removing pseudo rules or changing their `content` must not require an
+extra resolution to stabilize ancestor `:has()` matches. After moving real
+elements, resolve a common ancestor containing all affected subjects. Updates
+are deltas: retain copied DOM style values across batches, and never retain a
+generated-node pointer across resolutions.
+
+`aether.generated-selector-metamorphic`, `aether.generated-selector-lifecycle`
+and `aether.generated-selector-origin` cover mutations, repeated resolution,
+state changes and the pseudo's own style through the public ABI, with checks
+active under `NDEBUG`. `aether.selector-dom-boundary` checks private malformed
+origins and synthetic-node guards without adding ABI entry points.
+`aether.generated-selector-display-list` checks generated text in a headless
+display list; it does not replace visual renderer or binding validation.
+This contract does not add new selector syntax or change disconnected-node
+compatibility.
+
 ## Custom properties
 
 Custom-property names use decoded CSS identifier values with exact case and Unicode
