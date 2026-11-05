@@ -9,92 +9,193 @@
 static std::string to_lower_ascii(std::string_view s) {
     std::string result(s);
     for (auto& c : result)
-        c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        if (c >= 'A' && c <= 'Z') c = static_cast<char>(c + ('a' - 'A'));
     return result;
 }
 
-static std::string unescape_string(std::string_view source) {
-    if (source.find('\\') == std::string_view::npos)
-        return std::string(source);
-    std::string result;
-    result.reserve(source.size());
-    bool escaped = false;
-    for (char c : source) {
-        if (escaped) { result += c; escaped = false; }
-        else if (c == '\\') { escaped = true; }
-        else { result += c; }
-    }
-    if (escaped) result += '\\';
-    return result;
+static bool is_css_space(char c) {
+    return c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\f';
+}
+
+static bool is_css_newline(char c) {
+    return c == '\n' || c == '\r' || c == '\f';
 }
 
 static bool is_identifier_start(char c) {
-    auto u = static_cast<unsigned char>(c);
-    return std::isalpha(u) || c == '_' || c == '-' || u >= 128;
+    const auto u = static_cast<unsigned char>(c);
+    return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+           c == '_' || c == '-' || u >= 128;
 }
 
 static bool is_identifier_part(char c) {
-    auto u = static_cast<unsigned char>(c);
-    return std::isalnum(u) || c == '_' || c == '-' || c == '\\' || u >= 128;
+    return is_identifier_start(c) || (c >= '0' && c <= '9');
 }
 
-/* ── Top-level comma splitter (matches TextSplitter.SplitTopLevel) ── */
+static int hex_digit(char c) {
+    if (c >= '0' && c <= '9') return c - '0';
+    if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+    if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+    return -1;
+}
 
-static std::vector<std::string> split_top_level(std::string_view source, char sep) {
-    std::vector<std::string> result;
-    size_t start = 0;
-    int parens = 0, brackets = 0, braces = 0;
-    char quote = '\0';
-    bool escaped = false;
+static void append_scalar(std::string* out, uint32_t value) {
+    if (!out) return;
+    if (value <= 0x7f) {
+        out->push_back(static_cast<char>(value));
+    } else if (value <= 0x7ff) {
+        out->push_back(static_cast<char>(0xc0 | (value >> 6)));
+        out->push_back(static_cast<char>(0x80 | (value & 0x3f)));
+    } else if (value <= 0xffff) {
+        out->push_back(static_cast<char>(0xe0 | (value >> 12)));
+        out->push_back(static_cast<char>(0x80 | ((value >> 6) & 0x3f)));
+        out->push_back(static_cast<char>(0x80 | (value & 0x3f)));
+    } else {
+        out->push_back(static_cast<char>(0xf0 | (value >> 18)));
+        out->push_back(static_cast<char>(0x80 | ((value >> 12) & 0x3f)));
+        out->push_back(static_cast<char>(0x80 | ((value >> 6) & 0x3f)));
+        out->push_back(static_cast<char>(0x80 | (value & 0x3f)));
+    }
+}
 
-    for (size_t i = 0; i < source.size(); ++i) {
-        char c = source[i];
-        if (quote != '\0') {
-            if (escaped) { escaped = false; }
-            else if (c == '\\') { escaped = true; }
-            else if (c == quote) { quote = '\0'; }
-            continue;
+// Preserve valid source UTF-8 exactly. On malformed input advance at least one byte,
+// so structural recovery is bounded; the semantic consumer rejects that branch.
+static bool consume_scalar(std::string_view source, size_t& index, std::string* out) {
+    if (index >= source.size()) return false;
+    const size_t start = index++;
+    const auto first = static_cast<unsigned char>(source[start]);
+    if (first < 0x80) {
+        if (first == 0) return false;
+        if (out) out->push_back(static_cast<char>(first));
+        return true;
+    }
+    const size_t length = first >= 0xc2 && first <= 0xdf ? 2 :
+                          first >= 0xe0 && first <= 0xef ? 3 :
+                          first >= 0xf0 && first <= 0xf4 ? 4 : 0;
+    if (!length || source.size() - start < length) return false;
+    uint32_t scalar = first & (0x7f >> length);
+    for (size_t n = 1; n < length; ++n) {
+        const auto byte = static_cast<unsigned char>(source[start + n]);
+        if ((byte & 0xc0) != 0x80) return false;
+        scalar = (scalar << 6) | (byte & 0x3f);
+    }
+    if ((length == 2 && scalar < 0x80) || (length == 3 && scalar < 0x800) ||
+        (length == 4 && scalar < 0x10000) || scalar > 0x10ffff ||
+        (scalar >= 0xd800 && scalar <= 0xdfff)) return false;
+    index = start + length;
+    if (out) out->append(source.substr(start, length));
+    return true;
+}
+
+static void consume_newline(std::string_view source, size_t& index) {
+    const char c = source[index++];
+    if (c == '\r' && index < source.size() && source[index] == '\n') ++index;
+}
+
+// Both decoding and boundary scanning call this primitive. Decoded punctuation
+// is name/string data and is never examined again as selector structure.
+static bool consume_escape(std::string_view source, size_t& index,
+                           std::string* out, bool in_string) {
+    ++index; // backslash
+    if (index == source.size()) {
+        if (!in_string) append_scalar(out, 0xfffd);
+        return true;
+    }
+    if (is_css_newline(source[index])) {
+        consume_newline(source, index);
+        return in_string;
+    }
+    if (hex_digit(source[index]) >= 0) {
+        uint32_t value = 0;
+        unsigned digits = 0;
+        while (index < source.size() && digits < 6 && hex_digit(source[index]) >= 0) {
+            value = (value << 4) | static_cast<unsigned>(hex_digit(source[index++]));
+            ++digits;
         }
-        if (c == '\'' || c == '"') { quote = c; continue; }
-        switch (c) {
-            case '(': ++parens; break;
-            case ')': parens = std::max(0, parens - 1); break;
-            case '[': ++brackets; break;
-            case ']': brackets = std::max(0, brackets - 1); break;
-            case '{': ++braces; break;
-            case '}': braces = std::max(0, braces - 1); break;
-            default:
-                if (c == sep && parens == 0 && brackets == 0 && braces == 0) {
-                    auto sv = source.substr(start, i - start);
-                    /* trim */
-                    while (!sv.empty() && std::isspace(static_cast<unsigned char>(sv.front()))) sv.remove_prefix(1);
-                    while (!sv.empty() && std::isspace(static_cast<unsigned char>(sv.back()))) sv.remove_suffix(1);
-                    result.emplace_back(sv);
-                    start = i + 1;
-                }
-                break;
+        if (index < source.size() && is_css_space(source[index])) {
+            if (source[index] == '\r') consume_newline(source, index);
+            else ++index;
+        }
+        if (!value || value > 0x10ffff || (value >= 0xd800 && value <= 0xdfff)) value = 0xfffd;
+        append_scalar(out, value);
+        return true;
+    }
+    return consume_scalar(source, index, out);
+}
+
+static bool consume_name(std::string_view source, size_t& index, std::string* out) {
+    const size_t start = index;
+    while (index < source.size()) {
+        if (source[index] == '\\') {
+            if (!consume_escape(source, index, out, false)) return false;
+        } else if (is_identifier_part(source[index])) {
+            if (!consume_scalar(source, index, out)) return false;
+        } else break;
+    }
+    return index > start;
+}
+
+// A bad-string newline ends the token, leaving real following delimiters visible
+// to a forgiving enclosing selector list. No later quote is invented as its end.
+static bool consume_string(std::string_view source, size_t& index, std::string* out) {
+    const char quote = source[index++];
+    bool valid = true;
+    while (index < source.size()) {
+        const char c = source[index];
+        if (c == quote) { ++index; return valid; }
+        if (is_css_newline(c)) { consume_newline(source, index); return false; }
+        if (c == '\\') {
+            if (!consume_escape(source, index, out, true)) valid = false;
+        } else if (!consume_scalar(source, index, out)) valid = false;
+    }
+    return false; // Preserve the existing rejection of unterminated attributes.
+}
+
+// Yield only unescaped structural source bytes. Lexical errors remain local to
+// the semantic parser owning a branch, not to its enclosing forgiving function.
+static bool next_structure(std::string_view source, size_t& index, size_t& offset, char& token) {
+    while (index < source.size()) {
+        const char c = source[index];
+        if (c == '\'' || c == '"') {
+            consume_string(source, index, nullptr);
+        } else if (is_identifier_part(c) || c == '\\') {
+            consume_name(source, index, nullptr);
+        } else {
+            offset = index++;
+            token = c;
+            return true;
         }
     }
-    auto sv = source.substr(start);
-    while (!sv.empty() && std::isspace(static_cast<unsigned char>(sv.front()))) sv.remove_prefix(1);
-    while (!sv.empty() && std::isspace(static_cast<unsigned char>(sv.back()))) sv.remove_suffix(1);
-    result.emplace_back(sv);
+    return false;
+}
+
+static char matching_close(char c) {
+    if (c == '(') return ')';
+    if (c == '[') return ']';
+    if (c == '{') return '}';
+    return '\0';
+}
+
+static void update_blocks(char c, std::vector<char>& blocks) {
+    if (const char closing = matching_close(c)) blocks.push_back(closing);
+    else if (!blocks.empty() && c == blocks.back()) blocks.pop_back();
+    // A mismatched close never closes another block. The semantic branch parser
+    // rejects it; scanning continues to the actual matching delimiter, if any.
+}
+
+static std::vector<std::string_view> split_top_level(std::string_view source, char sep) {
+    std::vector<std::string_view> result;
+    std::vector<char> blocks;
+    size_t start = 0, index = 0, offset = 0;
+    char token = '\0';
+    while (next_structure(source, index, offset, token)) {
+        if (token == sep && blocks.empty()) {
+            result.push_back(source.substr(start, offset - start));
+            start = index;
+        } else update_blocks(token, blocks);
+    }
+    result.push_back(source.substr(start));
     return result;
 }
-
-/* ── Trim helper ──────────────────────────────────────────────────── */
-
-static void ltrim(std::string_view& sv) {
-    while (!sv.empty() && std::isspace(static_cast<unsigned char>(sv.front())))
-        sv.remove_prefix(1);
-}
-
-static void rtrim(std::string_view& sv) {
-    while (!sv.empty() && std::isspace(static_cast<unsigned char>(sv.back())))
-        sv.remove_suffix(1);
-}
-
-static void trim(std::string_view& sv) { ltrim(sv); rtrim(sv); }
 
 /* ── Parser state ─────────────────────────────────────────────────── */
 
@@ -107,49 +208,33 @@ struct parser_s {
 
     bool eof() const { return index >= source.size(); }
     char peek() const { return eof() ? '\0' : source[index]; }
-    char advance() { return source[index++]; }
 
     bool skip_whitespace() {
         size_t start = index;
-        while (!eof() && std::isspace(static_cast<unsigned char>(source[index])))
-            ++index;
+        while (!eof() && is_css_space(source[index])) ++index;
         return index > start;
     }
 
     std::string read_identifier() {
-        size_t start = index;
-        while (!eof() && is_identifier_part(source[index]))
-            ++index;
-        return start == index ? std::string() : unescape_string(source.substr(start, index - start));
+        std::string value;
+        if (!consume_name(source, index, &value)) return {};
+        return value;
     }
 
-    std::string_view peek_balanced_body(bool trim_body = true) {
-        size_t saved = index;
-        ++index; /* skip '(' */
-        size_t body_start = index;
-        int depth = 1;
-        char quote = '\0';
-        bool escaped = false;
-        while (!eof()) {
-            char c = source[index];
-            if (quote != '\0') {
-                if (escaped) { escaped = false; }
-                else if (c == '\\') { escaped = true; }
-                else if (c == quote) { quote = '\0'; }
-            } else if (c == '\'' || c == '"') {
-                quote = c;
-            } else if (c == '(') {
-                ++depth;
-            } else if (c == ')' && --depth == 0) {
-                auto body = source.substr(body_start, index - body_start);
-                if (trim_body) trim(body);
-                ++index; /* advance past ')' */
-                return body;
+    bool peek_balanced_body(std::string_view& body) {
+        size_t cursor = index + 1, offset = 0;
+        const size_t start = cursor;
+        std::vector<char> blocks{')'};
+        char token = '\0';
+        while (next_structure(source, cursor, offset, token)) {
+            update_blocks(token, blocks);
+            if (blocks.empty()) {
+                body = source.substr(start, offset - start);
+                index = cursor;
+                return true;
             }
-            ++index;
         }
-        index = saved; /* restore on failure */
-        return {};
+        return false;
     }
 };
 
@@ -187,30 +272,11 @@ static bool try_read_attribute_operator(parser_s& p, attribute_match_operator_t&
 
 /* ── Attribute value reader ───────────────────────────────────────── */
 
-static std::string read_attribute_value(parser_s& p) {
-    if (p.eof()) return {};
-    char c = p.peek();
-    if (c == '\'' || c == '"') {
-        ++p.index;
-        size_t start = p.index;
-        bool escaped = false;
-        while (!p.eof()) {
-            c = p.peek();
-            if (escaped) { escaped = false; }
-            else if (c == '\\') { escaped = true; }
-            else if (c == static_cast<char>(p.source[start - 1])) { /* matching quote */
-                auto val = unescape_string(p.source.substr(start, p.index - start));
-                ++p.index;
-                return val;
-            }
-            ++p.index;
-        }
-        return {};
-    }
-    size_t start = p.index;
-    while (!p.eof() && !std::isspace(static_cast<unsigned char>(p.peek())) && p.peek() != ']')
-        ++p.index;
-    return start == p.index ? std::string() : unescape_string(p.source.substr(start, p.index - start));
+static bool read_attribute_value(parser_s& p, std::string& value) {
+    if (p.eof()) return false;
+    if (p.peek() == '\'' || p.peek() == '"')
+        return consume_string(p.source, p.index, &value);
+    return consume_name(p.source, p.index, &value);
 }
 
 /* ── Attribute selector parser ────────────────────────────────────── */
@@ -232,9 +298,8 @@ static bool try_parse_attribute(parser_s& p, attribute_selector_s& attr) {
     attribute_match_operator_t op = ATTR_EQUALS;
     if (!try_read_attribute_operator(p, op)) return false;
     p.skip_whitespace();
-    bool is_quoted = (!p.eof() && (p.peek() == '\'' || p.peek() == '"'));
-    auto val = read_attribute_value(p);
-    if (val.empty() && !is_quoted) return false;
+    std::string val;
+    if (!read_attribute_value(p, val)) return false;
     p.skip_whitespace();
     bool ci = false;
     if (!p.eof() && p.peek() != ']') {
@@ -355,8 +420,7 @@ static bool try_parse_pseudo(parser_s& p, pseudo_selector_s& pseudo,
     std::string_view body;
     bool has_body = false;
     if (!p.eof() && p.peek() == '(') {
-        body = p.peek_balanced_body(name != "nth-child");
-        if (body.empty()) return false;
+        if (!p.peek_balanced_body(body) || body.empty()) return false;
         has_body = true;
     }
 
@@ -443,8 +507,9 @@ static bool try_parse_compound(parser_s& p, compound_selector_s& compound) {
     if (!p.eof() && p.peek() == '*') {
         ++p.index;
         consumed = true;
-    } else if (!p.eof() && is_identifier_start(p.peek())) {
+    } else if (!p.eof() && (is_identifier_start(p.peek()) || p.peek() == '\\')) {
         compound.type_name = to_lower_ascii(p.read_identifier());
+        if (compound.type_name.empty()) return false;
         p.specificity = p.specificity + specificity_s{0, 0, 1};
         consumed = true;
     }
@@ -597,7 +662,6 @@ static bool selector_parse_list_view(std::string_view source, std::vector<compil
 bool selector_parse(const char* source, compiled_selector_s& out) {
     if (!source) return false;
     std::string_view sv(source);
-    ltrim(sv);
     if (sv.empty()) return false;
     parser_s p{sv, 0, {}, SELECTOR_DEP_NONE};
     if (!selector_parse_core(p, out)) return false;
@@ -608,7 +672,6 @@ bool selector_parse(const char* source, compiled_selector_s& out) {
 bool selector_parse_list(const char* source, std::vector<compiled_selector_s>& out) {
     if (!source) return false;
     std::string_view sv(source);
-    ltrim(sv);
     if (sv.empty()) return false;
     return selector_parse_list_view(sv, out, selector_list_policy_t::Forgiving);
 }

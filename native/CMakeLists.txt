@@ -264,6 +264,19 @@ if(AETHERUI_BUILD_TESTS)
     target_link_libraries(aether_selector_attributes_test PRIVATE AetherUI::Core)
     add_test(NAME aether.selector-attributes COMMAND aether_selector_attributes_test)
 
+    add_executable(aether_selector_escapes_test tests/test_selector_escapes.cpp)
+    target_link_libraries(aether_selector_escapes_test PRIVATE AetherUI::Core)
+    if(MSVC)
+        target_compile_options(aether_selector_escapes_test PRIVATE /utf-8)
+    endif()
+    add_test(NAME aether.selector-escapes COMMAND aether_selector_escapes_test)
+
+    # Private EOF/AST coverage, without extending the installed C ABI.
+    add_executable(aether_selector_escape_parser_test tests/test_selector_escape_parser.cpp
+        src/style_runtime/selector_parser.cpp)
+    target_include_directories(aether_selector_escape_parser_test PRIVATE include src/style_runtime)
+    add_test(NAME aether.selector-escape-parser COMMAND aether_selector_escape_parser_test)
+
     add_executable(aether_selector_structure_test tests/test_selector_structure.cpp)
     target_link_libraries(aether_selector_structure_test PRIVATE AetherUI::Core)
     add_test(NAME aether.selector-structure COMMAND aether_selector_structure_test)

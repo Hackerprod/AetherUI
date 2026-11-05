@@ -336,8 +336,8 @@ static void compile_range(
             break;
         }
 
-        std::string selector_text = str_trim(
-            source.substr(index, opening - index));
+        // Trailing whitespace can belong to a CSS escape in the final name.
+        std::string selector_text = source.substr(index, opening - index);
         std::string declaration_text =
             source.substr(opening + 1, closing - opening - 1);
 
