@@ -51,6 +51,7 @@ typedef uint64_t aether_capabilities_t;
 #define AETHER_CAPABILITY_DISPLAY_LIST  (UINT64_C(1) << 3)
 #define AETHER_CAPABILITY_RENDER_PLAN   (UINT64_C(1) << 4)
 #define AETHER_CAPABILITY_INPUT_HIT_TEST (UINT64_C(1) << 5)
+#define AETHER_CAPABILITY_LAYOUT_TRANSITION_CONTEXT (UINT64_C(1) << 6)
 
 AETHER_API uint32_t              aether_abi_version(void);
 AETHER_API aether_capabilities_t aether_abi_capabilities(void);
@@ -717,6 +718,20 @@ AETHER_API aether_status_t aether_layout_create(
     aether_layout_engine_t* out_engine);
 
 AETHER_API void aether_layout_destroy(aether_layout_engine_t engine);
+
+typedef struct aether_transition_runtime_s* aether_transition_runtime_t;
+
+/* Opt in to effective fixed-container placement for the next layout only.
+   Copies active transform owners by value; runtime and previous_layout may be
+   null. changed is true for a missing/legacy result or a changed effective set.
+   Keep the same DOM/styles alive until layout; prepare again after replacing
+   the DOM. A later prepare replaces pending scratch. Layout consumes it even
+   on error. Preparation adds no borrowed runtime/map reference; the existing
+   layout result lifetime still requires its layout style map to remain alive. */
+AETHER_API aether_status_t aether_layout_prepare_transition_context(
+    aether_layout_engine_t engine, aether_transition_runtime_t runtime,
+    aether_style_map_t current_styles, aether_layout_result_t previous_layout,
+    aether_bool_t* out_changed);
 
 AETHER_API aether_status_t aether_layout_layout(
     aether_layout_engine_t engine,

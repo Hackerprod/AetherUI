@@ -21,6 +21,7 @@ internal static class Program
 {
     private static readonly (string Name, Action Test)[] Tests =
     [
+        ("Prepared fixed context follows static and transition boundaries", FixedViewportContextBoundaries),
         ("Visibility retains layout and rebuilds contextual paint", VisibilityRetainsLayoutAndContext),
         ("Hidden focus rejects input and Tab finds a visible child", HiddenFocusRejectsInput),
         ("Visibility invalidates a queued pointer target", VisibilityInvalidatesQueuedPointerTarget),
@@ -1257,6 +1258,104 @@ internal static class Program
         }
     }
 
+    private static void FixedViewportContextBoundaries()
+    {
+        foreach (var declaration in new[] { "transform:translate(0)", "backdrop-filter:blur(0)" })
+        {
+            var markup = FixedViewportMarkup($"#toggler:active {{ {declaration} }}");
+            using var renderer = new RecordingRenderer();
+            using var host = new UiDocumentHost(new RawMarkupComponent(markup), new ApproximateTextMeasurer(), renderer, new UiHostOptions());
+            host.SetViewport(360, 340, 1);
+            host.Render();
+            var toggler = Assert.NotNull(host.Document?.GetElementById("toggler"));
+            FixedAt(host, 20);
+            host.ResetMetrics();
+            SetTestState(host, toggler, ElementState.Active, true);
+            host.Render();
+            FixedAt(host, 150);
+            Assert.Equal(1L, host.Metrics.LayoutBuilds);
+            SetTestState(host, toggler, ElementState.Active, false);
+            host.Render();
+            FixedAt(host, 20);
+            Assert.Equal(2L, host.Metrics.LayoutBuilds);
+        }
+
+        using var animatedRenderer = new RecordingRenderer();
+        using var animatedHost = new UiDocumentHost(new RawMarkupComponent(FixedViewportMarkup(
+            "#toggler { transform:translateX(10px); transition:transform 1s linear } #toggler:active { transform:none }")),
+            new ApproximateTextMeasurer(), animatedRenderer, new UiHostOptions());
+        animatedHost.SetViewport(360, 340, 1);
+        animatedHost.Render();
+        FixedAt(animatedHost, 150);
+        var element = Assert.NotNull(animatedHost.Document?.GetElementById("toggler"));
+        animatedHost.ResetMetrics();
+        SetTestState(animatedHost, element, ElementState.Active, true);
+        animatedHost.Render();
+        FixedAt(animatedHost, 150);
+        var afterObserve = Environment.TickCount64;
+        var builds = animatedHost.Metrics.LayoutBuilds;
+        Assert.True(animatedHost.TickTransitions(afterObserve + 100));
+        animatedHost.Render();
+        FixedAt(animatedHost, 150);
+        Assert.Equal(builds, animatedHost.Metrics.LayoutBuilds);
+        Assert.False(animatedHost.TickTransitions(afterObserve + 2000));
+        animatedHost.Render();
+        FixedAt(animatedHost, 20);
+        Assert.Equal(builds + 1, animatedHost.Metrics.LayoutBuilds);
+        animatedHost.Render();
+        Assert.Equal(builds + 1, animatedHost.Metrics.LayoutBuilds);
+
+        var flags = System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic;
+        var runtimeField = typeof(UiDocumentHost).GetField("_transitionRuntime", flags)!;
+        using var resetRenderer = new RecordingRenderer();
+        var resetComponent = new FixedViewportResetComponent();
+        using var resetHost = new UiDocumentHost(resetComponent, new ApproximateTextMeasurer(), resetRenderer, new UiHostOptions());
+        resetHost.SetViewport(360, 340, 1);
+        resetHost.Render();
+        SetTestState(resetHost, Assert.NotNull(resetHost.Document?.GetElementById("toggler")), ElementState.Active, true);
+        resetHost.Render();
+        var oldRuntime = (TransitionRuntimeInterop)runtimeField.GetValue(resetHost)!;
+        Assert.True(oldRuntime.HasActive);
+        resetComponent.Replace();
+        resetHost.Render();
+        Assert.True(oldRuntime.IsDisposed);
+        Assert.False(ReferenceEquals(oldRuntime, runtimeField.GetValue(resetHost)));
+        Assert.False(resetHost.HasActiveTransitions);
+        FixedAt(resetHost, 20);
+
+        // The node carrying these declarations has no layout property: this
+        // checks actual presence promotion and value-only paint invalidation.
+        using var valueRenderer = new RecordingRenderer();
+        using var valueHost = new UiDocumentHost(new RawMarkupComponent(FixedViewportMarkup(
+            "#toggler { transform:translateX(1px) } #toggler:active { transform:translateX(2px) }")),
+            new ApproximateTextMeasurer(), valueRenderer, new UiHostOptions());
+        valueHost.SetViewport(360, 340, 1);
+        valueHost.Render();
+        valueHost.ResetMetrics();
+        SetTestState(valueHost, Assert.NotNull(valueHost.Document?.GetElementById("toggler")), ElementState.Active, true);
+        valueHost.Render();
+        FixedAt(valueHost, 150);
+        Assert.Equal(0L, valueHost.Metrics.LayoutBuilds);
+    }
+
+    private static string FixedViewportMarkup(string rules) =>
+        "<style>html,body{margin:0}body{width:360px;height:340px}#outer{width:360px;height:340px;display:flex;justify-content:center;align-items:center}" +
+        "#item{width:100px;height:80px;flex-shrink:0}#fixed{position:fixed;left:20px;top:20px;width:30px;height:30px}" +
+        "#leaf{margin-left:10px;margin-top:10px;width:10px;height:10px}" + rules +
+        "</style><body><div id='outer'><div id='item'><div id='toggler'><div id='fixed'><div id='leaf'></div></div></div></div></div></body>";
+
+    private static void FixedAt(UiDocumentHost host, float coordinate)
+    {
+        var fixedBox = Assert.NotNull(host.Layout?.FindPrimaryBox(Assert.NotNull(host.Document?.GetElementById("fixed"))));
+        foreach (var rect in new[] { fixedBox.MarginBox, fixedBox.BorderBox, fixedBox.PaddingBox, fixedBox.ContentBox })
+        {
+            Assert.True(MathF.Abs(rect.X - coordinate) < .01f && MathF.Abs(rect.Y - coordinate) < .01f);
+            Assert.True(MathF.Abs(rect.Width - 30) < .01f && MathF.Abs(rect.Height - 30) < .01f);
+        }
+        var leaf = Assert.NotNull(host.Layout?.FindPrimaryBox(Assert.NotNull(host.Document?.GetElementById("leaf"))));
+        Assert.True(MathF.Abs(leaf.BorderBox.X - coordinate - 10) < .01f && MathF.Abs(leaf.BorderBox.Y - coordinate - 10) < .01f);
+    }
+
     private static void NativeAbiContractRejectsIncompatibleMetadata()
     {
         Assert.True(NativeAbiContract.EnsureCompatible() >= NativePaintCommandLayout.MinimumBufferSize);
@@ -1273,7 +1372,7 @@ internal static class Program
         Assert.Throws<InvalidOperationException>(() => NativeAbiContract.Validate(
             NativeAbiContract.ExpectedVersion, NativeAbiContract.RequiredCapabilities,
             (nuint)(NativePaintCommandLayout.MinimumBufferSize - 1)));
-        Assert.Equal(0x3FUL, NativeAbiContract.RequiredCapabilities);
+        Assert.Equal(0x7FUL, NativeAbiContract.RequiredCapabilities);
         try
         {
             NativeAbiContract.Validate(NativeAbiContract.ExpectedVersion, 0x1FUL,
@@ -1282,7 +1381,7 @@ internal static class Program
         }
         catch (InvalidOperationException error)
         {
-            Assert.True(error.Message.Contains("capabilities") && error.Message.Contains("0x3F") && error.Message.Contains("0x1F"));
+            Assert.True(error.Message.Contains("capabilities") && error.Message.Contains("0x7F") && error.Message.Contains("0x1F"));
         }
         NativeAbiContract.ValidateComputedStyleSize(512, 512);
         Assert.Throws<InvalidOperationException>(() => NativeAbiContract.ValidateComputedStyleSize(512, 511));
@@ -3766,6 +3865,15 @@ internal static class Program
             <html><head><style>body { margin: 0; min-height: 100%; background-color: #0f172a; }</style></head>
             <body><div>solid body</div></body></html>
             """);
+    }
+
+    private sealed class FixedViewportResetComponent : UiComponent
+    {
+        private bool _replaced;
+        public void Replace() { _replaced = true; StateHasChanged(); }
+        protected override void BuildRenderTree(MarkupWriter writer) => writer.WriteLiteral(
+            FixedViewportMarkup(_replaced ? "#toggler{transform:none}" :
+                "#toggler{transform:translateX(10px);transition:transform 1s linear}#toggler:active{transform:none}"));
     }
 
     private sealed class RawMarkupComponent(string markup) : UiComponent

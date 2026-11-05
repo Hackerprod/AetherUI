@@ -659,6 +659,12 @@ static runtime_node_state_s* compute_node(aether_style_runtime_s* runtime, aethe
         if (inherited_change_impact == STYLE_IMPACT_NONE)
             inherited_change_impact = found->second->declared_inherited_impact;
     }
+    if (!is_new_node) {
+        const auto& previous = found->second->style.style;
+        const bool before_context = previous.transforms.count > 0 || previous.backdrop_filters.count > 0;
+        const bool after_context = next.transforms.count > 0 || next.backdrop_filters.count > 0;
+        if (before_context != after_context) impact |= STYLE_IMPACT_LAYOUT;
+    }
     auto state = std::make_unique<runtime_node_state_s>();
     state->style.style = next;
     state->custom_properties = std::move(scope);

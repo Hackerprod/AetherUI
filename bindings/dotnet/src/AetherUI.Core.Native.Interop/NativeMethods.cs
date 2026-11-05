@@ -194,6 +194,10 @@ internal static unsafe partial class NativeMethods
     [LibraryImport(Lib, EntryPoint = "aether_layout_destroy")]
     internal static partial void LayoutDestroy(IntPtr engine);
 
+    [LibraryImport(Lib, EntryPoint = "aether_layout_prepare_transition_context")]
+    internal static partial int LayoutPrepareTransitionContext(IntPtr engine, IntPtr runtime,
+        IntPtr styles, IntPtr previousLayout, out int changed);
+
     [LibraryImport(Lib, EntryPoint = "aether_layout_layout")]
     internal static partial int LayoutLayout(
         IntPtr engine, IntPtr document, IntPtr styles, float width, float height,

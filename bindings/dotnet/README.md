@@ -182,7 +182,7 @@ install step, or `AetherNativeRuntimeIdentifier`) is misconfigured.
 ## ABI and lifetime rules
 
 `AetherUI.Core.Native.Interop` validates `aether_abi_version()` and the capability bits the managed
-pipeline requires (including input-hit-test bit 5, required mask `0x3F`) before any native handle is created — a mismatch fails at startup, not partway
+pipeline requires (including input-hit-test bit 5 and layout-transition-context bit 6, required mask `0x7F`) before any native handle is created — a mismatch fails at startup, not partway
 through a render. ABI 0.34 and structure sizes remain unchanged; an older 0.34
 runtime reporting `0x1F` fails the capability check before the new symbol is called.
 Scrollbar presses use the native input-part query with current styles and offsets.

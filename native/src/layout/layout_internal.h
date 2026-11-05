@@ -162,6 +162,10 @@ aether_thicknessf resolve_border_edges(const aether_layout_engine_s* e,
 aether_rectf normal_flow_border_box(const aether_layout_box_s* box);
 aether_rectf normal_flow_margin_box(const aether_layout_box_s* box);
 
+// Logical placement always moves the requested root. Prepared results filter
+// definite axes at descendant ELEMENT fixed barriers outside a fixed container
+// local to this moved subtree. Auto axes retain their static-position delta.
+// Legacy results retain full propagation; relative visual offsets are separate.
 void offset_box(aether_layout_box_s* box, float dx, float dy);
 
 bool is_auto_margin(aether_css_length value);

@@ -50,6 +50,17 @@ public sealed class NativeLayoutInterop : IDisposable
             GCHandle.ToIntPtr(_self), out _engine));
     }
 
+    /// <summary>Prepares owned context scratch for the next layout. Call again after a DOM change.</summary>
+    public bool PrepareTransitionContext(TransitionRuntimeInterop? runtime, NativeStyleMap currentStyles,
+        NativeLayoutResult? previousLayout)
+    {
+        ObjectDisposedException.ThrowIf(_engine == IntPtr.Zero, this);
+        ArgumentNullException.ThrowIfNull(currentStyles);
+        Throw(NativeMethods.LayoutPrepareTransitionContext(_engine, runtime?.Handle ?? IntPtr.Zero,
+            currentStyles.Handle, previousLayout?.Handle ?? IntPtr.Zero, out var changed));
+        return changed != 0;
+    }
+
     public NativeLayoutResult Layout(NativeDomDocument document, NativeStyleMap styles,
         float width, float height, Func<IntPtr, NativeScrollOffset> scroll)
     {

@@ -203,6 +203,18 @@ public sealed partial class UiDocumentHost : IDisposable
 
         ResolveStyles();
 
+        if (_layoutInterop.PrepareTransitionContext(_transitionRuntime, _nativeVisualStyleMap!, _nativeLayout))
+        {
+            InvalidateLayout();
+            _pendingPointerTarget = null;
+            _hasPendingPointerTarget = false;
+            if (_hasPointerPosition)
+            {
+                _pendingPointerMove = _lastPointerPosition;
+                _hasPendingPointerMove = true;
+            }
+        }
+
         if ((_invalidation & VisualInvalidation.Layout) != 0)
         {
             // Native layout results borrow their resolved style map for layout-only
@@ -289,6 +301,11 @@ public sealed partial class UiDocumentHost : IDisposable
         // The UA defaults sheet is native-owned: the style runtime applies it at the
         // engine-defaults layer on creation, so the host passes no defaults text here.
         _nativeStyleRuntime.Load(nativeDom.Native, string.Empty, authorCss);
+        // The builder borrows its runtime. Rebind before releasing old DOM handles.
+        var previousTransitions = _transitionRuntime;
+        _transitionRuntime = new TransitionRuntimeInterop();
+        _renderingInterop.SetTransitionRuntime(_transitionRuntime.Handle);
+        previousTransitions?.Dispose();
         previousNativeDom?.Dispose();
 
         foreach (var input in _document.GetElementsByTagName("input"))
@@ -369,11 +386,6 @@ public sealed partial class UiDocumentHost : IDisposable
     /// </summary>
     private void ObserveTransition(IntPtr nodeHandle, ComputedStyle before, ComputedStyle after)
     {
-        if (after.TransitionDuration <= 0f || after.TransitionProperties == 0)
-        {
-            return;
-        }
-
         TransitionStyleMarshaler.Observe(_transitionRuntime!, nodeHandle, before, after, Environment.TickCount64);
     }
 

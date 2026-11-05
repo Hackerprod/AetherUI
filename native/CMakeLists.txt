@@ -268,6 +268,11 @@ if(AETHERUI_BUILD_TESTS)
     target_link_libraries(aether_table_layout_integration_test PRIVATE AetherUI::Core)
     add_test(NAME aether.table-layout-integration COMMAND aether_table_layout_integration_test)
 
+    add_executable(aether_fixed_viewport_test tests/test_fixed_viewport.cpp)
+    target_include_directories(aether_fixed_viewport_test PRIVATE src)
+    target_link_libraries(aether_fixed_viewport_test PRIVATE AetherUI::Core)
+    add_test(NAME aether.fixed-viewport COMMAND aether_fixed_viewport_test)
+
     add_executable(aether_transition_runtime_test tests/test_transition_runtime.cpp)
     target_include_directories(aether_transition_runtime_test PRIVATE src)
     target_link_libraries(aether_transition_runtime_test PRIVATE AetherUI::Core)

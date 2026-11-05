@@ -1,6 +1,8 @@
 /* ── Layout Engine — core box layout, flow, inline, and intrinsic sizing ─ */
 #include "layout_internal.h"
 #include "input_hit_test.h"
+#include "../animations/transition_runtime.h"
+#include <utility>
 
 #include <algorithm>
 #include <cctype>
@@ -86,14 +88,33 @@ static void offset_rect(aether_rectf& r, float dx, float dy) {
     r.y += dy;
 }
 
-void offset_box(aether_layout_box_s* box, float dx, float dy) {
+static void offset_box_descendants(aether_layout_box_s* box, float dx, float dy,
+                                   bool local_fixed_container) {
     offset_rect(box->margin_box, dx, dy);
     offset_rect(box->border_box, dx, dy);
     offset_rect(box->padding_box, dx, dy);
     offset_rect(box->content_box, dx, dy);
+    const auto* result = box->owner;
+    const bool prepared = result && result->effective_context_enabled;
+    local_fixed_container = local_fixed_container ||
+        (prepared && box->kind == LAYOUT_BOX_ELEMENT &&
+         result->effective_fixed_container_nodes.count(box->element) != 0);
     for (auto* child : box->children) {
-        offset_box(child, dx, dy);
+        float child_dx = dx, child_dy = dy;
+        if (prepared && !local_fixed_container && child->kind == LAYOUT_BOX_ELEMENT &&
+            child->style.position == AETHER_POSITION_FIXED) {
+            if (child->style.inset.left.unit != AETHER_CSS_UNIT_AUTO ||
+                child->style.inset.right.unit != AETHER_CSS_UNIT_AUTO) child_dx = 0.f;
+            if (child->style.inset.top.unit != AETHER_CSS_UNIT_AUTO ||
+                child->style.inset.bottom.unit != AETHER_CSS_UNIT_AUTO) child_dy = 0.f;
+        }
+        if (child_dx != 0.f || child_dy != 0.f)
+            offset_box_descendants(child, child_dx, child_dy, local_fixed_container);
     }
+}
+
+void offset_box(aether_layout_box_s* box, float dx, float dy) {
+    offset_box_descendants(box, dx, dy, false);
 }
 
 aether_rectf normal_flow_border_box(const aether_layout_box_s* box) {
@@ -1167,6 +1188,19 @@ float measure_child_natural_width(
    C ABI implementation
    ══════════════════════════════════════════════════════════════════════ */
 
+static std::unordered_set<aether_node_s*> effective_fixed_containers(
+    const aether_style_map_s* styles, const std::unordered_set<aether_node_s*>& active) {
+    std::unordered_set<aether_node_s*> effective;
+    if (styles) for (const auto& entry : styles->styles) {
+        auto* node = entry.first;
+        const auto& style = entry.second;
+        if (node && node->type == AETHER_NODE_ELEMENT && !node->anonymous_flex_owner &&
+            (style.transforms.count > 0 || style.backdrop_filters.count > 0 || active.count(node)))
+            effective.insert(node);
+    }
+    return effective;
+}
+
 extern "C" {
 
 AETHER_API aether_status_t aether_layout_create(
@@ -1186,14 +1220,34 @@ AETHER_API void aether_layout_destroy(aether_layout_engine_t engine) {
     delete engine;
 }
 
+AETHER_API aether_status_t aether_layout_prepare_transition_context(
+    aether_layout_engine_t engine, aether_transition_runtime_t runtime,
+    aether_style_map_t current_styles, aether_layout_result_t previous_layout,
+    aether_bool_t* out_changed) {
+    if (out_changed) *out_changed = AETHER_FALSE;
+    if (!engine || !current_styles || !out_changed) return AETHER_ERROR_NULL_ARG;
+    try {
+        auto active = aether_active_transform_owners(runtime);
+        const auto effective = effective_fixed_containers(current_styles, active);
+        *out_changed = !previous_layout || !previous_layout->effective_context_enabled ||
+            effective != previous_layout->effective_fixed_container_nodes;
+        engine->prepared_active_nodes = std::move(active);
+        engine->transition_context_prepared = true;
+        return AETHER_OK;
+    } catch (const std::bad_alloc&) { return AETHER_ERROR_OUT_OF_MEMORY; }
+}
+
 AETHER_API aether_status_t aether_layout_layout(
     aether_layout_engine_t engine, aether_doc_t doc, aether_style_map_t styles,
     float viewport_width, float viewport_height,
     aether_scroll_offset_fn scroll_fn, void* scroll_data,
     aether_layout_result_t* out_result)
 {
-    if (!engine || !out_result) return AETHER_ERROR_NULL_ARG;
-    if (!doc) return AETHER_ERROR_NULL_ARG;
+    if (!engine) return AETHER_ERROR_NULL_ARG;
+    const bool prepared = std::exchange(engine->transition_context_prepared, false);
+    auto active = std::move(engine->prepared_active_nodes);
+    engine->prepared_active_nodes.clear();
+    if (!out_result || !doc) return AETHER_ERROR_NULL_ARG;
     if (viewport_width <= 0 || viewport_height <= 0) return AETHER_ERROR_INVALID_STATE;
 
     engine->scroll_offset_fn = scroll_fn;
@@ -1205,6 +1259,11 @@ AETHER_API aether_status_t aether_layout_layout(
     if (!result) return AETHER_ERROR_OUT_OF_MEMORY;
     result->viewport = {viewport_width, viewport_height};
     result->style_map = styles;
+    result->effective_context_enabled = prepared;
+    if (prepared) {
+        try { result->effective_fixed_container_nodes = effective_fixed_containers(styles, active); }
+        catch (const std::bad_alloc&) { delete result; return AETHER_ERROR_OUT_OF_MEMORY; }
+    }
 
     // Find root element (using C API from document_node.cpp)
     aether_node_s* root_el = aether_doc_get_body(doc);

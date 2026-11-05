@@ -7,6 +7,7 @@
 #include <string>
 #include <vector>
 #include <unordered_map>
+#include <unordered_set>
 #include "../css/style_map_types.h"
 #include "../dom/dom_types.h"
 #include "../rendering/stacking.h"
@@ -162,6 +163,9 @@ struct inline_item_s {
 
 struct aether_layout_result_s {
     aether_layout_box_s* root = nullptr;
+    // Immutable effective context for this result, installed before all passes.
+    bool effective_context_enabled = false;
+    std::unordered_set<aether_node_s*> effective_fixed_container_nodes;
     // Borrowed for the lifetime of a layout result.  Rendering needs the
     // document element's style to apply CSS canvas-background propagation even
     // though layout intentionally starts at <body>.
@@ -269,6 +273,9 @@ private:
 /* ── Layout engine (stateless; mutable per-layout scratch) ──────── */
 
 struct aether_layout_engine_s {
+    // One-shot owned scratch. No runtime/map pointer survives prepare.
+    bool transition_context_prepared = false;
+    std::unordered_set<aether_node_s*> prepared_active_nodes;
     aether_text_measurer_fn text_measurer = nullptr;
     void*                   text_measurer_data = nullptr;
     aether_scroll_offset_fn scroll_offset_fn = nullptr;

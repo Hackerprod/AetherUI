@@ -19,8 +19,6 @@ extern "C" {
  * matrix over the real, post-layout geometry.
  */
 
-typedef struct aether_transition_runtime_s* aether_transition_runtime_t;
-
 AETHER_API aether_status_t aether_transition_runtime_create(aether_transition_runtime_t* out_runtime);
 AETHER_API void aether_transition_runtime_destroy(aether_transition_runtime_t runtime);
 
@@ -65,4 +63,10 @@ AETHER_API void aether_display_list_builder_set_transition_runtime(
 
 #ifdef __cplusplus
 }
+#endif
+
+#ifdef __cplusplus
+#include <unordered_set>
+// Private value snapshot: active TRANSFORM only, including its delay phase.
+std::unordered_set<aether_node_t> aether_active_transform_owners(aether_transition_runtime_t runtime);
 #endif

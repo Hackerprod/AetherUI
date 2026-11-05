@@ -17,6 +17,9 @@ internal sealed class LayoutInterop : IDisposable
         _native = new NativeLayoutInterop(Measure);
     }
 
+    public bool PrepareTransitionContext(TransitionRuntimeInterop? runtime, NativeStyleMap currentStyles,
+        NativeLayoutResult? previousLayout) => _native.PrepareTransitionContext(runtime, currentStyles, previousLayout);
+
     public NativeLayoutResult CreateNativeLayout(DomInterop dom, NativeStyleMap nativeStyles, SizeF viewport) =>
         _native.Layout(dom.Native, nativeStyles, viewport.Width, viewport.Height,
             _ => default);
