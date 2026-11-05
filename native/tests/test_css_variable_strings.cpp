@@ -149,7 +149,7 @@ void lexical() {
 }
 void private_resolver() {
     custom_property_scope_s scope;
-    scope.local = {{"--a", "var(--b)"}, {"--b", "leaf"}, {"--x", "a"}, {"--\\71", "raw-name"}};
+    scope.local = {{"--a", "var(--b)"}, {"--b", "leaf"}, {"--x", "a"}, {"--q", "decoded-name"}};
     std::string out = "sentinel";
     auto check = [&](const char* source, int depth, int length, bool valid, const std::string& expected) {
         require(variable_resolve(source, &scope, depth, length, out) == valid && out == expected, "private depth/length/alias contract");
@@ -161,8 +161,9 @@ void private_resolver() {
     check("var(--x)zz", 2, 3, true, "azz");
     check("var(--x)zz", 2, 2, false, "");
     check(nullptr, 2, 3, false, "");
-    check("var(--\\71)", 2, 65536, true, "raw-name");
-    check("var(--q)", 2, 65536, false, "");
+    // Private scopes hold decoded keys; CSS spelling is not key identity.
+    check("var(--\\71)", 2, 65536, true, "decoded-name");
+    check("var(--q)", 2, 65536, true, "decoded-name");
     check("v\\61r(--x)", 2, 65536, true, "a");
     check("VAR(--x)", 2, 65536, true, "a");
     for (const auto* broken : {"var(--x", "var(--x,[)", "var(--missing,'bad)", "var(--x extra)", "ordinary(["}) check(broken, 32, 65536, false, "");
@@ -178,9 +179,72 @@ void private_resolver() {
     for (int i = 1; i <= 20; ++i) scope.local["--a" + std::to_string(i)] = "var(--a" + std::to_string(i - 1) + ")var(--a" + std::to_string(i - 1) + ")";
     check("var(--a2)", 32, 65536, true, "");
     check("var(--a20,outer)", 32, 65536, false, "");
+
+    // A key is not expanded value data: a long decoded key can name one byte.
+    const std::string long_key = "--" + std::string(300, 'j');
+    scope.local[long_key] = "a";
+    check(("var(" + long_key + ")").c_str(), 2, 1, true, "a");
+    // Exhaustion must abort the entire result, not take the cheap fallback.
+    for (const std::string scalar : {"j", "\\00006a", "\\00fffd", "\\01f642"}) {
+        std::string huge = "var(--";
+        for (int i = 0; i < (scalar == "j" ? 200000 : 45000); ++i) huge += scalar;
+        huge += ",outer)";
+        check(huge.c_str(), 32, 65536, false, "");
+    }
+}
+void identifier_decoder() {
+    auto decode = [](const std::string& source, css_variable_budget& budget, std::string& out) {
+        std::string pending;
+        css_variable_lexer lexer(source.data(), source.size(), 0, &budget);
+        const bool ok = lexer.decode_identifier([](void* data, const char* bytes, size_t size) {
+            static_cast<std::string*>(data)->append(bytes, size);
+            return true;
+        }, &pending);
+        out = ok ? std::move(pending) : std::string();
+        return ok;
+    };
+    std::string out;
+    for (const auto* input : {"--j", "--\\6A", "--\\6a", "--\\00006a", "\\2d\\2d j"}) {
+        css_variable_budget budget;
+        require(decode(input, budget, out) && out == "--j", "decoded identifier equivalence");
+    }
+    // EOF after a name escape is U+FFFD, but cannot close an incomplete var().
+    css_variable_budget eof_budget;
+    require(decode("--x\\", eof_budget, out) && out == "--x\xef\xbf\xbd", "identifier EOF escape");
+    for (const std::string input : std::vector<std::string>{"--x\\\n", "--x extra", "--x" + std::string("\xc0\xaf"),
+                                  "--x" + std::string("\xed\xa0\x80"), "--x" + std::string("\xf4\x90\x80\x80")}) {
+        css_variable_budget budget;
+        require(!decode(input, budget, out) && out.empty(), "invalid identifier must not publish a partial key");
+    }
+    const std::string source = "\\2d\\2d \\01f642\\00006a\r\nZ";
+    css_variable_budget measured;
+    require(decode(source, measured, out) && out == "--\xf0\x9f\x99\x82jZ", "UTF-8 and CRLF decoder");
+    const size_t cost = 1048576 - measured.remaining;
+    require(cost > source.size(), "lookahead and UTF-8 source reads must be charged");
+    css_variable_budget exact{cost};
+    require(decode(source, exact, out) && exact.remaining == 0, "exact decoder source budget");
+    css_variable_budget short_budget{cost - 1};
+    require(!decode(source, short_budget, out) && short_budget.exhausted && out.empty(), "decoder budget failure is atomic at caller");
+    // Token recognition and later key decoding are separate charged passes.
+    css_variable_budget passes;
+    css_variable_lexer lexer(source.data(), source.size(), 0, &passes);
+    require(lexer.next().kind == css_variable_token_kind::ident, "budgeted token recognition");
+    const auto before_decode = passes.remaining;
+    require(decode(source, passes, out) && before_decode - passes.remaining == cost, "second pass charges all source reads again");
+    for (const std::string input : std::vector<std::string>{source, "--x\\ ", "--x\\3b ;height:2px", "--\\e9", "--\xf0\x9f\x99\x82"}) {
+        css_variable_lexer spans(input.data(), input.size());
+        std::string restored;
+        for (;;) {
+            const auto token = spans.next();
+            if (token.kind == css_variable_token_kind::end) break;
+            require(token.kind != css_variable_token_kind::error && token.end > token.begin, "decoded token span progress");
+            restored.append(input, token.begin, token.end - token.begin);
+        }
+        require(restored == input, "decoded token spans preserve source bytes");
+    }
 }
 }
 int main() {
-    try { lexical(); private_resolver(); integration(); std::puts("PASS CSS variable strings G1-G12 and measured5"); return 0; }
+    try { lexical(); identifier_decoder(); private_resolver(); integration(); std::puts("PASS CSS variable strings G1-G12, decoded identifiers and measured5"); return 0; }
     catch (const std::exception& e) { std::fprintf(stderr, "FAIL CSS variable strings: %s\n", e.what()); return 1; }
 }

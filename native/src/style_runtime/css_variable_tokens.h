@@ -20,12 +20,18 @@ struct css_variable_token {
     char delimiter = 0;
     bool is_var = false, dashed = false;
 };
+// A sink receives one decoded scalar (1..4 UTF-8 bytes) at a time. No allocation
+// is performed by the decoder. A false return aborts the whole identifier.
+using css_identifier_sink = bool (*)(void*, const char*, size_t);
 class css_variable_lexer {
 public:
     css_variable_lexer(const char* data, size_t length, size_t start = 0, css_variable_budget* budget = nullptr)
         : data_(data), length_(length), cursor_(start), budget_(budget) {}
     css_variable_token next();
     size_t position() const { return cursor_; }
+    // Decode exactly one identifier spanning the remaining input, not arbitrary
+    // escaped text. Callers must discard any partial sink output on failure.
+    bool decode_identifier(css_identifier_sink sink, void* context);
 private:
     const char* data_;
     size_t length_, cursor_;
@@ -35,7 +41,9 @@ private:
     bool escape_at(size_t at);
     bool ident_at(size_t at);
     bool number_at(size_t at);
+    unsigned int scalar();
     unsigned int escape();
-    void name(bool& var, bool& url, bool& dashed);
+    void name(bool& var, bool& url, bool& dashed,
+              css_identifier_sink sink = nullptr, void* context = nullptr);
 };
 bool variable_has_reference(const std::string& source);

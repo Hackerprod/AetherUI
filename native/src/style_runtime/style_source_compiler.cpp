@@ -113,18 +113,54 @@ static bool try_strip_important(std::string& value) {
     return true;
 }
 
-static std::vector<std::string> split_and_trim(const std::string& s, char ch) {
-    auto parts = split_top_level(s, ch);
-    std::vector<std::string> result;
-    result.reserve(parts.size());
-    for (auto& p : parts) {
-        result.push_back(str_trim(p));
+struct declaration_span {
+    size_t begin = 0, end = 0, colon = std::string::npos;
+    bool valid = true;
+};
+static std::vector<declaration_span> declaration_spans(const std::string& source) {
+    // Delimit only source tokens. Punctuation decoded from a name is data,
+    // never a colon/semicolon/brace to be interpreted a second time.
+    css_component_lexer lexer(source.data(), source.size());
+    std::vector<declaration_span> spans;
+    std::vector<char> blocks;
+    declaration_span current;
+    for (;;) {
+        const auto token = lexer.next();
+        if (token.kind == css_variable_token_kind::end ||
+            (blocks.empty() && token.delimiter == ';')) {
+            current.end = token.begin;
+            spans.push_back(current);
+            if (token.kind == css_variable_token_kind::end) return spans;
+            current = declaration_span{};
+            current.begin = token.end;
+            continue;
+        }
+        if (token.kind == css_variable_token_kind::error) current.valid = false;
+        if (blocks.empty() && token.delimiter == ':' && current.colon == std::string::npos)
+            current.colon = token.begin;
+        if (token.kind == css_variable_token_kind::open || token.kind == css_variable_token_kind::function)
+            blocks.push_back(token.delimiter == '(' ? ')' : token.delimiter == '[' ? ']' : '}');
+        else if (token.kind == css_variable_token_kind::close) {
+            if (blocks.empty() || blocks.back() != token.delimiter) current.valid = false;
+            else blocks.pop_back();
+        }
     }
-    return result;
 }
-
-static int32_t find_top_level_colon(const std::string& s) {
-    return find_top_level(s, ':');
+static bool declaration_name(const std::string& source, const declaration_span& span, std::string& name) {
+    css_variable_lexer lexer(source.data(), span.colon, span.begin);
+    css_variable_token token;
+    do { token = lexer.next(); }
+    while (token.kind == css_variable_token_kind::whitespace || token.kind == css_variable_token_kind::comment);
+    if (token.kind != css_variable_token_kind::ident) return false;
+    const auto ident = token;
+    do { token = lexer.next(); }
+    while (token.kind == css_variable_token_kind::whitespace || token.kind == css_variable_token_kind::comment);
+    if (token.kind != css_variable_token_kind::end) return false;
+    css_variable_lexer decoder(source.data() + ident.begin, ident.end - ident.begin);
+    return decoder.decode_identifier([](void* out, const char* bytes, size_t size) {
+        static_cast<std::string*>(out)->append(bytes, size);
+        return true;
+    }, &name);
 }
 
 static bool is_calc_expression(const std::string& value) {
@@ -191,35 +227,32 @@ static declaration_compilation_result compile_declarations(
     declaration_compilation_result result;
     int32_t declaration_order = 0;
 
-    auto segments = split_and_trim(source, ';');
-    for (auto& segment : segments) {
-        if (segment.empty()) continue;
-
-        int32_t colon = find_top_level_colon(segment);
-        if (colon <= 0) continue;
-
-        std::string name = str_to_lower(str_trim(segment.substr(0, colon)));
-        std::string value = str_trim(segment.substr(colon + 1));
+    for (const auto& segment : declaration_spans(source)) {
+        if (!segment.valid || segment.colon == std::string::npos) continue;
+        std::string name;
+        if (!declaration_name(source, segment, name)) continue;
+        std::string value = str_trim(source.substr(segment.colon + 1, segment.end - segment.colon - 1));
         if (name.empty() || value.empty()) continue;
 
         bool important = try_strip_important(value);
 
-        if (name == "content") {
-            compiled_content_declaration_s content;
-            content.source = value;
-            content.important = important;
-            content.declaration_order = declaration_order++;
-            result.content.push_back(std::move(content));
-            continue;
-        }
-
-        if (name.size() >= 2 && name[0] == '-' && name[1] == '-') {
+        if (name.size() > 2 && name[0] == '-' && name[1] == '-') {
             custom_property_declaration_s custom;
             custom.name = name;
             custom.source = value;
             custom.important = important;
             custom.declaration_order = declaration_order++;
             result.custom.push_back(custom);
+            continue;
+        }
+
+        name = str_to_lower(name);
+        if (name == "content") {
+            compiled_content_declaration_s content;
+            content.source = value;
+            content.important = important;
+            content.declaration_order = declaration_order++;
+            result.content.push_back(std::move(content));
             continue;
         }
 

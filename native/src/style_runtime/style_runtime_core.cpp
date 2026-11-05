@@ -618,14 +618,12 @@ static runtime_node_state_s* compute_node(aether_style_runtime_s* runtime, aethe
         impact = STYLE_IMPACT_NONE;
         inherited_change_impact = STYLE_IMPACT_NONE;
         if (!is_new_node) {
-            // No-op recompute: keep the existing state so its owned buffers
-            // (background layers, gradients, shadows, filters) stay alive for
-            // any frame-local resolved style map that borrowed them. Replacing
-            // the state here — even with an identical style — destroys the old
-            // state and frees those buffers, orphaning the map's shallow copies
-            // and leaving descendant paint (e.g. a background image) dangling
-            // after an unrelated ancestor state change (hover).
+            // Retain the state, its style buffers and its scope address. A
+            // concrete no-op can still change custom values or replace the
+            // parent's state, so refresh both local keys and the parent link.
+            // Descendants are visited even when this node emits no update.
             aether_computed_style_free(&next);
+            found->second->custom_properties = std::move(scope);
             found->second->inherited_change_impact = inherited_change_impact;
             return found->second.get();
         }

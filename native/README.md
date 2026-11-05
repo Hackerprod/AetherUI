@@ -146,6 +146,22 @@ against the installed package, calls `aether_abi_version()`/`aether_abi_capabili
 what it was compiled against. Copy that project's `CMakeLists.txt` as the starting point for a new
 native or cgo consumer.
 
+## Custom properties
+
+Custom-property names use decoded CSS identifier values with exact case and Unicode
+identity: `--Brand` and `--brand` are distinct, while `--j`, `--\6a` and `--\6A`
+name the same property. Declarations, inline styles, inheritance and `var()` share
+this identity. Standard property and `var` function names remain case-insensitive.
+Values retain their source spelling. Custom-only changes refresh inherited scopes
+even when the ancestor's concrete style does not change.
+
+`aether.custom-property-case` checks this through the public ABI, including escaped
+names, cascading, recomputation and snapshot lifetime. `aether.css-variable-strings`
+also covers the private decoder and resolver budgets. Private scopes must use
+decoded keys; source spellings are not a compatibility alias. This does not add
+`@property`, computed-value alias inheritance, full `revert` semantics, or deferred
+inline shorthands, and does not normalize Unicode.
+
 ## Visibility
 
 `visibility:hidden` preserves layout and overflow geometry. It suppresses the

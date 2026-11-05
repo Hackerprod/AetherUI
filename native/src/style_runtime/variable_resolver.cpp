@@ -3,6 +3,7 @@
 #include <array>
 #include <cstring>
 #include <memory>
+#include <limits>
 
 bool custom_property_scope_s::try_get(const std::string& name, std::string& value) const {
     auto it = local.find(name);
@@ -24,12 +25,13 @@ struct payload {
     struct block { std::unique_ptr<char[]> bytes; size_t capacity = 0, used = 0; };
     std::vector<block> blocks;
     size_t size = 0;
-    bool append(span source, size_t limit, css_variable_budget& budget) {
+    bool append(span source, size_t limit, css_variable_budget& budget, size_t allocation_hint = 0) {
         if (size > limit || source.size > limit - size) return false;
         size_t cursor = 0;
         while (cursor < source.size) {
             if (blocks.empty() || blocks.back().used == blocks.back().capacity) {
-                const size_t capacity = std::min(size_t(256), source.size - cursor);
+                const size_t capacity = std::min(size_t(256),
+                    std::min(limit - size, std::max(source.size - cursor, allocation_hint)));
                 if (!budget.take(capacity)) return false;
                 blocks.push_back({std::make_unique<char[]>(capacity), capacity, 0});
             }
@@ -62,6 +64,16 @@ struct payload {
         return true;
     }
 };
+bool decode_name(span source, payload& decoded, css_variable_budget& budget) {
+    struct sink_context { payload& bytes; css_variable_budget& budget; } context{decoded, budget};
+    css_variable_lexer decoder(source.data, source.size, 0, &budget);
+    return decoder.decode_identifier([](void* opaque, const char* bytes, size_t size) {
+        auto& sink = *static_cast<sink_context*>(opaque);
+        // Key length is independent of the expanded-value limit. The global
+        // budget pays for source reads, UTF-8 writes, capacity and compaction.
+        return sink.bytes.append({bytes, size}, std::numeric_limits<size_t>::max(), sink.budget, 256);
+    }, &context);
+}
 // Raw acquisition borrows stable map entries; it never invokes the copying helper.
 const std::string* lookup(const custom_property_scope_s* scope, const std::string& name,
                           css_variable_budget& budget) {
@@ -107,15 +119,7 @@ bool parse_invocation(span source, size_t body, invocation& call, css_variable_b
         }
         if (!call.has_comma && blocks.empty() && t.kind != kind::whitespace && t.kind != kind::comment) {
             if (!got_name && t.kind == kind::ident && t.dashed) {
-                size_t name_end = t.end;
-                // Keep the established raw-key trim, including an escape terminator.
-                while (name_end > t.begin) {
-                    if (!budget.take(1)) return false;
-                    const char c = source.data[name_end - 1];
-                    if (c != ' ' && c != '\t' && c != '\r' && c != '\n') break;
-                    --name_end;
-                }
-                call.name = {source.data + t.begin, name_end - t.begin};
+                call.name = {source.data + t.begin, t.end - t.begin};
                 got_name = true;
             } else extra_name = true;
         }
@@ -202,7 +206,7 @@ bool resolve(span root, const custom_property_scope_s* scope, int32_t max_depth,
         frames[index].pending = call;
         payload name_bytes;
         std::string name;
-        if (!name_bytes.append(call.name, call.name.size, budget) || !name_bytes.compact(name, budget)) return false;
+        if (!decode_name(call.name, name_bytes, budget) || !name_bytes.compact(name, budget)) return false;
         if (!budget.take(1) || !budget.take(name.size())) return false;
         const auto found = active.find(name);
         const std::string* raw = nullptr;

@@ -351,6 +351,13 @@ if(AETHERUI_BUILD_TESTS)
     target_link_libraries(aether_ua_stylesheet_test PRIVATE AetherUI::Core)
     add_test(NAME aether.ua-stylesheet COMMAND aether_ua_stylesheet_test)
 
+    add_executable(aether_custom_property_case_test tests/test_custom_property_case.cpp)
+    target_link_libraries(aether_custom_property_case_test PRIVATE AetherUI::Core)
+    if(MSVC)
+        target_compile_options(aether_custom_property_case_test PRIVATE /utf-8)
+    endif()
+    add_test(NAME aether.custom-property-case COMMAND aether_custom_property_case_test)
+
     add_executable(aether_style_map_lifetime_test tests/test_style_map_lifetime.cpp)
     target_link_libraries(aether_style_map_lifetime_test PRIVATE AetherUI::Core)
     add_test(NAME aether.style-map-lifetime COMMAND aether_style_map_lifetime_test)

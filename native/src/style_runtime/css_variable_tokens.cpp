@@ -20,7 +20,8 @@ unsigned char css_variable_lexer::read(size_t at) {
     return static_cast<unsigned char>(data_[at]);
 }
 bool css_variable_lexer::escape_at(size_t at) {
-    return read(at) == '\\' && at + 1 < length_ && !newline(read(at + 1));
+    // CSS consumes a final backslash as an escaped replacement character.
+    return read(at) == '\\' && (at + 1 == length_ || !newline(read(at + 1)));
 }
 bool css_variable_lexer::ident_at(size_t at) {
     const auto c = read(at);
@@ -32,8 +33,30 @@ bool css_variable_lexer::number_at(size_t at) {
     if (c == '+' || c == '-') c = read(++at);
     return digit(c) || (c == '.' && digit(read(at + 1)));
 }
+unsigned int css_variable_lexer::scalar() {
+    const unsigned int first = read(cursor_++);
+    if (first < 0x80) return first;
+    const size_t continuation = first >= 0xc2 && first <= 0xdf ? 1 :
+                                first >= 0xe0 && first <= 0xef ? 2 :
+                                first >= 0xf0 && first <= 0xf4 ? 3 : 0;
+    if (continuation == 0 || continuation > length_ - cursor_) {
+        failed_ = true;
+        return 0;
+    }
+    unsigned int value = first & (0x7f >> continuation);
+    for (size_t i = 0; i < continuation; ++i) {
+        const unsigned int c = read(cursor_);
+        if (failed_ || (c & 0xc0) != 0x80) { failed_ = true; return 0; }
+        ++cursor_;
+        value = (value << 6) | (c & 0x3f);
+    }
+    const unsigned int minimum = continuation == 1 ? 0x80 : continuation == 2 ? 0x800 : 0x10000;
+    if (value < minimum || value > 0x10ffff || (value >= 0xd800 && value <= 0xdfff)) failed_ = true;
+    return value;
+}
 unsigned int css_variable_lexer::escape() {
     ++cursor_; // The caller already recognized the backslash.
+    if (cursor_ == length_) return 0xfffd;
     unsigned int value = 0;
     if (hex(read(cursor_)) >= 0) {
         for (size_t n = 0; n < 6 && cursor_ < length_ && !failed_; ++n) {
@@ -48,17 +71,38 @@ unsigned int css_variable_lexer::escape() {
         }
         return value == 0 || value > 0x10ffff || (value >= 0xd800 && value <= 0xdfff) ? 0xfffd : value;
     }
-    return read(cursor_++);
+    return scalar();
 }
-void css_variable_lexer::name(bool& var, bool& url, bool& dashed) {
+void css_variable_lexer::name(bool& var, bool& url, bool& dashed,
+                              css_identifier_sink sink, void* context) {
     size_t count = 0;
     var = url = true;
     dashed = true;
     while (cursor_ < length_ && !failed_) {
         unsigned int c = read(cursor_);
-        if (named(static_cast<unsigned char>(c))) ++cursor_;
+        if (named(static_cast<unsigned char>(c))) c = scalar();
         else if (escape_at(cursor_)) c = escape();
         else break;
+        if (failed_) break;
+        if (sink) {
+            char bytes[4];
+            size_t size = 0;
+            if (c < 0x80) bytes[size++] = static_cast<char>(c);
+            else if (c < 0x800) {
+                bytes[size++] = static_cast<char>(0xc0 | (c >> 6));
+                bytes[size++] = static_cast<char>(0x80 | (c & 0x3f));
+            } else if (c < 0x10000) {
+                bytes[size++] = static_cast<char>(0xe0 | (c >> 12));
+                bytes[size++] = static_cast<char>(0x80 | ((c >> 6) & 0x3f));
+                bytes[size++] = static_cast<char>(0x80 | (c & 0x3f));
+            } else {
+                bytes[size++] = static_cast<char>(0xf0 | (c >> 18));
+                bytes[size++] = static_cast<char>(0x80 | ((c >> 12) & 0x3f));
+                bytes[size++] = static_cast<char>(0x80 | ((c >> 6) & 0x3f));
+                bytes[size++] = static_cast<char>(0x80 | (c & 0x3f));
+            }
+            if (!sink(context, bytes, size)) { failed_ = true; break; }
+        }
         if (count < 2 && c != '-') dashed = false;
         if (c >= 'A' && c <= 'Z') c += 'a' - 'A';
         if (count >= 3 || c != static_cast<unsigned int>("var"[count])) var = false;
@@ -68,6 +112,12 @@ void css_variable_lexer::name(bool& var, bool& url, bool& dashed) {
     var = var && count == 3;
     url = url && count == 3;
     dashed = dashed && count > 2;
+}
+bool css_variable_lexer::decode_identifier(css_identifier_sink sink, void* context) {
+    if (!ident_at(cursor_) || failed_) return false;
+    bool var, url, dashed;
+    name(var, url, dashed, sink, context);
+    return !failed_ && cursor_ == length_;
 }
 css_variable_token css_variable_lexer::next() {
     css_variable_token t;

@@ -305,6 +305,7 @@ struct compiled_property_declaration_s {
 };
 
 struct custom_property_declaration_s {
+    // Decoded CSS identifier value, with case and Unicode identity preserved.
     std::string name;
     std::string source;
     bool important = false;
@@ -471,10 +472,11 @@ inline const std::string& custom_property_invalid_value() {
 }
 
 struct custom_property_scope_s {
+    // Keys are decoded identifiers, never source spellings or case-folded names.
     std::unordered_map<std::string, std::string> local;
     custom_property_scope_s* parent = nullptr;
 
-    bool try_get(const std::string& name, std::string& value) const;
+    bool try_get(const std::string& name, std::string& value) const; // name is already decoded
 };
 
 // ═══ Variable resolver ═════════════════════════════════════════
