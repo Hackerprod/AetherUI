@@ -33,6 +33,55 @@ production consumer today — every real caller goes through `style_runtime/`. I
 `ComputedStyle`, `CssLength`, and `ColorRgba` are the value types layout and the display-list builder
 still consume directly. Don't add new cascade logic there; extend `style_runtime/` instead.
 
+### Transition property module
+
+`style_runtime/transition_properties.cpp` privately owns the four transition longhands,
+their parse/apply callbacks, initial values, and the single-transition shorthand. It depends
+on the private property registry contract, small shared string/token utilities, and the public
+value types. It does not depend on DOM, selectors, layout, rendering, animation runtime,
+`style_runtime_types.h`, or global engine initialization.
+
+The catalog calls `transition_properties_register_longhands()` after `transform-origin` and
+`transition_properties_register_shorthands()` at the end of shorthand composition. The caller
+provides a live, non-null registry, serializes composition, and calls `seal()` once after all
+families have registered. Do not look up definitions while composition can still grow either
+vector: sealing rebuilds the pointer maps. The module never seals, retains definition pointers,
+or captures local state in callbacks. Duplicate or post-seal registration preserves the registry's
+existing no-op behavior. Full-catalog IDs remain 82–85; an empty module-only registry uses 0–3.
+The private headers and test targets are not installed or exported.
+
+This boundary preserves existing behavior, not full CSS transition conformance. Initial values
+remain `none / 0s / 0s / linear`; omitted shorthand components reset to those values, and its
+expansion emits CSS tokens for ordinary longhand parsing. Lists, negative times (including delay),
+and unknown shorthand targets remain unsupported. An unknown direct `transition-property`
+instead succeeds with mask zero. Existing numeric parsing, including nonfinite values and
+unusual `strtof` forms, is intentionally unchanged. Global keywords and `var()` remain generic
+pipeline responsibilities; the existing parent-inheritance and deferred-inline-shorthand
+limitations are covered by regression tests rather than changed here.
+
+`aether.transition-property-module` links only the module and its test translation unit, with
+separate compile checks for each self-contained private header. It covers metadata/order,
+scalar-only application, parser aliases, reallocation/lifetime, independent registries,
+repeated/sealed registration, shorthand round-trips, and atomic failure. The public-ABI
+`aether.transition-property-pipeline` covers resolution, reset/precedence/global semantics,
+changing variables, PAINT-only updates, unchanged repeats, and shared-tokenizer numeric
+results for margin, padding, inset, border, flex, gap, and overflow. Both use explicit checks
+that remain active with `NDEBUG`.
+
+To verify the isolated target before building Core, use a fresh build directory:
+
+```sh
+cmake -S native -B artifacts/build/transition-isolation \
+  -DCMAKE_BUILD_TYPE=Release -DAETHERUI_BUILD_TESTS=ON
+cmake --build artifacts/build/transition-isolation \
+  --target aether_transition_property_module_test --verbose
+ctest --test-dir artifacts/build/transition-isolation \
+  -R '^aether.transition-property-module$' --output-on-failure
+```
+
+Then build and run the complete suite and installed package consumer as described below.
+The isolated test does not replace whole-engine, ABI, or installation validation.
+
 ## ABI contract
 
 The current ABI is **0.1.0**: flat C functions, opaque handles, fixed-width value types, integer

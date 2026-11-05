@@ -58,6 +58,7 @@ add_library(aether_core SHARED
     src/style_runtime/style_computed.cpp
     src/style_runtime/style_property_registry.cpp
     src/style_runtime/builtin_properties.cpp
+    src/style_runtime/transition_properties.cpp
     src/style_runtime/cascade.cpp
     src/style_runtime/selector_matcher.cpp
     src/style_runtime/selector_parser.cpp
@@ -392,6 +393,32 @@ if(AETHERUI_BUILD_TESTS)
     target_include_directories(aether_transition_runtime_test PRIVATE src)
     target_link_libraries(aether_transition_runtime_test PRIVATE AetherUI::Core)
     add_test(NAME aether.transition-runtime COMMAND aether_transition_runtime_test)
+
+    # This contract target must build before/without Core: the module owns its
+    # parse/apply behavior, not the DOM, cascade, or global property catalog.
+    add_executable(aether_transition_property_module_test
+        tests/test_transition_property_module.cpp
+        src/style_runtime/transition_properties.cpp)
+    target_include_directories(aether_transition_property_module_test PRIVATE include src/style_runtime)
+    target_compile_features(aether_transition_property_module_test PRIVATE cxx_std_20)
+    add_test(NAME aether.transition-property-module COMMAND aether_transition_property_module_test)
+
+    # Each private header must compile as the sole include in its own TU.
+    set(transition_header_checks)
+    foreach(header transition_properties_internal style_property_registry_internal
+            style_string_utils_internal builtin_property_parse_utils)
+        set(check_source "${CMAKE_CURRENT_BINARY_DIR}/transition_header_${header}.cpp")
+        file(WRITE "${check_source}" "#include \"${header}.h\"\n")
+        list(APPEND transition_header_checks "${check_source}")
+    endforeach()
+    add_library(aether_transition_property_headers_test OBJECT ${transition_header_checks})
+    target_include_directories(aether_transition_property_headers_test PRIVATE include src/style_runtime)
+    target_compile_features(aether_transition_property_headers_test PRIVATE cxx_std_20)
+    add_dependencies(aether_transition_property_module_test aether_transition_property_headers_test)
+
+    add_executable(aether_transition_property_pipeline_test tests/test_transition_property_pipeline.cpp)
+    target_link_libraries(aether_transition_property_pipeline_test PRIVATE AetherUI::Core)
+    add_test(NAME aether.transition-property-pipeline COMMAND aether_transition_property_pipeline_test)
 
     add_executable(aether_paint_context_test tests/test_paint_context.cpp)
     target_link_libraries(aether_paint_context_test PRIVATE AetherUI::Core)

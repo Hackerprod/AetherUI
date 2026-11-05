@@ -1,8 +1,12 @@
 #pragma once
 
-#include "style_runtime_types.h"
+#include "style_string_utils_internal.h"
+#include <aether/aether.h>
+#include <cstdint>
 #include <functional>
 #include <string>
+#include <unordered_map>
+#include <utility>
 #include <vector>
 
 // ═══ Style impact flags ════════════════════════════════════════
