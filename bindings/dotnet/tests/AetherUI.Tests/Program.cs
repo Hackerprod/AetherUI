@@ -2122,6 +2122,14 @@ internal static class Program
         typeof(UiDocumentHost).GetMethod("InvalidateVisual", flags)!.Invoke(host, [false]);
     }
 
+    private static LayoutBox RequireVisiblePrimaryBox(UiDocumentHost host, ElementNode element)
+    {
+        var box = Assert.NotNull(host.Layout?.FindPrimaryBox(element));
+        Assert.True(box.Style.Visible && box.Style.Display != DisplayKind.None, $"{element.Id} must initially be visible and displayed.");
+        Assert.True(box.BorderBox.Width > 0 && box.BorderBox.Height > 0, $"{element.Id} must initially have positive area.");
+        return box;
+    }
+
     private static void VisibilityRetainsLayoutAndContext()
     {
         const string markup = """
@@ -2163,12 +2171,15 @@ internal static class Program
         host.Render();
         var a = Assert.NotNull(host.Document?.GetElementById("a"));
         var b = Assert.NotNull(host.Document?.GetElementById("b"));
+        var aBox = RequireVisiblePrimaryBox(host, a);
+        RequireVisiblePrimaryBox(host, b);
         host.KeyPressed(UiKey.Tab);
         Assert.True((a.State & ElementState.Focus) != 0);
         SetTestState(host, a, ElementState.Active, true);
         host.TextInput('x'); // No Render between hiding and input.
         Assert.Equal("seed", a.RuntimeValue ?? a.GetAttribute("value"));
         Assert.True((a.State & ElementState.Focus) == 0);
+        Assert.True(!aBox.Style.Visible);
         host.KeyPressed(UiKey.Tab);
         Assert.True((b.State & ElementState.Focus) != 0);
         host.TextInput('b');
@@ -2176,12 +2187,17 @@ internal static class Program
         // A control hidden only while focused loses focus once, resolves :focus,
         // and must not regain focus when that makes it visible again.
         using var renderer2 = new RecordingRenderer();
-        using var host2 = new UiDocumentHost(new RawMarkupComponent("<style>input:focus { visibility:hidden }</style><input id='c'>"), new ApproximateTextMeasurer(), renderer2, new UiHostOptions());
+        var focusCycle = new VisibilityFocusCycleComponent();
+        using var host2 = new UiDocumentHost(focusCycle, new ApproximateTextMeasurer(), renderer2, new UiHostOptions());
         host2.SetViewport(300, 180, 1);
         host2.Render();
         var c = Assert.NotNull(host2.Document?.GetElementById("c"));
+        RequireVisiblePrimaryBox(host2, c);
         host2.KeyPressed(UiKey.Tab);
+        Assert.Equal(1, focusCycle.FocusCount);
         host2.KeyPressed(UiKey.Backspace);
+        Assert.Equal(1, focusCycle.FocusCount);
+        Assert.Equal("seed", c.RuntimeValue ?? c.GetAttribute("value"));
         Assert.True((c.State & ElementState.Focus) == 0);
         Assert.True(Assert.NotNull(host2.Layout?.FindPrimaryBox(c)).Style.Visible);
     }
@@ -2194,23 +2210,37 @@ internal static class Program
         host.SetViewport(300, 180, 1);
         host.Render();
         var a = Assert.NotNull(host.Document?.GetElementById("a"));
+        var b = Assert.NotNull(host.Document?.GetElementById("b"));
+        RequireVisiblePrimaryBox(host, a);
+        RequireVisiblePrimaryBox(host, b);
         host.KeyPressed(UiKey.Tab);
+        Assert.True((a.State & ElementState.Focus) != 0, "Input a must be focused before Backspace.");
         component.OnKey = _ => SetTestState(host, a, ElementState.Invalid, true);
         host.KeyPressed(UiKey.Backspace);
+        Assert.Equal(1, component.KeyCount);
+        Assert.True(!Assert.NotNull(host.Layout?.FindPrimaryBox(a)).Style.Visible, "The key handler must hide input a.");
         Assert.Equal("seed", a.RuntimeValue ?? a.GetAttribute("value"));
-        Assert.True((a.State & ElementState.Focus) == 0);
+        Assert.True((a.State & ElementState.Focus) == 0, "Hidden input a must lose focus.");
         host.KeyPressed(UiKey.Tab);
-        var b = Assert.NotNull(host.Document?.GetElementById("b"));
+        Assert.True((b.State & ElementState.Focus) != 0, "Button b must be focused before Enter.");
         component.OnKey = _ => SetTestState(host, b, ElementState.Invalid, true);
         host.KeyPressed(UiKey.Enter);
+        Assert.Equal(2, component.KeyCount);
+        Assert.True(!Assert.NotNull(host.Layout?.FindPrimaryBox(b)).Style.Visible, "The key handler must hide button b.");
+        Assert.True((b.State & ElementState.Focus) == 0, "Hidden button b must lose focus.");
         Assert.Equal(0, component.ClickCount);
         Assert.Equal(0, component.SubmitCount);
         SetTestState(host, b, ElementState.Invalid, false);
         host.KeyPressed(UiKey.Tab);
+        RequireVisiblePrimaryBox(host, b);
+        Assert.True((b.State & ElementState.Focus) != 0, "Button b must be focused before Enter.");
         component.OnKey = null;
         component.OnClick = _ => SetTestState(host, b, ElementState.Invalid, true);
         host.KeyPressed(UiKey.Enter);
+        Assert.Equal(3, component.KeyCount);
         Assert.Equal(1, component.ClickCount);
+        Assert.True(!Assert.NotNull(host.Layout?.FindPrimaryBox(b)).Style.Visible, "The click handler must hide button b.");
+        Assert.True((b.State & ElementState.Focus) == 0, "Hidden button b must lose focus.");
         Assert.Equal(0, component.SubmitCount);
     }
 
@@ -2286,12 +2316,20 @@ internal static class Program
         using var host = new UiDocumentHost(component, new ApproximateTextMeasurer(), renderer, new UiHostOptions());
         host.SetViewport(200, 180, 1);
         host.Render();
+        var a = Assert.NotNull(host.Document?.GetElementById("a"));
         var b = Assert.NotNull(host.Document?.GetElementById("b"));
+        RequireVisiblePrimaryBox(host, a);
+        var bBox = RequireVisiblePrimaryBox(host, b);
         component.OnOut = _ => SetTestState(host, b, ElementState.Invalid, true);
         host.PointerMoved(new PointF(20, 20));
         host.Render();
+        Assert.True((a.State & ElementState.Hover) != 0);
+        Assert.Equal(1, component.InitialMouseovers);
+        Assert.Equal(0, component.OutgoingMouseouts);
         host.PointerMoved(new PointF(20, 100));
         host.Render();
+        Assert.Equal(1, component.OutgoingMouseouts);
+        Assert.True(!bBox.Style.Visible);
         Assert.Equal(0, component.IncomingMouseovers);
         Assert.True((b.State & ElementState.Hover) == 0);
         Assert.Equal(CursorKind.Default, host.CursorAt(new PointF(20, 100)));
@@ -2308,8 +2346,12 @@ internal static class Program
             host.Render();
             var a = Assert.NotNull(host.Document?.GetElementById("a"));
             var b = Assert.NotNull(host.Document?.GetElementById("b"));
+            RequireVisiblePrimaryBox(host, a);
+            var bBox = RequireVisiblePrimaryBox(host, b);
             host.KeyPressed(UiKey.Tab);
             Assert.True((a.State & ElementState.Focus) != 0);
+            Assert.Equal(1, component.InitialFocus);
+            Assert.Equal(0, component.BlurCount);
             component.OnBlur = _ => SetTestState(host, b, ElementState.Invalid, true);
             if (usePointer)
             {
@@ -2317,6 +2359,8 @@ internal static class Program
                 host.PointerPressed(new PointF(rect.X + 2, rect.Y + 2));
             }
             else host.KeyPressed(UiKey.Tab);
+            Assert.Equal(1, component.BlurCount);
+            Assert.True(!bBox.Style.Visible);
             Assert.True((a.State & ElementState.Focus) == 0);
             Assert.True((b.State & ElementState.Focus) == 0);
             Assert.Equal(0, component.IncomingFocus);
@@ -2334,13 +2378,20 @@ internal static class Program
         host.SetViewport(300, 180, 1);
         host.Render();
         var b = Assert.NotNull(host.Document?.GetElementById("b"));
-        var rect = Assert.NotNull(host.Layout?.FindPrimaryBox(b)).BorderBox;
+        var box = RequireVisiblePrimaryBox(host, b);
+        var rect = box.BorderBox;
         host.PointerPressed(new PointF(rect.X + 2, rect.Y + 2));
+        // Observe the :active style before any API can resolve the cleared state.
+        Assert.True(!box.Style.Visible);
+        Assert.True((b.State & ElementState.Active) == 0);
         Assert.Equal(0, component.IncomingFocus);
         Assert.Equal(0, component.IncomingPress);
         Assert.True((b.State & ElementState.Focus) == 0);
         host.TextInput('x');
         Assert.Equal("", b.RuntimeValue ?? b.GetAttribute("value") ?? "");
+        RequireVisiblePrimaryBox(host, b);
+        Assert.Equal(0, component.IncomingFocus);
+        Assert.Equal(0, component.IncomingPress);
     }
 
     private static void HiddenScrollbarCancelsDrag()
@@ -2351,17 +2402,32 @@ internal static class Program
         host.SetViewport(400, 300, 1);
         host.Render();
         var inner = Assert.NotNull(host.Document?.GetElementById("inner"));
-        var box = Assert.NotNull(host.Layout?.FindPrimaryBox(inner));
+        var box = RequireVisiblePrimaryBox(host, inner);
         var thumb = box.Scrollbar.HorizontalThumb;
+        Assert.True(box.Scrollbar.HorizontalVisible);
+        Assert.True(thumb.Width > 0 && thumb.Height > 0);
         var start = new PointF(thumb.X + 2, thumb.Y + thumb.Height / 2);
+        Assert.True(thumb.Contains(start) && box.Scrollbar.HorizontalTrack.Contains(start));
+        // Reflection is limited to the capture/drag invariant, like SetTestState.
+        const System.Reflection.BindingFlags flags = System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic;
+        var dragField = Assert.NotNull(typeof(UiDocumentHost).GetField("_scrollbarDrag", flags));
+        var captureField = Assert.NotNull(typeof(UiDocumentHost).GetField("_scrollbarPointerCaptured", flags));
         host.PointerPressed(start);
+        Assert.True(dragField.GetValue(host) is not null);
+        Assert.Equal(true, (bool)captureField.GetValue(host)!);
         SetTestState(host, inner, ElementState.Invalid, true);
         host.PointerMoved(new PointF(start.X + 80, start.Y));
+        Assert.True(!box.Style.Visible);
+        Assert.True(dragField.GetValue(host) is null);
+        Assert.Equal(true, (bool)captureField.GetValue(host)!);
         Assert.Equal(0f, host.GetScrollOffset(inner).X);
         host.PointerReleased(start);
+        Assert.Equal(false, (bool)captureField.GetValue(host)!);
         Assert.Equal(0, component.ClickCount);
         // Hidden bars cannot reacquire capture, but programmatic offsets survive.
         host.PointerPressed(start);
+        Assert.True(dragField.GetValue(host) is null);
+        Assert.Equal(false, (bool)captureField.GetValue(host)!);
         host.PointerMoved(new PointF(start.X + 80, start.Y));
         host.PointerReleased(start);
         Assert.Equal(0f, host.GetScrollOffset(inner).X);
@@ -3134,31 +3200,48 @@ internal static class Program
         protected override void BuildRenderTree(MarkupWriter writer) => writer.WriteLiteral(markup);
     }
 
+    private sealed class VisibilityFocusCycleComponent : UiComponent
+    {
+        public int FocusCount { get; private set; }
+        protected override void BuildRenderTree(MarkupWriter writer)
+        {
+            writer.WriteLiteral("<style>input:focus { visibility:hidden }</style><body><input id='c' value='seed'");
+            writer.WriteEventAttribute("onfocus", _ => FocusCount++);
+            writer.WriteLiteral("></body>");
+        }
+    }
+
     private sealed class VisibilityFocusComponent(bool hideWhenActive = false) : UiComponent
     {
         public Action<UiEvent>? OnBlur { get; set; }
+        public int InitialFocus { get; private set; }
+        public int BlurCount { get; private set; }
         public int IncomingFocus { get; private set; }
         public int IncomingPress { get; private set; }
         protected override void BuildRenderTree(MarkupWriter writer)
         {
             if (hideWhenActive) writer.WriteLiteral("<style>#b:active { visibility:hidden }</style>");
-            writer.WriteLiteral("<style>input { display:block; width:100px; height:30px } #b:invalid { visibility:hidden }</style><input id='a'");
-            writer.WriteEventAttribute("onblur", e => OnBlur?.Invoke(e));
+            writer.WriteLiteral("<style>input { display:block; width:100px; height:30px } #b:invalid { visibility:hidden }</style><body><input id='a'");
+            writer.WriteEventAttribute("onfocus", _ => InitialFocus++);
+            writer.WriteEventAttribute("onblur", e => { BlurCount++; OnBlur?.Invoke(e); });
             writer.WriteLiteral("><input id='b'");
             writer.WriteEventAttribute("onfocus", _ => IncomingFocus++);
             writer.WriteEventAttribute("onmousedown", _ => IncomingPress++);
-            writer.WriteLiteral(">");
+            writer.WriteLiteral("></body>");
         }
     }
 
     private sealed class VisibilityHoverComponent : UiComponent
     {
         public Action<UiEvent>? OnOut { get; set; }
+        public int InitialMouseovers { get; private set; }
+        public int OutgoingMouseouts { get; private set; }
         public int IncomingMouseovers { get; private set; }
         protected override void BuildRenderTree(MarkupWriter writer)
         {
             writer.WriteLiteral("<style>body { margin:0 } #a,#b { width:80px; height:80px } #b { cursor:pointer } #b:invalid { visibility:hidden }</style><body><div id='a'");
-            writer.WriteEventAttribute("onmouseout", e => OnOut?.Invoke(e));
+            writer.WriteEventAttribute("onmouseover", _ => InitialMouseovers++);
+            writer.WriteEventAttribute("onmouseout", e => { OutgoingMouseouts++; OnOut?.Invoke(e); });
             writer.WriteLiteral("></div><div id='b'");
             writer.WriteEventAttribute("onmouseover", _ => IncomingMouseovers++);
             writer.WriteLiteral("></div></body>");
@@ -3169,19 +3252,20 @@ internal static class Program
     {
         public Action<UiEvent>? OnKey { get; set; }
         public Action<UiEvent>? OnClick { get; set; }
+        public int KeyCount { get; private set; }
         public int ClickCount { get; private set; }
         public int SubmitCount { get; private set; }
 
         protected override void BuildRenderTree(MarkupWriter writer)
         {
-            writer.WriteLiteral("<style>:invalid { visibility:hidden }</style><form");
+            writer.WriteLiteral("<style>:invalid { visibility:hidden }</style><body><form");
             writer.WriteEventAttribute("onsubmit", _ => SubmitCount++);
             writer.WriteLiteral("><input id='a' value='seed'");
-            writer.WriteEventAttribute("onkeydown", e => OnKey?.Invoke(e));
+            writer.WriteEventAttribute("onkeydown", e => { KeyCount++; OnKey?.Invoke(e); });
             writer.WriteLiteral("><button id='b'");
-            writer.WriteEventAttribute("onkeydown", e => OnKey?.Invoke(e));
+            writer.WriteEventAttribute("onkeydown", e => { KeyCount++; OnKey?.Invoke(e); });
             writer.WriteEventAttribute("onclick", e => { ClickCount++; OnClick?.Invoke(e); });
-            writer.WriteLiteral(">submit</button></form>");
+            writer.WriteLiteral(">submit</button></form></body>");
         }
     }
 

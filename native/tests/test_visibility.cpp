@@ -38,7 +38,8 @@ struct Fixture {
     aether_layout_engine_t engine = nullptr;
     aether_layout_result_t layout = nullptr;
     std::vector<std::pair<aether_node_t,bool>> visibility;
-    Fixture(const char* html, const std::string& css) {
+    Fixture(const char* html, const std::string& css,
+            int32_t initial_state = AETHER_STATE_NONE) {
         ok(aether_doc_create(&doc)); ok(aether_doc_parse_html(doc, html));
         aether_style_runtime_options_t options{};
         aether_style_environment_t env{400,300,1,16,0,0,0};
@@ -46,6 +47,8 @@ struct Fixture {
         const std::string sheet = "html,body{display:block;margin:0}body{width:400px;font-size:16px;line-height:20px}div{display:block}span{display:inline}table{display:table}tr{display:table-row}td{display:table-cell} " + css;
         int64_t handle = 0;
         ok(aether_style_runtime_add_stylesheet(runtime,sheet.c_str(),2,"visibility.css",&handle,nullptr));
+        // Apply the public state before the first real style resolution.
+        if(auto target = node("target")) aether_element_set_state(target,initial_state);
         resolve(); fresh_map(); ok(aether_layout_create(measure,nullptr,&engine)); relayout();
     }
     ~Fixture() {
@@ -319,9 +322,62 @@ void dynamic() {
     check(initial.hit(0,5,5)!=initial.node("target"),"anonymous snapshot stays hidden");
 
 }
+// Each pseudo has its own probe, so simultaneous states cannot mask one another.
+void public_state_matrix() {
+    const char* html = "<body><div id='target'><div id='hover'></div><div id='active'></div>"
+        "<div id='focus'></div><div id='invalid'></div><div id='valid'></div>"
+        "<div id='focus-within'></div></div></body>";
+    const char* css = "#target>div{width:20px;height:20px;visibility:hidden}"
+        "#target:hover #hover{visibility:visible}"
+        "#target:active #active{visibility:visible}"
+        "#target:focus #focus{visibility:visible}"
+        "#target:invalid #invalid{visibility:visible}"
+        "#target:not(:invalid) #valid{visibility:visible}"
+        "#target:focus-within #focus-within{visibility:visible}";
+    const char* ids[] = {"hover","active","focus","invalid","valid","focus-within"};
+    const int32_t public_bits[] = {
+        AETHER_STATE_HOVER,AETHER_STATE_ACTIVE,AETHER_STATE_FOCUS,AETHER_STATE_INVALID
+    };
+    auto probe_visible = [](Fixture& fixture,const char* id) {
+        // Fixture::resolve copies each received ABI update's computed style.
+        // Check receipt explicitly rather than allowing a missing style to pass.
+        for(auto entry:fixture.visibility) if(entry.first==fixture.node(id)) return entry.second;
+        check(false,"probe received an actual resolved style update");
+        return false;
+    };
+    Fixture incremental(html,css);
+    for(int combination=0;combination<16;++combination) {
+        int32_t mask = AETHER_STATE_NONE;
+        for(int bit=0;bit<4;++bit) if(combination & (1<<bit)) mask |= public_bits[bit];
+        // Removing Invalid must preserve Hover/Active/Focus, then None clears all.
+        for(int32_t state : {mask,mask & ~int32_t(AETHER_STATE_INVALID),int32_t(AETHER_STATE_NONE)}) {
+            context = "public state matrix combination " + std::to_string(combination) +
+                " state " + std::to_string(state);
+            Fixture full(html,css,state);
+            aether_element_set_state(incremental.node("target"),state);
+            check(aether_element_get_state(incremental.node("target"))==state,"incremental public state roundtrip is exact");
+            check(aether_element_get_state(full.node("target"))==state,"initial public state roundtrip is exact");
+            incremental.resolve(incremental.node("target"));
+            const bool expected[] = {
+                bool(state&AETHER_STATE_HOVER),bool(state&AETHER_STATE_ACTIVE),
+                bool(state&AETHER_STATE_FOCUS),bool(state&AETHER_STATE_INVALID),
+                !bool(state&AETHER_STATE_INVALID),false
+            };
+            for(int probe=0;probe<6;++probe) {
+                context = "public state matrix combination " + std::to_string(combination) +
+                    " state " + std::to_string(state) + " :" + ids[probe];
+                const bool initial = probe_visible(full,ids[probe]);
+                const bool changed = probe_visible(incremental,ids[probe]);
+                check(initial==expected[probe],"initial resolution matches explicit public pseudo expectation");
+                check(changed==expected[probe],"incremental resolution matches explicit public pseudo expectation");
+                check(changed==initial,"incremental and fresh full resolution agree");
+            }
+        }
+    }
+}
 } // namespace
 int main() {
-    inheritance();geometry();painting();hits();dynamic();
+    inheritance();geometry();painting();hits();dynamic();public_state_matrix();
     std::printf("visibility: %d assertions, %d failures\n",assertions,failures);
     return failures?1:0;
 }

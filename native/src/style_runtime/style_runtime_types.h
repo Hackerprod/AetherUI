@@ -173,19 +173,36 @@ enum pseudo_selector_kind_t : uint8_t {
 
 // ═══ Style pseudo-state flags ═════════════════════════════════
 
+// Public states flow unchanged through element set/get and selector matching.
+// Keep their ABI values; focus-within uses a separate, reserved internal bit.
 enum style_pseudo_state_t : uint32_t {
     PSEUDO_STATE_NONE          = 0,
-    PSEUDO_STATE_HOVER         = 1u << 0,
-    PSEUDO_STATE_ACTIVE        = 1u << 1,
-    PSEUDO_STATE_FOCUS         = 1u << 2,
-    PSEUDO_STATE_FOCUS_WITHIN  = 1u << 3,
+    PSEUDO_STATE_HOVER         = AETHER_STATE_HOVER,
+    PSEUDO_STATE_ACTIVE        = AETHER_STATE_ACTIVE,
+    PSEUDO_STATE_FOCUS         = AETHER_STATE_FOCUS,
+    PSEUDO_STATE_FOCUS_WITHIN  = 1u << 6,
     PSEUDO_STATE_DISABLED      = 1u << 4,
     PSEUDO_STATE_CHECKED       = 1u << 5,
-    PSEUDO_STATE_INVALID       = 1u << 6,
+    PSEUDO_STATE_INVALID       = AETHER_STATE_INVALID,
     PSEUDO_STATE_READ_ONLY     = 1u << 7,
     PSEUDO_STATE_SELECTED      = 1u << 8,
     PSEUDO_STATE_EXPANDED      = 1u << 9,
 };
+
+static_assert(static_cast<uint32_t>(PSEUDO_STATE_HOVER) == AETHER_STATE_HOVER);
+static_assert(static_cast<uint32_t>(PSEUDO_STATE_ACTIVE) == AETHER_STATE_ACTIVE);
+static_assert(static_cast<uint32_t>(PSEUDO_STATE_FOCUS) == AETHER_STATE_FOCUS);
+static_assert(static_cast<uint32_t>(PSEUDO_STATE_INVALID) == AETHER_STATE_INVALID);
+static_assert(
+    (PSEUDO_STATE_HOVER | PSEUDO_STATE_ACTIVE | PSEUDO_STATE_FOCUS |
+     PSEUDO_STATE_FOCUS_WITHIN | PSEUDO_STATE_DISABLED | PSEUDO_STATE_CHECKED |
+     PSEUDO_STATE_INVALID | PSEUDO_STATE_READ_ONLY | PSEUDO_STATE_SELECTED |
+     PSEUDO_STATE_EXPANDED) ==
+    (PSEUDO_STATE_HOVER + PSEUDO_STATE_ACTIVE + PSEUDO_STATE_FOCUS +
+     PSEUDO_STATE_FOCUS_WITHIN + PSEUDO_STATE_DISABLED + PSEUDO_STATE_CHECKED +
+     PSEUDO_STATE_INVALID + PSEUDO_STATE_READ_ONLY + PSEUDO_STATE_SELECTED +
+     PSEUDO_STATE_EXPANDED),
+    "All internal pseudo-state bits must be disjoint");
 
 // ═══ NthExpression ════════════════════════════════════════════
 
