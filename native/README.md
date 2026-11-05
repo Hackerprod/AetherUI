@@ -146,6 +146,22 @@ against the installed package, calls `aether_abi_version()`/`aether_abi_capabili
 what it was compiled against. Copy that project's `CMakeLists.txt` as the starting point for a new
 native or cgo consumer.
 
+## HTML attribute values
+
+Slashes are data in unquoted HTML attribute values, including a slash directly
+before `>`: `src=logo.svg/>` has the value `logo.svg/`, while `src=logo.svg />`
+has the value `logo.svg` followed by the parser's self-closing marker. URLs and
+paths are not normalized. The parser extracts the raw value before decoding
+HTML entities once; decoded whitespace, quotes, and `>` never become delimiters.
+
+`aether.html-unquoted-attributes` checks the complete attribute map through the
+public ABI, including real versus accidentally invented `disabled` attributes,
+child relationships, production cascade matches, and reparsing. Its checks also
+run with `NDEBUG`. The slash boundary follows HTML tokenization, but this is not
+a claim of general HTML5 conformance: the existing entity decoder, `std::isspace`
+behavior (including vertical tab), incomplete-start-tag recovery at EOF, and
+self-closing behavior for non-void elements remain unchanged.
+
 ## Custom properties
 
 Custom-property names use decoded CSS identifier values with exact case and Unicode

@@ -112,6 +112,10 @@ if(AETHERUI_BUILD_TESTS)
     )
     add_test(NAME aether.abi-c COMMAND aether_abi_c_smoke_test)
 
+    add_executable(aether_html_unquoted_attributes_test tests/test_html_unquoted_attributes.cpp)
+    target_link_libraries(aether_html_unquoted_attributes_test PRIVATE AetherUI::Core)
+    add_test(NAME aether.html-unquoted-attributes COMMAND aether_html_unquoted_attributes_test)
+
     add_executable(aether_border_radii_test tests/test_border_radii.cpp src/css/border_radii.cpp src/rendering/border_painter.cpp)
     target_link_libraries(aether_border_radii_test PRIVATE AetherUI::Core)
     add_test(NAME aether.border-radii COMMAND aether_border_radii_test)

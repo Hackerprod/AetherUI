@@ -79,9 +79,11 @@ class HtmlParser {
             return val;
         }
 
+        // In an unquoted value, '/' is data, including immediately before '>'.
+        // The outer tag parser recognizes '/>' only outside an attribute value.
         size_t start = pos;
         while (!end() && !std::isspace(static_cast<unsigned char>(current()))
-               && current() != '>' && current() != '/')
+               && current() != '>')
             pos++;
         return std::string(src + start, pos - start);
     }
