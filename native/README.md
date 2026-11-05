@@ -59,14 +59,16 @@ unusual `strtof` forms, is intentionally unchanged. Global keywords and `var()` 
 pipeline responsibilities; the existing parent-inheritance and deferred-inline-shorthand
 limitations are covered by regression tests rather than changed here.
 
-`aether.transition-property-module` links only the module and its test translation unit, with
-separate compile checks for each self-contained private header. It covers metadata/order,
+`aether.transition-property-module` links only the module, the private CSS token lexer,
+and its test translation unit, with separate compile checks for each self-contained private header. It covers metadata/order,
 scalar-only application, parser aliases, reallocation/lifetime, independent registries,
 repeated/sealed registration, shorthand round-trips, and atomic failure. The public-ABI
 `aether.transition-property-pipeline` covers resolution, reset/precedence/global semantics,
 changing variables, PAINT-only updates, unchanged repeats, and shared-tokenizer numeric
-results for margin, padding, inset, border, flex, gap, and overflow. Both use explicit checks
-that remain active with `NDEBUG`.
+results for margin, padding, inset, border, flex, gap, and overflow. The shared splitter
+consumes CSS components, including adjacent tokens separated only by comments and
+percentage/dimension boundaries. Comments do not count as CSS whitespace; functions
+and balanced blocks remain intact. Both use explicit checks that remain active with `NDEBUG`.
 
 To verify the isolated target before building Core, use a fresh build directory:
 

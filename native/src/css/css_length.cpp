@@ -174,13 +174,15 @@ public:
     explicit calc_parser_s(std::string_view source) : source_(source) {}
 
     bool parse(calc_value_s& output) {
-        skip_whitespace();
+        if (!skip_trivia()) return false;
+        // The opening parenthesis must be adjacent to the identifier: trivia
+        // here would turn the function into an ident followed by a block.
         if (!consume_identifier("calc") || !consume('(')) return false;
         calc_value_s value{};
         if (!parse_sum(value)) return false;
-        skip_whitespace();
+        if (!skip_trivia()) return false;
         if (!consume(')')) return false;
-        skip_whitespace();
+        if (!skip_trivia()) return false;
         if (position_ != source_.size()) return false;
         output = value;
         return true;
@@ -190,15 +192,14 @@ private:
     bool parse_sum(calc_value_s& output) {
         if (!parse_product(output)) return false;
         for (;;) {
-            const size_t before_whitespace = position_;
-            skip_whitespace();
-            const bool had_leading_whitespace = position_ != before_whitespace;
+            bool had_leading_whitespace = false;
+            if (!skip_trivia(&had_leading_whitespace)) return false;
             if (position_ == source_.size() || (source_[position_] != '+' && source_[position_] != '-')) return true;
             const char operation = source_[position_++];
-            const size_t after_operator = position_;
-            skip_whitespace();
-            // Binary + and - require whitespace on both sides in CSS calc().
-            if (!had_leading_whitespace || position_ == after_operator) return false;
+            bool had_trailing_whitespace = false;
+            if (!skip_trivia(&had_trailing_whitespace)) return false;
+            // Comments separate tokens, but do not supply CSS whitespace.
+            if (!had_leading_whitespace || !had_trailing_whitespace) return false;
             calc_value_s right{};
             if (!parse_product(right) || !calc_add(output, right, operation == '+' ? 1.f : -1.f)) return false;
         }
@@ -207,12 +208,12 @@ private:
     bool parse_product(calc_value_s& output) {
         if (!parse_primary(output)) return false;
         for (;;) {
-            const size_t before_whitespace = position_;
-            skip_whitespace();
+            const size_t before_trivia = position_;
+            if (!skip_trivia()) return false;
             if (position_ == source_.size() || (source_[position_] != '*' && source_[position_] != '/')) {
-                // Addition/subtraction owns its preceding whitespace. Retain it
-                // so parse_sum can enforce the CSS tokenization rule.
-                position_ = before_whitespace;
+                // Addition/subtraction owns all preceding trivia. Restore it
+                // so parse_sum can distinguish comments from real whitespace.
+                position_ = before_trivia;
                 return true;
             }
             const char operation = source_[position_++];
@@ -223,10 +224,10 @@ private:
     }
 
     bool parse_primary(calc_value_s& output) {
-        skip_whitespace();
+        if (!skip_trivia()) return false;
         if (consume('(')) {
             if (!parse_sum(output)) return false;
-            skip_whitespace();
+            if (!skip_trivia()) return false;
             return consume(')');
         }
 
@@ -248,8 +249,22 @@ private:
         return true;
     }
 
-    void skip_whitespace() {
-        while (position_ < source_.size() && css_space(source_[position_])) ++position_;
+    bool skip_trivia(bool* saw_whitespace = nullptr) {
+        if (saw_whitespace) *saw_whitespace = false;
+        while (position_ < source_.size()) {
+            if (css_space(source_[position_])) {
+                if (saw_whitespace) *saw_whitespace = true;
+                ++position_;
+            } else if (source_[position_] == '/' && position_ + 1 < source_.size() &&
+                       source_[position_ + 1] == '*') {
+                const size_t end = source_.find("*/", position_ + 2);
+                if (end == std::string_view::npos) return false;
+                position_ = end + 2;
+            } else {
+                break;
+            }
+        }
+        return true;
     }
 
     std::string_view source_;

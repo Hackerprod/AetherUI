@@ -1,3 +1,4 @@
+#include "../style_runtime/css_component_values.h"
 #include "backdrop_filters.h"
 
 #include "../style_runtime/style_runtime_types.h"
@@ -9,26 +10,7 @@
 
 namespace {
 
-std::vector<std::string> split_functions(const std::string& source, bool* valid) {
-    std::vector<std::string> result;
-    int depth = 0;
-    size_t start = 0;
-    *valid = true;
-    for (size_t index = 0; index < source.size(); ++index) {
-        const char c = source[index];
-        if (c == '(') ++depth;
-        else if (c == ')') { if (--depth < 0) { *valid = false; return {}; } }
-        else if (std::isspace(static_cast<unsigned char>(c)) && depth == 0) {
-            const auto item = str_trim(source.substr(start, index - start));
-            if (!item.empty()) result.push_back(item);
-            start = index + 1;
-        }
-    }
-    if (depth != 0) { *valid = false; return {}; }
-    const auto item = str_trim(source.substr(start));
-    if (!item.empty()) result.push_back(item);
-    return result;
-}
+std::vector<std::string> split_functions(const std::string& source, bool* valid) { return css_split_components(source, valid); }
 
 bool parse_blur(const std::string& function, aether_backdrop_filter* out) {
     const auto open = function.find('(');

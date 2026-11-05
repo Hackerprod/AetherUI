@@ -167,19 +167,27 @@ static bool bi_try_font_size(const char* src, std::string& out) {
 
 static bool bi_try_font_family(const char* src, std::string& out) {
     if (!src || !*src) return false;
-    std::string t = str_trim(src);
-    if (t.empty()) return false;
-    // The ABI carries one resolved family, rather than the CSS fallback list. Choose the first
-    // family and normalize CSS quoting so platform text APIs receive a real family name instead
-    // of the literal CSS token (for example, "'Segoe UI', sans-serif").
-    auto families = split_top_level(t, ',');
+    const auto families = css_split_component_delimited(src, ',');
     if (families.empty()) return false;
-    out = str_trim(families.front());
-    if (out.size() >= 2 && ((out.front() == '\'' && out.back() == '\'') ||
-                            (out.front() == '"' && out.back() == '"'))) {
-        out = out.substr(1, out.size() - 2);
+    const auto& family = families.front();
+    css_component_cursor cursor(family);
+    css_component_value component;
+    out.clear();
+    while (cursor.next(component)) {
+        const auto spelling = family.substr(component.begin, component.end - component.begin);
+        if (component.token.kind != css_variable_token_kind::ident) {
+            if (!out.empty() || spelling.size() < 2 ||
+                (spelling.front() != '\'' && spelling.front() != '"')) return false;
+            out = spelling.substr(1, spelling.size() - 2);
+            return !out.empty() && !cursor.next(component) && cursor.valid();
+        }
+        if (!out.empty()) out += ' ';
+        css_variable_lexer decoder(spelling.data(), spelling.size());
+        if (!decoder.decode_identifier([](void* context, const char* bytes, size_t count) {
+            static_cast<std::string*>(context)->append(bytes, count); return true;
+        }, &out)) return false;
     }
-    return !out.empty();
+    return cursor.valid() && !out.empty();
 }
 
 // Line-height preserves the existing zero-valued NUMBER calc compatibility.
@@ -332,38 +340,10 @@ static property_apply_result_s bi_apply_gradient(aether_computed_style_t* st, co
 
 static bool bi_split_shadow_top_level(const std::string& source, bool split_whitespace,
                                       std::vector<std::string>& output) {
-    output.clear();
-    std::string token;
-    char quote = 0;
-    int depth = 0;
-    for (size_t index = 0; index < source.size(); ++index) {
-        const char character = source[index];
-        if (quote) {
-            token += character;
-            if (character == '\\' && index + 1 < source.size()) token += source[++index];
-            else if (character == quote) quote = 0;
-            continue;
-        }
-        if (character == '\'' || character == '"') { quote = character; token += character; continue; }
-        if (character == '(') { ++depth; token += character; continue; }
-        if (character == ')') {
-            if (depth == 0) return false;
-            --depth;
-            token += character;
-            continue;
-        }
-        const bool delimiter = depth == 0 &&
-            (split_whitespace ? std::isspace(static_cast<unsigned char>(character)) : character == ',');
-        if (!delimiter) { token += character; continue; }
-        const std::string value = str_trim(token);
-        if (value.empty()) return false;
-        output.push_back(value);
-        token.clear();
-    }
-    if (quote || depth != 0) return false;
-    const std::string value = str_trim(token);
-    if (value.empty()) return false;
-    output.push_back(value);
+    bool valid = false;
+    output = split_whitespace ? css_split_components(source, &valid) : css_split_component_delimited(source, ',', &valid);
+    if (!valid || output.empty()) return false;
+    for (const auto& part : output) if (css_split_components(part).empty()) return false;
     return true;
 }
 

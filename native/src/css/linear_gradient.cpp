@@ -1,3 +1,4 @@
+#include "../style_runtime/css_component_values.h"
 #include "linear_gradient.h"
 
 #include <algorithm>
@@ -24,20 +25,8 @@ std::string lowercase(std::string value) {
 }
 
 std::vector<std::string> split_top_level(const std::string& source) {
-    std::vector<std::string> parts;
-    std::string current;
-    int depth = 0;
-    for (char character : source) {
-        if (character == '(') ++depth;
-        else if (character == ')' && depth > 0) --depth;
-        if (character == ',' && depth == 0) {
-            parts.push_back(trim(current));
-            current.clear();
-        } else {
-            current += character;
-        }
-    }
-    parts.push_back(trim(current));
+    auto parts = css_split_component_delimited(source, ',');
+    for (auto& part : parts) part = trim(part);
     return parts;
 }
 
@@ -45,7 +34,12 @@ enum class direction_result { not_a_direction, valid, invalid };
 
 direction_result try_parse_direction(const std::string& source, float& x, float& y,
                                      bool& uses_fixed_corner_direction) {
-    const auto direction = lowercase(trim(source));
+    const auto components = css_split_components(source);
+    std::string direction;
+    for (const auto& component : components) {
+        if (!direction.empty()) direction += ' ';
+        direction += lowercase(component);
+    }
     if (direction.size() > 3 && direction.ends_with("deg")) {
         const auto degrees_text = direction.substr(0, direction.size() - 3);
         char* end = nullptr;
@@ -104,28 +98,10 @@ direction_result try_parse_direction(const std::string& source, float& x, float&
 }
 
 bool parse_stop(const std::string& source, aether_gradient_stop& stop) {
-    const std::string token = trim(source);
-    if (token.empty()) return false;
-
-    size_t color_end = token.find_first_of(" \t\r\n");
-    const auto open = token.find('(');
-    // Parentheses belong to the color token only when the function starts
-    // before its first whitespace. A later `calc(...)` is the stop position.
-    if (open != std::string::npos && open < color_end) {
-        int depth = 0;
-        for (size_t index = open; index < token.size(); ++index) {
-            if (token[index] == '(') ++depth;
-            else if (token[index] == ')' && --depth == 0) {
-                color_end = index + 1;
-                break;
-            }
-        }
-        if (depth != 0) return false;
-    }
-    if (color_end == std::string::npos) color_end = token.size();
-    if (!aether_color_rgba_try_parse(token.substr(0, color_end).c_str(), &stop.color)) return false;
-
-    const auto offset_text = trim(token.substr(color_end));
+    const auto components = css_split_components(source);
+    if (components.empty() || components.size() > 2) return false;
+    if (!aether_color_rgba_try_parse(components[0].c_str(), &stop.color)) return false;
+    const auto offset_text = components.size() == 2 ? components[1] : std::string{};
     if (offset_text.empty()) {
         stop.position = aether_css_length_zero();
         stop.offset = 0.f;

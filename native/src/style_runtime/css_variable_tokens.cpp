@@ -1,4 +1,4 @@
-﻿#include "css_variable_tokens.h"
+#include "css_variable_tokens.h"
 #include <vector>
 
 namespace {
@@ -56,7 +56,7 @@ unsigned int css_variable_lexer::scalar() {
 }
 unsigned int css_variable_lexer::escape() {
     ++cursor_; // The caller already recognized the backslash.
-    if (cursor_ == length_) return 0xfffd;
+    if (cursor_ == length_) { escape_tail_ = css_variable_escape_tail::backslash; return 0xfffd; }
     unsigned int value = 0;
     if (hex(read(cursor_)) >= 0) {
         for (size_t n = 0; n < 6 && cursor_ < length_ && !failed_; ++n) {
@@ -68,7 +68,9 @@ unsigned int css_variable_lexer::escape() {
         if (white(read(cursor_))) {
             const auto c = read(cursor_++);
             if (c == '\r' && read(cursor_) == '\n') ++cursor_;
+            else if (c == '\r' && cursor_ == length_) escape_tail_ = css_variable_escape_tail::hex_cr;
         }
+        else if (cursor_ == length_) escape_tail_ = css_variable_escape_tail::hex;
         return value == 0 || value > 0x10ffff || (value >= 0xd800 && value <= 0xdfff) ? 0xfffd : value;
     }
     return scalar();
@@ -121,20 +123,32 @@ bool css_variable_lexer::decode_identifier(css_identifier_sink sink, void* conte
 }
 css_variable_token css_variable_lexer::next() {
     css_variable_token t;
+    using category = css_variable_serialization;
+    escape_tail_ = css_variable_escape_tail::none;
     t.begin = cursor_;
     auto finish = [&](css_variable_token_kind kind) {
-        t.kind = failed_ ? css_variable_token_kind::error : kind;
         t.end = cursor_;
+        t.escape_tail = escape_tail_;
+        // Flags describe literal spelling, not decoded identifier values. Every
+        // source access, including this bounded lookahead, is budgeted.
+        t.starts_double_hyphen = t.end - t.begin >= 2 &&
+            read(t.begin) == '-' && read(t.begin + 1) == '-';
+        t.exact_double_hyphen = t.serialization == category::ident &&
+            t.end - t.begin == 2 && t.starts_double_hyphen;
+        t.kind = failed_ ? css_variable_token_kind::error : kind;
+        if (t.kind == css_variable_token_kind::error) t.serialization = category::error;
         return t;
     };
     if (failed_) return finish(css_variable_token_kind::error);
     if (cursor_ >= length_) return finish(css_variable_token_kind::end);
     const auto c = read(cursor_);
     if (white(c)) {
+        t.serialization = category::whitespace;
         do { ++cursor_; } while (cursor_ < length_ && white(read(cursor_)) && !failed_);
         return finish(css_variable_token_kind::whitespace);
     }
     if (c == '/' && read(cursor_ + 1) == '*') {
+        t.serialization = category::comment;
         cursor_ += 2;
         while (cursor_ < length_ && !failed_) {
             if (read(cursor_) == '*' && read(cursor_ + 1) == '/') { cursor_ += 2; return finish(css_variable_token_kind::comment); }
@@ -143,6 +157,7 @@ css_variable_token css_variable_lexer::next() {
         return finish(css_variable_token_kind::error);
     }
     if (c == '\'' || c == '"') {
+        t.serialization = category::string;
         ++cursor_;
         while (cursor_ < length_ && !failed_) {
             const auto q = read(cursor_++);
@@ -156,8 +171,20 @@ css_variable_token css_variable_lexer::next() {
         }
         return finish(css_variable_token_kind::error);
     }
+    // CSS sentinels take precedence over ident/delimiter tokenization.
+    if (c == '-' && read(cursor_ + 1) == '-' && read(cursor_ + 2) == '>') {
+        cursor_ += 3;
+        t.serialization = category::cdc;
+        return finish(css_variable_token_kind::other);
+    }
+    if (c == '<' && read(cursor_ + 1) == '!' && read(cursor_ + 2) == '-' && read(cursor_ + 3) == '-') {
+        cursor_ += 4;
+        t.serialization = category::cdo;
+        return finish(css_variable_token_kind::other);
+    }
     bool v = false, u = false, d = false;
     if (number_at(cursor_)) {
+        t.serialization = category::number;
         if (c == '+' || c == '-') ++cursor_;
         while (digit(read(cursor_)) && !failed_) ++cursor_;
         if (read(cursor_) == '.' && digit(read(cursor_ + 1))) {
@@ -171,25 +198,29 @@ css_variable_token css_variable_lexer::next() {
             cursor_ = exponent;
             while (digit(read(cursor_)) && !failed_) ++cursor_;
         }
-        if (ident_at(cursor_)) name(v, u, d);
-        else if (read(cursor_) == '%') ++cursor_;
+        if (ident_at(cursor_)) { name(v, u, d); t.serialization = category::dimension; }
+        else if (read(cursor_) == '%') { ++cursor_; t.serialization = category::percentage; }
         return finish(css_variable_token_kind::other);
     }
     if ((c == '#' && (named(read(cursor_ + 1)) || escape_at(cursor_ + 1))) || (c == '@' && ident_at(cursor_ + 1))) {
         ++cursor_;
         name(v, u, d);
+        t.serialization = c == '#' ? category::hash : category::at_keyword;
         return finish(css_variable_token_kind::other);
     }
     if (ident_at(cursor_)) {
         name(v, u, d);
         t.dashed = d;
+        t.serialization = category::ident;
         if (read(cursor_) != '(') return finish(css_variable_token_kind::ident);
         ++cursor_;
+        t.serialization = category::function;
         if (u) {
             size_t look = cursor_;
             while (look < length_ && white(read(look)) && !failed_) ++look;
             const auto q = read(look);
             if (q != '\'' && q != '"') {
+                t.serialization = category::url;
                 while (cursor_ < length_ && !failed_) {
                     const auto a = read(cursor_);
                     if (a == ')') { ++cursor_; return finish(css_variable_token_kind::other); }
@@ -205,6 +236,8 @@ css_variable_token css_variable_lexer::next() {
     }
     ++cursor_;
     t.delimiter = static_cast<char>(c);
+    t.serialization = c == '(' ? category::open_parenthesis :
+        (c == '[' || c == '{' || c == ')' || c == ']' || c == '}' || c == ',') ? category::other : category::delimiter;
     if (c == '(' || c == '[' || c == '{') return finish(css_variable_token_kind::open);
     if (c == ')' || c == ']' || c == '}') return finish(css_variable_token_kind::close);
     if (c == ',') return finish(css_variable_token_kind::comma);

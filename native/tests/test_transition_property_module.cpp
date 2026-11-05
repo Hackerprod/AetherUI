@@ -241,12 +241,15 @@ void growth_and_lifetime() {
 
 void shared_helpers() {
     require(bi_split_ws(" a\t b\n c\r d ") == std::vector<std::string>({"a", "b", "c", "d"}), "four whitespace chars");
-    require(bi_split_ws("a\fb") == std::vector<std::string>({"a\fb"}), "form feed unchanged");
-    require(bi_split_ws("calc(1px + 2px) [a {b c}] \"a\\\" b\" ) x") ==
-            std::vector<std::string>({"calc(1px + 2px)", "[a {b c}]", "\"a\\\" b\"", ")", "x"}),
-            "nested delimiters, quoted escape and saturating depth");
+    require(bi_split_ws("a\fb") == std::vector<std::string>({"a", "b"}), "form feed is CSS whitespace");
+    require(bi_split_ws("calc(1px + 2px) [a {b c}] \"a\\\" b\"") ==
+            std::vector<std::string>({"calc(1px + 2px)", "[a {b c}]", "\"a\\\" b\""}),
+            "nested delimiters and quoted escape");
+    require(bi_split_ws("calc(1px + 2px) ) x").empty(), "unmatched close rejected");
     require(bi_split_ws("a(b [c d]) 5px") == std::vector<std::string>({"a(b [c d])", "5px"}), "combined depth");
-    require(bi_split_ws("a\\ b") == std::vector<std::string>({"a\\", "b"}), "external escapes unchanged");
+    require(bi_split_ws("a\\ b") == std::vector<std::string>({"a\\ b"}), "escaped space remains in identifier");
+    require(bi_split_ws("7px/**/11px") == std::vector<std::string>({"7px", "11px"}), "comment-separated components");
+    require(bi_split_ws("7%11px") == std::vector<std::string>({"7%", "11px"}), "adjacent components");
     require(bi_is_global_keyword("InHeRiT") && !bi_is_global_keyword("revert-layer"), "global keyword scope");
 }
 } // namespace

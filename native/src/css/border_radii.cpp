@@ -1,3 +1,4 @@
+#include "../style_runtime/css_component_values.h"
 #include "border_radii.h"
 #include "css_types.h"
 
@@ -14,12 +15,7 @@ static std::string trim(std::string value) {
     return value.substr(first, last - first + 1);
 }
 
-static std::vector<std::string> words(const std::string& value) {
-    std::istringstream stream(value);
-    std::vector<std::string> result;
-    for (std::string item; stream >> item;) result.push_back(item);
-    return result;
-}
+static std::vector<std::string> words(const std::string& value) { return css_split_components(value); }
 
 static bool parse_component(const std::vector<std::string>& values, aether_css_length output[4]) {
     if (values.empty() || values.size() > 4) return false;
@@ -35,11 +31,12 @@ static bool parse_component(const std::vector<std::string>& values, aether_css_l
 
 bool aether_border_radii_try_parse(const std::string& source, aether_border_radii* out) {
     if (!out) return false;
-    const auto slash = source.find('/');
-    if (slash != std::string::npos && source.find('/', slash + 1) != std::string::npos) return false;
+    const auto sections = css_split_component_delimited(source, '/');
+    if (sections.empty() || sections.size() > 2) return false;
+    const auto slash = css_find_component_delimiter(source, '/');
     aether_css_length horizontal[4], vertical[4];
     if (!parse_component(words(trim(source.substr(0, slash))), horizontal)) return false;
-    if (slash == std::string::npos) std::copy(std::begin(horizontal), std::end(horizontal), std::begin(vertical));
+    if (slash < 0) std::copy(std::begin(horizontal), std::end(horizontal), std::begin(vertical));
     else if (!parse_component(words(trim(source.substr(slash + 1))), vertical)) return false;
     *out = {{horizontal[0], vertical[0]}, {horizontal[1], vertical[1]},
             {horizontal[2], vertical[2]}, {horizontal[3], vertical[3]}};

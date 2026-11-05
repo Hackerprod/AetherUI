@@ -1,3 +1,4 @@
+#include "../style_runtime/css_component_values.h"
 #include "background_layers.h"
 
 #include "linear_gradient.h"
@@ -10,32 +11,11 @@ namespace {
 
 std::vector<std::string> split_trimmed(const std::string& source, char separator) {
     std::vector<std::string> result;
-    for (const auto& part : split_top_level(source, separator)) result.push_back(str_trim(part));
+    for (const auto& part : css_split_component_delimited(source, separator)) result.push_back(str_trim(part));
     return result;
 }
 
-std::vector<std::string> split_words(const std::string& source) {
-    std::vector<std::string> result;
-    std::string current;
-    char quote = 0;
-    int depth = 0;
-    for (size_t i = 0; i < source.size(); ++i) {
-        const char c = source[i];
-        if (quote) {
-            current += c;
-            if (c == '\\' && i + 1 < source.size()) current += source[++i];
-            else if (c == quote) quote = 0;
-        } else if (c == '\'' || c == '"') { quote = c; current += c; }
-        else if (c == '(') { ++depth; current += c; }
-        else if (c == ')') { if (depth == 0) return {}; --depth; current += c; }
-        else if (depth == 0 && std::isspace(static_cast<unsigned char>(c))) {
-            if (!current.empty()) { result.push_back(current); current.clear(); }
-        } else current += c;
-    }
-    if (quote || depth != 0) return {};
-    if (!current.empty()) result.push_back(current);
-    return result;
-}
+std::vector<std::string> split_words(const std::string& source) { return css_split_components(source); }
 
 bool parse_url(const std::string& source, std::string& out) {
     const auto text = str_trim(source);
@@ -203,7 +183,7 @@ bool aether_background_shorthand_try_parse(const std::string& source, aether_bac
     const auto layers = split_trimmed(source, ',');
     if (layers.empty()) return false;
     for (size_t index = 0; index < layers.size(); ++index) {
-        const auto slash = find_top_level(layers[index], '/');
+        const auto slash = css_find_component_delimiter(layers[index], '/');
         const auto before_size = str_trim(slash < 0 ? layers[index] : layers[index].substr(0, slash));
         const auto after_slash = slash < 0 ? std::string{} : str_trim(layers[index].substr(slash + 1));
         if (slash >= 0 && after_slash.empty()) return false;

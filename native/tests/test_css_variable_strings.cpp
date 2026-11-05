@@ -85,6 +85,23 @@ std::string chain(int n) {
     return css;
 }
 void integration() {
+    // These go through actual var() substitution, not only serialized calc text.
+    struct width_case { const char* declaration; int unit; };
+    const width_case widths[] = {
+        {"--n:2;width:calc(var(--n) * 1px)", AETHER_CSS_UNIT_LINEAR},
+        {"--n:2;width:calc(1px +var(--n)*1px)", AETHER_CSS_UNIT_AUTO},
+        {"--n:2;--p:+;width:calc(1px var(--p)var(--n)*1px)", AETHER_CSS_UNIT_AUTO},
+        {"--n:2;--p:+;width:calc(1px var(--p) var(--n)*1px)", AETHER_CSS_UNIT_LINEAR},
+        {"--f:calc;width:var(--f)(10px)", AETHER_CSS_UNIT_AUTO},
+        {"--n:10;width:var(--n)px", AETHER_CSS_UNIT_AUTO},
+        {"--n:10;width:var(--n)%", AETHER_CSS_UNIT_AUTO},
+        {"--n:1;width:calc(var(--n)px)", AETHER_CSS_UNIT_AUTO},
+    };
+    for (bool inlined : {false, true}) for (const auto& example : widths) {
+        fixture f;
+        f.load(std::string("width:73px;") + example.declaration, inlined);
+        require(f.style.width.unit == example.unit, std::string("computed width tokens: ") + example.declaration);
+    }
     family("font-family:'plain-family'", "plain-family");
     family("font-family:'var(--missing)'", "var(--missing)");
     family("font-family:'var(--family)'", "var(--family)");
@@ -158,7 +175,10 @@ void private_resolver() {
     check("var(--a)", 2, 65536, true, "leaf");
     check("abc", 2, 3, true, "abc");
     check("abcd", 2, 3, false, "");
-    check("var(--x)zz", 2, 3, true, "azz");
+    // Substitution preserves ident tokens; the four-byte comment counts.
+    check("var(--x)zz", 2, 7, true, "a/**/zz");
+    check("var(--x)zz", 2, 6, false, "");
+    check("var(--x)zz", 2, 3, false, "");
     check("var(--x)zz", 2, 2, false, "");
     check(nullptr, 2, 3, false, "");
     // Private scopes hold decoded keys; CSS spelling is not key identity.

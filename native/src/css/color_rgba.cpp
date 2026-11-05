@@ -1,3 +1,4 @@
+#include "../style_runtime/css_component_values.h"
 #include <aether/aether.h>
 #include <cstring>
 #include <cstdlib>
@@ -65,14 +66,14 @@ static aether_bool_t try_channel(const char* text, float* value) {
         buf[len - 1] = '\0';
         char* end = nullptr;
         float pct = strtof(buf, &end);
-        if (end == buf || !std::isfinite(pct)) return AETHER_FALSE;
+        if (end == buf || *end != '\0' || !std::isfinite(pct)) return AETHER_FALSE;
         *value = fminf(fmaxf(pct / 100.0f, 0.0f), 1.0f);
         return AETHER_TRUE;
     }
 
     char* end = nullptr;
     float channel = strtof(text, &end);
-    if (end == text || !std::isfinite(channel)) return AETHER_FALSE;
+    if (end == text || *end != '\0' || !std::isfinite(channel)) return AETHER_FALSE;
     *value = fminf(fmaxf(channel / 255.0f, 0.0f), 1.0f);
     return AETHER_TRUE;
 }
@@ -89,49 +90,30 @@ static aether_bool_t try_alpha(const char* text, float* value) {
         buf[len - 1] = '\0';
         char* end = nullptr;
         float pct = strtof(buf, &end);
-        if (end == buf || !std::isfinite(pct)) return AETHER_FALSE;
+        if (end == buf || *end != '\0' || !std::isfinite(pct)) return AETHER_FALSE;
         *value = fminf(fmaxf(pct / 100.0f, 0.0f), 1.0f);
         return AETHER_TRUE;
     }
 
     char* end = nullptr;
     float alpha = strtof(text, &end);
-    if (end == text || !std::isfinite(alpha)) return AETHER_FALSE;
+    if (end == text || *end != '\0' || !std::isfinite(alpha)) return AETHER_FALSE;
     *value = fminf(fmaxf(alpha, 0.0f), 1.0f);
     return AETHER_TRUE;
 }
 
 static aether_bool_t try_parse_rgb(const char* s, aether_bool_t has_alpha, aether_color_rgba* out) {
-    const char* p = s;
+    const std::string body(s, std::strlen(s) - 1); // caller verified final ')'
+    const auto parts = css_split_component_delimited(body, ',');
+    if (parts.size() != static_cast<size_t>(has_alpha ? 4 : 3)) return AETHER_FALSE;
     float channels[4] = {0, 0, 0, 1};
-    int count = 0;
-
-    while (*p && count < (has_alpha ? 4 : 3)) {
-        while (*p == ' ' || *p == '\t') ++p;
-        if (*p == '\0') break;
-
-        char buf[32];
-        int i = 0;
-        while (*p && *p != ',' && *p != ')' && i < (int)sizeof(buf) - 1) {
-            buf[i++] = *p++;
-        }
-        buf[i] = '\0';
-
-        while (i > 0 && buf[i - 1] == ' ') buf[--i] = '\0';
-
-        float val;
-        if (count < 3) {
-            if (!try_channel(buf, &val)) return AETHER_FALSE;
-        } else {
-            if (!try_alpha(buf, &val)) return AETHER_FALSE;
-        }
-        channels[count++] = val;
-
-        while (*p == ' ' || *p == '\t') ++p;
-        if (*p == ',') ++p;
+    for (size_t index = 0; index < parts.size(); ++index) {
+        const auto components = css_split_components(parts[index]);
+        if (components.size() != 1) return AETHER_FALSE;
+        if (index < 3) {
+            if (!try_channel(components[0].c_str(), &channels[index])) return AETHER_FALSE;
+        } else if (!try_alpha(components[0].c_str(), &channels[index])) return AETHER_FALSE;
     }
-
-    if (count != (has_alpha ? 4 : 3)) return AETHER_FALSE;
 
     out->r = channels[0];
     out->g = channels[1];

@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 #include <cstddef>
 #include <string>
 
@@ -14,11 +14,22 @@ struct css_variable_budget {
 };
 
 enum class css_variable_token_kind { other, whitespace, comment, ident, function, open, close, comma, end, error };
+// Serialization categories deliberately do not change the legacy kind used by
+// invocation, !important and media readers.
+enum class css_variable_serialization {
+    other, ident, function, at_keyword, hash, number, percentage, dimension,
+    url, bad_url, string, bad_string, delimiter, open_parenthesis, cdo, cdc,
+    whitespace, comment, end, error
+};
+enum class css_variable_escape_tail { none, backslash, hex, hex_cr };
 struct css_variable_token {
     css_variable_token_kind kind = css_variable_token_kind::end;
     size_t begin = 0, end = 0;
     char delimiter = 0;
     bool is_var = false, dashed = false;
+    css_variable_serialization serialization = css_variable_serialization::end;
+    css_variable_escape_tail escape_tail = css_variable_escape_tail::none;
+    bool starts_double_hyphen = false, exact_double_hyphen = false;
 };
 // A sink receives one decoded scalar (1..4 UTF-8 bytes) at a time. No allocation
 // is performed by the decoder. A false return aborts the whole identifier.
@@ -37,6 +48,7 @@ private:
     size_t length_, cursor_;
     css_variable_budget* budget_;
     bool failed_ = false;
+    css_variable_escape_tail escape_tail_ = css_variable_escape_tail::none;
     unsigned char read(size_t at);
     bool escape_at(size_t at);
     bool ident_at(size_t at);

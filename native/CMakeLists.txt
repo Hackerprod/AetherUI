@@ -135,7 +135,14 @@ if(AETHERUI_BUILD_TESTS)
     target_link_libraries(aether_dom_mutation_boundary_test PRIVATE AetherUI::Core)
     add_test(NAME aether.dom-mutation-boundary COMMAND aether_dom_mutation_boundary_test)
 
-    add_executable(aether_border_radii_test tests/test_border_radii.cpp src/css/border_radii.cpp src/rendering/border_painter.cpp)
+    add_executable(aether_css_component_consumers_test tests/test_css_component_consumers.cpp
+        src/style_runtime/css_variable_tokens.cpp src/css/border_radii.cpp
+        src/css/background_layers.cpp src/css/backdrop_filters.cpp
+        src/css/transforms.cpp src/css/linear_gradient.cpp)
+    target_link_libraries(aether_css_component_consumers_test PRIVATE AetherUI::Core)
+    add_test(NAME aether.css-component-consumers COMMAND aether_css_component_consumers_test)
+
+    add_executable(aether_border_radii_test tests/test_border_radii.cpp src/css/border_radii.cpp src/rendering/border_painter.cpp src/style_runtime/css_variable_tokens.cpp)
     target_link_libraries(aether_border_radii_test PRIVATE AetherUI::Core)
     add_test(NAME aether.border-radii COMMAND aether_border_radii_test)
 
@@ -173,11 +180,11 @@ if(AETHERUI_BUILD_TESTS)
     target_link_libraries(aether_control_sizing_test PRIVATE AetherUI::Core)
     add_test(NAME aether.control-sizing COMMAND aether_control_sizing_test)
 
-    add_executable(aether_linear_gradient_test tests/test_linear_gradient.cpp src/css/linear_gradient.cpp)
+    add_executable(aether_linear_gradient_test tests/test_linear_gradient.cpp src/css/linear_gradient.cpp src/style_runtime/css_variable_tokens.cpp)
     target_link_libraries(aether_linear_gradient_test PRIVATE AetherUI::Core)
     add_test(NAME aether.linear-gradient COMMAND aether_linear_gradient_test)
 
-    add_executable(aether_background_layers_test tests/test_background_layers.cpp src/css/background_layers.cpp src/css/linear_gradient.cpp)
+    add_executable(aether_background_layers_test tests/test_background_layers.cpp src/css/background_layers.cpp src/css/linear_gradient.cpp src/style_runtime/css_variable_tokens.cpp)
     target_link_libraries(aether_background_layers_test PRIVATE AetherUI::Core)
     add_test(NAME aether.background-layers COMMAND aether_background_layers_test)
 
@@ -353,6 +360,17 @@ if(AETHERUI_BUILD_TESTS)
     target_link_libraries(aether_css_variable_strings_test PRIVATE AetherUI::Core)
     add_test(NAME aether.css-variable-strings COMMAND aether_css_variable_strings_test)
 
+    # Token equivalence and deterministic work-limit tests stay private.
+    add_executable(aether_css_variable_boundaries_test tests/test_css_variable_boundaries.cpp
+        src/style_runtime/css_variable_tokens.cpp src/style_runtime/variable_resolver.cpp)
+    target_include_directories(aether_css_variable_boundaries_test PRIVATE include src)
+    target_link_libraries(aether_css_variable_boundaries_test PRIVATE AetherUI::Core)
+    add_test(NAME aether.css-variable-boundaries COMMAND aether_css_variable_boundaries_test)
+
+    add_executable(aether_css_calc_trivia_test tests/test_css_calc_trivia.cpp)
+    target_link_libraries(aether_css_calc_trivia_test PRIVATE AetherUI::Core)
+    add_test(NAME aether.css-calc-trivia COMMAND aether_css_calc_trivia_test)
+
     add_executable(aether_shorthand_var_test tests/test_shorthand_var.cpp)
     target_include_directories(aether_shorthand_var_test PRIVATE src)
     target_link_libraries(aether_shorthand_var_test PRIVATE AetherUI::Core)
@@ -371,7 +389,7 @@ if(AETHERUI_BUILD_TESTS)
     target_link_libraries(aether_current_color_test PRIVATE AetherUI::Core)
     add_test(NAME aether.current-color COMMAND aether_current_color_test)
 
-    add_executable(aether_transforms_test tests/test_transforms.cpp src/css/transforms.cpp src/rendering/transform_matrix.cpp)
+    add_executable(aether_transforms_test tests/test_transforms.cpp src/css/transforms.cpp src/rendering/transform_matrix.cpp src/style_runtime/css_variable_tokens.cpp)
     target_link_libraries(aether_transforms_test PRIVATE AetherUI::Core)
     target_include_directories(aether_transforms_test PRIVATE src/css src/rendering)
     add_test(NAME aether.transforms COMMAND aether_transforms_test)
@@ -402,7 +420,8 @@ if(AETHERUI_BUILD_TESTS)
     # parse/apply behavior, not the DOM, cascade, or global property catalog.
     add_executable(aether_transition_property_module_test
         tests/test_transition_property_module.cpp
-        src/style_runtime/transition_properties.cpp)
+        src/style_runtime/transition_properties.cpp
+        src/style_runtime/css_variable_tokens.cpp)
     target_include_directories(aether_transition_property_module_test PRIVATE include src/style_runtime)
     target_compile_features(aether_transition_property_module_test PRIVATE cxx_std_20)
     add_test(NAME aether.transition-property-module COMMAND aether_transition_property_module_test)

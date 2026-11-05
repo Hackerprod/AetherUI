@@ -1,3 +1,4 @@
+#include "../style_runtime/css_component_values.h"
 #include "transforms.h"
 
 #include <algorithm>
@@ -66,42 +67,19 @@ bool parse_angle(const std::string& source, float* out_radians) {
 bool split_components(const std::string& source, bool allow_commas, std::vector<std::string>* out) {
     if (!out) return false;
     out->clear();
-    std::string token;
-    int depth = 0;
-    bool requires_component_after_comma = false;
-    auto append = [&]() -> bool {
-        std::string value = trim(token);
-        token.clear();
-        if (value.empty()) return false;
-        out->push_back(std::move(value));
-        return true;
-    };
-    for (size_t index = 0; index < source.size(); ++index) {
-        const char c = source[index];
-        if (c == '(') { ++depth; token += c; continue; }
-        if (c == ')') {
-            if (--depth < 0) return false;
-            token += c;
-            continue;
+    css_component_cursor cursor(source);
+    css_component_value component;
+    bool after_comma = false;
+    while (cursor.next(component)) {
+        if (css_component_is_delimiter(component, ',')) {
+            if (!allow_commas || out->empty() || after_comma) return false;
+            after_comma = true;
+        } else {
+            out->push_back(source.substr(component.begin, component.end - component.begin));
+            after_comma = false;
         }
-        if (depth == 0 && c == ',') {
-            if (!allow_commas) return false;
-            if (!append()) return false;
-            requires_component_after_comma = true;
-            continue;
-        }
-        if (depth == 0 && std::isspace(static_cast<unsigned char>(c))) {
-            if (!token.empty()) {
-                if (!append()) return false;
-                requires_component_after_comma = false;
-            }
-            continue;
-        }
-        token += c;
-        requires_component_after_comma = false;
     }
-    if (depth != 0 || requires_component_after_comma) return false;
-    return token.empty() ? !out->empty() : append();
+    return cursor.valid() && !after_comma && !out->empty();
 }
 
 bool parse_length(const std::string& source, aether_css_length* out) {
@@ -170,30 +148,18 @@ bool parse_transform_function(const std::string& name, const std::vector<std::st
 bool parse_transform_list(const std::string& source, std::vector<aether_transform_operation>* out) {
     if (!out) return false;
     out->clear();
-    size_t cursor = 0;
-    while (cursor < source.size()) {
-        while (cursor < source.size() && std::isspace(static_cast<unsigned char>(source[cursor]))) ++cursor;
-        if (cursor == source.size()) break;
-        const size_t name_start = cursor;
-        while (cursor < source.size() && (std::isalpha(static_cast<unsigned char>(source[cursor])) || source[cursor] == '-')) ++cursor;
-        if (cursor == name_start || cursor == source.size() || source[cursor] != '(') return false;
-        const std::string name = source.substr(name_start, cursor - name_start);
-        ++cursor;
-        const size_t args_start = cursor;
-        int depth = 1;
-        while (cursor < source.size() && depth > 0) {
-            if (source[cursor] == '(') ++depth;
-            else if (source[cursor] == ')') --depth;
-            ++cursor;
-        }
-        if (depth != 0) return false;
+    css_component_cursor cursor(source);
+    css_component_value component;
+    while (cursor.next(component)) {
+        if (component.token.kind != css_variable_token_kind::function) return false;
+        const auto name = source.substr(component.begin, component.token.end - component.begin - 1);
         std::vector<std::string> args;
-        if (!split_components(source.substr(args_start, cursor - args_start - 1), true, &args)) return false;
+        if (!split_components(source.substr(component.token.end, component.end - component.token.end - 1), true, &args)) return false;
         aether_transform_operation operation{};
         if (!parse_transform_function(name, args, &operation)) return false;
         out->push_back(operation);
     }
-    return !out->empty();
+    return cursor.valid() && !out->empty();
 }
 
 bool origin_keyword(const std::string& value, bool* horizontal, aether_css_length* length) {
