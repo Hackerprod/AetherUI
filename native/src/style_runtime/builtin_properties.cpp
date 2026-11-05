@@ -1,5 +1,6 @@
 #include "style_property_registry_internal.h"
 #include "../css/border_utils.h"
+#include "../css/css_length_internal.h"
 #include "../css/border_radii.h"
 #include "../css/background_layers.h"
 #include "../css/backdrop_filters.h"
@@ -262,11 +263,25 @@ static bool bi_try_font_family(const char* src, std::string& out) {
     return !out.empty();
 }
 
+// Line-height preserves the existing zero-valued NUMBER calc compatibility.
+// Both validation and application use the same typed evaluation policy.
+static bool bi_read_line_height(const std::string& source, aether::css::calc_value_s& result) {
+    using aether::css::calc_value_kind_e;
+    if (aether::css::try_parse_calc(source, result))
+        return result.kind == calc_value_kind_e::length || result.number == 0.f;
+
+    aether_css_length length;
+    if (!aether_css_length_try_parse(source.c_str(), &length) || length.unit == AETHER_CSS_UNIT_AUTO)
+        return false;
+    result = {calc_value_kind_e::length, 0.f, length};
+    return true;
+}
+
 static bool bi_try_line_height(const char* src, std::string& out) {
     std::string t = str_trim(src);
     if (str_iequals(t, "normal")) { out = "normal"; return true; }
-    aether_css_length l;
-    if (aether_css_length_try_parse(t.c_str(), &l) && l.unit != AETHER_CSS_UNIT_AUTO) {
+    aether::css::calc_value_s result;
+    if (bi_read_line_height(t, result)) {
         out = t; return true;
     }
     return false;
@@ -1064,9 +1079,10 @@ void builtin_properties_register(style_property_registry_s* reg) {
         STYLE_IMPACT_TEXT_LAYOUT | STYLE_IMPACT_LAYOUT,
         "1.2em", bi_try_line_height,
         [](aether_computed_style_t* st, const std::string& v) {
-            aether_css_length l;
-            if (aether_css_length_try_parse(v.c_str(), &l))
-                st->line_height = aether_css_length_resolve(l, 0.0f, st->font_size, 16.0f, 1920.0f, 1080.0f);
+            aether::css::calc_value_s result;
+            if (bi_read_line_height(v, result))
+                st->line_height = result.kind == aether::css::calc_value_kind_e::number ? 0.f :
+                    aether_css_length_resolve(result.length, 0.0f, st->font_size, 16.0f, 1920.0f, 1080.0f);
         });
 
     // text-align

@@ -1,4 +1,4 @@
-#include <aether/aether.h>
+#include "css_length_internal.h"
 #include <cmath>
 #include <cstring>
 #include <cstdlib>
@@ -8,13 +8,8 @@
 
 namespace {
 
-enum class calc_value_kind_e { number, length };
-
-struct calc_value_s {
-    calc_value_kind_e kind = calc_value_kind_e::number;
-    float number = 0.f;
-    aether_css_length length = aether_css_length_zero();
-};
+using aether::css::calc_value_kind_e;
+using aether::css::calc_value_s;
 
 static bool is_ascii_alpha(char value) {
     return (value >= 'a' && value <= 'z') || (value >= 'A' && value <= 'Z');
@@ -57,15 +52,7 @@ static bool calc_add(calc_value_s& left, const calc_value_s& right, float sign) 
         left.number += sign * right.number;
         return std::isfinite(left.number);
     }
-    // CSS permits a unitless zero wherever a length is expected. Preserve that
-    // compatibility without treating arbitrary numbers as lengths.
-    if (left.kind == calc_value_kind_e::number) {
-        if (left.number != 0.f) return false;
-        left = calc_length(aether_css_length_zero());
-    }
-    if (right.kind == calc_value_kind_e::number) {
-        return right.number == 0.f;
-    }
+    if (left.kind != right.kind) return false;
     left.length.value += sign * right.length.value;
     left.length.linear_percent += sign * right.length.linear_percent;
     left.length.linear_em += sign * right.length.linear_em;
@@ -119,7 +106,7 @@ class calc_parser_s {
 public:
     explicit calc_parser_s(std::string_view source) : source_(source) {}
 
-    bool parse(aether_css_length& output) {
+    bool parse(calc_value_s& output) {
         skip_whitespace();
         if (!consume_identifier("calc") || !consume('(')) return false;
         calc_value_s value{};
@@ -128,12 +115,7 @@ public:
         if (!consume(')')) return false;
         skip_whitespace();
         if (position_ != source_.size()) return false;
-        if (value.kind == calc_value_kind_e::number) {
-            if (value.number != 0.f) return false;
-            output = aether_css_length_zero();
-        } else {
-            output = value.length;
-        }
+        output = value;
         return true;
     }
 
@@ -250,6 +232,10 @@ private:
 
 } // namespace
 
+bool aether::css::try_parse_calc(std::string_view source, calc_value_s& output) {
+    return calc_parser_s(source).parse(output);
+}
+
 AETHER_API aether_css_length aether_css_length_auto(void) {
     aether_css_length l{};
     l.unit = AETHER_CSS_UNIT_AUTO;
@@ -299,7 +285,12 @@ AETHER_API aether_bool_t aether_css_length_try_parse(const char* input, aether_c
     source = source.substr(first, last - first + 1);
     const char* s = source.c_str();
 
-    if (calc_parser_s parser(source); parser.parse(*out)) return AETHER_TRUE;
+    calc_value_s calculated{};
+    if (aether::css::try_parse_calc(source, calculated)) {
+        if (calculated.kind != calc_value_kind_e::length) return AETHER_FALSE;
+        *out = calculated.length;
+        return AETHER_TRUE;
+    }
     if (source.size() >= 5 && ascii_iequals(std::string_view(source).substr(0, 5), "calc(")) return AETHER_FALSE;
 
     if (s[0] == 'a' && s[1] == 'u' && s[2] == 't' && s[3] == 'o' && s[4] == '\0') {

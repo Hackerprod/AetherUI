@@ -3,6 +3,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <string>
 
 static void require(bool condition, const char* message) {
     if (!condition) {
@@ -25,7 +26,90 @@ static aether_text_metrics_t measure_empty(const char*, const aether_computed_st
     return {0.f, 1.f, .8f};
 }
 
+static void check_dimensional_fixture(const char* declarations, float expected_width, float expected_line_height) {
+    aether_doc_t doc = nullptr;
+    require(aether_doc_create(&doc) == AETHER_OK &&
+        aether_doc_parse_html(doc, "<!doctype html><html><body><div id='target'></div></body></html>") == AETHER_OK,
+        "dimensional fixture document");
+    aether_style_runtime_options_t options{};
+    aether_style_environment_t environment{800.f, 600.f, 1.f, 16.f, 0, 0, 0};
+    aether_style_runtime_t runtime = nullptr;
+    require(aether_style_runtime_create(&options, &environment, nullptr, nullptr, &runtime) == AETHER_OK,
+        "dimensional fixture runtime");
+    const std::string css = "html,body{display:block;margin:0;padding:0;border:0;}"
+        "#target{display:block;width:73px;height:10px;font-size:16px;line-height:7px;}#target{" +
+        std::string(declarations) + "}";
+    int64_t sheet = 0;
+    int32_t rules = 0;
+    require(aether_style_runtime_add_stylesheet(runtime, css.c_str(), 0, "dimensional.css", &sheet, &rules) == AETHER_OK,
+        "dimensional fixture stylesheet");
+    aether_style_update_t* updates = nullptr;
+    const auto count = aether_style_runtime_resolve_subtree(runtime, aether_doc_get_body(doc), &updates);
+    require(count >= 0, "dimensional fixture resolve");
+    const auto target = aether_doc_get_element_by_id(doc, "target");
+    bool found = false;
+    for (int32_t i = 0; i < count; ++i) {
+        aether_node_t node = nullptr;
+        aether_computed_style_handle_t handle = nullptr;
+        require(aether_style_runtime_get_update(updates[i], &node, &handle, nullptr) == AETHER_OK, "dimensional get_update");
+        if (node == target) {
+            aether_computed_style_t style{};
+            require(aether_computed_style_copy(handle, &style) == AETHER_OK, "dimensional computed style");
+            require(same(style.line_height, expected_line_height) && same(style.font_size, 16.f), declarations);
+            aether_computed_style_free(&style);
+            found = true;
+        }
+        aether_computed_style_handle_destroy(handle);
+    }
+    aether_style_updates_free(updates, count);
+    require(found, "dimensional target update");
+    aether_style_map_t map = nullptr;
+    require(aether_style_runtime_create_resolved_style_map(runtime, doc, &map) == AETHER_OK, "dimensional style map");
+    aether_layout_engine_t engine = nullptr;
+    require(aether_layout_create(measure_empty, nullptr, &engine) == AETHER_OK, "dimensional layout engine");
+    aether_layout_result_t layout = nullptr;
+    require(aether_layout_layout(engine, doc, map, 800.f, 600.f, nullptr, nullptr, &layout) == AETHER_OK, "dimensional layout");
+    const auto box = aether_layout_result_find_primary_box(layout, target);
+    require(box && same(aether_layout_box_get_border_box(box).width, expected_width), declarations);
+    aether_layout_result_destroy(layout);
+    aether_layout_destroy(engine);
+    aether_style_map_destroy(map);
+    aether_style_runtime_destroy(runtime);
+    aether_doc_destroy(doc);
+}
+
+static void check_dimensional_contract() {
+    struct width_case { const char* css; bool valid; float width; };
+    const width_case cases[] = {
+        {"10px", true, 10.f}, {"0", true, 0.f},
+        {"calc(10px + 0px)", true, 10.f}, {"calc(0px + 10px)", true, 10.f},
+        {"calc(10px * 0)", true, 0.f}, {"calc(0 * 10px)", true, 0.f},
+        {"calc(10px / 2)", true, 5.f}, {"calc((1 - 1) * 10px)", true, 0.f},
+        {"calc(10px + 0)", false, 73.f}, {"calc(0 + 10px)", false, 73.f},
+        {"calc(10px - 0)", false, 73.f}, {"calc(0 - 10px)", false, 73.f},
+        {"calc(0)", false, 73.f}, {"calc(1 - 1)", false, 73.f},
+        {"calc(10px + (2 - 2))", false, 73.f}, {"calc(10px + 1)", false, 73.f}
+    };
+    for (const auto& c : cases) {
+        aether_css_length value = aether_css_length_zero();
+        require((aether_css_length_try_parse(c.css, &value) == AETHER_TRUE) == c.valid, c.css);
+        if (!c.valid) require(value.unit == AETHER_CSS_UNIT_AUTO, "failed calc output must be AUTO");
+        check_dimensional_fixture((std::string("width:") + c.css + ";").c_str(), c.width, 7.f);
+    }
+    for (const auto css : {"calc(0)", "calc(1 - 1)", "calc(0px)"})
+        check_dimensional_fixture((std::string("line-height:") + css + ";").c_str(), 73.f, 0.f);
+
+    // Policy guards are separate from the measured 16-width/3-line-height set.
+    require(same(aether_css_length_resolve(parse("calc(10px - 10px)"), 800.f, 16.f, 16.f, 800.f, 600.f), 0.f),
+        "a zero-valued LENGTH keeps its type");
+    check_dimensional_fixture("width:calc(10px - 10px);", 0.f, 7.f);
+    check_dimensional_fixture("line-height:calc(10px + 0);", 73.f, 7.f);
+    check_dimensional_fixture("line-height:calc(2);", 73.f, 7.f);
+    check_dimensional_fixture("--lh:calc(1 - 1);line-height:var(--lh);", 73.f, 0.f);
+}
+
 int main() {
+    check_dimensional_contract();
     const auto half_minus_eight = parse("calc(50% - 8px)");
     require(half_minus_eight.unit == AETHER_CSS_UNIT_LINEAR &&
             same(half_minus_eight.value, -8.f) && same(half_minus_eight.linear_percent, 50.f),

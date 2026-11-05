@@ -21,6 +21,7 @@ internal static class Program
 {
     private static readonly (string Name, Action Test)[] Tests =
     [
+        ("Calc retains dimensional types in length and line-height contexts", CalcDimensionalTests.Run),
         ("Relative percentages use the initial containing block height", RelativePercentageTests.Run),
         ("Prepared fixed context follows static and transition boundaries", FixedViewportContextBoundaries),
         ("Visibility retains layout and rebuilds contextual paint", VisibilityRetainsLayoutAndContext),
@@ -113,7 +114,9 @@ internal static class Program
         ("No transition property means no animation", TransitionsDoNotAnimateWithoutTransitionProperty),
     ];
 
-    public static int Main()
+    public static int Main() => ProbeMainGuard.Run(RunTests);
+
+    private static int RunTests()
     {
         var failures = 0;
         foreach (var (name, test) in Tests)
