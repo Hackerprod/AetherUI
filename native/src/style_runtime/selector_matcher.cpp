@@ -139,6 +139,10 @@ static bool matches_attribute(const attribute_selector_s& attr, aether_node_s* n
     if (attr.op == ATTR_EXISTS) return true;
     const auto& actual = it->second;
     const auto& expected = attr.value;
+    // Selectors 6.2: empty substring operands never match; other operators retain their semantics.
+    if (expected.empty() &&
+        (attr.op == ATTR_PREFIX || attr.op == ATTR_SUFFIX || attr.op == ATTR_CONTAINS))
+        return false;
     if (attr.case_insensitive) {
         switch (attr.op) {
             case ATTR_EQUALS:    return ci_equals(actual, expected);

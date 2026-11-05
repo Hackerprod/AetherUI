@@ -221,6 +221,10 @@ if(AETHERUI_BUILD_TESTS)
     target_link_libraries(aether_scroll_model_test PRIVATE AetherUI::Core)
     add_test(NAME aether.scroll-model COMMAND aether_scroll_model_test)
 
+    add_executable(aether_selector_attributes_test tests/test_selector_attributes.cpp)
+    target_link_libraries(aether_selector_attributes_test PRIVATE AetherUI::Core)
+    add_test(NAME aether.selector-attributes COMMAND aether_selector_attributes_test)
+
     add_executable(aether_selector_structure_test tests/test_selector_structure.cpp)
     target_link_libraries(aether_selector_structure_test PRIVATE AetherUI::Core)
     add_test(NAME aether.selector-structure COMMAND aether_selector_structure_test)
