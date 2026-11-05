@@ -39,6 +39,9 @@ internal sealed class LayoutInterop : IDisposable
             (OverflowKind)nativeResult.ViewportOverflowY);
     }
 
+    /// <summary>Queries logical input coordinates using the native clips and input policy.
+    /// Coordinates have no implicit viewport rejection or clamping and may find an outside box.
+    /// An owner's ordinary content contribution is its BorderBox, excluding margins.</summary>
     public ElementNode? HitTest(NativeLayoutResult nativeResult, NativeStyleMap? currentStyles,
         DomInterop dom, PointF point, Func<ElementNode, ScrollOffset> scrollOffsetFor)
     {
@@ -49,6 +52,9 @@ internal sealed class LayoutInterop : IDisposable
         return handle == IntPtr.Zero ? null : dom.GetManagedElement(handle);
     }
 
+    /// <summary>Queries logical input coordinates using the native clips and input policy.
+    /// Coordinates have no implicit viewport rejection or clamping and may find an outside box.
+    /// An owner's ordinary content contribution is its BorderBox, excluding margins.</summary>
     public (NativeInputHitPart Part, ElementNode? Owner) HitTestInput(NativeLayoutResult nativeResult,
         NativeStyleMap? currentStyles, DomInterop dom, PointF point, Func<ElementNode, ScrollOffset> scrollOffsetFor)
     {

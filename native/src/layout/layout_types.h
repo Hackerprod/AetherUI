@@ -122,6 +122,13 @@ inline aether_node_s* layout_box_hit_owner(const aether_layout_box_s* box)
         ? box->element->anonymous_flex_owner : box->element;
 }
 
+// Own ordinary input area. Keep the existing inclusive/degenerate rect semantics.
+// This predicate is deliberately independent of traversal, clipping and eligibility.
+inline bool layout_box_contains_own_content(const aether_layout_box_s* box, float x, float y)
+{
+    return aether_rectf_contains(box->border_box, {x, y});
+}
+
 struct inline_item_s {
     aether_node_s*        element = nullptr;
     aether_computed_style_t style{};
@@ -254,7 +261,7 @@ private:
             }
         }
         if (presentation.visible && presentation.pointer_events != AETHER_POINTER_EVENTS_NONE &&
-            aether_rectf_contains(box->margin_box, {x, y})) return layout_box_hit_owner(box);
+            layout_box_contains_own_content(box, x, y)) return layout_box_hit_owner(box);
         return nullptr;
     }
 };

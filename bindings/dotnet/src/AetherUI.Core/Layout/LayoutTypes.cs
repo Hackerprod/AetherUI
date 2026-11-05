@@ -123,6 +123,10 @@ public sealed class LayoutResult
     public IReadOnlyList<LayoutBox> FindPaintBoxes(ElementNode element) =>
         _paintBoxesByElement.TryGetValue(element, out var boxes) ? boxes : Array.Empty<LayoutBox>();
 
+    /// <summary>Simplified paint-order query of inclusive BorderBox areas, including border and padding
+    /// and excluding margins. This does not reproduce native clipping, pointer eligibility or local stacking.</summary>
+    /// <remarks>Logical input coordinates are not clamped or rejected at viewport bounds;
+    /// an outside box can be returned. This is not a browser elementFromPoint query.</remarks>
     public ElementNode? HitTest(PointF point)
     {
         for (var index = _paintOrder.Count - 1; index >= 0; index--)
@@ -137,6 +141,10 @@ public sealed class LayoutResult
         return null;
     }
 
+    /// <summary>Simplified paint-order query of inclusive BorderBox areas, including border and padding
+    /// and excluding margins. Applies the supplied ancestor scroll offsets. This does not reproduce native clipping, pointer eligibility or local stacking.</summary>
+    /// <remarks>Logical input coordinates are not clamped or rejected at viewport bounds;
+    /// an outside box can be returned. This is not a browser elementFromPoint query.</remarks>
     public ElementNode? HitTest(PointF point, Func<ElementNode, ScrollOffset> offsetFor)
     {
         for (var index = _paintOrder.Count - 1; index >= 0; index--)

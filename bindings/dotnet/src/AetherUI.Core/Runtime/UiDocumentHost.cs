@@ -12,6 +12,9 @@ namespace AetherUI.Runtime;
 /// <summary>
 /// Coordinates a generated component, DOM, style resolution, layout, input routing, and rendering.
 /// Platform hosts translate native messages into the methods exposed here.
+/// Pointer and cursor methods take logical viewport-relative coordinates. Direct calls do not
+/// clamp to viewport bounds and may find outside boxes subject to native clips and input policy;
+/// delivery of physical pointer events remains a platform host concern.
 /// </summary>
 public sealed partial class UiDocumentHost : IDisposable
 {

@@ -167,8 +167,12 @@ The query preserves generated owners even when a binding cannot project them.
 including table rows/cells and flex items. CSS table/flex geometric collapse is
 not implemented. Tables retain their existing unspanned phase-1 layout, and
 flattened inline ancestors and table groups do not gain new paint scopes.
-DOM hit testing retains the existing rectangular clipping, margin-box candidates,
+DOM hit testing retains the existing rectangular clipping, border-box candidates (including border and padding, excluding margins),
 and traversal order; this change does not add inverse-transform hit testing.
+Hit queries accept logical input coordinates without implicit viewport rejection
+or clamping. Eligible boxes outside the viewport remain queryable, subject to
+existing clips and scroll offsets. This coordinate domain differs from a browser's
+`Document.elementFromPoint` query.
 Generated pseudo-elements are still recreated by the runtime, so their identity
 changes require layout even when triggered by a visibility declaration.
 Canvas background propagation remains separate from a box's own visibility.

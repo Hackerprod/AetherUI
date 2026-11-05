@@ -37,6 +37,7 @@ internal static class Program
         ("HTML parser", HtmlParserBuildsDocument),
         ("CSS cascade and pseudo classes", CssCascadeUsesState),
         ("Layout and hit testing", LayoutProducesHitTargets),
+        ("Content hits exclude margins and preserve host routing", ContentHitsExcludeMargins),
         ("Relative visual placement preserves flow and host input", RelativeVisualPlacementPreservesFlowAndInput),
         ("Safe generated markup and event dispatch", MarkupIsEncodedAndEventsDispatch),
         ("Required form validation", RequiredInputBlocksSubmit),
@@ -392,6 +393,59 @@ internal static class Program
         Assert.True(hovered.Style.Color.B > hovered.Style.Color.R);
     }
 
+
+    private static void ContentHitsExcludeMargins()
+    {
+        var cases = new (string Css, string ContainerCss, PointF Point, string Target, bool Scroll)[]
+        {
+            ("margin-top:-25px", "", new(195, 100), "b", false),
+            ("margin-top:25px", "", new(140, 135), "container", false),
+            ("margin-left:-25px", "", new(50, 145), "b", false),
+            ("margin-left:-25px", "overflow:hidden", new(50, 145), "", false),
+            ("margin-left:25px", "overflow:hidden", new(85, 145), "container", false),
+            ("margin-top:-25px", "overflow:auto;width:100px;height:60px", new(95, 90), "b", true),
+        };
+        foreach (var c in cases)
+        {
+            var component = new MarginHitComponent(c.Css, c.ContainerCss);
+            using var renderer = new RecordingRenderer();
+            using var host = new UiDocumentHost(component, new ApproximateTextMeasurer(), renderer, new UiHostOptions());
+            host.SetViewport(360, 340, 1);
+            host.Render();
+            if (c.Scroll)
+            {
+                host.SetScrollOffset(host.Document!.GetElementById("container")!, new ScrollOffset(10, 10));
+                host.Render();
+            }
+            Assert.Equal(c.Target == "b" ? CursorKind.Pointer : CursorKind.Default, host.CursorAt(c.Point));
+            host.PointerPressed(c.Point);
+            host.PointerReleased(c.Point);
+            Assert.Equal(c.Target, string.Join(',', component.Downs));
+            Assert.Equal(c.Target, string.Join(',', component.Clicks));
+        }
+    }
+
+    private sealed class MarginHitComponent(string css, string containerCss) : UiComponent
+    {
+        public List<string> Downs { get; } = [];
+        public List<string> Clicks { get; } = [];
+        protected override void BuildRenderTree(MarkupWriter writer)
+        {
+            writer.WriteLiteral($"<style>html,body{{margin:0}}#container{{position:absolute;left:70px;top:70px;width:180px;height:200px;{containerCss}}}#a{{width:50px;height:50px}}#b{{width:140px;height:50px;cursor:pointer;{css}}}</style><body><div id='container'");
+            writer.WriteEventAttribute("onmousedown", e =>
+            {
+                if (ReferenceEquals(e.Target, e.CurrentTarget)) Downs.Add("container");
+            });
+            writer.WriteEventAttribute("onclick", e =>
+            {
+                if (ReferenceEquals(e.Target, e.CurrentTarget)) Clicks.Add("container");
+            });
+            writer.WriteLiteral("><div id='a'></div><div id='b'");
+            writer.WriteEventAttribute("onmousedown", () => Downs.Add("b"));
+            writer.WriteEventAttribute("onclick", () => Clicks.Add("b"));
+            writer.WriteLiteral("></div></div></body>");
+        }
+    }
 
     private static void RelativeVisualPlacementPreservesFlowAndInput()
     {

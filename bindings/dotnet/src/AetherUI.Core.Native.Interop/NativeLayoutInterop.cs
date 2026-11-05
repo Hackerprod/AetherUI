@@ -60,6 +60,9 @@ public sealed class NativeLayoutInterop : IDisposable
         return new NativeLayoutResult(result);
     }
 
+    /// <summary>Queries logical input coordinates using the native clips and input policy.
+    /// Coordinates have no implicit viewport rejection or clamping and may find an outside box.
+    /// An owner's ordinary content contribution is its BorderBox, excluding margins.</summary>
     public IntPtr HitTest(NativeLayoutResult result, NativeStyleMap? currentStyles,
         float x, float y, Func<IntPtr, NativeScrollOffset> scroll)
     {
@@ -82,6 +85,9 @@ public sealed class NativeLayoutInterop : IDisposable
         }
     }
 
+    /// <summary>Queries logical input coordinates using the native clips and input policy.
+    /// Coordinates have no implicit viewport rejection or clamping and may find an outside box.
+    /// An owner's ordinary content contribution is its BorderBox, excluding margins.</summary>
     public NativeInputHit HitTestInput(NativeLayoutResult result, NativeStyleMap? currentStyles,
         float x, float y, Func<IntPtr, NativeScrollOffset> scroll)
     {

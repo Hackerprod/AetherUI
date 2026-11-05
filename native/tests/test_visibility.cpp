@@ -1,6 +1,7 @@
 // Public-ABI regressions for visibility:hidden. ASCII has fixed 10px advance.
 // collapse intentionally follows the documented hidden fallback, not CSS table collapse.
 #include <aether/aether.h>
+#include "content_hit_contract.h"
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -377,6 +378,7 @@ void public_state_matrix() {
 }
 } // namespace
 int main() {
+    failures += content_hit_contract::run();
     inheritance();geometry();painting();hits();dynamic();public_state_matrix();
     std::printf("visibility: %d assertions, %d failures\n",assertions,failures);
     return failures?1:0;

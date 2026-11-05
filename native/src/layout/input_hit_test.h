@@ -54,6 +54,6 @@ inline layout_input_hit_t layout_hit_test_input(const aether_layout_result_s* la
             }
         }
     }
-    if (eligible && aether_rectf_contains(box->margin_box, {x,y})) return {AETHER_INPUT_HIT_CONTENT, owner};
+    if (eligible && layout_box_contains_own_content(box, x, y)) return {AETHER_INPUT_HIT_CONTENT, owner};
     return {};
 }

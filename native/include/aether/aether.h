@@ -732,6 +732,13 @@ AETHER_API void aether_layout_result_destroy(aether_layout_result_t result);
 
 AETHER_API aether_layout_box_t aether_layout_result_get_root(aether_layout_result_t result);
 AETHER_API aether_layout_box_t aether_layout_result_find_primary_box(aether_layout_result_t result, aether_node_t element);
+/* DOM hit queries use each eligible owner's BorderBox (border, padding and
+   content), excluding margins. Rect edges remain inclusive. Descendants may
+   extend beyond an overflow-visible ancestor. Points are logical input
+   coordinates without implicit viewport rejection or clamping; outside boxes
+   remain queryable subject to the existing clips. The first query uses snapshot
+   styles without dynamic scroll offsets; the second adds the offsets callback;
+   the third uses current styles with per-box snapshot fallback and offsets. */
 AETHER_API aether_node_t       aether_layout_result_hit_test(aether_layout_result_t result, float x, float y);
 AETHER_API aether_node_t       aether_layout_result_hit_test_with_scroll_offsets(
     aether_layout_result_t result, float x, float y,
@@ -739,7 +746,11 @@ AETHER_API aether_node_t       aether_layout_result_hit_test_with_scroll_offsets
 AETHER_API aether_node_t       aether_layout_result_hit_test_with_styles_and_scroll_offsets(
     aether_layout_result_t result, aether_style_map_t styles, float x, float y,
     aether_scroll_offset_fn offsets, void* user_data);
-/* Frontmost eligible input contribution in reverse local paint order. Chrome
+/* Frontmost eligible input contribution in reverse local paint order.
+   Points use the DOM queries' logical coordinate domain without viewport clamping.
+   CONTENT is the owner's BorderBox contribution, including border/padding and
+   excluding margins, with inclusive rect edges. Own scrollbar chrome has its
+   separate regions and precedes children, which precede own CONTENT. Chrome
    uses snapshot geometry; current_styles optionally updates input eligibility and
    child order. Without offsets, snapshot scroll offsets are used (unlike the
    older DOM hit queries). With offsets, live offsets are clamped to the snapshot
