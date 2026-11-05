@@ -209,6 +209,11 @@ if(AETHERUI_BUILD_TESTS)
     target_link_libraries(aether_text_alignment_test PRIVATE AetherUI::Core)
     add_test(NAME aether.text-alignment COMMAND aether_text_alignment_test)
 
+    add_executable(aether_flex_negative_space_test tests/test_flex_negative_space.cpp)
+    target_link_libraries(aether_flex_negative_space_test PRIVATE AetherUI::Core)
+    target_include_directories(aether_flex_negative_space_test PRIVATE src/layout)
+    add_test(NAME aether.flex-negative-space COMMAND aether_flex_negative_space_test)
+
     add_executable(aether_auto_margins_test tests/test_auto_margins.cpp)
     target_link_libraries(aether_auto_margins_test PRIVATE AetherUI::Core)
     target_include_directories(aether_auto_margins_test PRIVATE src/layout)

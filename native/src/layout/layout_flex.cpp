@@ -561,13 +561,14 @@ float layout_flex_children(
                 consume_flex_main_auto_margins(resolved.boxes, children, styles, line, false,
                                                content.height, used_main_size);
             }
-            const float free = main_size_is_definite ? std::max(0.f, content.height - used_main_size) : 0.f;
+            // Positioning preserves overflow; only distributed spacing is nonnegative.
+            const float free = main_size_is_definite ? content.height - used_main_size : 0.f;
             float spacing = gap;
             float cursor_y = content.y;
             if (style.justify_content == AETHER_JUSTIFY_CENTER) cursor_y += free / 2.f;
             else if (style.justify_content == AETHER_JUSTIFY_END) cursor_y += free;
             if (style.justify_content == AETHER_JUSTIFY_SPACE_BETWEEN && line.item_indices.size() > 1) {
-                spacing += free / static_cast<float>(line.item_indices.size() - 1);
+                spacing += std::max(0.f, free) / static_cast<float>(line.item_indices.size() - 1);
             }
 
             const float cross_extent = resolve_flex_line_cross_size(
@@ -601,13 +602,14 @@ float layout_flex_children(
         float used_main_size = flex_line_used_main_size(resolved.boxes, line, true, gap);
         consume_flex_main_auto_margins(resolved.boxes, children, styles, line, true,
                                        content.width, used_main_size);
-        const float free = std::max(0.f, content.width - used_main_size);
+        // Positioning preserves overflow; only distributed spacing is nonnegative.
+        const float free = content.width - used_main_size;
         float spacing = gap;
         float cursor_x = content.x;
         if (style.justify_content == AETHER_JUSTIFY_CENTER) cursor_x += free / 2.f;
         else if (style.justify_content == AETHER_JUSTIFY_END) cursor_x += free;
         if (style.justify_content == AETHER_JUSTIFY_SPACE_BETWEEN && line.item_indices.size() > 1) {
-            spacing += free / static_cast<float>(line.item_indices.size() - 1);
+            spacing += std::max(0.f, free) / static_cast<float>(line.item_indices.size() - 1);
         }
 
         const float cross_extent = resolve_flex_line_cross_size(
