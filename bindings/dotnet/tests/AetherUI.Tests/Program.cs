@@ -21,6 +21,7 @@ internal static class Program
 {
     private static readonly (string Name, Action Test)[] Tests =
     [
+        ("Not selector lists reject every invalid branch locally", NotStrictListTests.Run),
         ("Has arguments keep their implicit descendant anchor local", HasRelativeAnchorTests.Run),
         ("Positioned auto margins use final sizes and preserve prepared layout", PositionedAutoMarginTests.Run),
         ("Flex alignment preserves signed residual space", FlexNegativeSpaceTests.Run),

@@ -162,7 +162,10 @@ static bool try_parse_pseudo(parser_s& p, pseudo_selector_s& pseudo,
 static bool try_parse_nth(std::string_view source, nth_expression_s& expr);
 static bool try_map_state(std::string_view name,
                           style_pseudo_state_t& required, style_pseudo_state_t& forbidden);
-static bool selector_parse_list_view(std::string_view source, std::vector<compiled_selector_s>& out);
+enum class selector_list_policy_t { Forgiving, Strict };
+
+static bool selector_parse_list_view(std::string_view source, std::vector<compiled_selector_s>& out,
+                                     selector_list_policy_t policy);
 
 /* ── Attribute operator reader ────────────────────────────────────── */
 
@@ -403,7 +406,9 @@ static bool try_parse_pseudo(parser_s& p, pseudo_selector_s& pseudo,
     /* :is() :where() :not() :has() */
     if (name == "is" || name == "where" || name == "not" || name == "has") {
         std::vector<compiled_selector_s> nested;
-        if (!selector_parse_list_view(body, nested) || nested.empty()) return false;
+        const auto policy = name == "not" ? selector_list_policy_t::Strict
+                                          : selector_list_policy_t::Forgiving;
+        if (!selector_parse_list_view(body, nested, policy)) return false;
         pseudo_selector_kind_t kind;
         if      (name == "is")   kind = PSEUDO_IS;
         else if (name == "where") kind = PSEUDO_WHERE;
@@ -566,19 +571,25 @@ static bool selector_parse_core(parser_s& p, compiled_selector_s& out) {
 
 /* ── Parse list (comma-separated, for nested :is/:where/:not/:has) ─ */
 
-static bool selector_parse_list_view(std::string_view source, std::vector<compiled_selector_s>& out) {
+static bool selector_parse_list_view(std::string_view source, std::vector<compiled_selector_s>& out,
+                                     selector_list_policy_t policy) {
     auto parts = split_top_level(source, ',');
-    bool any = false;
+    std::vector<compiled_selector_s> parsed;
     for (auto& part : parts) {
-        if (part.empty()) continue;
         compiled_selector_s sel;
         parser_s sub{part, 0, {}, SELECTOR_DEP_NONE};
-        if (selector_parse_core(sub, sel)) {
-            out.push_back(std::move(sel));
-            any = true;
+        const bool valid = !part.empty() && selector_parse_core(sub, sel);
+        sub.skip_whitespace();
+        if (!valid || !sub.eof()) {
+            if (policy == selector_list_policy_t::Strict) return false;
+            continue;
         }
+        parsed.push_back(std::move(sel));
     }
-    return any;
+    if (parsed.empty()) return false;
+    // Publish only after the complete list succeeds; preserve the caller's prefix.
+    for (auto& sel : parsed) out.push_back(std::move(sel));
+    return true;
 }
 
 /* ── Public API ───────────────────────────────────────────────────── */
@@ -599,5 +610,5 @@ bool selector_parse_list(const char* source, std::vector<compiled_selector_s>& o
     std::string_view sv(source);
     ltrim(sv);
     if (sv.empty()) return false;
-    return selector_parse_list_view(sv, out);
+    return selector_parse_list_view(sv, out, selector_list_policy_t::Forgiving);
 }
