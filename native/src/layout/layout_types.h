@@ -36,6 +36,10 @@ struct aether_layout_box_s {
     float collapsed_margin_before = 0.f;
     float collapsed_margin_after = 0.f;
 
+    // Only this box's relative inset; ancestor and placement translations are excluded.
+    float own_relative_dx = 0.f;
+    float own_relative_dy = 0.f;
+
     aether_rectf margin_box{};
     aether_rectf border_box{};
     aether_rectf padding_box{};

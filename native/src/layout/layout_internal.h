@@ -158,6 +158,10 @@ aether_thicknessf resolve_border_edges(const aether_layout_engine_s* e,
                                        const aether_computed_style_t& style,
                                        float reference);
 
+// Copies in the current parent coordinate space, excluding only the box's own inset.
+aether_rectf normal_flow_border_box(const aether_layout_box_s* box);
+aether_rectf normal_flow_margin_box(const aether_layout_box_s* box);
+
 void offset_box(aether_layout_box_s* box, float dx, float dy);
 
 bool is_auto_margin(aether_css_length value);

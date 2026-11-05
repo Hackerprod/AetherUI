@@ -4,6 +4,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <string>
 
 namespace {
 
@@ -36,7 +37,58 @@ aether_layout_box_t box_for(aether_doc_t document, aether_layout_result_t layout
 
 } // namespace
 
+
+// Relative visual overflow must still feed scroll metrics; normal-flow placement
+// must not enlarge the parent's reserved dimensions or the child's local range.
+static void verify_relative_scroll() {
+    int checked = 0;
+    for (const auto* inner_overflow : {"overflow:visible;", "overflow:hidden;", "overflow:clip;",
+             "overflow-x:visible;overflow-y:clip;", "overflow-x:clip;overflow-y:visible;"}) {
+        for (const int extent : {80,160}) {
+            for (const int delta : {0,60,-60}) {
+                aether_doc_t doc = nullptr;
+                require(aether_doc_create(&doc) == AETHER_OK && aether_doc_parse_html(doc,
+                    "<body><div id='outer'><div id='child'><div id='extent'></div></div></div></body>") == AETHER_OK,"relative scroll document");
+                const int extent_height = extent == 160 ? 150:80;
+                const std::string css = std::string("html,body,div{display:block;margin:0;}#outer{width:100px;height:100px;overflow:auto;}") +
+                    "#child{position:relative;width:80px;height:80px;left:" + std::to_string(delta) + "px;top:" + std::to_string(delta) +
+                    "px;" + inner_overflow + "}#extent{width:" + std::to_string(extent) + "px;height:" + std::to_string(extent_height) + "px;}";
+                aether_style_runtime_options_t options{};aether_style_environment_t env{360,340,1,16,0,0,0};
+                aether_style_runtime_t runtime = nullptr;
+                require(aether_style_runtime_create(&options,&env,nullptr,nullptr,&runtime) == AETHER_OK,"relative scroll runtime");
+                int64_t sheet = 0;int32_t rules = 0;
+                require(aether_style_runtime_add_stylesheet(runtime,css.c_str(),0,"relative-scroll.css",&sheet,&rules) == AETHER_OK,"relative scroll CSS");
+                aether_style_update_t* updates = nullptr;
+                const auto count = aether_style_runtime_resolve_subtree(runtime,aether_doc_get_document_element(doc),&updates);
+                require(count>0,"relative scroll cascade");aether_style_updates_free(updates,count);
+                aether_style_map_t styles = nullptr;
+                require(aether_style_runtime_create_resolved_style_map(runtime,doc,&styles) == AETHER_OK,"relative scroll map");
+                aether_layout_engine_t engine = nullptr;
+                require(aether_layout_create(measure,nullptr,&engine) == AETHER_OK,"relative scroll engine");
+                aether_layout_result_t layout = nullptr;
+                require(aether_layout_layout(engine,doc,styles,360,340,nullptr,nullptr,&layout) == AETHER_OK,"relative scroll layout");
+                const auto outer = box_for(doc,layout,"outer"), child = box_for(doc,layout,"child");
+                const auto ob = aether_layout_box_get_border_box(outer), cb = aether_layout_box_get_border_box(child);
+                require(same(ob.width,100) && same(ob.height,100) && same(cb.width,80) && same(cb.height,80),"relative scroll dimensions stable");
+                require(same(cb.x-ob.x,static_cast<float>(delta)) && same(cb.y-ob.y,static_cast<float>(delta)),"relative scroll child displacement");
+                const bool visible_x = std::strstr(inner_overflow,"overflow:visible") || std::strstr(inner_overflow,"overflow-x:visible");
+                const bool visible_y = std::strstr(inner_overflow,"overflow:visible") || std::strstr(inner_overflow,"overflow-y:visible");
+                const float expected_x = std::max(0.f,static_cast<float>(delta+(visible_x?extent:80)-100));
+                const float expected_y = std::max(0.f,static_cast<float>(delta+(visible_y?extent_height:80)-100));
+                const auto sm = aether_layout_box_get_scroll_metrics(outer), cm = aether_layout_box_get_scroll_metrics(child);
+                require(same(sm.scrollable_overflow_x,expected_x) && same(sm.scrollable_overflow_y,expected_y),"visual relative overflow and per-axis nested propagation");
+                const bool hidden = std::strstr(inner_overflow,"overflow:hidden") != nullptr;
+                require(same(cm.scrollable_overflow_x,hidden?static_cast<float>(extent-80):0.f) &&
+                        same(cm.scrollable_overflow_y,hidden?static_cast<float>(extent_height-80):0.f),"translation preserves child-local scroll range");
+                aether_layout_result_destroy(layout);aether_layout_destroy(engine);aether_style_map_destroy(styles);aether_style_runtime_destroy(runtime);aether_doc_destroy(doc);++checked;
+            }
+        }
+    }
+    std::printf("relative scroll: %d layouts passed (visual extents, zero/negative ranges, per-axis nested propagation)\n",checked);
+}
+
 int main() {
+    verify_relative_scroll();
     aether_doc_t document = nullptr;
     require(aether_doc_create(&document) == AETHER_OK &&
                 aether_doc_parse_html(document,

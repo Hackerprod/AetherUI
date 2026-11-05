@@ -56,7 +56,8 @@ void layout_positioned_children(
         if (node->pseudo_element == aether_pseudo_element_t::before) {
             if (!parent_box->children.empty()) {
                 const auto* first = parent_box->children.front();
-                return aether_rectf{first->margin_box.x, first->margin_box.y, 0.f, 0.f};
+                const auto flow_margin = normal_flow_margin_box(first);
+                return aether_rectf{flow_margin.x, flow_margin.y, 0.f, 0.f};
             }
             return aether_rectf{positioning_block.x, positioning_block.y, 0.f, 0.f};
         }
@@ -73,9 +74,10 @@ void layout_positioned_children(
                     const bool is_parent_text = previous_node->type == AETHER_NODE_TEXT &&
                         candidate->kind == LAYOUT_BOX_TEXT && candidate->element == parent;
                     if (is_previous_element || is_parent_text) {
+                        const auto flow_margin = normal_flow_margin_box(candidate);
                         return aether_rectf{
-                            candidate->margin_box.x + candidate->margin_box.width,
-                            candidate->margin_box.y,
+                            flow_margin.x + flow_margin.width,
+                            flow_margin.y,
                             0.f, 0.f,
                         };
                     }
@@ -131,7 +133,8 @@ void layout_positioned_children(
         } else if (std::isfinite(bottom)) {
             y = containing.y + containing.height - bottom - child_box->margin_box.height;
         }
-        offset_box(child_box, x - child_box->margin_box.x, y - child_box->margin_box.y);
+        const auto flow_margin = normal_flow_margin_box(child_box);
+        offset_box(child_box, x - flow_margin.x, y - flow_margin.y);
         parent_box->add_child(child_box);
     }
 }

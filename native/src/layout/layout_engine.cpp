@@ -96,6 +96,30 @@ void offset_box(aether_layout_box_s* box, float dx, float dy) {
     }
 }
 
+aether_rectf normal_flow_border_box(const aether_layout_box_s* box) {
+    auto rect = box->border_box;
+    offset_rect(rect, -box->own_relative_dx, -box->own_relative_dy);
+    return rect;
+}
+
+aether_rectf normal_flow_margin_box(const aether_layout_box_s* box) {
+    auto rect = box->margin_box;
+    offset_rect(rect, -box->own_relative_dx, -box->own_relative_dy);
+    return rect;
+}
+
+static void apply_relative_visual_offset(aether_layout_box_s* box, float dx, float dy) {
+    offset_rect(box->margin_box, dx, dy);
+    offset_rect(box->border_box, dx, dy);
+    offset_rect(box->padding_box, dx, dy);
+    offset_rect(box->content_box, dx, dy);
+    for (auto* child : box->children) {
+        // Fixed descendants and their entire subtree keep their existing viewport placement.
+        if (child->style.position != AETHER_POSITION_FIXED)
+            apply_relative_visual_offset(child, dx, dy);
+    }
+}
+
 bool is_auto_margin(aether_css_length value) {
     return value.unit == AETHER_CSS_UNIT_AUTO;
 }
@@ -436,7 +460,7 @@ aether_layout_box_s* layout_element(
         start_facts.establishes_block_formatting_context = has_bfc;
         if (first_is_block && aether_parent_start_margin_adjoins_child(start_facts)) {
             box->collapsed_margin_before = aether_collapse_adjoining_margins(margin.top, first->collapsed_margin_before);
-            offset_box(first, 0, content_y - first->border_box.y);
+            offset_box(first, 0, content_y - normal_flow_border_box(first).y);
             content_height = std::max(0.f, content_height - first->collapsed_margin_before);
         }
 
@@ -557,7 +581,9 @@ aether_layout_box_s* layout_element(
         const float bottom = resolve(engine, style.inset.bottom, containing_block.height, style);
         const float dx = std::isfinite(left) ? left : (std::isfinite(right) ? -right : 0.f);
         const float dy = std::isfinite(top) ? top : (std::isfinite(bottom) ? -bottom : 0.f);
-        if (dx != 0.f || dy != 0.f) offset_box(box, dx, dy);
+        box->own_relative_dx = dx;
+        box->own_relative_dy = dy;
+        if (dx != 0.f || dy != 0.f) apply_relative_visual_offset(box, dx, dy);
     }
     return box;
 }
@@ -641,7 +667,7 @@ float layout_flow_children(
                     ? aether_collapse_adjoining_margins(pending_margin, child_box->collapsed_margin_before)
                     : child_box->collapsed_margin_before;
                 const float border_y = cursor_y + collapsed_before;
-                offset_box(child_box, 0, border_y - child_box->border_box.y);
+                offset_box(child_box, 0, border_y - normal_flow_border_box(child_box).y);
                 parent_box->add_child(child_box);
                 aether_margin_adjacency_facts empty_facts{};
                 empty_facts.has_in_flow_content_before = !child_box->children.empty();
@@ -656,7 +682,8 @@ float layout_flow_children(
                 if (child_box->border_box.height <= .001f && aether_empty_block_margins_adjoin(empty_facts)) {
                     pending_margin = aether_collapse_adjoining_margins(collapsed_before, child_box->collapsed_margin_after);
                 } else {
-                    cursor_y = child_box->border_box.y + child_box->border_box.height;
+                    const auto flow_border = normal_flow_border_box(child_box);
+                    cursor_y = flow_border.y + flow_border.height;
                     pending_margin = child_box->collapsed_margin_after;
                 }
                 has_pending_margin = true;
@@ -732,11 +759,11 @@ float layout_inline_items(
                                               0, false, 0, false, true, result);
             float w = provisional->margin_box.width;
             if (cursor_x > start_x && cursor_x + w > start_x + available_width) {
-                float old_y = provisional->margin_box.y;
+                const float old_y = normal_flow_margin_box(provisional).y;
                 finish_line(false);
                 offset_box(provisional, 0, cursor_y - old_y);
             }
-            float dx = cursor_x - provisional->margin_box.x;
+            const float dx = cursor_x - normal_flow_margin_box(provisional).x;
             offset_box(provisional, dx, 0);
             parent_box->add_child(provisional);
             cursor_x += provisional->margin_box.width;

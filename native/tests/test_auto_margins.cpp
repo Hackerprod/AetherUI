@@ -4,6 +4,9 @@
 #include <cstring>
 #include <cstdio>
 #include <cstdlib>
+#include <array>
+#include <string>
+#include <vector>
 #include "layout_types.h"
 
 static void require(bool value, const char* message) {
@@ -26,7 +29,146 @@ static aether_layout_box_t box_for(aether_doc_t doc, aether_layout_result_t resu
     return box;
 }
 
+
+// Compare each visual rect with the identical zero-inset layout. This also exercises
+// the final boxes from provisional flex passes, without changing their flow sizes.
+static void verify_relative_flow() {
+    struct fixture { const char* container; const char* item; bool wrap = false; bool root = false; };
+    const fixture fixtures[] = {
+        {"", ""},
+        {"display:flex;align-items:flex-start;", ""},
+        {"display:flex;flex-direction:column;align-items:flex-start;", ""},
+        {"", "display:inline-block;vertical-align:top;"},
+        {"width:80px;text-align:center;", "display:inline-block;vertical-align:top;", true},
+        {"width:80px;text-align:end;", "display:inline-block;vertical-align:top;", true},
+        {"width:80px;text-align:justify;", "display:inline-block;vertical-align:top;", true},
+        {"", "margin-top:12px;margin-bottom:8px;"},
+        {"display:flex;align-items:end;", "margin-left:auto;margin-top:auto;"},
+        {"display:flex;flex-direction:column;align-items:end;", "margin-top:auto;margin-left:auto;"},
+        {"display:flex;flex-wrap:wrap;width:80px;align-items:stretch;", "height:auto;"},
+        {"display:flex;align-items:stretch;", "height:auto;"},
+        {"display:flex;flex-direction:column;align-items:stretch;", "width:auto;"},
+        {"", "", false, true},
+    };
+    struct inset_case { const char* css; float dx, dy; };
+    const inset_case insets[] = {
+        {"position:relative;left:0;top:0;",0,0}, {"position:static;",0,0}, {"position:relative;",0,0},
+        {"position:relative;left:0;top:0;",0,0},
+        {"position:relative;left:60px;",60,0}, {"position:relative;left:-60px;",-60,0},
+        {"position:relative;top:60px;",0,60}, {"position:relative;top:-60px;",0,-60},
+        {"position:relative;left:60px;top:60px;",60,60},
+        {"position:relative;left:-60px;top:-60px;",-60,-60},
+        {"position:relative;left:60px;top:-60px;",60,-60},
+        {"position:relative;right:60px;bottom:60px;",-60,-60},
+        {"position:relative;right:-60px;bottom:-60px;",60,60},
+        {"position:relative;left:60px;right:25px;top:-60px;bottom:25px;",60,-60},
+        {"position:relative;left:auto;right:60px;top:auto;bottom:-60px;",-60,60},
+        // All fixtures have a viewport-height containing block, including atomic inline.
+        {"position:relative;left:33.333333%;top:17.647059%;",60,60},
+    };
+    const char* ids[] = {"container","prefix","a","inner","normal","absolute","fixed","fixed-child","inner-b","b","auto-anchor","empty","after-empty"};
+    int checked = 0;
+    for (const auto& f : fixtures) {
+        std::vector<std::array<aether_rectf,4>> zero;
+        size_t zero_count = 0;
+        std::vector<std::array<aether_rectf,4>> nested_zero;
+        // Nonzero nested inset must compose exactly with the ancestor's own inset.
+        for (int nested : {0, 15, -15}) {
+            for (size_t pass = 0; pass < std::size(insets); ++pass) {
+                const auto& i = insets[pass];
+                const std::string markup = std::string("<html><body id='body'>") +
+                    (f.root ? "" : "<div id='container'>") +
+                    (f.wrap ? "<div id='prefix'></div>" : "") +
+                    "<div id='a'><div id='inner'><div id='normal'></div><div id='absolute'></div>"
+                    "<div id='fixed'><div id='fixed-child'></div></div></div><div id='inner-b'></div></div>"
+                    "<div id='auto-anchor'></div><div id='b'></div>"
+                    "<div id='empty'></div><div id='after-empty'></div>" +
+                    (f.root ? "" : "</div>") + "</body></html>";
+                // Use relative-zero as the baseline even when testing static/auto controls.
+                const std::string inset = pass == 0 ? "position:relative;left:0;top:0;" : i.css;
+                const std::string css = std::string("html,body,div{display:block;margin:0;}body{height:340px;}") +
+                    "#container{position:absolute;left:70px;top:70px;width:180px;height:340px;" + f.container + "}"
+                    "#a,#b{display:block;width:50px;height:50px;flex-shrink:0;" + f.item + "}"
+                    "#a{" + (f.root ? std::string("") : inset) + "}body{" + (f.root ? inset : "") + "}"
+                    "#prefix{display:inline-block;width:50px;height:50px;}"
+                    "#inner{position:relative;width:30px;height:30px;left:" + std::to_string(nested) + "px;top:" + std::to_string(nested) + "px;}"
+                    "#inner-b{width:10px;height:10px;}#normal{width:10px;height:10px;}"
+                    "#absolute{position:absolute;left:10px;top:10px;width:5px;height:5px;}"
+                    "#fixed{position:fixed;left:10px;top:10px;width:5px;height:5px;}#fixed-child{width:3px;height:3px;}"
+                    "#auto-anchor{position:absolute;width:4px;height:4px;}"
+                    "#empty{margin-top:7px;margin-bottom:11px;" + (f.root ? std::string("") : inset) + "}#after-empty{height:5px;}";
+                aether_doc_t doc = nullptr;
+                require(aether_doc_create(&doc) == AETHER_OK && aether_doc_parse_html(doc, markup.c_str()) == AETHER_OK, "relative document");
+                aether_style_runtime_options_t options{};
+                aether_style_environment_t env{360,340,1,16,0,0,0};
+                aether_style_runtime_t runtime = nullptr;
+                require(aether_style_runtime_create(&options,&env,nullptr,nullptr,&runtime) == AETHER_OK,"relative runtime");
+                int64_t sheet = 0; int32_t rules = 0;
+                require(aether_style_runtime_add_stylesheet(runtime,css.c_str(),0,"relative-flow.css",&sheet,&rules) == AETHER_OK,"relative CSS");
+                aether_style_update_t* updates = nullptr;
+                const auto count = aether_style_runtime_resolve_subtree(runtime,aether_doc_get_document_element(doc),&updates);
+                require(count > 0,"relative cascade"); aether_style_updates_free(updates,count);
+                aether_style_map_t styles = nullptr;
+                require(aether_style_runtime_create_resolved_style_map(runtime,doc,&styles) == AETHER_OK,"relative map");
+                aether_layout_engine_t engine = nullptr;
+                require(aether_layout_create(measure_empty,nullptr,&engine) == AETHER_OK,"relative engine");
+                aether_layout_result_t layout = nullptr;
+                require(aether_layout_layout(engine,doc,styles,360,340,nullptr,nullptr,&layout) == AETHER_OK,"relative layout");
+                std::vector<std::array<aether_rectf,4>> actual;
+                for (const auto* id : ids) {
+                    const auto el = aether_doc_get_element_by_id(doc,id);
+                    if (!el) { actual.push_back({}); continue; }
+                    const auto box = box_for(doc,layout,id);
+                    actual.push_back({aether_layout_box_get_margin_box(box),aether_layout_box_get_border_box(box),aether_layout_box_get_padding_box(box),aether_layout_box_get_content_box(box)});
+                }
+                auto* internal = static_cast<aether_layout_result_s*>(layout);
+                const size_t live = internal->live_box_count;
+                require(live == static_cast<size_t>(internal->root->descendants_and_self()),"relative provisional boxes released");
+                const float dx = pass == 0 ? 0 : (pass == std::size(insets)-1 ? (f.root ? 120.f : (std::strstr(f.container,"width:80px") ? 80.f/3.f : 60.f)) : i.dx);
+                const float dy = pass == 0 ? 0 : i.dy;
+                if (pass == 0) {
+                    zero = actual;
+                    zero_count = live;
+                    if (nested == 0) nested_zero = actual;
+                    for (size_t n = 0; n < actual.size(); ++n) {
+                        const std::string id = ids[n];
+                        const bool follows_inner = id == "inner" || id == "normal" || id == "absolute";
+                        for (size_t r = 0; r < 4; ++r) {
+                            require(same(actual[n][r].x - nested_zero[n][r].x, follows_inner ? static_cast<float>(nested) : 0.f) &&
+                                    same(actual[n][r].y - nested_zero[n][r].y, follows_inner ? static_cast<float>(nested) : 0.f),
+                                "nested inset composes exactly once while fixed and siblings remain stable");
+                        }
+                    }
+                }
+                require(live == zero_count,"relative box count stable");
+                for (size_t n=0; n<actual.size(); ++n) {
+                    const std::string id = ids[n];
+                    const bool moved = f.root ? (id != "fixed" && id != "fixed-child") :
+                        (id == "a" || id == "inner" || id == "normal" || id == "absolute" || id == "inner-b" || id == "empty");
+                    for (size_t r=0;r<4;++r) {
+                        const auto a=actual[n][r], z=zero[n][r];
+                        // Missing fixture elements have no box to translate.
+                        const bool present = aether_doc_get_element_by_id(doc,ids[n]) != nullptr;
+                        if (!same(a.x-z.x,present && moved ? dx:0) || !same(a.y-z.y,present && moved ? dy:0) || !same(a.width,z.width) || !same(a.height,z.height)) {
+                            std::fprintf(stderr,"relative fixture=%td nested=%d pass=%zu id=%s rect=%zu actual=(%g,%g,%g,%g) zero=(%g,%g,%g,%g) delta=(%g,%g)\n",&f-fixtures,nested,pass,ids[n],r,a.x,a.y,a.width,a.height,z.x,z.y,z.width,z.height,dx,dy);
+                            require(false,"relative visual deltas and reserved flow geometry");
+                        }
+                    }
+                }
+                const auto a = box_for(doc,layout,"a");
+                require(same(a->own_relative_dx,f.root?0:dx) && same(a->own_relative_dy,f.root?0:dy),"own relative metadata excludes ancestors");
+                const auto inner = box_for(doc,layout,"inner");
+                require(same(inner->own_relative_dx,static_cast<float>(nested)) && same(inner->own_relative_dy,static_cast<float>(nested)),"nested metadata excludes ancestor delta");
+                aether_layout_result_destroy(layout);aether_layout_destroy(engine);aether_style_map_destroy(styles);aether_style_runtime_destroy(runtime);aether_doc_destroy(doc);
+                ++checked;
+            }
+        }
+    }
+    std::printf("relative flow: %d layouts passed (four rects, flow siblings, fixed subtrees, provisional ownership)\n",checked);
+}
+
 int main() {
+    verify_relative_flow();
     const auto defaults = aether_computed_style_default();
     require(defaults.margin.left.unit == AETHER_CSS_UNIT_PX && same(defaults.margin.left.value, 0.f) &&
             defaults.margin.right.unit == AETHER_CSS_UNIT_PX && same(defaults.margin.right.value, 0.f),

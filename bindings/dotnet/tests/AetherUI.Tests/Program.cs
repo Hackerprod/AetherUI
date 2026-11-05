@@ -37,6 +37,7 @@ internal static class Program
         ("HTML parser", HtmlParserBuildsDocument),
         ("CSS cascade and pseudo classes", CssCascadeUsesState),
         ("Layout and hit testing", LayoutProducesHitTargets),
+        ("Relative visual placement preserves flow and host input", RelativeVisualPlacementPreservesFlowAndInput),
         ("Safe generated markup and event dispatch", MarkupIsEncodedAndEventsDispatch),
         ("Required form validation", RequiredInputBlocksSubmit),
         (".cshtml compiler", CshtmlCompilerGeneratesCSharp),
@@ -389,6 +390,75 @@ internal static class Program
 
         var hovered = Assert.NotNull(host.Layout?.FindPrimaryBox(button));
         Assert.True(hovered.Style.Color.B > hovered.Style.Color.R);
+    }
+
+
+    private static void RelativeVisualPlacementPreservesFlowAndInput()
+    {
+        foreach (var context in new[] { "block", "row", "column", "inline" })
+        foreach (var delta in new[] { -60, 0, 60 })
+        {
+            var component = new RelativeFlowComponent(context, delta);
+            using var renderer = new RecordingRenderer();
+            using var host = new UiDocumentHost(component, new ApproximateTextMeasurer(), renderer, new UiHostOptions());
+            host.SetViewport(360, 340, 1);
+            host.Render();
+            var a = Assert.NotNull(host.Document?.GetElementById("a"));
+            var b = Assert.NotNull(host.Document?.GetElementById("b"));
+            var ab = Assert.NotNull(host.Layout?.FindPrimaryBox(a));
+            var bb = Assert.NotNull(host.Layout?.FindPrimaryBox(b));
+            var horizontal = context is "row" or "inline";
+            Assert.Equal(new RectF(70 + delta, 70 + delta, 50, 50), ab.BorderBox);
+            Assert.Equal(ab.BorderBox, ab.MarginBox);
+            Assert.Equal(new RectF(horizontal ? 120 : 70, horizontal ? 70 : 120, 50, 50), bb.BorderBox);
+            Assert.True(renderer.LastDisplayList!.Commands.OfType<FillRoundedRectangleCommand>()
+                .Any(c => c.Color.R > .99f && c.Color.G < .01f && c.Rectangle == ab.BorderBox),
+                "The display command must use the translated border box.");
+            var visible = new PointF(95 + delta, 95 + delta);
+            Assert.Equal(CursorKind.Text, host.CursorAt(visible));
+            host.PointerPressed(visible);
+            host.PointerReleased(visible);
+            Assert.Equal("a", string.Join(',', component.Downs));
+            Assert.Equal("a", string.Join(',', component.Clicks));
+            if (delta != 0)
+            {
+                component.Downs.Clear();
+                component.Clicks.Clear();
+                var old = new PointF(95, 95);
+                Assert.True(host.CursorAt(old) != CursorKind.Text, "Old reserved space must not target translated A.");
+                host.PointerPressed(old);
+                host.PointerReleased(old);
+                Assert.True(!component.Downs.Contains("a") && !component.Clicks.Contains("a"));
+            }
+            // Rebuild at a new viewport and return to ensure no stale or accumulated inset.
+            host.SetViewport(400, 360, 1);
+            host.Render();
+            host.SetViewport(360, 340, 1);
+            host.Render();
+            Assert.Equal(ab.BorderBox, Assert.NotNull(host.Layout?.FindPrimaryBox(a)).BorderBox);
+        }
+    }
+
+    private sealed class RelativeFlowComponent(string context, int delta) : UiComponent
+    {
+        public List<string> Downs { get; } = [];
+        public List<string> Clicks { get; } = [];
+
+        protected override void BuildRenderTree(MarkupWriter writer)
+        {
+            var flex = context == "row" ? "display:flex;align-items:flex-start;" :
+                context == "column" ? "display:flex;flex-direction:column;align-items:flex-start;" : "";
+            var inline = context == "inline" ? "display:inline-block;vertical-align:top;" : "";
+            writer.WriteLiteral($"<style>html,body{{margin:0}}#container{{position:absolute;left:70px;top:70px;width:180px;height:200px;{flex}}}.box{{width:50px;height:50px;flex-shrink:0;{inline}}}#a{{position:relative;left:{delta}px;top:{delta}px;background:#ff0000;cursor:text}}#b{{background:#0000ff;cursor:pointer}}</style><body><div id='container'>");
+            foreach (var id in new[] { "a", "b" })
+            {
+                writer.WriteLiteral($"<div id='{id}' class='box'");
+                writer.WriteEventAttribute("onmousedown", () => Downs.Add(id));
+                writer.WriteEventAttribute("onclick", () => Clicks.Add(id));
+                writer.WriteLiteral("></div>");
+            }
+            writer.WriteLiteral("</div></body>");
+        }
     }
 
     private static void LayoutProducesHitTargets()

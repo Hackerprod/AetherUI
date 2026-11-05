@@ -562,7 +562,8 @@ float layout_flex_children(
                     if (alignment == AETHER_ALIGN_CENTER) x += (cross_extent - child_box->margin_box.width) / 2.f;
                     else if (alignment == AETHER_ALIGN_END) x += cross_extent - child_box->margin_box.width;
                 }
-                offset_box(child_box, x - child_box->margin_box.x, cursor_y - child_box->margin_box.y);
+                const auto flow_margin = normal_flow_margin_box(child_box);
+                offset_box(child_box, x - flow_margin.x, cursor_y - flow_margin.y);
                 parent_box->add_child(child_box);
                 cursor_y += child_box->margin_box.height + spacing;
             }
@@ -601,7 +602,8 @@ float layout_flex_children(
                 if (alignment == AETHER_ALIGN_CENTER) y += (cross_extent - child_box->margin_box.height) / 2.f;
                 else if (alignment == AETHER_ALIGN_END) y += cross_extent - child_box->margin_box.height;
             }
-            offset_box(child_box, cursor_x - child_box->margin_box.x, y - child_box->margin_box.y);
+            const auto flow_margin = normal_flow_margin_box(child_box);
+            offset_box(child_box, cursor_x - flow_margin.x, y - flow_margin.y);
             parent_box->add_child(child_box);
             cursor_x += child_box->margin_box.width + spacing;
         }
