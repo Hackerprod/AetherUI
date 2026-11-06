@@ -1,19 +1,16 @@
 #include "style_runtime_types.h"
 #include "css_variable_tokens.h"
 #include "variable_resolver_internal.h"
+#include "custom_property_scope_internal.h"
 #include <array>
 #include <cstring>
 #include <memory>
 #include <limits>
 
 bool custom_property_scope_s::try_get(const std::string& name, std::string& value) const {
-    auto it = local.find(name);
-    if (it != local.end()) {
-        value = it->second;
-        return true;
-    }
-    if (parent) {
-        return parent->try_get(name, value);
+    for (auto scope = this; scope; scope = scope->parent) {
+        auto it = scope->local.find(name);
+        if (it != scope->local.end()) { value = it->second; return true; }
     }
     value.clear();
     return false;
@@ -166,24 +163,50 @@ bool decode_name(span source, payload& decoded, css_variable_budget& budget) {
         return sink.bytes.append({bytes, size}, std::numeric_limits<size_t>::max(), sink.budget, 256);
     }, &context);
 }
-// Raw acquisition borrows stable map entries; it never invokes the copying helper.
-const std::string* lookup(const custom_property_scope_s* scope, const std::string& name,
-                          css_variable_budget& budget) {
-    for (auto current = scope; current;) {
-        if (!budget.take(1) || !budget.take(name.size())) return nullptr;
+// One typed acquisition interface for the source adapter, named local roots,
+// and terminal-only consumers. No string inspection decides whether to recurse.
+struct environment {
+    const custom_property_scope_s* raw = nullptr;
+    const custom_property_sources_s* sources = nullptr;
+    const computed_custom_property_scope_s* computed = nullptr;
+};
+struct acquired {
+    enum class kind { invalid, source, terminal, exhausted } type = kind::invalid;
+    const std::string* value = nullptr;
+};
+acquired lookup(const environment& env, const std::string& name, css_variable_budget& budget) {
+    if (env.sources) {
+        if (!budget.take(1) || !budget.take(name.size())) return {};
+        const auto it = env.sources->find(name);
+        if (it != env.sources->end())
+            return it->second.initial ? acquired{} : acquired{acquired::kind::source, &it->second.source};
+    }
+    for (auto current = env.computed; current; current = current->parent()) {
+        if (!budget.take(1) || !budget.take(name.size())) return {};
+        const auto it = current->local.find(name);
+        if (it != current->local.end()) {
+            if (it->second.status == custom_property_status::work_exhausted)
+                return {acquired::kind::exhausted, nullptr};
+            return it->second.status == custom_property_status::valid
+                ? acquired{acquired::kind::terminal, &it->second.value} : acquired{};
+        }
+        if (!budget.take(1)) return {};
+    }
+    // Compatibility adapter only. Runtime never supplies env.raw.
+    for (auto current = env.raw; current; current = current->parent) {
+        if (!budget.take(1) || !budget.take(name.size())) return {};
         const auto it = current->local.find(name);
         if (it != current->local.end()) {
             const auto& invalid = custom_property_invalid_value();
             if (it->second.size() == invalid.size()) {
-                if (!budget.take(invalid.size()) || !budget.take(invalid.size())) return nullptr;
-                if (std::memcmp(it->second.data(), invalid.data(), invalid.size()) == 0) return nullptr;
+                if (!budget.take(invalid.size()) || !budget.take(invalid.size())) return {};
+                if (std::memcmp(it->second.data(), invalid.data(), invalid.size()) == 0) return {};
             }
-            return &it->second;
+            return {acquired::kind::source, &it->second};
         }
-        if (!budget.take(1)) return nullptr;
-        current = current->parent;
+        if (!budget.take(1)) return {};
     }
-    return nullptr;
+    return {};
 }
 struct invocation {
     span name, fallback;
@@ -236,18 +259,28 @@ struct frame {
     // stable across unordered_map rehash and frame vector relocation.
     const std::string* active_name = nullptr;
     bool cyclic = false;
+    bool invalid = false; // Semantic failure: still inspect later dependencies.
+    bool terminal = false;
 };
-bool resolve(span root, const custom_property_scope_s* scope, int32_t max_depth,
-             size_t limit, css_variable_budget& budget, std::string& result) {
-    if (max_depth < 0) return false;
+bool resolve(span root, const environment& env, int32_t max_depth,
+             size_t limit, css_variable_budget& budget, std::string& result,
+             const std::string* root_name = nullptr) {
+    if (max_depth < 0 || (root_name && max_depth < 1)) return false;
     std::vector<frame> frames;
     std::unordered_map<std::string, size_t> active;
     if (!budget.take(1)) return false;
-    frames.push_back(frame{root});
+    frames.push_back(frame{root, 0, root_name ? size_t(1) : size_t(0)});
+    if (root_name) {
+        if (!budget.take(1) || !budget.take(root_name->size()) ||
+            !budget.take(root_name->size()) || !budget.take(1) ||
+            !budget.take(root_name->size()) || !budget.take(root_name->size())) return false;
+        const auto inserted = active.emplace(*root_name, 0);
+        frames.back().active_name = &inserted.first->first;
+    }
     while (!frames.empty() && !budget.exhausted) {
         const size_t index = frames.size() - 1;
         if (frames[index].phase == frame::state::failed || frames[index].cursor == frames[index].source.size) {
-            bool ok = frames[index].phase != frame::state::failed && !frames[index].cyclic && frames[index].blocks.empty();
+            bool ok = frames[index].phase != frame::state::failed && !frames[index].cyclic && !frames[index].invalid && frames[index].blocks.empty();
             if (frames[index].active_name) {
                 const auto* key = frames[index].active_name;
                 frames[index].active_name = nullptr;
@@ -258,7 +291,7 @@ bool resolve(span root, const custom_property_scope_s* scope, int32_t max_depth,
             frames.pop_back();
             if (frames.empty()) return ok && output.compact(result, budget);
             const size_t parent = frames.size() - 1;
-            if (ok) ok = frames[parent].output.append(output, limit, budget);
+            if (ok && !frames[parent].invalid) ok = frames[parent].output.append(output, limit, budget);
             if (budget.exhausted) return false;
             if (ok) { frames[parent].phase = frame::state::scanning; continue; }
             if (frames[parent].phase == frame::state::raw && !frames[parent].cyclic && frames[parent].pending.has_comma && frames[parent].depth < static_cast<size_t>(max_depth)) {
@@ -269,7 +302,8 @@ bool resolve(span root, const custom_property_scope_s* scope, int32_t max_depth,
                 frames.push_back(frame{fallback, 0, depth});
                 continue;
             }
-            frames[parent].phase = frame::state::failed;
+            frames[parent].invalid = true;
+            frames[parent].phase = frame::state::scanning;
             continue;
         }
         const span source = frames[index].source;
@@ -278,7 +312,7 @@ bool resolve(span root, const custom_property_scope_s* scope, int32_t max_depth,
         if (budget.exhausted) return false;
         if (t.kind == kind::error || t.kind == kind::end) { frames[index].phase = frame::state::failed; continue; }
         frames[index].cursor = t.end;
-        if (t.kind != kind::function || !t.is_var) {
+        if (frames[index].terminal || t.kind != kind::function || !t.is_var) {
             if (t.kind == kind::open || t.kind == kind::function) {
                 if (!budget.take(1)) return false;
                 frames[index].blocks.push_back(closing(t.delimiter));
@@ -289,7 +323,9 @@ bool resolve(span root, const custom_property_scope_s* scope, int32_t max_depth,
                 }
                 frames[index].blocks.pop_back();
             }
-            if (!frames[index].output.append_token({source.data + t.begin, t.end - t.begin}, t, limit, budget)) frames[index].phase = frame::state::failed;
+            if (!frames[index].invalid &&
+                !frames[index].output.append_token({source.data + t.begin, t.end - t.begin}, t, limit, budget))
+                frames[index].invalid = true;
             continue;
         }
         invocation call;
@@ -301,7 +337,7 @@ bool resolve(span root, const custom_property_scope_s* scope, int32_t max_depth,
         if (!decode_name(call.name, name_bytes, budget) || !name_bytes.compact(name, budget)) return false;
         if (!budget.take(1) || !budget.take(name.size())) return false;
         const auto found = active.find(name);
-        const std::string* raw = nullptr;
+        acquired value;
         if (found != active.end()) {
             // Mark only the active cyclic segment. Unmarked callers may recover.
             for (size_t i = found->second; i < frames.size(); ++i) {
@@ -309,34 +345,43 @@ bool resolve(span root, const custom_property_scope_s* scope, int32_t max_depth,
                 frames[i].cyclic = true;
             }
         } else {
-            raw = lookup(scope, name, budget);
+            value = lookup(env, name, budget);
+        }
+        if (value.type == acquired::kind::exhausted) {
+            // A hard failure in an ancestor is sticky, never a fallback trigger.
+            budget.exhausted = true;
+            return false;
         }
         if (budget.exhausted) return false;
-        if (raw && frames[index].depth < static_cast<size_t>(max_depth)) {
+        if (value.value && frames[index].depth < static_cast<size_t>(max_depth)) {
             const size_t depth = frames[index].depth + 1;
             frames[index].phase = frame::state::raw;
-            // Conservative charge for hash, owned capacity and possible SSO move copy.
-            if (!budget.take(1) || !budget.take(name.size()) ||
-                !budget.take(name.size()) || !budget.take(1) ||
-                !budget.take(name.size()) || !budget.take(name.size())) return false;
-            const auto inserted = active.emplace(std::move(name), frames.size());
-            const auto* key = &inserted.first->first;
-            const span raw_span{raw->data(), raw->size()};
+            const std::string* key = nullptr;
+            if (value.type == acquired::kind::source) {
+                // Conservative charge for hash, owned capacity and possible SSO move copy.
+                if (!budget.take(1) || !budget.take(name.size()) ||
+                    !budget.take(name.size()) || !budget.take(1) ||
+                    !budget.take(name.size()) || !budget.take(name.size())) return false;
+                const auto inserted = active.emplace(std::move(name), frames.size());
+                key = &inserted.first->first;
+            }
+            const span value_span{value.value->data(), value.value->size()};
             if (!budget.take(1)) return false;
-            frames.push_back(frame{raw_span, 0, depth});
+            frames.push_back(frame{value_span, 0, depth});
             frames.back().active_name = key;
+            frames.back().terminal = value.type == acquired::kind::terminal;
         } else if (!frames[index].cyclic && call.has_comma && frames[index].depth < static_cast<size_t>(max_depth)) {
             const size_t depth = frames[index].depth + 1;
             frames[index].phase = frame::state::fallback;
             if (!budget.take(1)) return false;
             frames.push_back(frame{call.fallback, 0, depth});
-        } else frames[index].phase = frame::state::failed;
+        } else frames[index].invalid = true;
     }
     return false;
 }
 }
 
-bool variable_resolve_with_budget(const char* source, const custom_property_scope_s* scope,
+static bool resolve_value_with_budget(const char* source, const environment& env,
                       int32_t max_depth, int32_t max_expansion_length,
                       css_variable_budget& budget, std::string& out_value) {
     bool ok = false;
@@ -347,7 +392,7 @@ bool variable_resolve_with_budget(const char* source, const custom_property_scop
             size_t length = 0;
             while (budget.take(1)) {
                 if (source[length] == '\0') {
-                    ok = resolve({source, length}, scope, max_depth,
+                    ok = resolve({source, length}, env, max_depth,
                                  static_cast<size_t>(max_expansion_length), budget, result);
                     // Publishing the compact result may copy SSO payload on move.
                     if (ok && (!budget.take(1) || !budget.take(result.size()) ||
@@ -362,6 +407,58 @@ bool variable_resolve_with_budget(const char* source, const custom_property_scop
     if (ok) out_value = std::move(result);
     else out_value.clear();
     return ok;
+}
+
+bool variable_resolve_with_budget(const char* source, const custom_property_scope_s* scope,
+                      int32_t max_depth, int32_t max_expansion_length,
+                      css_variable_budget& budget, std::string& out_value) {
+    return resolve_value_with_budget(source, {scope, nullptr, nullptr}, max_depth,
+        max_expansion_length, budget, out_value);
+}
+
+bool resolve_computed_value_with_budget(const char* source,
+    const computed_custom_property_scope_s* scope, int32_t max_depth,
+    int32_t max_expansion_length, css_variable_budget& budget, std::string& out_value) {
+    return resolve_value_with_budget(source, {nullptr, nullptr, scope}, max_depth,
+        max_expansion_length, budget, out_value);
+}
+
+bool resolve_computed_value(const char* source, const computed_custom_property_scope_s* scope,
+    int32_t max_depth, int32_t max_expansion_length, std::string& out_value) {
+    css_variable_budget budget;
+    return resolve_computed_value_with_budget(source, scope, max_depth,
+        max_expansion_length, budget, out_value);
+}
+
+computed_custom_property_s resolve_custom_property_root_with_budget(
+    const std::string& name, const custom_property_sources_s& sources,
+    const computed_custom_property_scope_s* parent, int32_t max_depth,
+    int32_t max_expansion_length, css_variable_budget& budget) {
+    computed_custom_property_s result;
+    const environment env{nullptr, &sources, parent};
+    const auto input = lookup(env, name, budget);
+    bool ok = false;
+    if (input.value && max_expansion_length >= 0) {
+        // Length acquisition and publication are charged just as for consumers.
+        if (budget.take(input.value->size()) && budget.take(1))
+            ok = resolve({input.value->data(), input.value->size()}, env, max_depth,
+                static_cast<size_t>(max_expansion_length), budget, result.value, &name);
+        // Returning the aggregate and moving it into the snapshot can each
+        // copy SSO bytes. Charge both reads/writes, plus logical capacity.
+        if (ok && (!budget.take(1) || !budget.take(result.value.size()) ||
+                   !budget.take(1) || !budget.take(result.value.size()) ||
+                   !budget.take(result.value.size()) || !budget.take(result.value.size()) ||
+                   !budget.take(result.value.size()))) ok = false;
+    }
+    // Account for storing the owned canonical key and publishing the map entry,
+    // including string terminator and possible SSO copies. No global quota.
+    if (!budget.take(1) || !budget.take(name.size()) || !budget.take(1) ||
+        !budget.take(name.size()) || !budget.take(name.size())) ok = false;
+    if (budget.exhausted || input.type == acquired::kind::exhausted)
+        result.status = custom_property_status::work_exhausted;
+    else if (ok) result.status = custom_property_status::valid;
+    if (result.status != custom_property_status::valid) result.value.clear();
+    return result;
 }
 
 bool variable_resolve(const char* source, const custom_property_scope_s* scope,

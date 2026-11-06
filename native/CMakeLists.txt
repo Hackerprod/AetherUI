@@ -65,6 +65,7 @@ add_library(aether_core SHARED
     src/style_runtime/rule_index.cpp
     src/style_runtime/css_variable_tokens.cpp
     src/style_runtime/variable_resolver.cpp
+    src/style_runtime/custom_property_scope.cpp
     src/style_runtime/media_condition.cpp
     src/style_runtime/style_diff.cpp
     src/style_runtime/style_source_compiler.cpp
@@ -464,6 +465,20 @@ if(AETHERUI_BUILD_TESTS)
     add_executable(aether_ua_stylesheet_test tests/test_ua_stylesheet.cpp)
     target_link_libraries(aether_ua_stylesheet_test PRIVATE AetherUI::Core)
     add_test(NAME aether.ua-stylesheet COMMAND aether_ua_stylesheet_test)
+
+    add_executable(aether_computed_custom_property_scope_test tests/test_computed_custom_property_scope.cpp
+        src/style_runtime/custom_property_scope.cpp src/style_runtime/variable_resolver.cpp
+        src/style_runtime/css_variable_tokens.cpp)
+    target_include_directories(aether_computed_custom_property_scope_test PRIVATE include)
+    add_test(NAME aether.computed-custom-property-scope COMMAND aether_computed_custom_property_scope_test)
+
+    add_executable(aether_inherited_custom_properties_test tests/test_inherited_custom_properties.cpp)
+    target_link_libraries(aether_inherited_custom_properties_test PRIVATE AetherUI::Core)
+    if(MSVC)
+        target_compile_options(aether_computed_custom_property_scope_test PRIVATE /utf-8)
+        target_compile_options(aether_inherited_custom_properties_test PRIVATE /utf-8)
+    endif()
+    add_test(NAME aether.inherited-custom-properties COMMAND aether_inherited_custom_properties_test)
 
     add_executable(aether_custom_property_case_test tests/test_custom_property_case.cpp)
     target_link_libraries(aether_custom_property_case_test PRIVATE AetherUI::Core)

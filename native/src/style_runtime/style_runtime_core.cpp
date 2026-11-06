@@ -7,6 +7,7 @@
 #include "style_property_registry_internal.h"
 #include "style_runtime_types.h"
 #include "css_variable_tokens.h"
+#include "custom_property_scope_internal.h"
 
 #include <algorithm>
 #include <cctype>
@@ -23,7 +24,7 @@ struct aether_computed_style_handle_s {
 
 struct runtime_node_state_s {
     aether_computed_style_handle_s style{};
-    custom_property_scope_s custom_properties{};
+    computed_custom_property_scope_ptr custom_properties;
     color_resolution_state_s color_references{};
     uint32_t declared_impact = STYLE_IMPACT_NONE;
     uint32_t declared_inherited_impact = STYLE_IMPACT_NONE;
@@ -411,14 +412,16 @@ static runtime_node_state_s* compute_node(aether_style_runtime_s* runtime, aethe
         }
     }
 
-    custom_property_scope_s scope;
-    scope.parent = parent ? &parent->custom_properties : nullptr;
+    custom_property_sources_s sources;
     for (const auto& pair : custom_winners) {
         auto value = str_trim(pair.second.source);
         if (str_iequals(value, "inherit") || str_iequals(value, "unset")) continue;
-        scope.local[pair.first] = str_iequals(value, "initial") || str_iequals(value, "revert")
-            ? custom_property_invalid_value() : pair.second.source;
+        sources.emplace(pair.first, custom_property_source_s{pair.second.source,
+            str_iequals(value, "initial") || str_iequals(value, "revert")});
     }
+
+    auto scope = compute_custom_property_scope(sources, parent ? parent->custom_properties : nullptr,
+        runtime->options.max_variable_depth, runtime->options.max_variable_expansion_length);
 
     // Deferred shorthands: their values reference custom properties, so they were kept
     // raw at compile time. Resolve each against this node's variable scope and expand it
@@ -431,7 +434,7 @@ static runtime_node_state_s* compute_node(aether_style_runtime_s* runtime, aethe
         if (rule->shorthand_declarations.empty()) continue;
         for (const auto& declaration : rule->shorthand_declarations) {
             std::string resolved;
-            if (!variable_resolve(declaration.source.c_str(), &scope,
+            if (!resolve_computed_value(declaration.source.c_str(), scope.get(),
                                   runtime->options.max_variable_depth,
                                   runtime->options.max_variable_expansion_length, resolved)) {
                 report(runtime, "AETHER-CSS-VAR", declaration.name.c_str(),
@@ -462,7 +465,7 @@ static runtime_node_state_s* compute_node(aether_style_runtime_s* runtime, aethe
         if (content_winner.is_set) {
             std::string content_source = content_winner.source;
             if (variable_has_reference(content_source) &&
-                !variable_resolve(content_source.c_str(), &scope,
+                !resolve_computed_value(content_source.c_str(), scope.get(),
                                   runtime->options.max_variable_depth,
                                   runtime->options.max_variable_expansion_length, content_source)) {
                 report(runtime, "AETHER-CSS-VAR", "content", content_winner.source.c_str(),
@@ -540,7 +543,7 @@ static runtime_node_state_s* compute_node(aether_style_runtime_s* runtime, aethe
             value = definition.initial_value;
             break;
         case compiled_value_mode::deferred:
-            if (!variable_resolve(compiled.deferred_source.c_str(), &scope,
+            if (!resolve_computed_value(compiled.deferred_source.c_str(), scope.get(),
                                   runtime->options.max_variable_depth,
                                   runtime->options.max_variable_expansion_length, value)) {
                 report(runtime, "AETHER-CSS-VAR", definition.name.c_str(),
@@ -618,9 +621,9 @@ static runtime_node_state_s* compute_node(aether_style_runtime_s* runtime, aethe
         impact = STYLE_IMPACT_NONE;
         inherited_change_impact = STYLE_IMPACT_NONE;
         if (!is_new_node) {
-            // Retain the state, its style buffers and its scope address. A
-            // concrete no-op can still change custom values or replace the
-            // parent's state, so refresh both local keys and the parent link.
+            // Retain style buffers, but always publish the new computed snapshot.
+            // A concrete no-op can still change custom values or replace the
+            // parent generation. Children own their previous snapshots safely.
             // Descendants are visited even when this node emits no update.
             aether_computed_style_free(&next);
             found->second->custom_properties = std::move(scope);

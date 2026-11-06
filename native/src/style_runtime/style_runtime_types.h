@@ -450,6 +450,8 @@ inline const std::string& custom_property_invalid_value() {
     return v;
 }
 
+// Private raw-source adapter for resolver regression tests only. Runtime state
+// stores computed_custom_property_scope_ptr instead, with no raw-source path.
 struct custom_property_scope_s {
     // Keys are decoded identifiers, never source spellings or case-folded names.
     std::unordered_map<std::string, std::string> local;
