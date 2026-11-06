@@ -3,6 +3,85 @@
 #include <stdio.h>
 #include <string.h>
 
+/* Installed public headers only; calls and checks remain active under NDEBUG. */
+static int installed_attribute_values(void) {
+    aether_doc_t doc = NULL;
+    aether_style_runtime_t runtime = NULL;
+    aether_node_t node = NULL;
+    aether_style_runtime_options_t options = {0};
+    aether_style_environment_t environment = {800, 600, 1, 16, 0, 0, 0};
+    int64_t sheet = 0;
+    int32_t rules = 0;
+    int ok = 1, have_style = 0;
+    float width = 0, height = 0, opacity = 0, left = 0;
+    const char* values[] = {"I", "i", "OTHER", "I"};
+    if (aether_doc_create(&doc) != AETHER_OK || !doc) return 0;
+    if (aether_doc_parse_html(doc, "<body><DIV id='I' TYPE='I' data-x='VALUE'></DIV></body>") != AETHER_OK) {
+        aether_doc_destroy(doc); return 0;
+    }
+    node = aether_doc_get_element_by_id(doc, "I");
+    if (!node || aether_style_runtime_create(&options, &environment, NULL, NULL, &runtime) != AETHER_OK) {
+        aether_doc_destroy(doc); return 0;
+    }
+    if (aether_style_runtime_add_stylesheet(runtime,
+        "#I{width:10px;height:10px;opacity:1;margin-left:0}"
+        "#I[type=i]{width:31px}#I[type=i i]{height:41px}"
+        "#I[type=i s]{opacity:.5}#I[type=I s]{margin-left:17px}"
+        "#I[data-x=value]{width:99px}#I[data-x=value s]{height:99px}",
+        1, "installed-attribute-values.css", &sheet, &rules) != AETHER_OK || rules != 7) ok = 0;
+    for (int pass = 0; ok && pass < 4; ++pass) {
+        aether_style_update_t* updates = NULL;
+        char* actual;
+        int count;
+        int canonical_type = 0;
+        if (pass && aether_element_set_attribute(node, "TYPE", values[pass]) != AETHER_OK) ok = 0;
+        actual = aether_element_get_attribute(node, "type");
+        ok = ok && actual && strcmp(actual, values[pass]) == 0;
+        aether_string_free(actual);
+        actual = aether_element_get_attribute(node, "DATA-X");
+        ok = ok && actual && strcmp(actual, "VALUE") == 0;
+        aether_string_free(actual);
+        for (int j = 0; j < aether_element_get_attribute_count(node); ++j) {
+            char* key = aether_element_get_attribute_name(node, j);
+            char* value = aether_element_get_attribute_value(node, j);
+            if (key && strcmp(key, "type") == 0) {
+                ++canonical_type;
+                ok = ok && value && strcmp(value, values[pass]) == 0;
+            }
+            aether_string_free(key); aether_string_free(value);
+        }
+        ok = ok && canonical_type == 1 && aether_element_get_attribute_count(node) == 3;
+        count = aether_style_runtime_resolve_subtree(runtime, aether_doc_get_document_element(doc), &updates);
+        if (count < 0) { ok = 0; break; }
+        for (int j = 0; j < count; ++j) {
+            aether_node_t updated = NULL;
+            aether_computed_style_handle_t handle = NULL;
+            if (aether_style_runtime_get_update(updates[j], &updated, &handle, NULL) != AETHER_OK) {
+                ok = 0; continue;
+            }
+            if (updated == node) {
+                aether_computed_style_t style = {0};
+                if (aether_computed_style_copy(handle, &style) != AETHER_OK) ok = 0;
+                else {
+                    width = style.width.value; height = style.height.value;
+                    opacity = style.opacity; left = style.margin.left.value; have_style = 1;
+                }
+                aether_computed_style_free(&style);
+            }
+            aether_computed_style_handle_destroy(handle);
+        }
+        aether_style_updates_free(updates, count);
+        ok = ok && have_style && width == (pass == 2 ? 10.f : 31.f) &&
+            height == (pass == 2 ? 10.f : 41.f) && opacity == (pass == 1 ? .5f : 1.f) &&
+            left == (pass == 0 || pass == 3 ? 17.f : 0.f);
+        if (!ok) fprintf(stderr, "installed attribute values pass=%d width=%g height=%g opacity=%g left=%g\n",
+                         pass, width, height, opacity, left);
+    }
+    aether_style_runtime_destroy(runtime);
+    aether_doc_destroy(doc);
+    return ok;
+}
+
 int main(void) {
     if (aether_abi_version() != AETHER_ABI_VERSION_CURRENT) {
         fputs("installed header and runtime ABI versions differ\n", stderr);
@@ -119,6 +198,8 @@ int main(void) {
         aether_doc_destroy(doc);
         if (!ok) { fputs("installed HTML comment cycle contract failed\n", stderr); return 1; }
     }
+
+    if (!installed_attribute_values()) { fputs("installed HTML attribute value modes failed\n", stderr); return 1; }
 
     puts("OK: installed AetherUI::Core package, HTML names, end tags and comments are consumable from C11");
     return 0;

@@ -114,6 +114,38 @@ if(AETHERUI_BUILD_TESTS)
     )
     add_test(NAME aether.abi-c COMMAND aether_abi_c_smoke_test)
 
+    add_executable(aether_ascii_text_test tests/test_ascii_text.cpp)
+    add_test(NAME aether.ascii-text COMMAND aether_ascii_text_test)
+    if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+        foreach(char_mode signed unsigned)
+            add_executable(aether_ascii_text_${char_mode}_test tests/test_ascii_text.cpp)
+            target_compile_options(aether_ascii_text_${char_mode}_test PRIVATE -f${char_mode}-char)
+            add_test(NAME aether.ascii-text-${char_mode} COMMAND aether_ascii_text_${char_mode}_test)
+        endforeach()
+    endif()
+
+    add_executable(aether_selector_attribute_values_test tests/test_selector_attribute_values.cpp
+        src/style_runtime/selector_parser.cpp src/style_runtime/selector_matcher.cpp)
+    target_include_directories(aether_selector_attribute_values_test PRIVATE include src/style_runtime)
+    add_test(NAME aether.selector-attribute-values COMMAND aether_selector_attribute_values_test)
+
+    add_executable(aether_html_attribute_values_runtime_test tests/test_html_attribute_values_runtime.cpp)
+    target_link_libraries(aether_html_attribute_values_runtime_test PRIVATE AetherUI::Core)
+    add_test(NAME aether.html-attribute-values-runtime COMMAND aether_html_attribute_values_runtime_test)
+
+    # Locale changes are process-local; keep this regression in its own executable.
+    add_executable(aether_selector_ascii_locale_test tests/test_selector_ascii_locale.cpp
+        src/style_runtime/selector_parser.cpp src/style_runtime/selector_matcher.cpp
+        src/style_runtime/rule_index.cpp)
+    target_include_directories(aether_selector_ascii_locale_test PRIVATE include src/style_runtime)
+    target_link_libraries(aether_selector_ascii_locale_test PRIVATE AetherUI::Core)
+    add_test(NAME aether.selector-ascii-locale COMMAND aether_selector_ascii_locale_test)
+    if(MSVC)
+        target_compile_options(aether_selector_attribute_values_test PRIVATE /utf-8)
+        target_compile_options(aether_html_attribute_values_runtime_test PRIVATE /utf-8)
+        target_compile_options(aether_selector_ascii_locale_test PRIVATE /utf-8)
+    endif()
+
     add_executable(aether_html_attribute_case_runtime_test tests/test_html_attribute_case_runtime.cpp)
     target_link_libraries(aether_html_attribute_case_runtime_test PRIVATE AetherUI::Core)
     add_test(NAME aether.html-attribute-case-runtime COMMAND aether_html_attribute_case_runtime_test)

@@ -1,5 +1,6 @@
 #include "style_runtime_types.h"
 #include "../dom/dom_types.h"
+#include "../primitives/ascii_text.h"
 #include <cctype>
 
 // Layout and paint share storage with generated content, but selector traversal
@@ -123,88 +124,47 @@ static bool has_matching_descendant(aether_node_s* node, const std::vector<compi
 
 /* ── Attribute matching ───────────────────────────────────────────── */
 
-static bool ci_equals(std::string_view a, std::string_view b) {
-    if (a.size() != b.size()) return false;
-    for (size_t i = 0; i < a.size(); ++i)
-        if (std::tolower(static_cast<unsigned char>(a[i])) != std::tolower(static_cast<unsigned char>(b[i])))
-            return false;
-    return true;
-}
-
-static bool ci_starts_with(std::string_view hay, std::string_view needle) {
-    if (needle.size() > hay.size()) return false;
-    return ci_equals(hay.substr(0, needle.size()), needle);
-}
-
-static bool ci_ends_with(std::string_view hay, std::string_view needle) {
-    if (needle.size() > hay.size()) return false;
-    return ci_equals(hay.substr(hay.size() - needle.size()), needle);
-}
-
-static bool ci_contains(std::string_view hay, std::string_view needle) {
-    if (needle.empty()) return true;
-    if (needle.size() > hay.size()) return false;
-    for (size_t i = 0; i <= hay.size() - needle.size(); ++i)
-        if (ci_equals(hay.substr(i, needle.size()), needle)) return true;
-    return false;
-}
-
 static bool matches_attribute(const attribute_selector_s& attr, aether_node_s* node) {
-    auto it = node->attributes.find(attr.name);
+    const auto it = node->attributes.find(attr.name);
     if (it == node->attributes.end()) return false;
     if (attr.op == ATTR_EXISTS) return true;
-    const auto& actual = it->second;
-    const auto& expected = attr.value;
-    // Selectors 6.2: empty substring operands never match; other operators retain their semantics.
+    const std::string_view actual = it->second;
+    const std::string_view expected = attr.value;
+    const bool insensitive = aether::attribute_value_is_ascii_insensitive(
+        attr.case_mode, attr.html_default_ascii_insensitive);
+    const auto equals = [insensitive](std::string_view a, std::string_view b) {
+        return insensitive ? aether::ascii_iequals(a, b) : a == b;
+    };
+    // CSS substring operators reject empty operands. The shared primitives
+    // deliberately retain ordinary empty-string comparison/search semantics.
     if (expected.empty() &&
         (attr.op == ATTR_PREFIX || attr.op == ATTR_SUFFIX || attr.op == ATTR_CONTAINS))
         return false;
-    if (attr.case_insensitive) {
-        switch (attr.op) {
-            case ATTR_EQUALS:    return ci_equals(actual, expected);
-            case ATTR_INCLUDES:  {
-                /* split actual on whitespace, check if any token equals expected */
-                size_t pos = 0;
-                while (pos < actual.size()) {
-                    while (pos < actual.size() && std::isspace(static_cast<unsigned char>(actual[pos]))) ++pos;
-                    size_t end = pos;
-                    while (end < actual.size() && !std::isspace(static_cast<unsigned char>(actual[end]))) ++end;
-                    if (end > pos && ci_equals(actual.substr(pos, end - pos), expected)) return true;
-                    pos = end;
-                }
-                return false;
-            }
-            case ATTR_DASH_MATCH: return ci_equals(actual, expected) ||
-                (actual.size() > expected.size() &&
-                 ci_equals(actual.substr(0, expected.size()), expected) &&
-                 actual[expected.size()] == '-');
-            case ATTR_PREFIX:  return ci_starts_with(actual, expected);
-            case ATTR_SUFFIX:  return ci_ends_with(actual, expected);
-            case ATTR_CONTAINS: return ci_contains(actual, expected);
-            default: return false;
-        }
-    }
     switch (attr.op) {
-        case ATTR_EQUALS:    return actual == expected;
-        case ATTR_INCLUDES:  {
+        case ATTR_EQUALS: return equals(actual, expected);
+        case ATTR_INCLUDES: {
+            if (expected.empty()) return false;
+            for (const unsigned char byte : expected)
+                if (aether::is_html_space(byte)) return false;
             size_t pos = 0;
             while (pos < actual.size()) {
-                while (pos < actual.size() && std::isspace(static_cast<unsigned char>(actual[pos]))) ++pos;
+                while (pos < actual.size() && aether::is_html_space(static_cast<unsigned char>(actual[pos]))) ++pos;
                 size_t end = pos;
-                while (end < actual.size() && !std::isspace(static_cast<unsigned char>(actual[end]))) ++end;
-                if (end > pos && actual.compare(pos, end - pos, expected) == 0) return true;
+                while (end < actual.size() && !aether::is_html_space(static_cast<unsigned char>(actual[end]))) ++end;
+                if (end > pos && equals(actual.substr(pos, end - pos), expected)) return true;
                 pos = end;
             }
             return false;
         }
-        case ATTR_DASH_MATCH: return actual == expected ||
-            (actual.size() > expected.size() &&
-             actual.compare(0, expected.size(), expected) == 0 &&
-             actual[expected.size()] == '-');
-        case ATTR_PREFIX:  return actual.compare(0, expected.size(), expected) == 0;
-        case ATTR_SUFFIX:  return actual.size() >= expected.size() &&
-            actual.compare(actual.size() - expected.size(), expected.size(), expected) == 0;
-        case ATTR_CONTAINS: return actual.find(expected) != std::string::npos;
+        case ATTR_DASH_MATCH: return equals(actual, expected) ||
+            (actual.size() > expected.size() && actual[expected.size()] == '-' &&
+             equals(actual.substr(0, expected.size()), expected));
+        case ATTR_PREFIX: return insensitive ? aether::ascii_istarts_with(actual, expected) :
+            actual.starts_with(expected);
+        case ATTR_SUFFIX: return insensitive ? aether::ascii_iends_with(actual, expected) :
+            actual.ends_with(expected);
+        case ATTR_CONTAINS: return insensitive ? aether::ascii_icontains(actual, expected) :
+            actual.find(expected) != std::string_view::npos;
         default: return false;
     }
 }
@@ -259,7 +219,7 @@ static bool matches_pseudo(const pseudo_selector_s& pseudo, aether_node_s* node)
 static bool matches_compound(const compound_selector_s& compound, aether_node_s* node) {
     if (!compound.type_name.empty()) {
         if (node->type != AETHER_NODE_ELEMENT) return false;
-        if (!ci_equals(std::string_view(node->tag_name), std::string_view(compound.type_name)))
+        if (!aether::ascii_iequals(std::string_view(node->tag_name), std::string_view(compound.type_name)))
             return false;
     }
     if (!compound.ids.empty()) {

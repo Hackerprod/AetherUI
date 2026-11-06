@@ -1,6 +1,7 @@
 #pragma once
 #include "../dom/pseudo_element.h"
 #include "style_string_utils_internal.h"
+#include "attribute_value_policy.h"
 
 #include <aether/aether.h>
 #include <string>
@@ -203,8 +204,9 @@ struct attribute_selector_s {
     std::string name;
     attribute_match_operator_t op = ATTR_EXISTS;
     std::string value;
-    bool has_value        = false;
-    bool case_insensitive = false;
+    bool has_value = false;
+    attribute_value_case_mode case_mode = attribute_value_case_mode::default_html;
+    bool html_default_ascii_insensitive = false;
 };
 
 // ═══ Pseudo selector (forward-declares compiled_selector_s) ══

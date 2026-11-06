@@ -89,7 +89,7 @@ void same(const compiled_selector_s& a, const compiled_selector_s& b, const std:
             const auto q = p + ".attributes[" + std::to_string(j) + "]";
             require(u.name == v.name, q + ".name"); require(u.op == v.op, q + ".op");
             require(u.value == v.value, q + ".value"); require(u.has_value == v.has_value, q + ".has_value");
-            require(u.case_insensitive == v.case_insensitive, q + ".case_insensitive");
+            require(u.case_mode == v.case_mode && u.html_default_ascii_insensitive == v.html_default_ascii_insensitive, q + ".case_policy");
         }
         require(c.pseudos.size() == d.pseudos.size(), p + ".pseudos.size");
         for (size_t j = 0; j < std::min(c.pseudos.size(), d.pseudos.size()); ++j) {

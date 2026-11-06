@@ -7,15 +7,8 @@
 
 /* ── Helpers ──────────────────────────────────────────────────────── */
 
-static std::string to_lower_ascii(std::string_view s) {
-    std::string result(s);
-    for (auto& c : result)
-        if (c >= 'A' && c <= 'Z') c = static_cast<char>(c + ('a' - 'A'));
-    return result;
-}
-
 static bool is_css_space(char c) {
-    return c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\f';
+    return aether::is_html_space(static_cast<unsigned char>(c));
 }
 
 // Comments are token separators, never whitespace. Keep this out of name,
@@ -351,39 +344,36 @@ static bool read_attribute_value(parser_s& p, std::string& value) {
 static bool try_parse_attribute(parser_s& p, attribute_selector_s& attr) {
     ++p.index; /* skip '[' */
     p.skip_trivia();
-    // Decode CSS escapes first: \44 still denotes uppercase D.
-    auto name = aether::canonical_html_attribute_name(p.read_identifier());
-    if (name.empty()) return false;
+    // Decode CSS escapes before canonicalization and classification. Publish
+    // only a complete attribute, preserving the previous result on failure.
+    attribute_selector_s parsed;
+    parsed.name = aether::canonical_html_attribute_name(p.read_identifier());
+    if (parsed.name.empty()) return false;
+    parsed.html_default_ascii_insensitive =
+        aether::html_attribute_defaults_ascii_insensitive(parsed.name);
     p.skip_trivia();
     if (p.peek() == ']') {
         ++p.index;
-        attr.name = std::move(name);
-        attr.op = ATTR_EXISTS;
-        attr.has_value = false;
-        attr.case_insensitive = false;
+        attr = std::move(parsed);
         return true;
     }
-    attribute_match_operator_t op = ATTR_EQUALS;
-    if (!try_read_attribute_operator(p, op)) return false;
+    if (!try_read_attribute_operator(p, parsed.op)) return false;
     p.skip_trivia();
-    std::string val;
-    if (!read_attribute_value(p, val)) return false;
+    if (!read_attribute_value(p, parsed.value)) return false;
+    parsed.has_value = true;
     p.skip_trivia();
-    bool ci = false;
     if (!p.eof() && p.peek() != ']') {
-        auto flag = p.read_identifier();
-        if (flag.size() == 1 && (flag[0] == 'i' || flag[0] == 'I')) { ci = true; }
-        else if (flag.size() == 1 && (flag[0] == 's' || flag[0] == 'S')) { /* ok */ }
+        const auto flag = p.read_identifier();
+        if (aether::ascii_iequals(flag, "i"))
+            parsed.case_mode = attribute_value_case_mode::ascii_insensitive;
+        else if (aether::ascii_iequals(flag, "s"))
+            parsed.case_mode = attribute_value_case_mode::sensitive;
         else return false;
         p.skip_trivia();
     }
     if (p.eof() || p.peek() != ']') return false;
     ++p.index;
-    attr.name = std::move(name);
-    attr.op = op;
-    attr.value = std::move(val);
-    attr.has_value = true;
-    attr.case_insensitive = ci;
+    attr = std::move(parsed);
     return true;
 }
 
@@ -419,12 +409,7 @@ static bool try_parse_nth(std::string_view source, nth_expression_s& expr) {
     source.remove_prefix(cursor);
     cursor = 0;
     const auto equals_ascii = [&](std::string_view word) {
-        if (source.size() < word.size()) return false;
-        for (size_t i = 0; i < word.size(); ++i) {
-            char c = source[i];
-            if (c >= 'A' && c <= 'Z') c = static_cast<char>(c + ('a' - 'A'));
-            if (c != word[i]) return false;
-        }
+        if (!aether::ascii_istarts_with(source, word)) return false;
         size_t end = word.size();
         skip_trivia(source, end);
         return end == source.size();
@@ -494,7 +479,7 @@ static bool try_parse_pseudo(parser_s& p, pseudo_selector_s& pseudo,
                              specificity_s& spec, selector_dependency_t& deps) {
     // The caller consumed the colon and any comments, and handled a second colon.
     // Pseudo names are ASCII-insensitive after CSS escape decoding, not their arguments.
-    auto name = to_lower_ascii(p.read_identifier());
+    auto name = aether::ascii_lowercase(p.read_identifier());
     if (name.empty()) return false;
 
     std::string_view body;
@@ -596,7 +581,7 @@ static bool try_parse_compound(parser_s& p, compound_selector_s& compound) {
         ++p.index;
         consumed = true;
     } else if (would_start_ident_name(p.source, p.index)) {
-        compound.type_name = to_lower_ascii(p.read_identifier());
+        compound.type_name = aether::ascii_lowercase(p.read_identifier());
         if (compound.type_name.empty()) return false;
         p.specificity = p.specificity + specificity_s{0, 0, 1};
         consumed = true;
@@ -637,7 +622,7 @@ static bool try_parse_compound(parser_s& p, compound_selector_s& compound) {
                     p.pseudo_element != aether_pseudo_element_t::none) return false;
                 ++p.index;
                 p.skip_comments();
-                auto name = to_lower_ascii(p.read_identifier());
+                auto name = aether::ascii_lowercase(p.read_identifier());
                 if (name == "before") {
                     p.pseudo_element = aether_pseudo_element_t::before;
                 } else if (name == "after") {

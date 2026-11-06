@@ -1,4 +1,5 @@
 #include "style_runtime_types.h"
+#include "../primitives/ascii_text.h"
 
 // ═══ Rule index ════════════════════════════════════════════════
 //
@@ -19,7 +20,7 @@ static void add_to_bucket(
 
 // Convert a type name to lowercase for case-insensitive bucket key.
 static std::string type_key(const std::string& s) {
-    return str_to_lower(s);
+    return aether::ascii_lowercase(s);
 }
 
 void rule_index_clear(rule_index_s* idx) {

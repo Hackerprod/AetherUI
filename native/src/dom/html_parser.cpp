@@ -22,32 +22,16 @@ static bool is_void_element(const std::string& tag) {
         "area", "base", "br", "col", "embed", "hr", "img", "input",
         "link", "meta", "param", "source", "track", "wbr"
     };
-    std::string lower = tag;
-    std::transform(lower.begin(), lower.end(), lower.begin(),
-        [](unsigned char c) -> char { return static_cast<char>(std::tolower(c)); });
     for (auto* v : voids) {
-        if (lower == v) return true;
+        if (aether::ascii_iequals(tag, v)) return true;
     }
     return false;
-}
-
-static char ascii_lower(char c) {
-    return c >= 'A' && c <= 'Z' ? static_cast<char>(c + ('a' - 'A')) : c;
-}
-
-static bool ascii_equal_ignore_case(std::string_view a, std::string_view b) {
-    if (a.size() != b.size()) return false;
-    for (size_t i = 0; i < a.size(); ++i) {
-        if (ascii_lower(a[i]) != ascii_lower(b[i])) return false;
-    }
-    return true;
 }
 
 static bool is_raw_text_end_boundary(char c) {
     // HTML whitespace, not locale-sensitive isspace (which also accepts VT).
     // Unlike a browser tokenizer, this byte parser has not normalized CR to LF.
-    return c == '>' || c == '/' || c == ' ' || c == '\t' || c == '\n' ||
-           c == '\f' || c == '\r';
+    return c == '>' || c == '/' || aether::is_html_space(static_cast<unsigned char>(c));
 }
 
 /* ── Parser ───────────────────────────────────────────────────────── */
@@ -237,7 +221,7 @@ class HtmlParser {
         for (size_t count = stack.size(); count > 1; --count) {
             aether_node_s* node = stack[count - 1];
             if (node->type == AETHER_NODE_ELEMENT &&
-                ascii_equal_ignore_case(node->tag_name, name)) {
+                aether::ascii_iequals(node->tag_name, name)) {
                 stack.resize(count - 1);
                 return;
             }
@@ -257,7 +241,7 @@ class HtmlParser {
             // Require </name plus a real delimiter: EOF is not a boundary.
             // The remaining-length check bounds every subsequent access.
             if (len - candidate > name.size() + 2 && src[candidate + 1] == '/' &&
-                ascii_equal_ignore_case(input.substr(candidate + 2, name.size()), name) &&
+                aether::ascii_iequals(input.substr(candidate + 2, name.size()), name) &&
                 is_raw_text_end_boundary(src[candidate + 2 + name.size()])) {
                 text_end = candidate;
                 break;
@@ -360,7 +344,7 @@ class HtmlParser {
             // Recognize syntax in the source, never in decoded text. EOF after
             // the name is not a delimiter; rejected candidates remain literal.
             if (len - candidate > name.size() + 2 && src[candidate + 1] == '/' &&
-                ascii_equal_ignore_case(input.substr(candidate + 2, name.size()), name) &&
+                aether::ascii_iequals(input.substr(candidate + 2, name.size()), name) &&
                 is_raw_text_end_boundary(src[candidate + 2 + name.size()])) {
                 text_end = candidate;
                 pos = candidate + 2 + name.size();
@@ -407,7 +391,7 @@ class HtmlParser {
         const bool rcdata_name_boundary = !end() && is_raw_text_end_boundary(current());
         // Canonical HTML element identity. Attribute names are normalized at
         // their own storage boundary below; values remain untouched.
-        std::transform(tag_name.begin(), tag_name.end(), tag_name.begin(), ascii_lower);
+        tag_name = aether::ascii_lowercase(std::move(tag_name));
 
         // Stage the token separately from the DOM: EOF in any attribute state
         // discards the entire opening without allocating a node or style ID.
@@ -473,8 +457,8 @@ class HtmlParser {
             return;
 
         stack.push_back(element);
-        if (ascii_equal_ignore_case(element->tag_name, "style") ||
-            ascii_equal_ignore_case(element->tag_name, "script")) {
+        if (aether::ascii_iequals(element->tag_name, "style") ||
+            aether::ascii_iequals(element->tag_name, "script")) {
             parse_raw_text(element, doc);
         }
     }

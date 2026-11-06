@@ -53,7 +53,9 @@ void attr_ast(const compiled_selector_s& s, const std::string& name,
     check(a.name == name, s.source + " canonical decoded name");
     check(a.op == op && a.has_value == (op != ATTR_EXISTS), s.source + " operator/presence");
     check(a.value == value, s.source + " value preserved");
-    check(a.case_insensitive == insensitive, s.source + " value flag");
+    const bool explicit_sensitive = s.source.find(" s]") != std::string::npos || s.source.find(" S]") != std::string::npos;
+    check(a.case_mode == (insensitive ? attribute_value_case_mode::ascii_insensitive : explicit_sensitive ? attribute_value_case_mode::sensitive : attribute_value_case_mode::default_html), s.source + " three-state value flag");
+    check(!a.html_default_ascii_insensitive, s.source + " data-x is not a legacy attribute");
     metadata(s, {0,1,0}, SELECTOR_DEP_SELF_ATTRIBUTE);
     check(s.anchor.is_universal(), s.source + " universal anchor");
 }
