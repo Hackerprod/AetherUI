@@ -179,9 +179,20 @@ class HtmlParser {
     void parse_end_tag(std::vector<aether_node_s*>& stack, aether_doc_s* doc) {
         (void)doc;
         pos += 2;
+        const bool immediate_ascii_name = !end() && is_ascii_alpha(current());
         skip_whitespace();
         std::string name = read_name();
-        skip_until_tag_end();
+        // Restrict the shared tokenizer to recognized names and delimiters.
+        // Keep legacy handling for malformed openers, truncated names and EOF
+        // immediately after a name, outside this suffix-consumption contract.
+        if (immediate_ascii_name && !name.empty() && !end() &&
+            is_raw_text_end_boundary(current())) {
+            // Consume even an unmatched token, so quoted markup cannot escape
+            // its discarded attributes. EOF must not alter insertion context.
+            if (consume_end_tag_suffix() == EndTagSuffixResult::Eof) return;
+        } else {
+            skip_until_tag_end();
+        }
 
         if (name.empty()) return;
 
@@ -230,10 +241,12 @@ class HtmlParser {
         pos = text_end;
     }
 
-    void consume_rcdata_end_tag() {
-        // The appropriate name and delimiter have already been recognized.
-        // Consume only the discarded end-tag attributes, without borrowing the
-        // ordinary end-tag parser's first-'>' behavior or changing the stack.
+    enum class EndTagSuffixResult { Terminated, Eof };
+
+    EndTagSuffixResult consume_end_tag_suffix() {
+        // The name and delimiter have already been recognized. Consume the
+        // discarded attributes without decoding references or changing the
+        // stack. Only a source '>' outside a quoted value terminates the token.
         enum class State {
             BeforeName, Name, AfterName, BeforeValue, SingleQuoted, DoubleQuoted,
             Unquoted, AfterQuoted, SelfClosing
@@ -245,7 +258,7 @@ class HtmlParser {
             switch (state) {
             case State::BeforeName:
                 if (space) { ++pos; break; }
-                if (c == '>') { ++pos; return; }
+                if (c == '>') { ++pos; return EndTagSuffixResult::Terminated; }
                 if (c == '/') { ++pos; state = State::SelfClosing; break; }
                 // Even '=' or a quote is a first attribute-name byte here.
                 ++pos;
@@ -258,14 +271,14 @@ class HtmlParser {
                 break;
             case State::AfterName:
                 if (space) { ++pos; break; }
-                if (c == '>') { ++pos; return; }
+                if (c == '>') { ++pos; return EndTagSuffixResult::Terminated; }
                 if (c == '/') { ++pos; state = State::SelfClosing; break; }
                 if (c == '=') { ++pos; state = State::BeforeValue; break; }
                 state = State::BeforeName;
                 break;
             case State::BeforeValue:
                 if (space) { ++pos; break; }
-                if (c == '>') { ++pos; return; }
+                if (c == '>') { ++pos; return EndTagSuffixResult::Terminated; }
                 if (c == '\'' || c == '"') {
                     ++pos;
                     state = c == '\'' ? State::SingleQuoted : State::DoubleQuoted;
@@ -279,23 +292,24 @@ class HtmlParser {
                 if (c == (state == State::SingleQuoted ? '\'' : '"')) state = State::AfterQuoted;
                 break;
             case State::Unquoted:
-                if (c == '>') { ++pos; return; }
+                if (c == '>') { ++pos; return EndTagSuffixResult::Terminated; }
                 ++pos;
                 if (space) state = State::BeforeName;
                 break;
             case State::AfterQuoted:
                 if (space) { ++pos; state = State::BeforeName; break; }
-                if (c == '>') { ++pos; return; }
+                if (c == '>') { ++pos; return EndTagSuffixResult::Terminated; }
                 if (c == '/') { ++pos; state = State::SelfClosing; break; }
                 state = State::BeforeName;
                 break;
             case State::SelfClosing:
-                if (c == '>') { ++pos; return; }
+                if (c == '>') { ++pos; return EndTagSuffixResult::Terminated; }
                 state = State::BeforeName;
                 break;
             }
         }
         // EOF in an accepted end-tag token discards it, including its name.
+        return EndTagSuffixResult::Eof;
     }
 
     void parse_rcdata(aether_node_s* element, aether_doc_s* doc) {
@@ -314,7 +328,7 @@ class HtmlParser {
                 is_raw_text_end_boundary(src[candidate + 2 + name.size()])) {
                 text_end = candidate;
                 pos = candidate + 2 + name.size();
-                consume_rcdata_end_tag();
+                (void)consume_end_tag_suffix();
                 break;
             }
             search = candidate + 1;
