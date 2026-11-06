@@ -154,6 +154,14 @@ if(AETHERUI_BUILD_TESTS)
     target_link_libraries(aether_html_end_tag_suffix_test PRIVATE AetherUI::Core)
     add_test(NAME aether.html-end-tag-suffix COMMAND aether_html_end_tag_suffix_test)
 
+    add_executable(aether_html_comments_test tests/test_html_comments.cpp)
+    target_link_libraries(aether_html_comments_test PRIVATE AetherUI::Core)
+    add_test(NAME aether.html-comments COMMAND aether_html_comments_test)
+
+    add_executable(aether_html_comment_consumers_test tests/test_html_comment_consumers.cpp)
+    target_link_libraries(aether_html_comment_consumers_test PRIVATE AetherUI::Core)
+    add_test(NAME aether.html-comment-consumers COMMAND aether_html_comment_consumers_test)
+
     add_executable(aether_html_end_tags_test tests/test_html_end_tags.cpp)
     target_link_libraries(aether_html_end_tags_test PRIVATE AetherUI::Core)
     add_test(NAME aether.html-end-tags COMMAND aether_html_end_tags_test)

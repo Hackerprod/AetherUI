@@ -151,19 +151,55 @@ class HtmlParser {
 
     void parse_comment(aether_node_s* parent, aether_doc_s* doc) {
         pos += 4;
-        std::string_view sv(src, len);
-        size_t end_pos = sv.find("-->", pos);
-        if (end_pos == std::string_view::npos) {
-            parent->children.push_back(
-                create_comment(std::string(src + pos, len - pos), doc));
-            parent->children.back()->parent = parent;
-            pos = len;
-            return;
+        const size_t start = pos;
+        enum class State { Start, StartDash, Comment, EndDash, End, EndBang };
+        State state = State::Start;
+        bool closed = false;
+        while (!end() && !closed) {
+            const char c = current();
+            switch (state) {
+            case State::Start:
+                if (c == '-') state = State::StartDash;
+                else if (c == '>') closed = true;
+                else state = State::Comment;
+                break;
+            case State::StartDash:
+                if (c == '-') state = State::End;
+                else if (c == '>') closed = true;
+                else state = State::Comment;
+                break;
+            case State::Comment:
+                if (c == '-') state = State::EndDash;
+                break;
+            case State::EndDash:
+                state = c == '-' ? State::End : State::Comment;
+                break;
+            case State::End:
+                if (c == '>') closed = true;
+                else if (c == '!') state = State::EndBang;
+                else if (c != '-') state = State::Comment;
+                break;
+            case State::EndBang:
+                if (c == '-') state = State::EndDash;
+                else if (c == '>') closed = true;
+                else state = State::Comment;
+                break;
+            }
+            if (!closed) ++pos;
         }
+
+        // Comment data is one contiguous input interval. The state withholds
+        // only a possible closing suffix: nothing, '-', nothing, '-', '--',
+        // or '--!'. A fallback commits it by advancing into Comment (or the
+        // next pending suffix). At both a close and EOF it remains excluded.
+        // Keep literal bytes, including CR/CRLF and references; the public
+        // C-string boundary makes an embedded NUL EOF before this parser runs.
+        constexpr size_t pending[] = {0, 1, 0, 1, 2, 3};
+        const size_t text_end = pos - pending[static_cast<size_t>(state)];
         parent->children.push_back(
-            create_comment(std::string(src + pos, end_pos - pos), doc));
+            create_comment(std::string(src + start, text_end - start), doc));
         parent->children.back()->parent = parent;
-        pos = end_pos + 3;
+        if (closed) ++pos; // Consume exactly the closing '>', never the tail.
     }
 
     void skip_declaration() {

@@ -86,6 +86,40 @@ int main(void) {
         if (!ok) { fputs("installed HTML end-tag suffix contract failed\n", stderr); return 1; }
     }
 
-    puts("OK: installed AetherUI::Core package, HTML names and end-tag suffixes are consumable from C11");
+    {
+        aether_doc_t doc = NULL;
+        aether_node_t body, child, after;
+        const char* expected[] = {"", "", "bang", "literal&amp;\r\n"};
+        int ok;
+        if (aether_doc_create(&doc) != AETHER_OK || !doc) return 1;
+        ok = aether_doc_parse_html(doc,
+            "<body><!--><!---><!--bang--!><!--literal&amp;\r\n--><p id=after>tail</p></body>") == AETHER_OK;
+        body = aether_doc_get_body(doc);
+        after = aether_doc_get_element_by_id(doc, "after");
+        ok = ok && body && after && aether_node_get_child_count(body) == 5 &&
+            aether_node_get_child(body, 4) == after && aether_node_get_parent(after) == body;
+        for (int i = 0; i < 4; ++i) {
+            char* value;
+            child = aether_node_get_child(body, i);
+            value = aether_node_get_text_content(child);
+            ok = ok && child && aether_node_get_type(child) == AETHER_NODE_COMMENT &&
+                aether_node_get_parent(child) == body && aether_node_get_child_count(child) == 0 &&
+                value && strcmp(value, expected[i]) == 0;
+            aether_string_free(value);
+        }
+        ok = ok && aether_doc_parse_html(doc, "<body><!--eof--!\0--><p id=phantom>") == AETHER_OK;
+        body = aether_doc_get_body(doc);
+        child = aether_node_get_child(body, 0);
+        char* value = aether_node_get_text_content(child);
+        ok = ok && body && child && aether_node_get_child_count(body) == 1 &&
+            aether_node_get_type(child) == AETHER_NODE_COMMENT && aether_node_get_parent(child) == body &&
+            value && strcmp(value, "eof") == 0 && !aether_doc_get_element_by_id(doc, "after") &&
+            !aether_doc_get_element_by_id(doc, "phantom");
+        aether_string_free(value);
+        aether_doc_destroy(doc);
+        if (!ok) { fputs("installed HTML comment cycle contract failed\n", stderr); return 1; }
+    }
+
+    puts("OK: installed AetherUI::Core package, HTML names, end tags and comments are consumable from C11");
     return 0;
 }
