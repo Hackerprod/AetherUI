@@ -386,6 +386,24 @@ if(AETHERUI_BUILD_TESTS)
     target_link_libraries(aether_css_calc_trivia_test PRIVATE AetherUI::Core)
     add_test(NAME aether.css-calc-trivia COMMAND aether_css_calc_trivia_test)
 
+    add_executable(aether_pending_declaration_syntax_test
+        tests/test_pending_declaration_syntax.cpp src/style_runtime/css_variable_tokens.cpp)
+    target_include_directories(aether_pending_declaration_syntax_test PRIVATE src/style_runtime)
+    add_test(NAME aether.pending-declaration-syntax COMMAND aether_pending_declaration_syntax_test)
+
+    add_executable(aether_shorthand_compiler_test tests/test_shorthand_compiler.cpp
+        src/style_runtime/style_source_compiler.cpp src/style_runtime/selector_parser.cpp
+        src/style_runtime/media_condition.cpp src/style_runtime/css_variable_tokens.cpp
+        src/css/css_length.cpp)
+    target_include_directories(aether_shorthand_compiler_test PRIVATE src/style_runtime)
+    target_compile_definitions(aether_shorthand_compiler_test PRIVATE AETHER_CSS_NUMERIC_ONLY)
+    target_link_libraries(aether_shorthand_compiler_test PRIVATE AetherUI::Core)
+    add_test(NAME aether.shorthand-compiler COMMAND aether_shorthand_compiler_test)
+
+    add_executable(aether_shorthand_atomicity_test tests/test_shorthand_atomicity.cpp)
+    target_link_libraries(aether_shorthand_atomicity_test PRIVATE AetherUI::Core)
+    add_test(NAME aether.shorthand-atomicity COMMAND aether_shorthand_atomicity_test)
+
     add_executable(aether_shorthand_var_test tests/test_shorthand_var.cpp)
     target_include_directories(aether_shorthand_var_test PRIVATE src)
     target_link_libraries(aether_shorthand_var_test PRIVATE AetherUI::Core)

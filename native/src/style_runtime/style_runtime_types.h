@@ -503,5 +503,19 @@ aether_status_t style_source_compile_inline(
     const char* source,
     std::vector<compiled_property_declaration_s>& out_properties,
     std::vector<custom_property_declaration_s>& out_custom,
+    std::vector<compiled_shorthand_declaration_s>& out_shorthands,
+    aether_style_diagnostic_fn diagnostics_callback,
+    void* diagnostics_user_data);
+
+// Internal transactional compiler shared by stylesheet, inline and substitution.
+struct style_shorthand_definition_s;
+struct style_property_registry_s;
+bool style_source_compile_shorthand(
+    const style_shorthand_definition_s& shorthand,
+    const std::string& source,
+    bool important,
+    int32_t declaration_order,
+    style_property_registry_s* registry,
+    std::vector<compiled_property_declaration_s>& output,
     aether_style_diagnostic_fn diagnostics_callback,
     void* diagnostics_user_data);

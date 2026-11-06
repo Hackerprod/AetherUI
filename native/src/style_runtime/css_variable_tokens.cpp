@@ -136,7 +136,12 @@ css_variable_token css_variable_lexer::next() {
         t.exact_double_hyphen = t.serialization == category::ident &&
             t.end - t.begin == 2 && t.starts_double_hyphen;
         t.kind = failed_ ? css_variable_token_kind::error : kind;
-        if (t.kind == css_variable_token_kind::error) t.serialization = category::error;
+        // Recovery-aware readers need the original category (especially
+        // comment trivia), while legacy readers still receive kind::error.
+        // Budget/decoder failures must never become recoverable EOF tokens.
+        t.eof_recoverable = t.eof_recoverable && !failed_;
+        if (t.kind == css_variable_token_kind::error && !t.eof_recoverable)
+            t.serialization = category::error;
         return t;
     };
     if (failed_) return finish(css_variable_token_kind::error);
@@ -154,6 +159,7 @@ css_variable_token css_variable_lexer::next() {
             if (read(cursor_) == '*' && read(cursor_ + 1) == '/') { cursor_ += 2; return finish(css_variable_token_kind::comment); }
             ++cursor_;
         }
+        t.eof_recoverable = !failed_;
         return finish(css_variable_token_kind::error);
     }
     if (c == '\'' || c == '"') {
@@ -169,6 +175,7 @@ css_variable_token css_variable_lexer::next() {
                 if (e == '\r' && read(cursor_) == '\n') ++cursor_;
             }
         }
+        t.eof_recoverable = !failed_;
         return finish(css_variable_token_kind::error);
     }
     // CSS sentinels take precedence over ident/delimiter tokenization.
@@ -221,12 +228,26 @@ css_variable_token css_variable_lexer::next() {
             const auto q = read(look);
             if (q != '\'' && q != '"') {
                 t.serialization = category::url;
+                cursor_ = look; // Leading whitespace is not URL content.
+                bool trailing_white = false;
                 while (cursor_ < length_ && !failed_) {
                     const auto a = read(cursor_);
                     if (a == ')') { ++cursor_; return finish(css_variable_token_kind::other); }
+                    if (white(a)) {
+                        trailing_white = true;
+                        ++cursor_;
+                        continue;
+                    }
+                    // Consume bad URL remnants as one opaque token too. Keep
+                    // the legacy kind, but expose the error to syntax readers.
+                    if (trailing_white || a == '\'' || a == '"' || a == '(' ||
+                        a <= 8 || a == 11 || (a >= 14 && a <= 31) || a == 127 ||
+                        (a == '\\' && !escape_at(cursor_)))
+                        t.serialization = category::bad_url;
                     if (escape_at(cursor_)) { (void)escape(); }
                     else ++cursor_;
                 }
+                t.eof_recoverable = !failed_ && t.serialization == category::url;
                 return finish(css_variable_token_kind::error);
             }
         }
@@ -249,5 +270,68 @@ bool variable_has_reference(const std::string& source) {
         const auto t = lexer.next();
         if (t.kind == css_variable_token_kind::function && t.is_var) return true;
         if (t.kind == css_variable_token_kind::end || t.kind == css_variable_token_kind::error) return false;
+    }
+}
+
+bool validate_pending_declaration_value(const std::string& source) {
+    using kind = css_variable_token_kind;
+    using category = css_variable_serialization;
+    struct block {
+        char close = 0;
+        // A var() begins with precisely one dashed identifier, followed by
+        // either its closing parenthesis or a comma and a declaration-value.
+        enum class phase { ordinary, name, separator, fallback } state = phase::ordinary;
+    };
+    std::vector<block> blocks(1);
+    css_variable_lexer lexer(source.data(), source.size());
+    size_t components = 0;
+    bool top_brace = false;
+    for (;;) {
+        const auto token = lexer.next();
+        if ((token.kind == kind::error && !token.eof_recoverable) || token.serialization == category::bad_string ||
+            token.serialization == category::bad_url) return false;
+        if (token.kind == kind::end) {
+            // CSS supplies missing block closes at EOF. A var() without a
+            // name is still invalid; empty declarations/fallbacks are syntax,
+            // leaving acceptance of the substituted value to property grammar.
+            for (const auto& item : blocks)
+                if (item.state == block::phase::name) return false;
+            return true;
+        }
+        if (token.kind == kind::whitespace || token.kind == kind::comment ||
+            (token.eof_recoverable && token.serialization == category::comment)) continue;
+        if (token.kind == kind::close) {
+            if (blocks.size() == 1 || token.delimiter != blocks.back().close ||
+                blocks.back().state == block::phase::name) return false;
+            blocks.pop_back();
+            continue;
+        }
+        auto& current = blocks.back();
+        if (current.state == block::phase::name) {
+            if (token.kind != kind::ident || !token.dashed) return false;
+            current.state = block::phase::separator;
+            continue;
+        }
+        if (current.state == block::phase::separator) {
+            if (token.kind != kind::comma) return false;
+            current.state = block::phase::fallback;
+            continue;
+        }
+        // Fallbacks have their own declaration-value boundary, even inside
+        // another function. Nested ordinary blocks may contain these tokens.
+        if ((blocks.size() == 1 || current.state == block::phase::fallback) &&
+            token.kind == kind::other && token.serialization == category::delimiter &&
+            (token.delimiter == '!' || token.delimiter == ';')) return false;
+        if (blocks.size() == 1) {
+            ++components;
+            if (token.kind == kind::open && token.delimiter == '{') top_brace = true;
+            if (top_brace && components > 1) return false;
+        }
+        if (token.kind == kind::open || token.kind == kind::function) {
+            block nested;
+            nested.close = token.delimiter == '(' ? ')' : token.delimiter == '[' ? ']' : '}';
+            if (token.kind == kind::function && token.is_var) nested.state = block::phase::name;
+            blocks.push_back(nested);
+        }
     }
 }

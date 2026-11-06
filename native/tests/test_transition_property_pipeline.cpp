@@ -113,16 +113,12 @@ struct fixture_s {
     void unchanged() {
         require(resolve() == 0 && !box_updated && impact == 0, "repeat resolution must emit no updates");
     }
-    void mutate_variables(bool expect_change = true) {
+    void mutate_variables() {
         require(aether_element_set_attribute(root, "style",
             "--transition: transform 250ms ease-out 25ms; --time: 250ms; "
             "--delay: 25ms; --prop: transform; --timing: ease-out;")
             == AETHER_OK, "mutate inherited custom properties");
         const int count = resolve();
-        if (!expect_change) {
-            require(count == 0 && !box_updated && impact == 0, "ignored inline shorthand stays unchanged");
-            return;
-        }
         require(count == 1 && box_updated, "variable mutation updates only box");
         require(impact == AETHER_STYLE_IMPACT_PAINT,
             "transition mutation must be PAINT only, without LAYOUT/HITTEST/COMPOSITE");
@@ -138,18 +134,11 @@ void check(const std::string& declaration, transition_s expected, bool in_line) 
 void check_variable(const std::string& declaration, transition_s before,
                     transition_s after, bool in_line) {
     current_case = declaration.c_str();
-    // Inline deferred shorthands are ignored by the characterized baseline;
-    // deferred longhands do resolve. Keep this distinction explicit.
-    const bool ignored = in_line && declaration.find("transition:") != std::string::npos;
-    if (ignored) {
-        before = previous;
-        if (declaration.find("transition-duration: 50ms") != std::string::npos) before.duration = .05f;
-        after = before;
-    }
+    // Inline and stylesheet pending groups now share the same atomic path.
     fixture_s f(declaration, in_line);
     f.expect(before);
     f.unchanged();
-    f.mutate_variables(!ignored);
+    f.mutate_variables();
     f.expect(after);
     f.unchanged();
     f.expect(after);

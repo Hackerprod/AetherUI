@@ -110,6 +110,9 @@ using shorthand_expand_fn = std::function<bool(const char* source, style_shortha
 struct style_shorthand_definition_s {
     std::string name;
     shorthand_expand_fn expand;
+    // Complete destination set, independent of the authored value. Resolved at seal().
+    std::vector<std::string> target_names;
+    std::vector<int32_t> target_ids;
 };
 
 // ═══ Property registry ═════════════════════════════════════════
@@ -229,7 +232,8 @@ struct style_property_registry_s {
         by_name[normalized] = &definitions.back();
     }
 
-    void register_shorthand(const char* name, shorthand_expand_fn expand) {
+    void register_shorthand(const char* name, shorthand_expand_fn expand,
+                            std::vector<std::string> targets = {}) {
         if (sealed) return;
         if (!name || !*name) return;
 
@@ -239,6 +243,7 @@ struct style_property_registry_s {
         style_shorthand_definition_s def;
         def.name = normalized;
         def.expand = std::move(expand);
+        def.target_names = std::move(targets);
 
         shorthand_defs.push_back(std::move(def));
         shorthands[normalized] = &shorthand_defs.back();
@@ -251,8 +256,19 @@ struct style_property_registry_s {
         for (const auto& definition : definitions)
             by_name[definition.name] = &definition;
         shorthands.clear();
-        for (const auto& shorthand : shorthand_defs)
+        for (auto& shorthand : shorthand_defs) {
             shorthands[shorthand.name] = &shorthand;
+            shorthand.target_ids.clear();
+            for (const auto& name : shorthand.target_names) {
+                const auto found = by_name.find(name);
+                if (found == by_name.end()) { shorthand.target_ids.clear(); break; }
+                const auto id = found->second->id;
+                bool duplicate = false;
+                for (auto previous : shorthand.target_ids) if (previous == id) duplicate = true;
+                if (duplicate) { shorthand.target_ids.clear(); break; }
+                shorthand.target_ids.push_back(id);
+            }
+        }
         sealed = true;
     }
 

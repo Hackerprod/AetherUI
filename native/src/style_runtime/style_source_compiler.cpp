@@ -148,18 +148,18 @@ static bool is_calc_expression(const std::string& value) {
 
 // ═══ Compile longhand ══════════════════════════════════════════════════
 
-static void compile_longhand(
+static bool try_compile_longhand(
     const std::string& name,
     const std::string& value,
     bool important,
     int32_t declaration_order,
     style_property_registry_s* registry,
-    std::vector<compiled_property_declaration_s>& output,
+    compiled_property_declaration_s& output,
     aether_style_diagnostic_fn diagnostics_callback,
     void* diagnostics_user_data)
 {
     const auto* def = registry->try_get(name.c_str());
-    if (!def) return;
+    if (!def) return false;
 
     std::string normalized = str_trim(value);
     compiled_style_value_s compiled;
@@ -180,7 +180,7 @@ static void compile_longhand(
                 diagnostics_callback("AETHER-CSS-CALC", def->name.c_str(), normalized.c_str(),
                     "The calc() expression is syntactically or dimensionally invalid.", diagnostics_user_data);
             }
-            return;
+            return false;
         }
         compiled.mode = compiled_value_mode::value;
         compiled.typed_value = parsed;
@@ -191,7 +191,42 @@ static void compile_longhand(
     decl.value = compiled;
     decl.important = important;
     decl.declaration_order = declaration_order;
-    output.push_back(decl);
+    output = std::move(decl);
+    return true;
+}
+
+// Expand and validate the entire declaration before publishing any sibling.
+// This helper is shared with computed substitution; it never applies values.
+bool style_source_compile_shorthand(
+    const style_shorthand_definition_s& shorthand,
+    const std::string& source,
+    bool important,
+    int32_t declaration_order,
+    style_property_registry_s* registry,
+    std::vector<compiled_property_declaration_s>& output,
+    aether_style_diagnostic_fn diagnostics_callback,
+    void* diagnostics_user_data)
+{
+    if (shorthand.target_ids.empty() ||
+        shorthand.target_ids.size() != shorthand.target_names.size()) return false;
+    style_shorthand_writer_s writer;
+    if (!shorthand.expand(source.c_str(), writer) ||
+        writer.items.size() != shorthand.target_ids.size()) return false;
+    std::vector<compiled_property_declaration_s> staged;
+    staged.reserve(writer.items.size());
+    for (const auto& item : writer.items) {
+        compiled_property_declaration_s compiled;
+        if (!try_compile_longhand(item.name, item.value, important, declaration_order,
+                                  registry, compiled, diagnostics_callback, diagnostics_user_data)) return false;
+        bool expected = false;
+        for (auto id : shorthand.target_ids) if (id == compiled.property_id) expected = true;
+        if (!expected) return false;
+        for (const auto& previous : staged)
+            if (previous.property_id == compiled.property_id) return false;
+        staged.push_back(std::move(compiled));
+    }
+    output.insert(output.end(), staged.begin(), staged.end());
+    return true;
 }
 
 // ═══ Compile declarations ══════════════════════════════════════════════
@@ -211,9 +246,8 @@ static declaration_compilation_result compile_declarations(
         if (!declaration_name(source, segment, name)) continue;
         std::string value = source.substr(segment.colon + 1, segment.end - segment.colon - 1);
         const bool important = css_strip_important(value);
-        // An annotation may leave an empty custom value. Only skip a value
-        // that was empty before extraction, without trimming inside tokens.
-        if (name.empty() || (value.empty() && !important)) continue;
+        if (name.empty()) continue;
+        // Empty custom properties are valid and must not trigger var() fallback.
 
         if (name.size() > 2 && name[0] == '-' && name[1] == '-') {
             custom_property_declaration_s custom;
@@ -225,6 +259,7 @@ static declaration_compilation_result compile_declarations(
             continue;
         }
 
+        if (value.empty()) continue;
         name = str_to_lower(name);
         if (name == "content") {
             compiled_content_declaration_s content;
@@ -237,25 +272,16 @@ static declaration_compilation_result compile_declarations(
 
         const auto* shorthand = registry->try_get_shorthand(name.c_str());
         if (shorthand) {
+            const int32_t order = declaration_order++;
             if (contains_variable(value)) {
-                // The shorthand value depends on custom properties that resolve per
-                // node. Keep the raw declaration; resolution expands it against the
-                // node's variable scope (see compute_node in style_runtime_core.cpp).
-                result.shorthands.push_back({name, value, important, declaration_order++});
+                // Syntax is checked before cascade participation, without resolving
+                // variables or testing the eventual property-specific grammar.
+                if (validate_pending_declaration_value(value) && !shorthand->target_ids.empty())
+                    result.shorthands.push_back({name, value, important, order});
                 continue;
             }
-
-            style_shorthand_writer_s writer;
-            if (!shorthand->expand(value.c_str(), writer)) {
-                continue;
-            }
-
-            for (auto& item : writer.items) {
-                compile_longhand(
-                    item.name, item.value, important,
-                    declaration_order++, registry, result.properties,
-                    diagnostics_callback, diagnostics_user_data);
-            }
+            style_source_compile_shorthand(*shorthand, value, important, order, registry,
+                result.properties, diagnostics_callback, diagnostics_user_data);
             continue;
         }
 
@@ -263,10 +289,10 @@ static declaration_compilation_result compile_declarations(
             continue;
         }
 
-        compile_longhand(
-            name, value, important,
-            declaration_order++, registry, result.properties,
-            diagnostics_callback, diagnostics_user_data);
+        compiled_property_declaration_s compiled;
+        if (try_compile_longhand(name, value, important, declaration_order++, registry, compiled,
+                                 diagnostics_callback, diagnostics_user_data))
+            result.properties.push_back(std::move(compiled));
     }
 
     return result;
@@ -428,6 +454,7 @@ aether_status_t style_source_compile_inline(
     const char* source,
     std::vector<compiled_property_declaration_s>& out_properties,
     std::vector<custom_property_declaration_s>& out_custom,
+    std::vector<compiled_shorthand_declaration_s>& out_shorthands,
     aether_style_diagnostic_fn diagnostics_callback,
     void* diagnostics_user_data)
 {
@@ -441,6 +468,7 @@ aether_status_t style_source_compile_inline(
 
     out_properties = std::move(result.properties);
     out_custom = std::move(result.custom);
+    out_shorthands = std::move(result.shorthands);
 
     return AETHER_OK;
 }

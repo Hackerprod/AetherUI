@@ -27,6 +27,8 @@ struct css_variable_token {
     size_t begin = 0, end = 0;
     char delimiter = 0;
     bool is_var = false, dashed = false;
+    // Syntax consumers may recover EOF; legacy readers retain kind::error.
+    bool eof_recoverable = false;
     css_variable_serialization serialization = css_variable_serialization::end;
     css_variable_escape_tail escape_tail = css_variable_escape_tail::none;
     bool starts_double_hyphen = false, exact_double_hyphen = false;
@@ -59,3 +61,8 @@ private:
               css_identifier_sink sink = nullptr, void* context = nullptr);
 };
 bool variable_has_reference(const std::string& source);
+
+// Validate an ordinary declaration value after its terminal !important has been
+// removed. This checks all nested var() fallbacks without resolving variables or
+// interpreting property grammar. Empty fallbacks are permitted.
+bool validate_pending_declaration_value(const std::string& source);

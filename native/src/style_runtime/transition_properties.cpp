@@ -168,5 +168,5 @@ void transition_properties_register_shorthands(style_property_registry_s* reg) {
             writer.set("transition-delay", delay_value.c_str());
             writer.set("transition-timing-function", timing_value.c_str());
             return true;
-        });
+        }, {"transition-property", "transition-duration", "transition-delay", "transition-timing-function"});
 }

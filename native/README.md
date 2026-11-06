@@ -56,8 +56,8 @@ expansion emits CSS tokens for ordinary longhand parsing. Lists, negative times 
 and unknown shorthand targets remain unsupported. An unknown direct `transition-property`
 instead succeeds with mask zero. Existing numeric parsing, including nonfinite values and
 unusual `strtof` forms, is intentionally unchanged. Global keywords and `var()` remain generic
-pipeline responsibilities; the existing parent-inheritance and deferred-inline-shorthand
-limitations are covered by regression tests rather than changed here.
+pipeline responsibilities; the existing explicit-inherit limitation for non-inherited properties remains covered
+by regression tests. Inline pending shorthands now share the atomic declaration pipeline.
 
 `aether.transition-property-module` links only the module, the private CSS token lexer,
 and its test translation unit, with separate compile checks for each self-contained private header. It covers metadata/order,
@@ -465,3 +465,38 @@ existing clips and scroll offsets. This coordinate domain differs from a browser
 Generated pseudo-elements are still recreated by the runtime, so their identity
 changes require layout even when triggered by a visibility declaration.
 Canvas background propagation remains separate from a box's own visibility.
+
+## Atomic shorthand declarations
+
+The declaration compiler stages every longhand expansion before publishing the group.
+An invalid component rejects the whole declaration at parsing time, retaining earlier
+cascade candidates. Registered shorthands declare their complete destination set, checked
+when the registry is sealed; missing or duplicate destinations cannot produce partial styles.
+The six box shorthands (`padding`, `margin`, `inset`, `border-width`, `border-style`, and
+`border-color`) accept global keywords only as their whole value, never mixed with components.
+
+A syntactically valid `var()` shorthand participates with its original priority even when
+substitution later fails. Each group resolves and validates once per node. Failed groups
+offer `unset` to every destination; higher-priority longhands survive, while lower-priority
+candidates do not reappear. Stylesheet and inline declarations use the same path. Defined
+empty custom properties substitute zero tokens without activating a fallback.
+
+Pending declaration validation consumes the whole original value, including unused nested
+fallbacks, before cascade participation. Malformed `var()` calls, bad strings/URLs,
+unmatched closing blocks, forbidden top-level punctuation and restricted top-level brace
+combinations are rejected at parsing time. This does not parse the final property grammar
+prematurely: `bogus var(--p)` is pending and becomes invalid only after substitution.
+Importance belongs to the original declaration, not to substituted text.
+
+`aether.shorthand-atomicity` verifies the production public ABI, priorities, variable scopes,
+inline styles, repeated mutation and numerical layout. `aether.shorthand-compiler` checks
+staging, destination integrity, modes and pending preservation with an adversarial private
+registry. `aether.pending-declaration-syntax` checks token validation, protected strings/URLs,
+empty fallbacks and bounded-stack deep nesting. All three use checks active with `NDEBUG`.
+Existing transition pipeline tests now require inline pending values to resolve and update.
+
+This preserves the supported property grammars, units, initial values, explicit `inherit`
+limitation for non-inherited properties, and existing `revert`-as-`initial` behavior. It does
+not change the public ABI or require browser execution. The current custom-property scope
+is independent of ordinary computed values, so offering staged values or `unset` at their
+original priority is equivalent to pending candidates in this runtime.

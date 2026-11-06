@@ -1308,6 +1308,7 @@ void builtin_properties_register(style_property_registry_s* reg) {
         }
         auto parts = bi_split_ws(t);
         if (parts.size() < 1 || parts.size() > 4) return false;
+        for (const auto& part : parts) if (bi_is_global_keyword(part)) return false;
         std::string ex[4];
         switch (parts.size()) {
             case 1: ex[0]=ex[1]=ex[2]=ex[3]=parts[0]; break;
@@ -1323,54 +1324,54 @@ void builtin_properties_register(style_property_registry_s* reg) {
     {
         const char* t[4] = { "margin-top", "margin-right", "margin-bottom", "margin-left" };
         reg->register_shorthand("margin",
-            [&box_shorthand, t](const char* src, style_shorthand_writer_s& w) -> bool {
+            [box_shorthand, t](const char* src, style_shorthand_writer_s& w) -> bool {
                 return box_shorthand(src, t, w);
-            });
+            }, {t[0], t[1], t[2], t[3]});
     }
 
     // padding shorthand
     {
         const char* t[4] = { "padding-top", "padding-right", "padding-bottom", "padding-left" };
         reg->register_shorthand("padding",
-            [&box_shorthand, t](const char* src, style_shorthand_writer_s& w) -> bool {
+            [box_shorthand, t](const char* src, style_shorthand_writer_s& w) -> bool {
                 return box_shorthand(src, t, w);
-            });
+            }, {t[0], t[1], t[2], t[3]});
     }
 
     // inset shorthand
     {
         const char* t[4] = { "top", "right", "bottom", "left" };
         reg->register_shorthand("inset",
-            [&box_shorthand, t](const char* src, style_shorthand_writer_s& w) -> bool {
+            [box_shorthand, t](const char* src, style_shorthand_writer_s& w) -> bool {
                 return box_shorthand(src, t, w);
-            });
+            }, {t[0], t[1], t[2], t[3]});
     }
 
     // border-width shorthand
     {
         const char* t[4] = { "border-top-width", "border-right-width", "border-bottom-width", "border-left-width" };
         reg->register_shorthand("border-width",
-            [&box_shorthand, t](const char* src, style_shorthand_writer_s& w) -> bool {
+            [box_shorthand, t](const char* src, style_shorthand_writer_s& w) -> bool {
                 return box_shorthand(src, t, w);
-            });
+            }, {t[0], t[1], t[2], t[3]});
     }
 
     // border-style shorthand
     {
         const char* t[4] = { "border-top-style", "border-right-style", "border-bottom-style", "border-left-style" };
         reg->register_shorthand("border-style",
-            [&box_shorthand, t](const char* src, style_shorthand_writer_s& w) -> bool {
+            [box_shorthand, t](const char* src, style_shorthand_writer_s& w) -> bool {
                 return box_shorthand(src, t, w);
-            });
+            }, {t[0], t[1], t[2], t[3]});
     }
 
     // border-color shorthand
     {
         const char* t[4] = { "border-top-color", "border-right-color", "border-bottom-color", "border-left-color" };
         reg->register_shorthand("border-color",
-            [&box_shorthand, t](const char* src, style_shorthand_writer_s& w) -> bool {
+            [box_shorthand, t](const char* src, style_shorthand_writer_s& w) -> bool {
                 return box_shorthand(src, t, w);
-            });
+            }, {t[0], t[1], t[2], t[3]});
     }
 
     // overflow shorthand
@@ -1397,7 +1398,7 @@ void builtin_properties_register(style_property_registry_s* reg) {
                 writer.set("overflow-y", v1.c_str());
             }
             return true;
-        });
+        }, {"overflow-x", "overflow-y"});
 
     // gap shorthand
     reg->register_shorthand("gap",
@@ -1422,7 +1423,7 @@ void builtin_properties_register(style_property_registry_s* reg) {
                 writer.set("column-gap", v1.c_str());
             }
             return true;
-        });
+        }, {"row-gap", "column-gap"});
 
     // background shorthand
     reg->register_shorthand("background",
@@ -1449,6 +1450,9 @@ void builtin_properties_register(style_property_registry_s* reg) {
                 std::string g;
                 if (bi_try_gradient(t.c_str(), g)) {
                     writer.set("background-image", g.c_str());
+                    writer.set("background-position", "0% 0%");
+                    writer.set("background-size", "auto auto");
+                    writer.set("background-repeat", "repeat repeat");
 
                     // A solid fallback color (the gradient's first stop) is written too, so a
                     // consumer that only paints background-color still gets a plausible base
@@ -1486,7 +1490,7 @@ void builtin_properties_register(style_property_registry_s* reg) {
                 return true;
             }
             return false;
-        });
+        }, {"background-color", "background-image", "background-position", "background-size", "background-repeat"});
 
     // border shorthand
     reg->register_shorthand("border",
@@ -1523,7 +1527,7 @@ void builtin_properties_register(style_property_registry_s* reg) {
                 writer.set(p.c_str(), color.c_str());
             }
             return true;
-        });
+        }, {"border-top-width", "border-top-style", "border-top-color", "border-right-width", "border-right-style", "border-right-color", "border-bottom-width", "border-bottom-style", "border-bottom-color", "border-left-width", "border-left-style", "border-left-color"});
 
     // Per-side border shorthand. This is intentionally expanded through the same longhands as
     // `border`, so cascade precedence and invalid-value handling stay identical for every edge.
@@ -1553,7 +1557,7 @@ void builtin_properties_register(style_property_registry_s* reg) {
                 writer.set((prefix + "style").c_str(), style.c_str());
                 writer.set((prefix + "color").c_str(), color.c_str());
                 return true;
-            });
+            }, {shorthand + "-width", shorthand + "-style", shorthand + "-color"});
     }
 
     // flex shorthand
@@ -1599,7 +1603,7 @@ void builtin_properties_register(style_property_registry_s* reg) {
             writer.set("flex-shrink", shrink.c_str());
             writer.set("flex-basis", basis.c_str());
             return true;
-        });
+        }, {"flex-grow", "flex-shrink", "flex-basis"});
 
     transition_properties_register_shorthands(reg);
 }

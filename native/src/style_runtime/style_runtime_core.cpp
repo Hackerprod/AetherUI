@@ -389,10 +389,11 @@ static runtime_node_state_s* compute_node(aether_style_runtime_s* runtime, aethe
 
     std::vector<compiled_property_declaration_s> inline_properties;
     std::vector<custom_property_declaration_s> inline_custom;
+    std::vector<compiled_shorthand_declaration_s> inline_shorthands;
     // Generated pseudo-elements retain host attributes for selector matching, but
     // the host's inline declaration block does not cascade onto ::before/::after.
     if (!node->is_generated) if (auto it = node->attributes.find("style"); it != node->attributes.end()) {
-        style_source_compile_inline(it->second.c_str(), inline_properties, inline_custom,
+        style_source_compile_inline(it->second.c_str(), inline_properties, inline_custom, inline_shorthands,
                                     runtime->diag_cb, runtime->diag_user_data);
         for (const auto& declaration : inline_properties) {
             cascade_priority_t priority{
@@ -423,41 +424,48 @@ static runtime_node_state_s* compute_node(aether_style_runtime_s* runtime, aethe
     auto scope = compute_custom_property_scope(sources, parent ? parent->custom_properties : nullptr,
         runtime->options.max_variable_depth, runtime->options.max_variable_expansion_length);
 
-    // Deferred shorthands: their values reference custom properties, so they were kept
-    // raw at compile time. Resolve each against this node's variable scope and expand it
-    // into the cascade with the rule's own priority, exactly as if the expanded longhands
-    // had been authored inline (e.g. `background: var(--bg-gradient)` on a body).
+    // Custom properties have no dependency on the final ordinary style in this
+    // runtime. Compile each pending group once per node, then offer either all
+    // valid siblings or unset at the ORIGINAL priority. A computed failure must
+    // not resurrect lower-priority declarations; other longhand winners survive.
+    auto offer_shorthand = [&](const compiled_shorthand_declaration_s& declaration,
+                               const cascade_priority_t& priority) {
+        const auto* shorthand = registry->try_get_shorthand(declaration.name.c_str());
+        if (!shorthand) return;
+        std::string resolved;
+        std::vector<compiled_property_declaration_s> staged;
+        const bool substituted = resolve_computed_value(declaration.source.c_str(), scope.get(),
+            runtime->options.max_variable_depth, runtime->options.max_variable_expansion_length, resolved);
+        const bool valid = substituted && validate_pending_declaration_value(resolved) &&
+            !variable_has_reference(resolved) &&
+            style_source_compile_shorthand(*shorthand, resolved, declaration.important,
+                declaration.declaration_order, registry, staged, runtime->diag_cb, runtime->diag_user_data);
+        if (valid) {
+            for (const auto& item : staged)
+                cascade[static_cast<size_t>(item.property_id)].offer(priority, item.value);
+        } else {
+            report(runtime, substituted ? "AETHER-CSS-VALUE" : "AETHER-CSS-VAR", declaration.name.c_str(),
+                   declaration.source.c_str(), substituted ? "Resolved shorthand is invalid." : "Unable to resolve CSS variable.");
+            compiled_style_value_s unset;
+            unset.mode = compiled_value_mode::unset;
+            for (auto id : shorthand->target_ids)
+                cascade[static_cast<size_t>(id)].offer(priority, unset);
+        }
+    };
     for (const auto* rule : candidates) {
         if (rule->selector.pseudo_element != node->pseudo_element) continue;
         if (!media_condition_matches(rule->condition, &runtime->environment) ||
             !selector_match(rule->selector, node)) continue;
-        if (rule->shorthand_declarations.empty()) continue;
         for (const auto& declaration : rule->shorthand_declarations) {
-            std::string resolved;
-            if (!resolve_computed_value(declaration.source.c_str(), scope.get(),
-                                  runtime->options.max_variable_depth,
-                                  runtime->options.max_variable_expansion_length, resolved)) {
-                report(runtime, "AETHER-CSS-VAR", declaration.name.c_str(),
-                       declaration.source.c_str(), "Unable to resolve CSS variable.");
-                continue;
-            }
-            const auto* shorthand = registry->try_get_shorthand(declaration.name.c_str());
-            if (!shorthand) continue;
-            style_shorthand_writer_s writer;
-            if (!shorthand->expand(resolved.c_str(), writer)) continue;
-            for (const auto& item : writer.items) {
-                const auto* def = registry->try_get(item.name.c_str());
-                if (!def || def->id < 0 || def->id >= registry->property_count()) continue;
-                std::string parsed;
-                if (!def->parse(item.value.c_str(), parsed)) continue;
-                cascade_priority_t priority{
-                    declaration.important, false, rule->layer,
-                    rule->selector.specificity, rule->source_order, declaration.declaration_order
-                };
-                compiled_style_value_s value{compiled_value_mode::value, parsed, {}};
-                cascade[static_cast<size_t>(def->id)].offer(priority, value);
-            }
+            offer_shorthand(declaration, cascade_priority_t{
+                declaration.important, false, rule->layer, rule->selector.specificity,
+                rule->source_order, declaration.declaration_order});
         }
+    }
+    for (const auto& declaration : inline_shorthands) {
+        offer_shorthand(declaration, cascade_priority_t{
+            declaration.important, true, style_sheet_layer::author,
+            specificity_s{1, 0, 0}, INT32_MAX, declaration.declaration_order});
     }
 
     if (generated_content) {
