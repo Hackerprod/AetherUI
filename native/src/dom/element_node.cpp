@@ -1,7 +1,7 @@
 #include "dom_types.h"
 #include "html_attribute_name.h"
 #include "../abi/aether_abi.h"
-#include <cctype>
+#include "../primitives/html_space_tokens.h"
 
 static aether_node_s* make_element(const std::string& tag, aether_doc_s* doc) {
     auto* el = new aether_node_s();
@@ -80,17 +80,7 @@ AETHER_API aether_bool_t aether_element_has_class(aether_node_t element, const c
     if (!element || element->type != AETHER_NODE_ELEMENT || !class_name) return AETHER_FALSE;
     auto it = element->attributes.find("class");
     if (it == element->attributes.end()) return AETHER_FALSE;
-    std::string classes = it->second;
-    std::string needle = class_name;
-    size_t pos = 0;
-    while (pos < classes.size()) {
-        while (pos < classes.size() && std::isspace(static_cast<unsigned char>(classes[pos]))) pos++;
-        size_t end = pos;
-        while (end < classes.size() && !std::isspace(static_cast<unsigned char>(classes[end]))) end++;
-        if (end > pos && classes.substr(pos, end - pos) == needle) return AETHER_TRUE;
-        pos = end;
-    }
-    return AETHER_FALSE;
+    return aether::html_space_contains(it->second, class_name) ? AETHER_TRUE : AETHER_FALSE;
 }
 
 AETHER_API aether_bool_t aether_element_is_required(aether_node_t element) {

@@ -114,6 +114,26 @@ if(AETHERUI_BUILD_TESTS)
     )
     add_test(NAME aether.abi-c COMMAND aether_abi_c_smoke_test)
 
+    add_executable(aether_html_space_tokens_test tests/test_html_space_tokens.cpp)
+    add_test(NAME aether.html-space-tokens COMMAND aether_html_space_tokens_test)
+    if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+        foreach(char_mode signed unsigned)
+            add_executable(aether_html_space_tokens_${char_mode}_test tests/test_html_space_tokens.cpp)
+            target_compile_options(aether_html_space_tokens_${char_mode}_test PRIVATE -f${char_mode}-char)
+            add_test(NAME aether.html-space-tokens-${char_mode} COMMAND aether_html_space_tokens_${char_mode}_test)
+        endforeach()
+    endif()
+
+    add_executable(aether_class_token_consumers_test tests/test_class_token_consumers.cpp
+        src/style_runtime/selector_parser.cpp src/style_runtime/selector_matcher.cpp)
+    target_include_directories(aether_class_token_consumers_test PRIVATE include src/style_runtime)
+    target_link_libraries(aether_class_token_consumers_test PRIVATE AetherUI::Core)
+    add_test(NAME aether.class-token-consumers COMMAND aether_class_token_consumers_test)
+
+    add_executable(aether_class_token_runtime_test tests/test_class_token_runtime.cpp)
+    target_link_libraries(aether_class_token_runtime_test PRIVATE AetherUI::Core)
+    add_test(NAME aether.class-token-runtime COMMAND aether_class_token_runtime_test)
+
     add_executable(aether_ascii_text_test tests/test_ascii_text.cpp)
     add_test(NAME aether.ascii-text COMMAND aether_ascii_text_test)
     if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")

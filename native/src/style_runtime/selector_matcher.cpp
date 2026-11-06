@@ -1,7 +1,7 @@
 #include "style_runtime_types.h"
 #include "../dom/dom_types.h"
 #include "../primitives/ascii_text.h"
-#include <cctype>
+#include "../primitives/html_space_tokens.h"
 
 // Layout and paint share storage with generated content, but selector traversal
 // sees only the DOM. Never turn a generated traversal candidate into its host.
@@ -38,16 +38,7 @@ static aether_node_s* dom_parent(aether_node_s* node) {
 static bool has_class(aether_node_s* node, const std::string& name) {
     auto it = node->attributes.find("class");
     if (it == node->attributes.end()) return false;
-    const auto& classes = it->second;
-    size_t pos = 0;
-    while (pos < classes.size()) {
-        while (pos < classes.size() && std::isspace(static_cast<unsigned char>(classes[pos]))) ++pos;
-        size_t end = pos;
-        while (end < classes.size() && !std::isspace(static_cast<unsigned char>(classes[end]))) ++end;
-        if (end > pos && classes.compare(pos, end - pos, name) == 0) return true;
-        pos = end;
-    }
-    return false;
+    return aether::html_space_contains(it->second, name);
 }
 
 // :empty considers direct DOM elements and nonempty text (including whitespace),
@@ -146,14 +137,10 @@ static bool matches_attribute(const attribute_selector_s& attr, aether_node_s* n
             if (expected.empty()) return false;
             for (const unsigned char byte : expected)
                 if (aether::is_html_space(byte)) return false;
-            size_t pos = 0;
-            while (pos < actual.size()) {
-                while (pos < actual.size() && aether::is_html_space(static_cast<unsigned char>(actual[pos]))) ++pos;
-                size_t end = pos;
-                while (end < actual.size() && !aether::is_html_space(static_cast<unsigned char>(actual[end]))) ++end;
-                if (end > pos && equals(actual.substr(pos, end - pos), expected)) return true;
-                pos = end;
-            }
+            aether::html_space_token_scanner scanner(actual);
+            std::string_view token;
+            while (scanner.next(token))
+                if (equals(token, expected)) return true;
             return false;
         }
         case ATTR_DASH_MATCH: return equals(actual, expected) ||

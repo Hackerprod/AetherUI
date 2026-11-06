@@ -4,6 +4,7 @@
 #include "../css/computed_style_internal.h"
 #include "../css/style_map_types.h"
 #include "../dom/dom_types.h"
+#include "../primitives/html_space_tokens.h"
 #include "style_property_registry_internal.h"
 #include "style_runtime_types.h"
 #include "style_source_limits.h"
@@ -134,13 +135,10 @@ static node_style_info_s get_node_info(aether_node_s* node) {
     if (auto it = node->attributes.find("id"); it != node->attributes.end())
         info.id = it->second;
     if (auto it = node->attributes.find("class"); it != node->attributes.end()) {
-        std::string item;
-        for (char c : it->second) {
-            if (std::isspace(static_cast<unsigned char>(c))) {
-                if (!item.empty()) { info.classes.push_back(item); item.clear(); }
-            } else item += c;
-        }
-        if (!item.empty()) info.classes.push_back(item);
+        aether::html_space_token_scanner scanner(it->second);
+        std::string_view token;
+        while (scanner.next(token))
+            info.classes.emplace_back(token); // Own the bytes beyond this scan.
     }
     return info;
 }
