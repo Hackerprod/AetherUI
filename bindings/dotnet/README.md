@@ -191,6 +191,21 @@ absent. There is no silent fallback and no copy from an internal build directory
 manually copying `aether_core.dll` between `bin/` folders, something upstream of that (the CMake
 install step, or `AetherNativeRuntimeIdentifier`) is misconfigured.
 
+## Native attribute identity scope
+
+The native parser/C ABI and CSS attribute selectors use ASCII-only lowercase
+names, with first-source-wins parser duplicates and canonical enumeration. Native
+`ID` and `id` address the same attribute; ID values still match exactly.
+`NativeDomDocument.SetAttribute` delegates to that native contract. Explicit style
+resolution remains required after attribute mutation.
+
+The managed `ElementNode` model and its public `Attributes` view still use
+`OrdinalIgnoreCase` and `ToLowerInvariant`. Those Unicode rules can conflate
+non-ASCII names that native code keeps distinct, and `DomInterop` projects native
+attributes through the managed setter. This native change does not establish
+managed parity or broader bidirectional attribute synchronization. The native
+regression suite is not evidence that .NET integration or rendering tests ran.
+
 ## ABI and lifetime rules
 
 `AetherUI.Core.Native.Interop` validates `aether_abi_version()` and the capability bits the managed

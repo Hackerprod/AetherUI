@@ -114,6 +114,22 @@ if(AETHERUI_BUILD_TESTS)
     )
     add_test(NAME aether.abi-c COMMAND aether_abi_c_smoke_test)
 
+    add_executable(aether_html_attribute_case_runtime_test tests/test_html_attribute_case_runtime.cpp)
+    target_link_libraries(aether_html_attribute_case_runtime_test PRIVATE AetherUI::Core)
+    add_test(NAME aether.html-attribute-case-runtime COMMAND aether_html_attribute_case_runtime_test)
+
+    add_executable(aether_selector_attribute_case_test tests/test_selector_attribute_case.cpp
+        src/style_runtime/selector_parser.cpp src/style_runtime/selector_matcher.cpp)
+    target_include_directories(aether_selector_attribute_case_test PRIVATE include src/style_runtime)
+    add_test(NAME aether.selector-attribute-case COMMAND aether_selector_attribute_case_test)
+    if(MSVC)
+        target_compile_options(aether_selector_attribute_case_test PRIVATE /utf-8)
+    endif()
+
+    add_executable(aether_html_attribute_case_test tests/test_html_attribute_case.cpp)
+    target_link_libraries(aether_html_attribute_case_test PRIVATE AetherUI::Core)
+    add_test(NAME aether.html-attribute-case COMMAND aether_html_attribute_case_test)
+
     add_executable(aether_html_unquoted_attributes_test tests/test_html_unquoted_attributes.cpp)
     target_link_libraries(aether_html_unquoted_attributes_test PRIVATE AetherUI::Core)
     add_test(NAME aether.html-unquoted-attributes COMMAND aether_html_unquoted_attributes_test)

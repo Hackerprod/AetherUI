@@ -1,6 +1,7 @@
 #include <aether/aether.h>
 
 #include <stdio.h>
+#include <string.h>
 
 static int fail(const char* message) {
     fprintf(stderr, "FAIL: %s\n", message);
@@ -42,6 +43,30 @@ int main(void) {
     }
     if (aether_computed_style_size() != sizeof(aether_computed_style_t)) {
         return fail("runtime computed-style size differs from the C header");
+    }
+
+    {
+        aether_doc_t doc = NULL;
+        if (aether_doc_create(&doc) != AETHER_OK ||
+            aether_doc_parse_html(doc, "<div ID=TaRget id=Discard DATA-X=First data-x=Last></div>") != AETHER_OK) {
+            aether_doc_destroy(doc);
+            return fail("C attribute parse failed");
+        }
+        aether_node_t node = aether_doc_get_document_element(doc);
+        char* value = aether_element_get_attribute(node, "DaTa-X");
+        int valid = value && strcmp(value, "First") == 0 &&
+            aether_element_get_attribute_count(node) == 2 &&
+            aether_doc_get_element_by_id(doc, "TaRget") == node &&
+            aether_doc_get_element_by_id(doc, "target") == NULL &&
+            aether_doc_get_element_by_id(doc, "Discard") == NULL;
+        aether_string_free(value);
+        if (aether_element_set_attribute(node, "Id", "New") != AETHER_OK) valid = 0;
+        if (aether_doc_get_element_by_id(doc, "TaRget") != NULL ||
+            aether_doc_get_element_by_id(doc, "New") != node ||
+            !aether_element_has_attribute(node, "ID") ||
+            aether_element_get_attribute_count(node) != 2) valid = 0;
+        aether_doc_destroy(doc);
+        if (!valid) return fail("C ASCII attribute identity/first-wins/setter regression");
     }
 
     puts("OK: C ABI smoke test passed");

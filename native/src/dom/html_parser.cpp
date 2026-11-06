@@ -1,4 +1,5 @@
 #include "dom_types.h"
+#include "html_attribute_name.h"
 #include "../abi/aether_abi.h"
 #include <cctype>
 #include <cstring>
@@ -239,8 +240,8 @@ class HtmlParser {
             return;
         }
         std::string tag_name = read_name();
-        // Canonical HTML element identity; read_name also serves attributes,
-        // whose spelling and values must remain untouched.
+        // Canonical HTML element identity. Attribute names are normalized at
+        // their own storage boundary below; values remain untouched.
         std::transform(tag_name.begin(), tag_name.end(), tag_name.begin(), ascii_lower);
 
         // Stage the token separately from the DOM: EOF in any attribute state
@@ -266,7 +267,7 @@ class HtmlParser {
                 break;
             }
 
-            std::string attr_name = read_name();
+            std::string attr_name = aether::canonical_html_attribute_name(read_name());
             if (attr_name.empty()) {
                 pos++;
                 continue;
@@ -281,7 +282,7 @@ class HtmlParser {
             }
 
             std::string decoded_val = aether::html_decode(attr_value.c_str());
-            // Keep the first occurrence, after fully consuming every duplicate value.
+            // First source occurrence per ASCII name, after consuming each value.
             attributes.try_emplace(attr_name, decoded_val);
         }
 

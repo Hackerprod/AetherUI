@@ -278,9 +278,9 @@ ID lookup, reparsing and the real style runtime.
 
 This intentionally changes the observable result of `aether_element_get_tag_name`:
 HTML parsed as `<DiV>` now returns `div`, not the original spelling. The binary C
-ABI, exported types, signatures and version are unchanged. Attribute names are
-not canonicalized: `id` and `ID` remain distinct, and an exact duplicate still
-keeps its first value. Attribute values, ID/class values, text and raw-text bytes
+ABI, exported types, signatures and version are unchanged. Attribute names follow
+the separate ASCII identity contract below: `id` and `ID` name one attribute,
+whose first parsed value wins. Attribute values, ID/class values, text and raw-text bytes
 are not case-folded. This is ASCII normalization, not locale-dependent or Unicode
 case folding, and adds no XML, SVG/MathML namespace or custom-element semantics.
 
@@ -302,21 +302,66 @@ expectations. Run these with the complete native suite, C11 smoke test and
 installed package consumer. Native execution does not establish .NET execution,
 Chromium execution or visual equivalence.
 
-### Duplicate HTML attributes
+### HTML attribute-name identity and duplicates
 
-Within each opening tag, the HTML parser keeps the first value for an exactly
-matching attribute name, including empty and boolean values. Later values are
-fully consumed and decoded but do not replace or merge the first value. ID
-lookup, classes, selectors and inline styles all read that same stored value.
-Explicit `aether_element_set_attribute` calls still replace values and do not
-decode HTML entities.
+Attribute names in the native HTML DOM are canonical ASCII lowercase: only bytes
+`A`–`Z` become `a`–`z`. The parser, C `get_attribute` / `has_attribute` /
+`set_attribute` APIs, and CSS attribute-selector compiler share that identity.
+Enumeration returns canonical keys in the existing sorted map order. Get and has
+are read-only; an absent get returns null, while a present empty value returns an
+owned empty string and has remains true. The setter replaces the one canonical
+entry and preserves literal value bytes, without decoding HTML entities.
 
-`aether.html-duplicate-attributes` exercises this through the public ABI, with
-checks active under `NDEBUG`, complete attribute maps and trees, style consumers,
-mutations, reparsing and repeated-attribute stress cases. ASCII name folding is
-not part of this correction: differently cased names currently remain distinct.
-The test's case and incomplete-input diagnostics do not imply full HTML parser
-conformance.
+Within each opening tag, the parser keeps the first source occurrence for an
+ASCII-equivalent name, including empty and boolean values. `DATA-X=First
+data-x=Later` stores only `data-x=First`. Later values are fully consumed and
+decoded but do not replace or merge the first value. The entire opening is still
+discarded if EOF arrives before its syntactic terminator. ID lookup, classes,
+selectors, inline style and control attributes read the same canonical storage.
+
+CSS selector names are canonicalized **after escape decoding**: `[DATA-X]`,
+`[DaTa-X]` and `[\44 ATA-\58 ]` all query `data-x`. Values retain their existing
+comparison rules: `[DATA-X=Value]` differs from `[DATA-X=value]`; `i`/`I` and
+`s`/`S` flags apply only to values. ID and class values, URLs, text, raw text,
+custom-property names and non-ASCII bytes are not folded. This does not broaden
+the HTML name grammar, add namespaces/XML/SVG/MathML, or change the existing
+value matcher (including its locale-sensitive `i` handling).
+
+**Compatibility:** enumeration and formerly case-distinct native attribute keys
+change observably, but ABI versions, structures, signatures and lifetimes do not.
+Reparse original HTML to obtain canonical first-wins storage; a sorted old map
+cannot recover the source order of competing spellings. Attribute setters still
+do not bump document version or automatically invalidate style. Explicitly call
+`aether_style_runtime_resolve_subtree` on the affected style root after mutation;
+include siblings/ancestors for relational selectors. That root is also the
+inheritance root, so resolving a smaller subtree does not recover external
+ancestor inheritance. `disabled` attribute presence does not set `:disabled`
+state bits, and host inline style does not apply directly to generated pseudos.
+
+`aether.html-attribute-case` covers parser/API identity, byte preservation,
+duplicate casing/empty values, EOF, versioning and reparses.
+`aether.selector-attribute-case` covers decoded AST identity, all seven operators,
+value flags, metadata, composition, pseudo hosts and invalid-list recovery.
+`aether.html-attribute-case-runtime` covers real cascade/layout and mutation in the
+same runtime and stylesheet, explicit root resolution, retained snapshots,
+pseudo lifecycle, ID preorder and exact style impacts against lowercase controls.
+All use checks active under `NDEBUG`. Historical duplicate/tag/raw-text/pseudo
+inputs are retained with the newly canonical expected names. Run these with the
+complete native suite, C11 ABI smoke and the installed-package consumer.
+
+Scope is native. Managed .NET `ElementNode` still uses Unicode
+`OrdinalIgnoreCase`/`ToLowerInvariant`, including its public `Attributes` view,
+and can conflate non-ASCII names that native code keeps distinct. Its managed
+projection and attribute synchronization were not changed or validated by these
+native tests. Native success is not .NET, browser or visual validation.
+
+The identity boundaries follow Chromium source at
+[`7fe04cd3b6456bd7baec869f6a5efaebd6e79b71`](https://github.com/chromium/chromium/blob/7fe04cd3b6456bd7baec869f6a5efaebd6e79b71/third_party/blink/renderer/core/html/parser/html_tokenizer.cc#L835-L921):
+its tokenizer lowercases names before
+[first-wins deduplication](https://github.com/chromium/chromium/blob/7fe04cd3b6456bd7baec869f6a5efaebd6e79b71/third_party/blink/renderer/core/html/parser/atomic_html_token.h#L333-L379),
+and its [CSS compiler](https://github.com/chromium/chromium/blob/7fe04cd3b6456bd7baec869f6a5efaebd6e79b71/third_party/blink/renderer/core/css/parser/css_selector_parser.cc#L1512-L1565)
+folds decoded names in HTML documents. AetherUI has no HTML/XML mode distinction;
+this is its simplified HTML contract, not empirical Chromium conformance.
 
 ### ID lookup
 
@@ -601,8 +646,9 @@ binding execution are separate validation stages.
 Supported pseudoclass names are ASCII case-insensitive after CSS escape decoding:
 `:hover`, `:HOVER` and `:\48 OVER` have the same meaning. This applies recursively
 inside selector functions and preserves the original top-level selector source.
-Only the decoded pseudo name is folded. Classes, IDs, attribute names and values,
-and custom-property names retain their existing identity and comparison rules.
+Decoded pseudo names and HTML attribute names each follow their own ASCII
+normalization boundary. Classes, IDs, attribute values and custom-property names
+retain their existing identity and comparison rules.
 Pseudoelement names `::before` and `::after` already follow the same ASCII rule.
 
 `aether.pseudo-name-parser` checks all 22 existing names, recursive AST fields,

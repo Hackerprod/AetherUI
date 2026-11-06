@@ -1,4 +1,5 @@
 #include "style_runtime_types.h"
+#include "../dom/html_attribute_name.h"
 #include <cstdlib>
 #include <cctype>
 #include <algorithm>
@@ -350,7 +351,8 @@ static bool read_attribute_value(parser_s& p, std::string& value) {
 static bool try_parse_attribute(parser_s& p, attribute_selector_s& attr) {
     ++p.index; /* skip '[' */
     p.skip_trivia();
-    auto name = p.read_identifier();
+    // Decode CSS escapes first: \44 still denotes uppercase D.
+    auto name = aether::canonical_html_attribute_name(p.read_identifier());
     if (name.empty()) return false;
     p.skip_trivia();
     if (p.peek() == ']') {
