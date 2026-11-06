@@ -302,6 +302,7 @@ static declaration_compilation_result compile_declarations(
 
 static void compile_range(
     const std::string& source,
+    const std::string& original,
     int32_t start,
     int32_t end,
     media_condition_s* inherited_condition,
@@ -355,7 +356,7 @@ static void compile_range(
                     prelude.c_str(), nullptr, nullptr, static_cast<int32_t>(at_offset));
                 media_condition_s* combined = media_condition_and(inherited_condition, media);
                 compile_range(
-                    source, delimiter + 1, closing, combined,
+                    source, original, delimiter + 1, closing, combined,
                     sheet_handle, layer, registry, rule_id_counter, out_rules,
                     diagnostics_callback, diagnostics_user_data);
             }
@@ -375,7 +376,7 @@ static void compile_range(
         }
 
         // Trailing whitespace can belong to a CSS escape in the final name.
-        std::string selector_text = source.substr(index, opening - index);
+        std::string selector_text = original.substr(index, opening - index);
         std::string declaration_text =
             source.substr(opening + 1, closing - opening - 1);
 
@@ -427,13 +428,18 @@ aether_status_t style_source_compile(
     auto* registry = style_property_registry_get_global();
     if (!registry) return AETHER_ERROR_INVALID_STATE;
 
-    std::string cleaned = text_splitter_remove_comments(source);
+    // Both views have identical byte offsets. Only selectors need the original
+    // comments; declarations, media and rule discovery keep their existing path.
+    const std::string original(source);
+    const std::string cleaned = text_splitter_remove_comments(original);
+    if (cleaned.size() != original.size()) return AETHER_ERROR_INVALID_STATE;
 
     style_sheet_layer sheet_layer = static_cast<style_sheet_layer>(layer);
     media_condition_s* always = media_condition_always();
 
     compile_range(
         cleaned,
+        original,
         0,
         static_cast<int32_t>(cleaned.size()),
         always,

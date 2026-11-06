@@ -17,6 +17,29 @@ static bool is_css_space(char c) {
     return c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\f';
 }
 
+// Comments are token separators, never whitespace. Keep this out of name,
+// escape and string consumers: their source bytes belong to one atomic token.
+static bool consume_comment(std::string_view source, size_t& index) {
+    if (index + 1 >= source.size() || source[index] != '/' || source[index + 1] != '*')
+        return false;
+    const size_t closing = source.find("*/", index + 2);
+    index = closing == std::string_view::npos ? source.size() : closing + 2;
+    return true;
+}
+
+static void skip_comments(std::string_view source, size_t& index) {
+    while (consume_comment(source, index)) {}
+}
+
+static bool skip_trivia(std::string_view source, size_t& index) {
+    bool whitespace = false;
+    while (index < source.size()) {
+        if (is_css_space(source[index])) { whitespace = true; ++index; }
+        else if (!consume_comment(source, index)) break;
+    }
+    return whitespace;
+}
+
 static bool is_css_newline(char c) {
     return c == '\n' || c == '\r' || c == '\f';
 }
@@ -155,7 +178,9 @@ static bool consume_string(std::string_view source, size_t& index, std::string* 
 static bool next_structure(std::string_view source, size_t& index, size_t& offset, char& token) {
     while (index < source.size()) {
         const char c = source[index];
-        if (c == '\'' || c == '"') {
+        if (consume_comment(source, index)) {
+            continue;
+        } else if (c == '\'' || c == '"') {
             consume_string(source, index, nullptr);
         } else if (is_identifier_part(c) || c == '\\') {
             consume_name(source, index, nullptr);
@@ -209,11 +234,8 @@ struct parser_s {
     bool eof() const { return index >= source.size(); }
     char peek() const { return eof() ? '\0' : source[index]; }
 
-    bool skip_whitespace() {
-        size_t start = index;
-        while (!eof() && is_css_space(source[index])) ++index;
-        return index > start;
-    }
+    void skip_comments() { ::skip_comments(source, index); }
+    bool skip_trivia() { return ::skip_trivia(source, index); }
 
     std::string read_identifier() {
         std::string value;
@@ -283,10 +305,10 @@ static bool read_attribute_value(parser_s& p, std::string& value) {
 
 static bool try_parse_attribute(parser_s& p, attribute_selector_s& attr) {
     ++p.index; /* skip '[' */
-    p.skip_whitespace();
+    p.skip_trivia();
     auto name = p.read_identifier();
     if (name.empty()) return false;
-    p.skip_whitespace();
+    p.skip_trivia();
     if (p.peek() == ']') {
         ++p.index;
         attr.name = std::move(name);
@@ -297,17 +319,17 @@ static bool try_parse_attribute(parser_s& p, attribute_selector_s& attr) {
     }
     attribute_match_operator_t op = ATTR_EQUALS;
     if (!try_read_attribute_operator(p, op)) return false;
-    p.skip_whitespace();
+    p.skip_trivia();
     std::string val;
     if (!read_attribute_value(p, val)) return false;
-    p.skip_whitespace();
+    p.skip_trivia();
     bool ci = false;
     if (!p.eof() && p.peek() != ']') {
         auto flag = p.read_identifier();
         if (flag.size() == 1 && (flag[0] == 'i' || flag[0] == 'I')) { ci = true; }
         else if (flag.size() == 1 && (flag[0] == 's' || flag[0] == 'S')) { /* ok */ }
         else return false;
-        p.skip_whitespace();
+        p.skip_trivia();
     }
     if (p.eof() || p.peek() != ']') return false;
     ++p.index;
@@ -345,25 +367,25 @@ static bool try_map_state(std::string_view name,
 /* ── :nth-child expression parser ─────────────────────────────────── */
 
 static bool try_parse_nth(std::string_view source, nth_expression_s& expr) {
-    const auto is_space = [](char c) {
-        return c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\f';
-    };
     const auto is_digit = [](char c) { return c >= '0' && c <= '9'; };
-    while (!source.empty() && is_space(source.front())) source.remove_prefix(1);
-    while (!source.empty() && is_space(source.back())) source.remove_suffix(1);
+    size_t cursor = 0;
+    skip_trivia(source, cursor);
+    source.remove_prefix(cursor);
+    cursor = 0;
     const auto equals_ascii = [&](std::string_view word) {
-        if (source.size() != word.size()) return false;
+        if (source.size() < word.size()) return false;
         for (size_t i = 0; i < word.size(); ++i) {
             char c = source[i];
             if (c >= 'A' && c <= 'Z') c = static_cast<char>(c + ('a' - 'A'));
             if (c != word[i]) return false;
         }
-        return true;
+        size_t end = word.size();
+        skip_trivia(source, end);
+        return end == source.size();
     };
     if (equals_ascii("odd")) { expr = {2, 1}; return true; }
     if (equals_ascii("even")) { expr = {2, 0}; return true; }
 
-    size_t cursor = 0;
     // Signs belong to the coefficient/scalar or offset, never to the digits.
     const auto read_digits = [&](bool negative, int& value) {
         const size_t start = cursor;
@@ -382,26 +404,39 @@ static bool try_parse_nth(std::string_view source, nth_expression_s& expr) {
         return true;
     };
     bool negative = false;
-    if (cursor < source.size() && (source[cursor] == '+' || source[cursor] == '-'))
+    if (cursor < source.size() && (source[cursor] == '+' || source[cursor] == '-')) {
         negative = source[cursor++] == '-';
+        // '+' may be a delimiter followed by ident(n), without real whitespace.
+        // A comment cannot build a signed number (+/**/2) or ident(-/**/n).
+        if (!negative) {
+            const size_t after_sign = cursor;
+            skip_comments(source, cursor);
+            if (cursor != after_sign &&
+                (cursor == source.size() || (source[cursor] != 'n' && source[cursor] != 'N')))
+                return false;
+        }
+    }
     int coefficient = negative ? -1 : 1;
     bool has_digits = cursor < source.size() && is_digit(source[cursor]);
     if (has_digits && !read_digits(negative, coefficient)) return false;
-    if (cursor == source.size()) {
-        if (!has_digits) return false;
+    if (cursor == source.size() || (source[cursor] != 'n' && source[cursor] != 'N')) {
+        // The numeric token is complete. Trivia may follow a scalar but must
+        // never join separate tokens into a dimension (2/**/n) or number.
+        skip_trivia(source, cursor);
+        if (!has_digits || cursor != source.size()) return false;
         expr = {0, coefficient};
         return true;
     }
-    if (source[cursor] != 'n' && source[cursor] != 'N') return false;
     ++cursor;
-    while (cursor < source.size() && is_space(source[cursor])) ++cursor;
+    skip_trivia(source, cursor);
     int offset = 0;
     if (cursor < source.size()) {
         if (source[cursor] != '+' && source[cursor] != '-') return false;
         negative = source[cursor++] == '-';
-        while (cursor < source.size() && is_space(source[cursor])) ++cursor;
+        skip_trivia(source, cursor);
         if (!read_digits(negative, offset)) return false;
     }
+    skip_trivia(source, cursor);
     if (cursor != source.size()) return false;
     expr = {coefficient, offset};
     return true;
@@ -411,9 +446,7 @@ static bool try_parse_nth(std::string_view source, nth_expression_s& expr) {
 
 static bool try_parse_pseudo(parser_s& p, pseudo_selector_s& pseudo,
                              specificity_s& spec, selector_dependency_t& deps) {
-    ++p.index; /* skip first ':' */
-    if (!p.eof() && p.peek() == ':') return false; /* pseudo-elements rejected */
-
+    // The caller consumed the colon and any comments, and handled a second colon.
     // Pseudo names are ASCII-insensitive after CSS escape decoding, not their arguments.
     auto name = to_lower_ascii(p.read_identifier());
     if (name.empty()) return false;
@@ -516,6 +549,7 @@ static bool try_parse_compound(parser_s& p, compound_selector_s& compound) {
     }
 
     while (!p.eof()) {
+        p.skip_comments();
         char c = p.peek();
         if (c == '#') {
             ++p.index;
@@ -527,6 +561,7 @@ static bool try_parse_compound(parser_s& p, compound_selector_s& compound) {
             consumed = true;
         } else if (c == '.') {
             ++p.index;
+            p.skip_comments();
             auto val = p.read_identifier();
             if (val.empty()) return false;
             compound.classes.push_back(std::move(val));
@@ -541,9 +576,12 @@ static bool try_parse_compound(parser_s& p, compound_selector_s& compound) {
             p.dependencies = p.dependencies | SELECTOR_DEP_SELF_ATTRIBUTE;
             consumed = true;
         } else if (c == ':') {
-            if (p.index + 1 < p.source.size() && p.source[p.index + 1] == ':') {
+            ++p.index;
+            p.skip_comments();
+            if (p.peek() == ':') {
                 if (p.pseudo_element != aether_pseudo_element_t::none) return false;
-                p.index += 2;
+                ++p.index;
+                p.skip_comments();
                 auto name = to_lower_ascii(p.read_identifier());
                 if (name == "before") {
                     p.pseudo_element = aether_pseudo_element_t::before;
@@ -579,13 +617,13 @@ static bool selector_parse_core(parser_s& p, compiled_selector_s& out) {
     std::vector<compound_selector_s> compounds;
     std::vector<selector_combinator_t> combinators;
 
-    p.skip_whitespace();
+    p.skip_trivia();
     while (!p.eof()) {
         compound_selector_s compound;
         if (!try_parse_compound(p, compound)) return false;
         compounds.push_back(std::move(compound));
 
-        bool had_ws = p.skip_whitespace();
+        bool had_ws = p.skip_trivia();
         // ::before and ::after terminate a selector. They represent a generated child of the
         // element matched by the final compound, not an intermediate selector step.
         if (p.pseudo_element != aether_pseudo_element_t::none && !p.eof()) return false;
@@ -601,7 +639,7 @@ static bool selector_parse_core(parser_s& p, compiled_selector_s& out) {
 
         if (c == '>' || c == '+' || c == '~') {
             ++p.index;
-            p.skip_whitespace();
+            p.skip_trivia();
         }
         if (p.eof()) return false;
 
@@ -645,7 +683,7 @@ static bool selector_parse_list_view(std::string_view source, std::vector<compil
         compiled_selector_s sel;
         parser_s sub{part, 0, {}, SELECTOR_DEP_NONE};
         const bool valid = !part.empty() && selector_parse_core(sub, sel);
-        sub.skip_whitespace();
+        sub.skip_trivia();
         if (!valid || !sub.eof()) {
             if (policy == selector_list_policy_t::Strict) return false;
             continue;

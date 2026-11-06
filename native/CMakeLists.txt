@@ -324,6 +324,25 @@ if(AETHERUI_BUILD_TESTS)
     target_include_directories(aether_selector_escape_parser_test PRIVATE include src/style_runtime)
     add_test(NAME aether.selector-escape-parser COMMAND aether_selector_escape_parser_test)
 
+    # Comment boundaries, trivia and An+B without exporting private AST types.
+    add_executable(aether_selector_comments_parser_test tests/test_selector_comments_parser.cpp
+        src/style_runtime/selector_parser.cpp)
+    target_include_directories(aether_selector_comments_parser_test PRIVATE include src/style_runtime)
+    add_test(NAME aether.selector-comments-parser COMMAND aether_selector_comments_parser_test)
+
+    add_executable(aether_selector_comments_runtime_test tests/test_selector_comments_runtime.cpp)
+    target_link_libraries(aether_selector_comments_runtime_test PRIVATE AetherUI::Core)
+    add_test(NAME aether.selector-comments-runtime COMMAND aether_selector_comments_runtime_test)
+
+    add_executable(aether_selector_comments_compiler_test tests/test_selector_comments_compiler.cpp
+        src/style_runtime/style_source_compiler.cpp src/style_runtime/selector_parser.cpp
+        src/style_runtime/media_condition.cpp src/style_runtime/css_variable_tokens.cpp
+        src/css/css_length.cpp)
+    target_include_directories(aether_selector_comments_compiler_test PRIVATE src/style_runtime)
+    target_compile_definitions(aether_selector_comments_compiler_test PRIVATE AETHER_CSS_NUMERIC_ONLY)
+    target_link_libraries(aether_selector_comments_compiler_test PRIVATE AetherUI::Core)
+    add_test(NAME aether.selector-comments-compiler COMMAND aether_selector_comments_compiler_test)
+
     # Pseudo-name identity and recursive metadata without exporting private AST types.
     add_executable(aether_pseudo_name_parser_test tests/test_pseudo_name_parser.cpp
         src/style_runtime/selector_parser.cpp)

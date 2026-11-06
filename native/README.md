@@ -357,6 +357,34 @@ public states; parser coverage of other states does not imply HTML state derivat
 This does not add names, single-colon pseudoelements, Unicode case-folding,
 relative `:has()` arguments, or `nth-child(... of ...)` support.
 
+## Comments in selectors
+
+CSS comments separate tokens without becoming whitespace. `.card/**/.active`
+remains one compound selector, while `.card/**/ .active` retains its real
+space and descendant relation. Comments do not merge names, hashes, function
+names, attribute operators or numbers: `.ca/**/rd`, `#/**/host`,
+`:is/**/(.card)` and `[x~/**/=a]` are rejected. A class delimiter and its
+identifier may be separated (`./**/card`), as may colon tokens and a pseudo name.
+Quoted attribute values and escaped punctuation remain literal data.
+
+The stylesheet compiler retains the original selector bytes across nested
+`@media` blocks alongside its existing, offset-preserving comment mask for
+rule discovery, media and declarations. This correction does not change value,
+custom-property, shorthand, inline-style or importance parsing. Selector lists
+keep their existing forgiving/strict policies, including strict `:not()`.
+An+B keeps checked int32 arithmetic and existing syntax; comments cannot join
+separate numeric tokens. For example `+/**/n` is valid but `+/**/2` and
+`-/**/n` are not. An unfinished comment consumes through EOF, so it cannot
+manufacture a closing function or a new stylesheet rule.
+
+`aether.selector-comments-parser` checks recursive ASTs, specificity,
+dependencies, token boundaries, escapes, An+B and bounded adversarial input.
+`aether.selector-comments-compiler` checks rule metadata, nested media and
+unchanged declarations. `aether.selector-comments-runtime` checks public-ABI
+matching, mutations, cascade parity and generated pseudo-elements. Checks remain
+active with `NDEBUG`. This adds no selector syntax, public ABI or global parser
+work/depth limit, and does not establish general CSS or browser conformance.
+
 ## Empty-element selectors
 
 `:empty` matches an element with no direct DOM element children and no nonempty
