@@ -308,6 +308,24 @@ start-tag self-closing and attribute behavior remain unchanged. The C-string
 input ABI does not support embedded NUL. Parsing does not execute scripts or
 automatically apply the embedded styles; hosts supply CSS to the style runtime.
 
+## Pseudo-selector name identity
+
+Supported pseudoclass names are ASCII case-insensitive after CSS escape decoding:
+`:hover`, `:HOVER` and `:\48 OVER` have the same meaning. This applies recursively
+inside selector functions and preserves the original top-level selector source.
+Only the decoded pseudo name is folded. Classes, IDs, attribute names and values,
+and custom-property names retain their existing identity and comparison rules.
+Pseudoelement names `::before` and `::after` already follow the same ASCII rule.
+
+`aether.pseudo-name-parser` checks all 22 existing names, recursive AST fields,
+specificity, dependencies, strict/forgiving list policies, escapes and negatives.
+`aether.pseudo-name-runtime` checks public-ABI matching, cascade precedence,
+generated styles and repeated state deltas without recompiling stylesheets.
+Both keep checks active under `NDEBUG`. Runtime transitions use only the four
+public states; parser coverage of other states does not imply HTML state derivation.
+This does not add names, single-colon pseudoelements, Unicode case-folding,
+relative `:has()` arguments, or `nth-child(... of ...)` support.
+
 ## Empty-element selectors
 
 `:empty` matches an element with no direct DOM element children and no nonempty

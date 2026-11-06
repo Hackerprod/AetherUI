@@ -414,7 +414,8 @@ static bool try_parse_pseudo(parser_s& p, pseudo_selector_s& pseudo,
     ++p.index; /* skip first ':' */
     if (!p.eof() && p.peek() == ':') return false; /* pseudo-elements rejected */
 
-    auto name = p.read_identifier();
+    // Pseudo names are ASCII-insensitive after CSS escape decoding, not their arguments.
+    auto name = to_lower_ascii(p.read_identifier());
     if (name.empty()) return false;
 
     std::string_view body;

@@ -311,6 +311,16 @@ if(AETHERUI_BUILD_TESTS)
     target_include_directories(aether_selector_escape_parser_test PRIVATE include src/style_runtime)
     add_test(NAME aether.selector-escape-parser COMMAND aether_selector_escape_parser_test)
 
+    # Pseudo-name identity and recursive metadata without exporting private AST types.
+    add_executable(aether_pseudo_name_parser_test tests/test_pseudo_name_parser.cpp
+        src/style_runtime/selector_parser.cpp)
+    target_include_directories(aether_pseudo_name_parser_test PRIVATE include src/style_runtime)
+    add_test(NAME aether.pseudo-name-parser COMMAND aether_pseudo_name_parser_test)
+
+    add_executable(aether_pseudo_name_runtime_test tests/test_pseudo_name_runtime.cpp)
+    target_link_libraries(aether_pseudo_name_runtime_test PRIVATE AetherUI::Core)
+    add_test(NAME aether.pseudo-name-runtime COMMAND aether_pseudo_name_runtime_test)
+
     add_executable(aether_selector_structure_test tests/test_selector_structure.cpp)
     target_link_libraries(aether_selector_structure_test PRIVATE AetherUI::Core)
     add_test(NAME aether.selector-structure COMMAND aether_selector_structure_test)
