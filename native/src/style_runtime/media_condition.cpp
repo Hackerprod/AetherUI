@@ -3,6 +3,8 @@
 #include "css_component_tokens.h"
 #include "../css/css_length_internal.h"
 #include <string_view>
+#include <unordered_map>
+#include <vector>
 
 static media_condition_s* allocate_media_node(media_condition_allocation_scope_s* scope) {
     return scope ? scope->make_node() : new media_condition_s();
@@ -123,6 +125,8 @@ static bool media_feature_matches(const media_condition_s* node, const aether_st
 
 media_match media_condition_evaluate(const media_condition_s* node, const aether_style_environment_t* env) {
     if (!node) return media_match::true_;
+    // Most rules have a constant or a single feature: avoid heap allocations
+    // entirely for these roots. Composite nodes use the stack below.
     switch (node->kind) {
     case media_condition_s::kind_t::always_true:
         return media_match::true_;
@@ -131,16 +135,72 @@ media_match media_condition_evaluate(const media_condition_s* node, const aether
     case media_condition_s::kind_t::unknown:
         return media_match::unknown;
     case media_condition_s::kind_t::and_:
-        return match_and(media_condition_evaluate(node->left, env),
-                         media_condition_evaluate(node->right, env));
     case media_condition_s::kind_t::or_:
-        return match_or(media_condition_evaluate(node->left, env),
-                        media_condition_evaluate(node->right, env));
     case media_condition_s::kind_t::not_:
-        return match_not(media_condition_evaluate(node->inner, env));
+        break;
     default:
         return media_feature_matches(node, env) ? media_match::true_ : media_match::false_;
     }
+    // Conditions form a DAG: nested media rules can share ancestors. Keep
+    // results local to this call so environment changes never reuse stale
+    // values, and evaluate each reachable node once without using C++ recursion.
+    struct frame {
+        const media_condition_s* node;
+        unsigned phase = 0;
+    };
+    std::vector<frame> pending{{node}};
+    std::unordered_map<const media_condition_s*, media_match> values;
+    values.emplace(nullptr, media_match::true_);
+    while (!pending.empty()) {
+        const auto* current = pending.back().node;
+        if (values.find(current) != values.end()) {
+            pending.pop_back();
+            continue;
+        }
+        const auto kind = current->kind;
+        const bool binary = kind == media_condition_s::kind_t::and_ ||
+                            kind == media_condition_s::kind_t::or_;
+        const bool unary = kind == media_condition_s::kind_t::not_;
+        if ((binary || unary) && pending.back().phase == 0) {
+            pending.back().phase = 1;
+            const auto* child = binary ? current->left : current->inner;
+            if (values.find(child) == values.end()) pending.push_back({child});
+            continue;
+        }
+        if (binary && pending.back().phase == 1) {
+            pending.back().phase = 2;
+            if (values.find(current->right) == values.end())
+                pending.push_back({current->right});
+            continue;
+        }
+        media_match result;
+        switch (kind) {
+        case media_condition_s::kind_t::always_true:
+            result = media_match::true_;
+            break;
+        case media_condition_s::kind_t::always_false:
+            result = media_match::false_;
+            break;
+        case media_condition_s::kind_t::unknown:
+            result = media_match::unknown;
+            break;
+        case media_condition_s::kind_t::and_:
+            result = match_and(values.at(current->left), values.at(current->right));
+            break;
+        case media_condition_s::kind_t::or_:
+            result = match_or(values.at(current->left), values.at(current->right));
+            break;
+        case media_condition_s::kind_t::not_:
+            result = match_not(values.at(current->inner));
+            break;
+        default:
+            result = media_feature_matches(current, env) ? media_match::true_ : media_match::false_;
+            break;
+        }
+        values.emplace(current, result);
+        pending.pop_back();
+    }
+    return values.at(node);
 }
 } // namespace
 

@@ -19,9 +19,16 @@ static void check(bool ok, const char* label) {
     if (!ok) { std::fprintf(stderr, "FAIL source order compiler: %s\n", label); std::exit(1); }
 }
 static void gather(media_condition_s* node, std::set<media_condition_s*>& nodes) {
-    if (!node || node == media_condition_always() || node == media_condition_never() ||
-        node == media_condition_unknown() || !nodes.insert(node).second) return;
-    gather(node->left, nodes); gather(node->right, nodes); gather(node->inner, nodes);
+    std::vector<media_condition_s*> pending{node};
+    while (!pending.empty()) {
+        auto* current = pending.back();
+        pending.pop_back();
+        if (!current || current == media_condition_always() || current == media_condition_never() ||
+            current == media_condition_unknown() || !nodes.insert(current).second) continue;
+        pending.push_back(current->left);
+        pending.push_back(current->right);
+        pending.push_back(current->inner);
+    }
 }
 struct rules_owner {
     std::vector<compiled_rule_s> rules;

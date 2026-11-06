@@ -343,6 +343,42 @@ if(AETHERUI_BUILD_TESTS)
     target_link_libraries(aether_selector_comments_compiler_test PRIVATE AetherUI::Core)
     add_test(NAME aether.selector-comments-compiler COMMAND aether_selector_comments_compiler_test)
 
+    # Structural EOF recovery and typed component boundaries; no ABI additions.
+    add_executable(aether_stylesheet_eof_test tests/test_stylesheet_eof.cpp)
+    target_link_libraries(aether_stylesheet_eof_test PRIVATE AetherUI::Core)
+    add_test(NAME aether.stylesheet-eof COMMAND aether_stylesheet_eof_test)
+
+    add_executable(aether_stylesheet_eof_compiler_test tests/test_stylesheet_eof_compiler.cpp
+        src/style_runtime/style_source_compiler.cpp src/style_runtime/selector_parser.cpp
+        src/style_runtime/media_condition.cpp src/style_runtime/css_variable_tokens.cpp
+        src/css/css_length.cpp)
+    target_include_directories(aether_stylesheet_eof_compiler_test PRIVATE src/style_runtime)
+    target_compile_definitions(aether_stylesheet_eof_compiler_test PRIVATE AETHER_CSS_NUMERIC_ONLY)
+    target_link_libraries(aether_stylesheet_eof_compiler_test PRIVATE AetherUI::Core)
+    add_test(NAME aether.stylesheet-eof-compiler COMMAND aether_stylesheet_eof_compiler_test)
+
+    add_executable(aether_stylesheet_block_index_test tests/test_stylesheet_block_index.cpp
+        src/style_runtime/css_variable_tokens.cpp)
+    target_include_directories(aether_stylesheet_block_index_test PRIVATE src/style_runtime)
+    add_test(NAME aether.stylesheet-block-index COMMAND aether_stylesheet_block_index_test)
+    add_test(NAME aether.stylesheet-block-index-deep COMMAND aether_stylesheet_block_index_test deep)
+
+    add_executable(aether_media_condition_iterative_test tests/test_media_condition_iterative.cpp
+        src/style_runtime/media_condition.cpp src/style_runtime/css_variable_tokens.cpp
+        src/css/css_length.cpp)
+    target_include_directories(aether_media_condition_iterative_test PRIVATE include src/style_runtime)
+    target_compile_definitions(aether_media_condition_iterative_test PRIVATE AETHER_CSS_NUMERIC_ONLY)
+    target_link_libraries(aether_media_condition_iterative_test PRIVATE AetherUI::Core)
+    if(NOT MSVC)
+        target_compile_options(aether_media_condition_iterative_test PRIVATE -ffp-contract=off)
+    endif()
+    add_test(NAME aether.media-condition-iterative COMMAND aether_media_condition_iterative_test)
+
+    foreach(mode closed open mixed)
+        add_test(NAME aether.stylesheet-eof-${mode}-deep COMMAND aether_stylesheet_eof_test ${mode})
+        add_test(NAME aether.stylesheet-eof-compiler-${mode}-deep COMMAND aether_stylesheet_eof_compiler_test ${mode})
+    endforeach()
+
     add_executable(aether_stylesheet_source_order_test tests/test_stylesheet_source_order.cpp)
     target_link_libraries(aether_stylesheet_source_order_test PRIVATE AetherUI::Core)
     add_test(NAME aether.stylesheet-source-order COMMAND aether_stylesheet_source_order_test)

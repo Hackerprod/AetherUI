@@ -15,8 +15,9 @@ int main() {
     for (float width:{320.f,800.f}) {
         aether_style_environment_t env{width,600,1,16,0,0,0};
         auto cases=media_v3::cases(width,600);
-        // CSS component blocks close at EOF for this parser entrypoint, unlike
-        // stylesheet extraction. Commas inside an open block are not list OR.
+        // CSS component blocks close at EOF in this media parser entrypoint.
+        // Commas inside an open block are not list OR. Stylesheet block
+        // extraction has separate typed-boundary and EOF regression coverage.
         cases.push_back({"(min-width:100px",true,0});
         cases.push_back({"(min-width:calc(100px",true,0});
         cases.push_back({"not print and (min-width:banana",true,1});

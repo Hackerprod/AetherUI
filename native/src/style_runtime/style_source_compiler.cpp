@@ -1,5 +1,6 @@
 #include "style_runtime_types.h"
 #include "style_source_limits.h"
+#include "style_source_block_index.h"
 #include "media_condition_allocation_scope.h"
 #include <type_traits>
 #include "css_component_tokens.h"
@@ -56,17 +57,6 @@ static int32_t find_open_brace(const std::string& source, int32_t start, int32_t
             const char closing = opening == '(' ? ')' : opening == '[' ? ']' : '}';
             if (token.delimiter == closing) blocks.pop_back();
         }
-    }
-}
-
-static int32_t find_matching_brace(const std::string& source, int32_t opening, int32_t end) {
-    css_component_lexer lexer(source.data(), static_cast<size_t>(end), static_cast<size_t>(opening + 1));
-    int32_t depth = 1;
-    for (;;) {
-        const auto token = lexer.next();
-        if (token.kind == css_variable_token_kind::end) return -1;
-        if (token.delimiter == '{') ++depth;
-        if (token.delimiter == '}' && --depth == 0) return static_cast<int32_t>(token.begin);
     }
 }
 
@@ -301,7 +291,7 @@ static declaration_compilation_result compile_declarations(
     return result;
 }
 
-// ═══ Compile range (recursive) ═════════════════════════════════════════
+// ═══ Compile ranges (iterative depth-first source order) ════════════════
 
 static aether_status_t source_limit_error(aether_style_diagnostic_fn callback, void* user_data,
                                          const char* reason) {
@@ -324,10 +314,22 @@ static aether_status_t compile_range(
     void* diagnostics_user_data,
     media_condition_allocation_scope_s& media_scope)
 {
-    int32_t index = start;
-    while (index < end) {
+    struct frame_s {
+        int32_t index;
+        int32_t end;
+        media_condition_s* condition;
+    };
+    style_source_block_index_s blocks(source);
+    std::vector<frame_s> frames{{start, end, inherited_condition}};
+    while (!frames.empty()) {
+        auto& frame = frames.back();
+        auto& index = frame.index;
+        const auto end = frame.end;
         skip_whitespace(source, index, end);
-        if (index >= end) break;
+        if (index >= end) {
+            frames.pop_back();
+            continue;
+        }
 
         if (source[index] == '@') {
             int32_t at_offset = index;
@@ -353,43 +355,34 @@ static aether_status_t compile_range(
                 continue;
             }
 
-            int32_t closing = find_matching_brace(source, delimiter, end);
-            if (closing < 0) {
-                index = end;
-                continue;
-            }
-
+            const auto* extent = blocks.find(delimiter);
+            if (!extent || extent->next > end) return AETHER_ERROR_INVALID_STATE;
             std::string prelude = str_trim(source.substr(index, delimiter - index));
 
+            // Commit the parent's source position before push_back can move
+            // frames. The block-index cursor still belongs to the child next.
+            index = extent->next;
             if (name == "media") {
                 media_condition_s* media = media_condition_parse(
                     prelude.c_str(), nullptr, nullptr, at_offset, &media_scope);
-                media_condition_s* combined = media_condition_and(inherited_condition, media, &media_scope);
-                const auto status = compile_range(
-                    source, original, delimiter + 1, closing, combined,
-                    sheet_handle, layer, registry, rule_id_counter, out_rules,
-                    diagnostics_callback, diagnostics_user_data, media_scope);
-                if (status != AETHER_OK) return status;
+                media_condition_s* combined = media_condition_and(frame.condition, media, &media_scope);
+                frames.push_back({delimiter + 1, extent->body_end, combined});
             }
-
-            index = closing + 1;
             continue;
         }
 
         int32_t opening = find_open_brace(source, index, end);
         if (opening < 0) {
-            break;
+            frames.pop_back();
+            continue;
         }
-
-        int32_t closing = find_matching_brace(source, opening, end);
-        if (closing < 0) {
-            break;
-        }
+        const auto* extent = blocks.find(opening);
+        if (!extent || extent->next > end) return AETHER_ERROR_INVALID_STATE;
 
         // Trailing whitespace can belong to a CSS escape in the final name.
         std::string selector_text = original.substr(index, opening - index);
         std::string declaration_text =
-            source.substr(opening + 1, closing - opening - 1);
+            source.substr(opening + 1, extent->body_end - opening - 1);
 
         std::vector<compiled_selector_s> selectors;
         if (!selector_text.empty()) {
@@ -413,7 +406,7 @@ static aether_status_t compile_range(
                 rule.sheet_handle = sheet_handle;
                 rule.layer = layer;
                 rule.selector = std::move(sel);
-                rule.condition = inherited_condition;
+                rule.condition = frame.condition;
                 rule.declarations = declarations.properties;
                 rule.custom_declarations = declarations.custom;
                 rule.content_declarations = declarations.content;
@@ -423,7 +416,7 @@ static aether_status_t compile_range(
             }
         }
 
-        index = closing + 1;
+        index = extent->next;
     }
     return AETHER_OK;
 }

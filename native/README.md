@@ -107,6 +107,61 @@ transaction boundary, nested additions/removals, batch payloads, and callback ca
 The white-box runtime test covers those operations near ID/handle/source limits and
 checks that maps and cached states computed during callbacks survive the outer return.
 
+### Stylesheet block boundaries and EOF
+
+The source compiler keeps typed component boundaries for parentheses, brackets and
+braces. A mismatched closing token is content, not a close for an ancestor. Strings,
+URLs, comments and escapes pass through the component lexer, so punctuation inside
+them cannot expose a false sibling rule. A real opening brace may end implicitly at
+EOF; a prelude without a real opening brace still produces no rule. The original and
+comment-masked source views retain identical byte offsets, preserving original
+selector comments and escape terminators.
+
+A per-compilation index stores each brace's body end separately from its next source
+position. Real closes are excluded from the body and consumed by the next position;
+EOF uses the source end for both, without inventing a character or computing EOF+1.
+One typed token pass builds the index. A shared forward-only cursor visits each extent
+at most once, including ignored blocks. An explicit frame stack visits media bodies
+in depth-first source order, eliminating repeated ancestor scans and native-stack
+recursion. Entering a child advances its parent's source position, not the index
+cursor past that child's extents. IDs, selector-group positions, inactive rules,
+compilation-local ownership and transactional publication keep the contracts above.
+
+Media condition evaluation also uses an explicit stack. Per-call memoization handles
+shared DAGs without repeatedly evaluating a shared node, and is discarded before a
+later environment change. Three-valued AND/OR/NOT preserve unknown until the final
+match comparison. Leaf conditions avoid allocating traversal state. This does not
+cache results across rules or fix ownership of successful media graphs.
+
+The boundary behavior is checked against Chromium source at
+[`7fe04cd3b6456bd7baec869f6a5efaebd6e79b71`](https://github.com/chromium/chromium/tree/7fe04cd3b6456bd7baec869f6a5efaebd6e79b71):
+[`CSSTokenizer::BlockEnd`](https://github.com/chromium/chromium/blob/7fe04cd3b6456bd7baec869f6a5efaebd6e79b71/third_party/blink/renderer/core/css/parser/css_tokenizer.cc#L66-L86)
+only pops the matching type;
+[`UncheckedSkipToEndOfBlock`](https://github.com/chromium/chromium/blob/7fe04cd3b6456bd7baec869f6a5efaebd6e79b71/third_party/blink/renderer/core/css/parser/css_parser_token_stream.cc#L51-L74)
+stops at EOF; and
+[`ConsumeStyleRule`](https://github.com/chromium/chromium/blob/7fe04cd3b6456bd7baec869f6a5efaebd6e79b71/third_party/blink/renderer/core/css/parser/css_parser_impl.cc#L3081-L3091)
+requires a real opening brace. Chromium's streaming guards and nested rule objects
+are not copied here: AetherUI uses an offset index and emits flattened conditioned
+rules. Media AND/OR/NOT retain Chromium's
+[`KleeneValue` tables](https://github.com/chromium/chromium/blob/7fe04cd3b6456bd7baec869f6a5efaebd6e79b71/third_party/blink/renderer/core/css/kleene_value.h#L19-L52),
+but Chromium's recursive visitor short-circuits and records dependency flags, while
+AetherUI's pure evaluator keeps evaluating both operands as before. This is structural
+recovery, not full CSS EOF/value-grammar conformance.
+It does not synthesize closing text for calc(), var(), strings or property parsers,
+and it does not add CSS nesting, unsupported at-rules or new media features.
+
+`aether.stylesheet-eof` checks public rule counts, computed widths and environment
+changes. `aether.stylesheet-eof-compiler` checks DFS metadata, original selector text,
+rollback and reentrant compilation. Their closed/open/mixed deep variants use 10,000
+real media conditions, not constant-folded `all`. `aether.stylesheet-block-index`
+compares the production index with a bounded recursive component oracle over 22
+fixed and 200,000 deterministic adversarial inputs, counts token/extent visits, and
+checks offset limits without allocating a 2 GiB source. Its deep variant uses up to
+100,000 levels. `aether.media-condition-iterative` checks ternary truth tables,
+environment changes and deep shared DAGs. Every new check remains active under NDEBUG.
+For small native-stack validation on POSIX, run the deep executables in a shell with
+`ulimit -s 256`; no platform-specific stack API is added to the library or tests.
+
 ### Transition property module
 
 `style_runtime/transition_properties.cpp` privately owns the four transition longhands,
