@@ -247,9 +247,11 @@ static bool bi_try_border_radii(const char* src, std::string& out) {
 }
 
 static bool bi_try_gradient(const char* src, std::string& out) {
-    std::string t = str_trim(src);
-    if (str_starts_with_i(t, "linear-gradient")) { out = t; return true; }
-    return false;
+    aether_linear_gradient gradient{};
+    if (!aether_linear_gradient_try_parse(src, &gradient)) return false;
+    aether_linear_gradient_free(&gradient);
+    out = str_trim(src);
+    return true;
 }
 
 static property_apply_result_s bi_apply_gradient(aether_computed_style_t* st, const std::string& value);
@@ -287,8 +289,9 @@ static property_apply_result_s bi_apply_background_image(aether_computed_style_t
         aether_background_layer_list_free(&st->background_layers);
         return {};
     }
-    if (str_starts_with_i(str_trim(value), "linear-gradient") && find_top_level(value, ',') < 0)
-        return bi_apply_gradient(st, value);
+    std::string single_gradient;
+    if (bi_try_gradient(value.c_str(), single_gradient))
+        return bi_apply_gradient(st, single_gradient);
 
     aether_background_layer_list replacement{};
     if (!aether_background_image_list_try_parse(value, &replacement)) {

@@ -34,10 +34,11 @@ bool parse_url(const std::string& source, std::string& out) {
 
 bool parse_image(const std::string& source, aether_background_layer& out) {
     const auto text = str_trim(source);
-    if (str_starts_with_i(text, "linear-gradient")) {
-        aether_linear_gradient_parse_info_s info{};
+    aether_linear_gradient gradient{};
+    if (aether_linear_gradient_try_parse(text.c_str(), &gradient)) {
         out.kind = AETHER_BACKGROUND_LAYER_LINEAR_GRADIENT;
-        return aether_linear_gradient_try_parse(text.c_str(), &out.gradient, &info);
+        out.gradient = gradient;
+        return true;
     }
     std::string url;
     if (!parse_url(text, url)) return false;

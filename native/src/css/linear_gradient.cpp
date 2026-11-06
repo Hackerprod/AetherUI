@@ -152,12 +152,27 @@ bool aether_linear_gradient_try_parse(const char* source, aether_linear_gradient
     if (!source || !out_gradient) return false;
     *out_gradient = {};
     if (out_info) *out_info = {};
-    const std::string value = trim(source);
-    const auto open = value.find('(');
-    const auto close = value.rfind(')');
-    if (open == std::string::npos || close <= open || lowercase(trim(value.substr(0, open))) != "linear-gradient") return false;
+    const std::string value = source;
+    css_component_cursor cursor(value);
+    css_component_value function;
+    if (!cursor.next(function) || function.token.kind != css_variable_token_kind::function ||
+        lowercase(value.substr(function.begin, function.token.end - function.begin - 1)) != "linear-gradient") return false;
 
-    const auto parts = split_top_level(value.substr(open + 1, close - open - 1));
+    // The component cursor supplies the paired outer bounds, ignoring delimiters
+    // inside comments, strings and nested functions. Only CSS trivia may follow.
+    css_variable_lexer suffix(value.data(), value.size(), function.end);
+    for (;;) {
+        const auto token = suffix.next();
+        if (token.kind == css_variable_token_kind::end) break;
+        if (token.kind == css_variable_token_kind::whitespace || token.kind == css_variable_token_kind::comment) continue;
+        // CSS consumes an unterminated comment through EOF. Keep this exception
+        // local: neither other lexical errors nor an unclosed function is valid.
+        if (token.kind == css_variable_token_kind::error && token.eof_recoverable &&
+            token.serialization == css_variable_serialization::comment && token.end == value.size()) break;
+        return false;
+    }
+
+    const auto parts = split_top_level(value.substr(function.token.end, function.end - function.token.end - 1));
     if (parts.size() < 2) return false;
 
     float x = 0.f;

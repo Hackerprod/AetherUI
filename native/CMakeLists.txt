@@ -361,6 +361,26 @@ if(AETHERUI_BUILD_TESTS)
     target_link_libraries(aether_linear_gradient_test PRIVATE AetherUI::Core)
     add_test(NAME aether.linear-gradient COMMAND aether_linear_gradient_test)
 
+    add_executable(aether_gradient_boundary_test tests/test_gradient_boundary.cpp
+        src/css/linear_gradient.cpp src/css/background_layers.cpp src/style_runtime/css_variable_tokens.cpp)
+    target_link_libraries(aether_gradient_boundary_test PRIVATE AetherUI::Core)
+    add_test(NAME aether.gradient-boundary COMMAND aether_gradient_boundary_test)
+
+    add_executable(aether_gradient_boundary_runtime_test tests/test_gradient_boundary_runtime.cpp)
+    target_link_libraries(aether_gradient_boundary_runtime_test PRIVATE AetherUI::Core)
+    add_test(NAME aether.gradient-boundary-runtime COMMAND aether_gradient_boundary_runtime_test)
+
+    # Exercise registered private callbacks, including the shorthand fallback,
+    # without adding exports to the public library.
+    add_executable(aether_gradient_boundary_dispatch_test tests/test_gradient_boundary_dispatch.cpp
+        src/style_runtime/builtin_properties.cpp src/style_runtime/transition_properties.cpp
+        src/style_runtime/shadow_values.cpp src/style_runtime/css_variable_tokens.cpp
+        src/css/css_length.cpp src/css/background_layers.cpp src/css/linear_gradient.cpp
+        src/css/border_radii.cpp src/css/backdrop_filters.cpp src/css/transforms.cpp)
+    target_compile_definitions(aether_gradient_boundary_dispatch_test PRIVATE AETHER_CSS_NUMERIC_ONLY)
+    target_link_libraries(aether_gradient_boundary_dispatch_test PRIVATE AetherUI::Core)
+    add_test(NAME aether.gradient-boundary-dispatch COMMAND aether_gradient_boundary_dispatch_test)
+
     add_executable(aether_background_layers_test tests/test_background_layers.cpp src/css/background_layers.cpp src/css/linear_gradient.cpp src/style_runtime/css_variable_tokens.cpp)
     target_link_libraries(aether_background_layers_test PRIVATE AetherUI::Core)
     add_test(NAME aether.background-layers COMMAND aether_background_layers_test)
