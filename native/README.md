@@ -130,6 +130,22 @@ See the per-binding READMEs under `bindings/` for how each language enforces the
 idiom (`SafeHandle` in .NET, `AutoCloseable` in Java, an explicit `Close()` plus cgo pointer rules in
 Go).
 
+### Duplicate HTML attributes
+
+Within each opening tag, the HTML parser keeps the first value for an exactly
+matching attribute name, including empty and boolean values. Later values are
+fully consumed and decoded but do not replace or merge the first value. ID
+lookup, classes, selectors and inline styles all read that same stored value.
+Explicit `aether_element_set_attribute` calls still replace values and do not
+decode HTML entities.
+
+`aether.html-duplicate-attributes` exercises this through the public ABI, with
+checks active under `NDEBUG`, complete attribute maps and trees, style consumers,
+mutations, reparsing and repeated-attribute stress cases. ASCII name folding is
+not part of this correction: differently cased names currently remain distinct.
+The test's case and incomplete-input diagnostics do not imply full HTML parser
+conformance.
+
 ### ID lookup
 
 `aether_doc_get_element_by_id` returns the first connected element with the exact,

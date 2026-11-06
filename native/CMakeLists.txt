@@ -118,6 +118,10 @@ if(AETHERUI_BUILD_TESTS)
     target_link_libraries(aether_html_unquoted_attributes_test PRIVATE AetherUI::Core)
     add_test(NAME aether.html-unquoted-attributes COMMAND aether_html_unquoted_attributes_test)
 
+    add_executable(aether_html_duplicate_attributes_test tests/test_html_duplicate_attributes.cpp)
+    target_link_libraries(aether_html_duplicate_attributes_test PRIVATE AetherUI::Core)
+    add_test(NAME aether.html-duplicate-attributes COMMAND aether_html_duplicate_attributes_test)
+
     add_executable(aether_html_raw_text_test tests/test_html_raw_text.cpp)
     target_link_libraries(aether_html_raw_text_test PRIVATE AetherUI::Core)
     add_test(NAME aether.html-raw-text COMMAND aether_html_raw_text_test)

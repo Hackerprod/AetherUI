@@ -269,7 +269,8 @@ class HtmlParser {
             }
 
             std::string decoded_val = aether::html_decode(attr_value.c_str());
-            element->attributes[attr_name] = decoded_val;
+            // Keep the first occurrence, after fully consuming every duplicate value.
+            element->attributes.try_emplace(attr_name, decoded_val);
         }
 
         stack.back()->children.push_back(element);
