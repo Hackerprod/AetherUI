@@ -1,8 +1,7 @@
 #include "css_length_internal.h"
+#include "css_numeric_conversion_internal.h"
 #include <cmath>
-#include <cerrno>
 #include <limits>
-#include <cstdlib>
 #include <string>
 #include <string_view>
 
@@ -40,7 +39,8 @@ static bool store_length_component(double number, float& output) {
 
 // Fix the CSS token span before invoking the C conversion routine. In
 // particular, C hexadecimal numbers and an incomplete fraction are not CSS.
-static bool parse_numeric_token(std::string_view source, size_t& position, calc_value_s& output) {
+static bool parse_numeric_token(std::string_view source, size_t& position, calc_value_s& output,
+                                aether::css::c_numeric_locale& locale) {
     const size_t start = position;
     size_t end = start;
     if (end < source.size() && (source[end] == '+' || source[end] == '-')) ++end;
@@ -68,11 +68,10 @@ static bool parse_numeric_token(std::string_view source, size_t& position, calc_
         if (exponent != exponent_digits) end = exponent;
     }
     const std::string token(source.substr(start, end - start));
-    char* parsed_end = nullptr;
-    errno = 0;
-    const double number = std::strtod(token.c_str(), &parsed_end);
-    if (parsed_end != token.c_str() + token.size() || !std::isfinite(number) ||
-        errno == ERANGE || (number == 0.0 && nonzero_mantissa)) return false;
+    const auto converted = locale.parse_double(token);
+    if (!converted.valid || converted.range_error ||
+        (converted.value == 0.0 && nonzero_mantissa)) return false;
+    const double number = converted.value;
 
     const size_t unit_start = end;
     if (end < source.size() && source[end] == '%') ++end;
@@ -231,7 +230,7 @@ private:
             return consume(')');
         }
 
-        if (!parse_numeric_token(source_, position_, output)) return false;
+        if (!parse_numeric_token(source_, position_, output, locale_)) return false;
         if (output.kind == calc_value_kind_e::length) output = calc_length(output.length);
         return true;
     }
@@ -267,6 +266,7 @@ private:
         return true;
     }
 
+    aether::css::c_numeric_locale locale_;
     std::string_view source_;
     size_t position_ = 0;
 };
@@ -278,7 +278,8 @@ bool aether::css::try_parse_numeric_literal(std::string_view source, calc_value_
     while (!source.empty() && css_space(source.back())) source.remove_suffix(1);
     size_t position = 0;
     calc_value_s value{};
-    if (!parse_numeric_token(source, position, value) || position != source.size()) return false;
+    c_numeric_locale locale;
+    if (!parse_numeric_token(source, position, value, locale) || position != source.size()) return false;
     output = value;
     return true;
 }

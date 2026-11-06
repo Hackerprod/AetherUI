@@ -134,6 +134,14 @@ if(AETHERUI_BUILD_TESTS)
         target_include_directories(aether_rgb_locale_failure_test PRIVATE include)
         target_link_options(aether_rgb_locale_failure_test PRIVATE "-Wl,--wrap=newlocale")
         add_test(NAME aether.rgb-locale-failure COMMAND aether_rgb_locale_failure_test)
+
+        # Interpose the actual conversion calls, not those in an already linked DSO.
+        add_executable(aether_css_numeric_locale_failure_test tests/test_css_numeric_locale_failure.cpp
+            src/css/css_length.cpp src/css/color_rgba.cpp src/style_runtime/css_variable_tokens.cpp)
+        target_include_directories(aether_css_numeric_locale_failure_test PRIVATE include)
+        target_link_options(aether_css_numeric_locale_failure_test PRIVATE
+            "-Wl,--wrap=newlocale" "-Wl,--wrap=freelocale" "-Wl,--wrap=strtof_l" "-Wl,--wrap=strtod_l")
+        add_test(NAME aether.css-numeric-locale-failure COMMAND aether_css_numeric_locale_failure_test)
     endif()
 
     # Process-local locale mutation stays in a separate, serial test executable.
@@ -148,6 +156,21 @@ if(AETHERUI_BUILD_TESTS)
     add_executable(aether_rgb_tokens_test tests/test_rgb_tokens.cpp)
     target_link_libraries(aether_rgb_tokens_test PRIVATE AetherUI::Core)
     add_test(NAME aether.rgb-tokens COMMAND aether_rgb_tokens_test)
+
+    add_executable(aether_css_numeric_conversion_test tests/test_css_numeric_conversion.cpp
+        src/css/css_length.cpp)
+    target_compile_definitions(aether_css_numeric_conversion_test PRIVATE AETHER_CSS_NUMERIC_ONLY)
+    target_link_libraries(aether_css_numeric_conversion_test PRIVATE AetherUI::Core)
+    add_test(NAME aether.css-numeric-conversion COMMAND aether_css_numeric_conversion_test)
+
+    add_executable(aether_length_locale_test tests/test_length_locale.cpp)
+    target_link_libraries(aether_length_locale_test PRIVATE AetherUI::Core)
+    add_test(NAME aether.length-locale COMMAND aether_length_locale_test)
+
+    find_package(Threads REQUIRED)
+    add_executable(aether_length_locale_threads_test tests/test_length_locale_threads.cpp)
+    target_link_libraries(aether_length_locale_threads_test PRIVATE AetherUI::Core Threads::Threads)
+    add_test(NAME aether.length-locale-threads COMMAND aether_length_locale_threads_test)
 
     add_executable(aether_html_space_tokens_test tests/test_html_space_tokens.cpp)
     add_test(NAME aether.html-space-tokens COMMAND aether_html_space_tokens_test)

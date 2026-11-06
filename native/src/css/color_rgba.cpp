@@ -1,12 +1,9 @@
 #include "../style_runtime/css_component_values.h"
+#include "css_numeric_conversion_internal.h"
 #include <aether/aether.h>
 #include <cstring>
 #include <cstdlib>
 #include <cmath>
-#include <locale.h>
-#if defined(__APPLE__)
-#include <xlocale.h>
-#endif
 
 static int hex_digit(char c) {
     if (c >= '0' && c <= '9') return c - '0';
@@ -58,44 +55,7 @@ static aether_bool_t try_parse_hex(const char* s, aether_color_rgba* out) {
 }
 
 namespace {
-// Own one C numeric locale for this parse. Never change the process/thread
-// locale, fall back to it on allocation failure, or release a shared handle.
-class rgb_numeric_locale {
-public:
-#if defined(_WIN32)
-    rgb_numeric_locale() : locale_(_create_locale(LC_NUMERIC, "C")) {}
-    ~rgb_numeric_locale() { if (locale_) _free_locale(locale_); }
-#else
-    rgb_numeric_locale() : locale_(newlocale(LC_NUMERIC_MASK, "C", nullptr)) {}
-    ~rgb_numeric_locale() { if (locale_) freelocale(locale_); }
-#endif
-    rgb_numeric_locale(const rgb_numeric_locale&) = delete;
-    rgb_numeric_locale& operator=(const rgb_numeric_locale&) = delete;
-
-    bool parse(const std::string& text, float& value) const {
-        if (!locale_) return false;
-        char* end = nullptr;
-#if defined(_WIN32)
-        const float parsed = _strtof_l(text.c_str(), &end, locale_);
-#else
-        const float parsed = strtof_l(text.c_str(), &end, locale_);
-#endif
-        // ERANGE alone is not a failure: finite subnormals and underflow to
-        // zero retain the existing float contract. Overflow is nonfinite.
-        if (end == text.c_str() || end != text.c_str() + text.size() ||
-            !std::isfinite(parsed)) return false;
-        value = parsed;
-        return true;
-    }
-private:
-#if defined(_WIN32)
-    _locale_t locale_;
-#else
-    locale_t locale_;
-#endif
-};
-
-bool try_rgb_component(const std::string& source, const rgb_numeric_locale& locale,
+bool try_rgb_component(const std::string& source, aether::css::c_numeric_locale& locale,
                        bool alpha, bool& percentage, float& value) {
     css_component_cursor cursor(source);
     css_component_value component, extra;
@@ -109,8 +69,10 @@ bool try_rgb_component(const std::string& source, const rgb_numeric_locale& loca
         // Preserve the existing percentage spelling limit (31 numeric bytes).
         if (number.size() >= 32) return false;
     }
-    float parsed = 0;
-    if (!locale.parse(number, parsed)) return false;
+    const auto converted = locale.parse_float(number);
+    // Preserve finite subnormals and underflow-to-zero, including ERANGE.
+    if (!converted.valid) return false;
+    const float parsed = converted.value;
     const float scale = percentage ? 100.0f : alpha ? 1.0f : 255.0f;
     value = fminf(fmaxf(parsed / scale, 0.0f), 1.0f);
     return true;
@@ -121,7 +83,7 @@ static aether_bool_t try_parse_rgb(const char* s, aether_bool_t has_alpha, aethe
     const std::string body(s, std::strlen(s) - 1); // caller verified final ')'
     const auto parts = css_split_component_delimited(body, ',');
     if (parts.size() != static_cast<size_t>(has_alpha ? 4 : 3)) return AETHER_FALSE;
-    const rgb_numeric_locale locale;
+    aether::css::c_numeric_locale locale;
     float channels[4] = {0, 0, 0, 1};
     bool rgb_percentage = false;
     for (size_t index = 0; index < parts.size(); ++index) {
