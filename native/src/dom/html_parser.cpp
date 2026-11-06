@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <vector>
 #include <string_view>
+#include <memory>
 
 static bool is_ascii_alpha(char c) {
     return (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z');
@@ -123,8 +124,8 @@ class HtmlParser {
         return n;
     }
 
-    aether_node_s* create_element(const std::string& tag, aether_doc_s* doc) {
-        auto* n = new aether_node_s();
+    std::unique_ptr<aether_node_s> create_element(const std::string& tag, aether_doc_s* doc) {
+        auto n = std::make_unique<aether_node_s>();
         n->type = AETHER_NODE_ELEMENT;
         n->tag_name = tag;
         n->style_node_id = doc->next_style_node_id++;
@@ -242,7 +243,10 @@ class HtmlParser {
         // whose spelling and values must remain untouched.
         std::transform(tag_name.begin(), tag_name.end(), tag_name.begin(), ascii_lower);
 
-        aether_node_s* element = create_element(tag_name, doc);
+        // Stage the token separately from the DOM: EOF in any attribute state
+        // discards the entire opening without allocating a node or style ID.
+        std::map<std::string, std::string, std::less<>> attributes;
+        bool tag_terminated = false;
         bool self_closing = false;
 
         while (!end()) {
@@ -251,12 +255,14 @@ class HtmlParser {
 
             if (current() == '>') {
                 pos++;
+                tag_terminated = true;
                 break;
             }
 
             if (current() == '/' && peek(1) == '>') {
                 self_closing = true;
                 pos += 2;
+                tag_terminated = true;
                 break;
             }
 
@@ -276,11 +282,19 @@ class HtmlParser {
 
             std::string decoded_val = aether::html_decode(attr_value.c_str());
             // Keep the first occurrence, after fully consuming every duplicate value.
-            element->attributes.try_emplace(attr_name, decoded_val);
+            attributes.try_emplace(attr_name, decoded_val);
         }
 
-        stack.back()->children.push_back(element);
-        element->parent = stack.back();
+        // Only a syntactic terminator confirms the token. In particular, '>'
+        // consumed inside a quoted value is data, even as the final input byte.
+        if (!tag_terminated) return;
+
+        auto pending = create_element(tag_name, doc);
+        pending->attributes = std::move(attributes);
+        stack.back()->children.push_back(pending.get());
+        pending->parent = stack.back();
+        // The tree takes ownership only after push_back succeeds.
+        aether_node_s* element = pending.release();
 
         if (self_closing || is_void_element(element->tag_name))
             return;

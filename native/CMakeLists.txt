@@ -142,6 +142,14 @@ if(AETHERUI_BUILD_TESTS)
     target_link_libraries(aether_html_tag_names_test PRIVATE AetherUI::Core)
     add_test(NAME aether.html-tag-names COMMAND aether_html_tag_names_test)
 
+    add_executable(aether_html_start_tag_eof_test tests/test_html_start_tag_eof.cpp)
+    target_link_libraries(aether_html_start_tag_eof_test PRIVATE AetherUI::Core)
+    add_test(NAME aether.html-start-tag-eof COMMAND aether_html_start_tag_eof_test)
+
+    add_executable(aether_html_start_tag_eof_consumers_test tests/test_html_start_tag_eof_consumers.cpp)
+    target_link_libraries(aether_html_start_tag_eof_consumers_test PRIVATE AetherUI::Core)
+    add_test(NAME aether.html-start-tag-eof-consumers COMMAND aether_html_start_tag_eof_consumers_test)
+
     add_executable(aether_html_tag_name_consumers_test tests/test_html_tag_name_consumers.cpp
         src/layout/form_controls.cpp src/css/text_transform.cpp)
     target_include_directories(aether_html_tag_name_consumers_test PRIVATE src/layout)

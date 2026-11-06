@@ -327,7 +327,8 @@ void compatibility() {
     // These diagnostics deliberately preserve simplified-parser differences.
     run("diagnostic/end tag EOF consumed", "<body id=fixture></", {body({})});
     fixture("diagnostic/space after end angle", "<div>A</ div>B", {element("div", {text("A")}), text("B")});
-    run("diagnostic/valid incomplete start tag", "<body id=fixture><span", {body({element("span")})});
+    // Historical diagnostic input: EOF now discards the unfinished opening.
+    run("diagnostic/valid incomplete start tag", "<body id=fixture><span", {body({})});
     run("diagnostic/PI without terminator", "<body id=fixture><?probe><span>B</span>", {body({})});
 }
 

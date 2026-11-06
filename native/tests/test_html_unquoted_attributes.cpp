@@ -134,6 +134,22 @@ void run(const std::string& name, const std::string& html, const Attributes& exp
     if (css && styled) check_width(doc.handle, styled, css, width, name);
 }
 
+// Incomplete openings contribute neither a node nor any of their attributes.
+// Keep the positive run() helper's target-existence requirement unchanged.
+void run_absent(const std::string& name, const std::string& html) {
+    ++cases;
+    Document doc;
+    if (!check(aether_doc_create(&doc.handle) == AETHER_OK && doc.handle,
+               name, "document create")) return;
+    if (!check(aether_doc_parse_html(doc.handle, html.c_str()) == AETHER_OK,
+               name, "parse HTML")) return;
+    check(aether_doc_get_document_element(doc.handle) == nullptr,
+          name, "empty document has no nodes");
+    check(aether_doc_get_body(doc.handle) == nullptr, name, "no invented body");
+    check(aether_doc_get_element_by_id(doc.handle, "t") == nullptr,
+          name, "discarded target ID absent");
+}
+
 void original_regressions() {
     struct Case { const char* name; const char* html; const char* attr; const char* value; };
     // The twelve original reproducer inputs are unchanged, including unquoted IDs.
@@ -251,16 +267,14 @@ void whitespace_and_eof() {
             {{"id", "t"}, {"data-route", "/a/b"}, {"title", "after"}});
     }
     // Safety and compatibility checks for this parser, NOT Blink equivalence:
-    // std::isspace also recognizes VT; AetherUI keeps an unfinished start tag.
+    // std::isspace also recognizes VT.
     run("existing_vt_divergence", "<input id=\"t\" data-route=x\vdisabled>",
         {{"id", "t"}, {"data-route", "x"}, {"disabled", ""}});
-    run("existing_eof_recovery", "<input id=\"t\" data-route=/a/b",
-        {{"id", "t"}, {"data-route", "/a/b"}});
-    run("quoted_eof_control", "<input id=\"t\" data-route='/a/b'",
-        {{"id", "t"}, {"data-route", "/a/b"}});
+    // Preserve the historical EOF bytes; the entire unfinished opening is discarded.
+    run_absent("existing_eof_recovery", "<input id=\"t\" data-route=/a/b");
+    run_absent("quoted_eof_control", "<input id=\"t\" data-route='/a/b'");
     const std::string slashes(65536, '/');
-    run("long_slashes_eof", "<input id=\"t\" data-route=" + slashes,
-        {{"id", "t"}, {"data-route", slashes}});
+    run_absent("long_slashes_eof", "<input id=\"t\" data-route=" + slashes);
     run("long_slashes_next_attribute", "<input id=\"t\" data-route=" + slashes + " title=after>",
         {{"id", "t"}, {"data-route", slashes}, {"title", "after"}});
 }

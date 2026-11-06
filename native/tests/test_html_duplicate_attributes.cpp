@@ -354,8 +354,8 @@ void entity_and_cursor_cases() {
                            {element("i", {}, {text("real")})}), element("p")});
         check(!doc.find("phantom"), "repeated discarded payload has no ID");
     }
-    // These exact tree expectations were checked on the unchanged base first.
-    // EOF recovery is a preservation control, not complete HTML conformance.
+    // Preserve the original EOF inputs, but discard the whole unfinished opening.
+    // Parse directly so positive Document::parse() still requires its target.
     const std::pair<const char*, const char*> incomplete[] = {
         {"control_eof_duplicate_name", "data-x"}, {"control_eof_duplicate_equals", "data-x="},
         {"control_eof_duplicate_single_quote", "data-x='unfinished"},
@@ -364,8 +364,9 @@ void entity_and_cursor_cases() {
     for (const auto& [name, tail] : incomplete) {
         Case test(name);
         Document doc;
-        doc.parse(std::string("<body><div data-x=first ") + tail);
-        tree(doc, {element("div", {{"data-x", "first"}})});
+        const std::string html = std::string("<body><div data-x=first ") + tail;
+        require(aether_doc_parse_html(doc.handle, html.c_str()) == AETHER_OK, "parse HTML");
+        tree(doc, {});
     }
 }
 

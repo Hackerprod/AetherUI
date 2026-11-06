@@ -447,8 +447,15 @@ public ABI, including real versus accidentally invented `disabled` attributes,
 child relationships, production cascade matches, and reparsing. Its checks also
 run with `NDEBUG`. The slash boundary follows HTML tokenization, but this is not
 a claim of general HTML5 conformance: the existing entity decoder, `std::isspace`
-behavior (including vertical tab), incomplete-start-tag recovery at EOF, and
-self-closing behavior for non-void elements remain unchanged.
+behavior (including vertical tab), and self-closing behavior for non-void
+elements remain unchanged.
+
+An opening tag is committed only after its syntactic `>` or `/>` terminator.
+EOF before that terminator discards the entire opening, including all attributes,
+without adding a node or text. A `>` inside a quoted value is data, not a
+terminator. Already completed openings remain in the tree even without an end
+tag, including completed `style` and `script` openings with text through EOF.
+This does not expand name/attribute grammar or change raw-text/end-tag rules.
 
 ## HTML unmatched end tags
 
@@ -468,7 +475,7 @@ construction. HTML scope barriers, special end-tag rules (such as `p` and `br`),
 implied elements, formatting adoption, tables, templates and foreign content
 remain outside this recovery fix. Searching uses O(depth) node visits and O(1)
 auxiliary space, plus name-comparison cost; repeated unmatched closes can take
-O(depth × closes) visits. Token consumption and EOF recovery are unchanged.
+O(depth × closes) visits. End-tag token consumption and end-tag EOF recovery are unchanged.
 
 ## HTML style and script text
 
