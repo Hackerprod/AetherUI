@@ -230,6 +230,118 @@ class HtmlParser {
         pos = text_end;
     }
 
+    void consume_rcdata_end_tag() {
+        // The appropriate name and delimiter have already been recognized.
+        // Consume only the discarded end-tag attributes, without borrowing the
+        // ordinary end-tag parser's first-'>' behavior or changing the stack.
+        enum class State {
+            BeforeName, Name, AfterName, BeforeValue, SingleQuoted, DoubleQuoted,
+            Unquoted, AfterQuoted, SelfClosing
+        };
+        State state = State::BeforeName;
+        while (!end()) {
+            const char c = current();
+            const bool space = c == ' ' || c == '\t' || c == '\n' || c == '\f' || c == '\r';
+            switch (state) {
+            case State::BeforeName:
+                if (space) { ++pos; break; }
+                if (c == '>') { ++pos; return; }
+                if (c == '/') { ++pos; state = State::SelfClosing; break; }
+                // Even '=' or a quote is a first attribute-name byte here.
+                ++pos;
+                state = State::Name;
+                break;
+            case State::Name:
+                if (space || c == '/' || c == '>') { state = State::AfterName; break; }
+                ++pos;
+                if (c == '=') state = State::BeforeValue;
+                break;
+            case State::AfterName:
+                if (space) { ++pos; break; }
+                if (c == '>') { ++pos; return; }
+                if (c == '/') { ++pos; state = State::SelfClosing; break; }
+                if (c == '=') { ++pos; state = State::BeforeValue; break; }
+                state = State::BeforeName;
+                break;
+            case State::BeforeValue:
+                if (space) { ++pos; break; }
+                if (c == '>') { ++pos; return; }
+                if (c == '\'' || c == '"') {
+                    ++pos;
+                    state = c == '\'' ? State::SingleQuoted : State::DoubleQuoted;
+                    break;
+                }
+                state = State::Unquoted;
+                break;
+            case State::SingleQuoted:
+            case State::DoubleQuoted:
+                ++pos;
+                if (c == (state == State::SingleQuoted ? '\'' : '"')) state = State::AfterQuoted;
+                break;
+            case State::Unquoted:
+                if (c == '>') { ++pos; return; }
+                ++pos;
+                if (space) state = State::BeforeName;
+                break;
+            case State::AfterQuoted:
+                if (space) { ++pos; state = State::BeforeName; break; }
+                if (c == '>') { ++pos; return; }
+                if (c == '/') { ++pos; state = State::SelfClosing; break; }
+                state = State::BeforeName;
+                break;
+            case State::SelfClosing:
+                if (c == '>') { ++pos; return; }
+                state = State::BeforeName;
+                break;
+            }
+        }
+        // EOF in an accepted end-tag token discards it, including its name.
+    }
+
+    void parse_rcdata(aether_node_s* element, aether_doc_s* doc) {
+        const std::string_view input(src, len);
+        const std::string_view name(element->tag_name);
+        const size_t text_start = pos;
+        size_t text_end = len;
+        size_t search = pos;
+        while (search < len) {
+            const size_t candidate = input.find('<', search);
+            if (candidate == std::string_view::npos) break;
+            // Recognize syntax in the source, never in decoded text. EOF after
+            // the name is not a delimiter; rejected candidates remain literal.
+            if (len - candidate > name.size() + 2 && src[candidate + 1] == '/' &&
+                ascii_equal_ignore_case(input.substr(candidate + 2, name.size()), name) &&
+                is_raw_text_end_boundary(src[candidate + 2 + name.size()])) {
+                text_end = candidate;
+                pos = candidate + 2 + name.size();
+                consume_rcdata_end_tag();
+                break;
+            }
+            search = candidate + 1;
+        }
+        if (text_end == len) pos = len;
+
+        std::string normalized;
+        normalized.reserve(text_end - text_start);
+        for (size_t i = text_start; i < text_end; ++i) {
+            if (src[i] == '\r') {
+                normalized.push_back('\n');
+                if (i + 1 < text_end && src[i + 1] == '\n') ++i;
+            } else {
+                normalized.push_back(src[i]);
+            }
+        }
+        // Keep the existing HTML4 named-reference decoder. A decoded CR is not
+        // source preprocessing, and decoded markup must never be tokenized.
+        std::string decoded = aether::html_decode(normalized.c_str());
+        if (name == "textarea" && !decoded.empty() && decoded.front() == '\n')
+            decoded.erase(0, 1);
+        if (!decoded.empty()) {
+            element->children.push_back(create_text(decoded, doc));
+            element->children.back()->parent = element;
+        }
+    }
+
     void parse_start_tag(std::vector<aether_node_s*>& stack, aether_doc_s* doc) {
         pos++;
         // Only an immediate ASCII letter opens an ordinary start tag. Emit
@@ -240,6 +352,9 @@ class HtmlParser {
             return;
         }
         std::string tag_name = read_name();
+        // read_name still has its narrower legacy alphabet. Do not let a
+        // truncated name such as "textarea+foo" accidentally enable RCDATA.
+        const bool rcdata_name_boundary = !end() && is_raw_text_end_boundary(current());
         // Canonical HTML element identity. Attribute names are normalized at
         // their own storage boundary below; values remain untouched.
         std::transform(tag_name.begin(), tag_name.end(), tag_name.begin(), ascii_lower);
@@ -296,6 +411,13 @@ class HtmlParser {
         pending->parent = stack.back();
         // The tree takes ownership only after push_back succeeds.
         aether_node_s* element = pending.release();
+
+        // HTML ignores the self-closing flag for these non-void elements.
+        // This path owns its close/EOF and never exposes RCDATA to dispatch.
+        if (rcdata_name_boundary && (tag_name == "textarea" || tag_name == "title")) {
+            parse_rcdata(element, doc);
+            return;
+        }
 
         if (self_closing || is_void_element(element->tag_name))
             return;

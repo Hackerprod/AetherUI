@@ -152,6 +152,42 @@ void controls() {
         }
     }
 }
+void rcdata_controls() {
+    const char* css = "#root,#body{display:block;margin:0;padding:0}"
+                      "#control{display:block;width:160px;height:24px;white-space:pre;"
+                      "padding:0;margin:0;border-width:0;font-size:16px;line-height:1}";
+    for (const char* tag : {"textarea", "TEXTAREA", "TeXtArEa"}) {
+        for (const char* terminator : {">", "/>", " />"}) {
+            Frame frame(std::string("<html id='root'><body id='body'><") + tag +
+                        " id='control' value='ValueText' placeholder='HintText'" + terminator +
+                        "\r\n&lt;b&gt;&amp;</TeXtArEa><p id='after'>Tail</p></body></html>", css);
+            const auto control = frame.node("control");
+            require(aether_form_control_content_model(control) == AETHER_FORM_CONTROL_MULTILINE_EDITABLE,
+                    "RCDATA textarea retains multiline control model");
+            require(!aether_form_control_is_opaque_single_line(control) && frame.control_text().empty(),
+                    "textarea does not adopt INPUT value or placeholder");
+            require(aether_node_get_child_count(control) == 1, "RCDATA textarea has one text child");
+            const auto text = aether_node_get_child(control, 0);
+            require(aether_node_get_type(text) == AETHER_NODE_TEXT && aether_node_get_parent(text) == control,
+                    "decoded markup remains a direct text child");
+            char* content = aether_node_get_text_content(text);
+            require(content && std::strcmp(content, "<b>&") == 0, "textarea normalized and decoded content");
+            aether_string_free(content);
+            require(frame.painted_text("<b>&") == 1, "RCDATA text paints exactly once");
+            require(frame.painted_text("ValueText") == 0 && frame.painted_text("HintText") == 0,
+                    "textarea value and placeholder do not replace text");
+            require(aether_node_get_parent(frame.node("after")) == frame.node("body"),
+                    "post-RCDATA content is a body sibling");
+        }
+    }
+    for (const char* tag : {"button", "select", "div"}) {
+        Frame frame(std::string("<html id='root'><body id='body'><") + tag +
+                    " id='control'><b id='child'>ChildText</b></" + tag + "></body></html>", css);
+        require(aether_node_get_parent(frame.node("child")) == frame.node("control"),
+                "ordinary flow controls retain their element children");
+        require(frame.painted_text("ChildText") == 1, "ordinary flow children still paint");
+    }
+}
 void breaks() {
     const char* css = "#root,#body{display:block;margin:0;padding:0;font-size:16px;line-height:1}"
                       "#hidden{display:none}#block{display:block;width:9px;height:7px}";
@@ -207,9 +243,11 @@ void canvas() {
 int main(int argc, char** argv) {
     // Optional sections make independent pre-patch failures reproducible.
     const std::string section = argc > 1 ? argv[1] : "all";
-    require(argc <= 2 && (section == "all" || section == "controls" || section == "breaks" || section == "canvas"),
+    require(argc <= 2 && (section == "all" || section == "controls" || section == "rcdata" ||
+                         section == "breaks" || section == "canvas"),
             "unknown test section");
     if (section == "all" || section == "controls") controls();
+    if (section == "all" || section == "rcdata") rcdata_controls();
     if (section == "all" || section == "breaks") breaks();
     if (section == "all" || section == "canvas") canvas();
     return 0;
