@@ -33,7 +33,37 @@ jobs:
           -DAETHERUI_BUILD_TESTS=ON
 
       - name: Build
-        run: cmake --build artifacts/build/native-ci --config Release --parallel
+        shell: bash
+        run: |
+          if [[ "$RUNNER_OS" == "macOS" ]]; then
+            # Keep Make from starting every compile at once on the macOS runner.
+            (
+              echo "::group::macOS build resources (before)"
+              printf 'Runner image: %s %s\n' "${ImageOS:-unknown}" "${ImageVersion:-unknown}"
+              printf 'Runner architecture: %s\n' "${RUNNER_ARCH:-unknown}"
+              sw_vers
+              sysctl hw.logicalcpu hw.memsize
+              sysctl vm.swapusage
+              vm_stat
+              echo "::endgroup::"
+            ) || true
+
+            if /usr/bin/time -l cmake --build artifacts/build/native-ci --config Release --parallel 3; then
+              build_status=0
+            else
+              build_status=$?
+            fi
+
+            (
+              echo "::group::macOS build resources (after)"
+              sysctl vm.swapusage
+              vm_stat
+              echo "::endgroup::"
+            ) || true
+            exit "$build_status"
+          fi
+
+          cmake --build artifacts/build/native-ci --config Release --parallel
 
       - name: Test
         run: ctest --test-dir artifacts/build/native-ci -C Release --output-on-failure
