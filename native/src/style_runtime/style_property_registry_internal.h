@@ -52,8 +52,8 @@ struct style_shorthand_writer_s {
 using property_parse_fn = std::function<bool(const char* source, std::string& out_value)>;
 using property_apply_fn = std::function<void(aether_computed_style_t* style, const std::string& value)>;
 
-/* Symbolic CSS colors deliberately live only while one node is being
-   computed. Published computed styles are fully concrete. */
+/* Public computed styles are concrete. Private symbolic metadata survives
+   in runtime node state so inherited currentColor can resolve for descendants. */
 struct color_resolution_state_s {
     bool border_uses_current_color[4] = { true, true, true, true };
     std::vector<bool> text_shadow_uses_current_color;
@@ -85,6 +85,10 @@ struct property_apply_result_s {
     }
 };
 
+// Optional pure diagnostic classification after parse returned false. The
+// compiler/runtime own reporting, so literal and deferred rejections emit once.
+using property_parse_failure_fn = std::function<property_apply_result_s(const char* source)>;
+
 using property_apply_checked_fn = std::function<property_apply_result_s(
     aether_computed_style_t* style, const std::string& value)>;
 using property_apply_context_checked_fn = std::function<property_apply_result_s(
@@ -97,6 +101,7 @@ struct style_property_definition_s {
     uint32_t impact = STYLE_IMPACT_NONE;
     std::string initial_value;
     property_parse_fn parse;
+    property_parse_failure_fn parse_failure;
     property_apply_fn apply;
     property_apply_checked_fn apply_checked;
     property_apply_context_fn apply_with_context;
@@ -211,7 +216,8 @@ struct style_property_registry_s {
         uint32_t impact,
         const char* initial_value,
         property_parse_fn parse,
-        property_apply_context_checked_fn apply)
+        property_apply_context_checked_fn apply,
+        property_parse_failure_fn parse_failure = {})
     {
         if (sealed) return;
         if (!name || !*name) return;
@@ -227,6 +233,7 @@ struct style_property_registry_s {
         def.initial_value = initial_value ? initial_value : "";
         def.parse = std::move(parse);
         def.apply_with_context_checked = std::move(apply);
+        def.parse_failure = std::move(parse_failure);
 
         definitions.push_back(std::move(def));
         by_name[normalized] = &definitions.back();

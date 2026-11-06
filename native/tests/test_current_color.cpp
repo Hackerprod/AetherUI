@@ -4,6 +4,7 @@
 #include <cstring>
 #include <cstdio>
 #include <cstdlib>
+#include <string>
 
 static void require(bool condition, const char* message) {
     if (!condition) {
@@ -22,15 +23,16 @@ static bool same_color(aether_color_rgba actual, aether_color_rgba expected) {
 
 struct diagnostic_capture_s {
     int count = 0;
-    const char* code = nullptr;
-    const char* property = nullptr;
+    std::string code;
+    std::string property;
 };
 
 static void capture_diagnostic(const char* code, const char* property, const char*, const char*, void* user_data) {
     auto* capture = static_cast<diagnostic_capture_s*>(user_data);
     ++capture->count;
-    capture->code = code;
-    capture->property = property;
+    // Callback strings are borrowed only for the duration of this call.
+    capture->code = code ? code : "";
+    capture->property = property ? property : "";
 }
 
 static aether_computed_style_t find_style(aether_style_runtime_t runtime,
@@ -166,9 +168,8 @@ int main() {
     const aether_color_rgba black{0, 0, 0, 1};
 
     const auto before_style = find_style(runtime, const_cast<aether_node_t>(body), before);
-    require(diagnostics.count == 2 && diagnostics.code && diagnostics.property &&
-            std::strcmp(diagnostics.code, "AETHER-CSS-TEXT-SHADOW") == 0 &&
-            std::strcmp(diagnostics.property, "text-shadow") == 0,
+    require(diagnostics.count == 2 && diagnostics.code == "AETHER-CSS-TEXT-SHADOW" &&
+            diagnostics.property == "text-shadow",
             "text-shadow spread and inset must be rejected with dedicated diagnostics");
     require(same_color(before_style.border_colors.top, before_color) &&
             same_color(before_style.border_colors.right, before_color) &&

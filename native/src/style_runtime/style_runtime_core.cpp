@@ -594,12 +594,15 @@ static runtime_node_state_s* compute_node(aether_style_runtime_s* runtime, aethe
                 return false;
             }
             if (!definition.parse(value.c_str(), value)) {
+                const auto failure = definition.parse_failure ? definition.parse_failure(value.c_str()) : property_apply_result_s{};
                 report(runtime,
-                       is_calc_expression(value.c_str()) ? "AETHER-CSS-CALC" : "AETHER-CSS-VALUE",
+                       failure.diagnostic_code ? failure.diagnostic_code :
+                           is_calc_expression(value.c_str()) ? "AETHER-CSS-CALC" : "AETHER-CSS-VALUE",
                        definition.name.c_str(), value.c_str(),
-                       is_calc_expression(value.c_str())
-                           ? "The calc() expression is syntactically or dimensionally invalid."
-                           : "Resolved CSS value is invalid.");
+                       failure.diagnostic_message ? failure.diagnostic_message :
+                           is_calc_expression(value.c_str())
+                               ? "The calc() expression is syntactically or dimensionally invalid."
+                               : "Resolved CSS value is invalid.");
                 return false;
             }
             break;
@@ -659,10 +662,14 @@ static runtime_node_state_s* compute_node(aether_style_runtime_s* runtime, aethe
     }
 
     const bool is_new_node = found == runtime->states.end();
+    const uint32_t inherited_symbolic_impact = !is_new_node &&
+        found->second->color_references.text_shadow_uses_current_color !=
+            color_references.text_shadow_uses_current_color
+        ? STYLE_IMPACT_PAINT | STYLE_IMPACT_INHERITED : STYLE_IMPACT_NONE;
     const bool changed = is_new_node || !style_equal(found->second->style.style, next);
     if (!changed) {
         impact = STYLE_IMPACT_NONE;
-        inherited_change_impact = STYLE_IMPACT_NONE;
+        inherited_change_impact = inherited_symbolic_impact;
         if (!is_new_node) {
             // Retain style buffers, but always publish the new computed snapshot.
             // A concrete no-op can still change custom values or replace the
@@ -670,6 +677,9 @@ static runtime_node_state_s* compute_node(aether_style_runtime_s* runtime, aethe
             // Descendants are visited even when this node emits no update.
             aether_computed_style_free(&next);
             found->second->custom_properties = std::move(scope);
+            // Equal concrete colors can still change inherited currentColor.
+            // Keep storage stable, but publish metadata through intermediaries.
+            found->second->color_references = std::move(color_references);
             found->second->inherited_change_impact = inherited_change_impact;
             return found->second.get();
         }
@@ -704,6 +714,7 @@ static runtime_node_state_s* compute_node(aether_style_runtime_s* runtime, aethe
         if (inherited_change_impact == STYLE_IMPACT_NONE)
             inherited_change_impact = found->second->declared_inherited_impact;
     }
+    inherited_change_impact |= inherited_symbolic_impact;
     if (!is_new_node) {
         const auto& previous = found->second->style.style;
         const bool before_context = previous.transforms.count > 0 || previous.backdrop_filters.count > 0;

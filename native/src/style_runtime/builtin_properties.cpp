@@ -2,6 +2,7 @@
 #include "style_runtime_types.h"
 #include "builtin_property_parse_utils.h"
 #include "transition_properties_internal.h"
+#include "shadow_values.h"
 #include "../css/border_utils.h"
 #include "../css/css_length_internal.h"
 #include "../css/border_radii.h"
@@ -338,146 +339,35 @@ static property_apply_result_s bi_apply_gradient(aether_computed_style_t* st, co
     return {};
 }
 
-static bool bi_split_shadow_top_level(const std::string& source, bool split_whitespace,
-                                      std::vector<std::string>& output) {
-    bool valid = false;
-    output = split_whitespace ? css_split_components(source, &valid) : css_split_component_delimited(source, ',', &valid);
-    if (!valid || output.empty()) return false;
-    for (const auto& part : output) if (css_split_components(part).empty()) return false;
-    return true;
-}
-
-enum class shadow_parse_error_e {
-    none,
-    invalid,
-    inset_not_allowed,
-    spread_not_allowed,
-};
-
-static shadow_parse_error_e bi_parse_shadow_component(const std::string& source,
-                                                      bool allow_inset, bool allow_spread,
-                                                      aether_shadow& shadow,
-                                                      bool& uses_current_color) {
-    std::vector<std::string> tokens;
-    if (!bi_split_shadow_top_level(source, true, tokens)) return shadow_parse_error_e::invalid;
-
-    shadow = {};
-    uses_current_color = true; // CSS default: the element's final currentColor.
-    bool has_inset = false;
-    bool has_color = false;
-    int length_count = 0;
-    for (const auto& token : tokens) {
-        if (str_iequals(token, "inset")) {
-            if (!allow_inset) return shadow_parse_error_e::inset_not_allowed;
-            if (has_inset) return shadow_parse_error_e::invalid;
-            has_inset = true;
-            shadow.inset = AETHER_TRUE;
-            continue;
-        }
-        if (str_iequals(token, "currentColor")) {
-            if (has_color) return shadow_parse_error_e::invalid;
-            has_color = true;
-            uses_current_color = true;
-            continue;
-        }
-        aether_color_rgba color;
-        if (aether_color_rgba_try_parse(token.c_str(), &color)) {
-            if (has_color) return shadow_parse_error_e::invalid;
-            has_color = true;
-            uses_current_color = false;
-            shadow.color = color;
-            continue;
-        }
-        aether_css_length length;
-        if (!aether_css_length_try_parse(token.c_str(), &length) ||
-            length.unit == AETHER_CSS_UNIT_AUTO || length.unit == AETHER_CSS_UNIT_PERCENT ||
-            length_count == 4) return shadow_parse_error_e::invalid;
-        if (!allow_spread && length_count == 3) return shadow_parse_error_e::spread_not_allowed;
-        const float pixels = aether_css_length_resolve(length, 0, 16, 16, 1920, 1080);
-        if (!std::isfinite(pixels) || (length_count == 2 && pixels < 0)) return shadow_parse_error_e::invalid;
-        if (length_count == 0) shadow.offset_x = pixels;
-        else if (length_count == 1) shadow.offset_y = pixels;
-        else if (length_count == 2) shadow.blur_radius = pixels;
-        else shadow.spread_radius = pixels;
-        ++length_count;
-    }
-    return length_count >= 2 ? shadow_parse_error_e::none : shadow_parse_error_e::invalid;
-}
-
-static property_apply_result_s bi_apply_shadow_list(const std::string& value,
-                                                    aether_shadow_list& destination,
-                                                    std::vector<bool>& current_color_references,
-                                                    bool allow_inset, bool allow_spread,
-                                                    const char* code) {
-    aether_shadow_list_free(&destination);
-    current_color_references.clear();
-    if (str_iequals(value, "none")) return {};
-
-    std::vector<std::string> components;
-    if (!bi_split_shadow_top_level(value, false, components) || components.empty()) {
-        return property_apply_result_s::failure(code,
-            "The shadow list value is syntactically invalid.");
-    }
-
-    std::vector<aether_shadow> parsed;
-    std::vector<bool> references;
-    parsed.reserve(components.size());
-    references.reserve(components.size());
-    for (const auto& component : components) {
-        if (str_iequals(component, "none")) {
-            return property_apply_result_s::failure(code,
-                "The none keyword cannot be combined with another shadow.");
-        }
-        aether_shadow shadow{};
-        bool uses_current_color = false;
-        const auto error = bi_parse_shadow_component(component, allow_inset, allow_spread,
-                                                     shadow, uses_current_color);
-        if (error != shadow_parse_error_e::none) {
-            if (error == shadow_parse_error_e::inset_not_allowed) {
-                return property_apply_result_s::failure(code,
-                    "The inset keyword is not valid for text-shadow.");
-            }
-            if (error == shadow_parse_error_e::spread_not_allowed) {
-                return property_apply_result_s::failure(code,
-                    "A spread radius is not valid for text-shadow.");
-            }
-            return property_apply_result_s::failure(code,
-                allow_spread
-                    ? "Each box shadow requires two to four lengths and an optional color or inset keyword."
-                    : "Each text shadow requires two or three lengths and an optional color.");
-        }
-        parsed.push_back(shadow);
-        references.push_back(uses_current_color);
-    }
-
-    const size_t bytes = sizeof(aether_shadow) * parsed.size();
-    auto* items = static_cast<aether_shadow*>(std::malloc(bytes));
-    if (!items) return property_apply_result_s::failure(code,
-        "The shadow list could not be allocated.");
-    std::memcpy(items, parsed.data(), bytes);
-    destination = {items, static_cast<int32_t>(parsed.size())};
-    current_color_references = std::move(references);
-    return {};
+static property_apply_result_s bi_shadow_result(shadow_value_error error, bool box) {
+    if (error == shadow_value_error::none) return {};
+    return property_apply_result_s::failure(shadow_value_diagnostic_code(box), shadow_value_error_message(error, box));
 }
 
 static property_apply_result_s bi_apply_box_shadow(property_apply_context_s& context,
                                                    const std::string& value) {
-    return bi_apply_shadow_list(value, context.style->box_shadows,
-        context.color_resolution->box_shadow_uses_current_color, true, true,
-        "AETHER-CSS-BOX-SHADOW");
+    return bi_shadow_result(shadow_list_apply(value, true, context.style->box_shadows,
+        context.color_resolution->box_shadow_uses_current_color), true);
 }
 
 static property_apply_result_s bi_apply_text_shadow(property_apply_context_s& context,
                                                     const std::string& value) {
-    return bi_apply_shadow_list(value, context.style->text_shadows,
-        context.color_resolution->text_shadow_uses_current_color, false, false,
-        "AETHER-CSS-TEXT-SHADOW");
+    return bi_shadow_result(shadow_list_apply(value, false, context.style->text_shadows,
+        context.color_resolution->text_shadow_uses_current_color), false);
 }
 
-static bool bi_try_shadow(const char* src, std::string& out) {
-    std::string t = str_trim(src);
-    if (str_iequals(t, "none")) { out = "none"; return true; }
-    out = t; return true;
+static bool bi_try_shadow(const char* source, std::string& output, bool box) {
+    // Own the input before assigning output: deferred validation aliases them.
+    const std::string value = str_trim(source ? source : "");
+    parsed_shadow_list parsed;
+    if (shadow_list_parse(value, box, parsed) != shadow_value_error::none) return false;
+    output = value;
+    return true;
+}
+
+static property_apply_result_s bi_shadow_parse_failure(const char* source, bool box) {
+    parsed_shadow_list parsed;
+    return bi_shadow_result(shadow_list_parse(source ? source : "", box, parsed), box);
 }
 
 static bool bi_try_transform(const char* src, std::string& out) {
@@ -1244,9 +1134,11 @@ void builtin_properties_register(style_property_registry_s* reg) {
 
     // box-shadow
     reg->register_property_checked_with_context("box-shadow", false, STYLE_IMPACT_PAINT, "none",
-        bi_try_shadow, bi_apply_box_shadow);
+        [](const char* source, std::string& output) { return bi_try_shadow(source, output, true); },
+        bi_apply_box_shadow, [](const char* source) { return bi_shadow_parse_failure(source, true); });
     reg->register_property_checked_with_context("text-shadow", true, STYLE_IMPACT_PAINT, "none",
-        bi_try_shadow, bi_apply_text_shadow);
+        [](const char* source, std::string& output) { return bi_try_shadow(source, output, false); },
+        bi_apply_text_shadow, [](const char* source) { return bi_shadow_parse_failure(source, false); });
 
     // ── Interaction ────────────────────────────────────────────
 

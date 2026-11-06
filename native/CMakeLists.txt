@@ -58,6 +58,7 @@ add_library(aether_core SHARED
     src/style_runtime/style_computed.cpp
     src/style_runtime/style_property_registry.cpp
     src/style_runtime/builtin_properties.cpp
+    src/style_runtime/shadow_values.cpp
     src/style_runtime/transition_properties.cpp
     src/style_runtime/cascade.cpp
     src/style_runtime/selector_matcher.cpp
@@ -113,6 +114,40 @@ if(AETHERUI_BUILD_TESTS)
         C_STANDARD_REQUIRED YES
     )
     add_test(NAME aether.abi-c COMMAND aether_abi_c_smoke_test)
+
+    add_executable(aether_shadow_values_test tests/test_shadow_values.cpp
+        src/style_runtime/shadow_values.cpp src/style_runtime/css_variable_tokens.cpp)
+    target_link_libraries(aether_shadow_values_test PRIVATE AetherUI::Core)
+    add_test(NAME aether.shadow-values COMMAND aether_shadow_values_test)
+
+    add_executable(aether_shadow_cascade_test tests/test_shadow_cascade.cpp)
+    target_link_libraries(aether_shadow_cascade_test PRIVATE AetherUI::Core)
+    add_test(NAME aether.shadow-cascade COMMAND aether_shadow_cascade_test)
+
+    add_executable(aether_shadow_symbols_test tests/test_shadow_symbols.cpp)
+    target_link_libraries(aether_shadow_symbols_test PRIVATE AetherUI::Core)
+    add_test(NAME aether.shadow-symbols COMMAND aether_shadow_symbols_test)
+
+    if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        add_executable(aether_rgb_locale_failure_test tests/test_rgb_locale_failure.cpp
+            src/css/color_rgba.cpp src/style_runtime/css_variable_tokens.cpp)
+        target_include_directories(aether_rgb_locale_failure_test PRIVATE include)
+        target_link_options(aether_rgb_locale_failure_test PRIVATE "-Wl,--wrap=newlocale")
+        add_test(NAME aether.rgb-locale-failure COMMAND aether_rgb_locale_failure_test)
+    endif()
+
+    # Process-local locale mutation stays in a separate, serial test executable.
+    add_executable(aether_rgb_locale_test tests/test_rgb_locale.cpp)
+    target_link_libraries(aether_rgb_locale_test PRIVATE AetherUI::Core)
+    add_test(NAME aether.rgb-locale COMMAND aether_rgb_locale_test)
+
+    add_executable(aether_rgb_runtime_test tests/test_rgb_runtime.cpp)
+    target_link_libraries(aether_rgb_runtime_test PRIVATE AetherUI::Core)
+    add_test(NAME aether.rgb-runtime COMMAND aether_rgb_runtime_test)
+
+    add_executable(aether_rgb_tokens_test tests/test_rgb_tokens.cpp)
+    target_link_libraries(aether_rgb_tokens_test PRIVATE AetherUI::Core)
+    add_test(NAME aether.rgb-tokens COMMAND aether_rgb_tokens_test)
 
     add_executable(aether_html_space_tokens_test tests/test_html_space_tokens.cpp)
     add_test(NAME aether.html-space-tokens COMMAND aether_html_space_tokens_test)

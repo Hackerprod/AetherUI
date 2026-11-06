@@ -169,9 +169,15 @@ static bool try_compile_longhand(
     } else {
         std::string parsed;
         if (!def->parse(normalized.c_str(), parsed)) {
-            if (diagnostics_callback && is_calc_expression(normalized)) {
-                diagnostics_callback("AETHER-CSS-CALC", def->name.c_str(), normalized.c_str(),
-                    "The calc() expression is syntactically or dimensionally invalid.", diagnostics_user_data);
+            if (diagnostics_callback) {
+                const auto failure = def->parse_failure ? def->parse_failure(normalized.c_str()) : property_apply_result_s{};
+                if (failure.diagnostic_code) {
+                    diagnostics_callback(failure.diagnostic_code, def->name.c_str(), normalized.c_str(),
+                        failure.diagnostic_message, diagnostics_user_data);
+                } else if (is_calc_expression(normalized)) {
+                    diagnostics_callback("AETHER-CSS-CALC", def->name.c_str(), normalized.c_str(),
+                        "The calc() expression is syntactically or dimensionally invalid.", diagnostics_user_data);
+                }
             }
             return false;
         }

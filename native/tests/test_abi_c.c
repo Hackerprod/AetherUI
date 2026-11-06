@@ -69,6 +69,24 @@ int main(void) {
         if (!valid) return fail("C ASCII attribute identity/first-wins/setter regression");
     }
 
+    {
+        aether_color_rgba color = {7.f, 8.f, 9.f, 10.f};
+        if (!aether_color_rgba_try_parse("rgba(255,0,127.5,50%)", &color) ||
+            color.r != 1.f || color.g != 0.f || color.b != .5f || color.a != .5f) {
+            return fail("C RGB numeric channels with independent percentage alpha");
+        }
+        if (aether_color_rgba_try_parse("rgba(255,0%,127.5,.5)", &color) ||
+            color.r != 0.f || color.g != 0.f || color.b != 0.f || color.a != 0.f) {
+            return fail("C invalid RGB must reset output to transparent");
+        }
+        color.r = 7.f;
+        if (aether_color_rgba_try_parse(NULL, &color) || color.r != 7.f ||
+            aether_color_rgba_try_parse("red", NULL) ||
+            aether_color_rgba_try_parse(NULL, NULL)) {
+            return fail("C RGB null argument contract");
+        }
+    }
+
     puts("OK: C ABI smoke test passed");
     return 0;
 }
