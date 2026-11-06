@@ -564,6 +564,48 @@ caller-owned rules after rejected blocks. All keep checks active under
 controls. These bounded checks do not establish unlimited recursion depth or
 global linear-time parsing. No public ABI, export or dependency is added.
 
+### Pseudo-elements inside `:has()`
+
+The parser rejects `::before` and `::after` anywhere inside a `:has()` argument,
+including within nested `:is()`, `:where()`, `:not()` and currently supported
+nested `:has()` functions. Rejection follows the existing local list policy:
+`:has(::before)` and `:has(:not(::before))` are invalid, while
+`:has(:is(::before,.ready))` retains only `.ready`. An all-rejected `:is()` or
+`:where()` remains a present, empty argument, so `:has(:is(::before))` compiles
+a never-matching rule and `:has(:not(:is(::before)))` requires a real DOM
+descendant. Generated content cannot satisfy that requirement.
+
+Rejected branches contribute no specificity, dependencies or index entries.
+For example, `.card:has(:is(#never::before,.ready))` has specificity `(0,2,0)`.
+A valid but impossible branch such as `#never:is(::before)` instead recovers
+to `#never:is()` and retains its ID specificity and dependencies; `:where()`
+suppresses its specificity but not its dependencies. The top-level list remains
+forgiving, so `.card:has(::before),.safe` still publishes the `.safe` rule.
+
+The restriction belongs only to the argument. `.card:has(.ready)::before` and
+`::after` still generate content normally. Existing behavior of logical pseudos
+outside HAS, nested HAS, CSS escapes, comments and quoted attribute data is
+unchanged. This is not a general pseudo-element grammar change or full browser
+selector conformance; single-colon pseudos and leading relative combinators
+remain outside this correction.
+
+The source comparison uses Chromium revision
+[`7fe04cd3b6456bd7baec869f6a5efaebd6e79b71`](https://github.com/chromium/chromium/blob/7fe04cd3b6456bd7baec869f6a5efaebd6e79b71/third_party/blink/renderer/core/css/parser/css_selector_parser.cc#L1710-L1721):
+HAS unconditionally establishes a pseudo-element prohibition, and the parser
+rejects pseudo-elements under that context. Chromium restores the previous
+context on exit; AetherUI passes a private context by value to each subparser.
+The comparison does not imply Chromium execution, its additional nested-HAS
+restriction, or visual parity.
+
+`aether.has-pseudo-element-parser` checks recursive ASTs, metadata, protected
+tokens, bounded nesting, transactional output and independent concurrent parser
+calls. `aether.has-pseudo-element-compiler` checks declarations, rule IDs, media
+conditions and index publication. `aether.has-pseudo-element` checks the public
+ABI, cascade, mutations, state changes and stylesheet/generated-content lifetime.
+Generated pseudos are inspected through current style updates and their text
+children, not public child counts or handles retained across resolutions. All
+checks stay active under `NDEBUG`; no matcher, public ABI or binding is changed.
+
 ## Empty-element selectors
 
 `:empty` matches an element with no direct DOM element children and no nonempty

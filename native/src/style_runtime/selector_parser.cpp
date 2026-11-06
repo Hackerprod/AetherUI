@@ -224,12 +224,17 @@ static std::vector<std::string_view> split_top_level(std::string_view source, ch
 
 /* ── Parser state ─────────────────────────────────────────────────── */
 
+struct selector_parse_context_s {
+    bool disallow_pseudo_elements = false;
+};
+
 struct parser_s {
     std::string_view source;
     size_t index = 0;
     specificity_s specificity;
     selector_dependency_t dependencies = SELECTOR_DEP_NONE;
     aether_pseudo_element_t pseudo_element = aether_pseudo_element_t::none;
+    selector_parse_context_s context{};
 
     bool eof() const { return index >= source.size(); }
     char peek() const { return eof() ? '\0' : source[index]; }
@@ -272,7 +277,7 @@ static bool try_map_state(std::string_view name,
 enum class selector_list_policy_t { ForgivingNonEmpty, ForgivingAllowEmpty, StrictNonEmpty };
 
 static bool selector_parse_list_view(std::string_view source, std::vector<compiled_selector_s>& out,
-                                     selector_list_policy_t policy);
+                                     selector_list_policy_t policy, selector_parse_context_s context);
 
 /* ── Attribute operator reader ────────────────────────────────────── */
 
@@ -509,7 +514,12 @@ static bool try_parse_pseudo(parser_s& p, pseudo_selector_s& pseudo,
         const auto policy = (name == "not" || name == "has")
             ? selector_list_policy_t::StrictNonEmpty
             : selector_list_policy_t::ForgivingAllowEmpty;
-        if (!selector_parse_list_view(body, nested, policy)) return false;
+        // HAS forbids pseudo-elements throughout its argument, including logical
+        // functions within it. Copy context so neither success nor recovery can
+        // change the grammar of the containing selector or its sibling branches.
+        auto argument_context = p.context;
+        if (name == "has") argument_context.disallow_pseudo_elements = true;
+        if (!selector_parse_list_view(body, nested, policy, argument_context)) return false;
         pseudo_selector_kind_t kind;
         if      (name == "is")   kind = PSEUDO_IS;
         else if (name == "where") kind = PSEUDO_WHERE;
@@ -582,7 +592,8 @@ static bool try_parse_compound(parser_s& p, compound_selector_s& compound) {
             ++p.index;
             p.skip_comments();
             if (p.peek() == ':') {
-                if (p.pseudo_element != aether_pseudo_element_t::none) return false;
+                if (p.context.disallow_pseudo_elements ||
+                    p.pseudo_element != aether_pseudo_element_t::none) return false;
                 ++p.index;
                 p.skip_comments();
                 auto name = to_lower_ascii(p.read_identifier());
@@ -679,12 +690,13 @@ static bool selector_parse_core(parser_s& p, compiled_selector_s& out) {
 /* ── Parse list (comma-separated, for nested :is/:where/:not/:has) ─ */
 
 static bool selector_parse_list_view(std::string_view source, std::vector<compiled_selector_s>& out,
-                                     selector_list_policy_t policy) {
+                                     selector_list_policy_t policy, selector_parse_context_s context) {
     auto parts = split_top_level(source, ',');
     std::vector<compiled_selector_s> parsed;
     for (auto& part : parts) {
         compiled_selector_s sel;
         parser_s sub{part, 0, {}, SELECTOR_DEP_NONE};
+        sub.context = context;
         const bool valid = !part.empty() && selector_parse_core(sub, sel);
         sub.skip_trivia();
         if (!valid || !sub.eof()) {
@@ -715,5 +727,5 @@ bool selector_parse_list(const char* source, std::vector<compiled_selector_s>& o
     if (!source) return false;
     std::string_view sv(source);
     if (sv.empty()) return false;
-    return selector_parse_list_view(sv, out, selector_list_policy_t::ForgivingNonEmpty);
+    return selector_parse_list_view(sv, out, selector_list_policy_t::ForgivingNonEmpty, {});
 }

@@ -345,6 +345,27 @@ if(AETHERUI_BUILD_TESTS)
     target_link_libraries(aether_forgiving_empty_list_test PRIVATE AetherUI::Core)
     add_test(NAME aether.forgiving-empty-list COMMAND aether_forgiving_empty_list_test)
 
+    # HAS arguments reject pseudo-elements while preserving local list recovery.
+    find_package(Threads REQUIRED)
+    add_executable(aether_has_pseudo_element_parser_test tests/test_has_pseudo_element_parser.cpp
+        src/style_runtime/selector_parser.cpp)
+    target_include_directories(aether_has_pseudo_element_parser_test PRIVATE include src/style_runtime)
+    target_link_libraries(aether_has_pseudo_element_parser_test PRIVATE Threads::Threads)
+    add_test(NAME aether.has-pseudo-element-parser COMMAND aether_has_pseudo_element_parser_test)
+
+    add_executable(aether_has_pseudo_element_compiler_test tests/test_has_pseudo_element_compiler.cpp
+        src/style_runtime/style_source_compiler.cpp src/style_runtime/selector_parser.cpp
+        src/style_runtime/rule_index.cpp src/style_runtime/media_condition.cpp
+        src/style_runtime/css_variable_tokens.cpp src/css/css_length.cpp)
+    target_include_directories(aether_has_pseudo_element_compiler_test PRIVATE include src/style_runtime)
+    target_compile_definitions(aether_has_pseudo_element_compiler_test PRIVATE AETHER_CSS_NUMERIC_ONLY)
+    target_link_libraries(aether_has_pseudo_element_compiler_test PRIVATE AetherUI::Core)
+    add_test(NAME aether.has-pseudo-element-compiler COMMAND aether_has_pseudo_element_compiler_test)
+
+    add_executable(aether_has_pseudo_element_test tests/test_has_pseudo_element.cpp)
+    target_link_libraries(aether_has_pseudo_element_test PRIVATE AetherUI::Core)
+    add_test(NAME aether.has-pseudo-element COMMAND aether_has_pseudo_element_test)
+
     add_executable(aether_selector_attributes_test tests/test_selector_attributes.cpp)
     target_link_libraries(aether_selector_attributes_test PRIVATE AetherUI::Core)
     add_test(NAME aether.selector-attributes COMMAND aether_selector_attributes_test)
