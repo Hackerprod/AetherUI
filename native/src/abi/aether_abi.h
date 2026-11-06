@@ -2,6 +2,7 @@
 #define AETHER_ABI_INTERNAL_H
 
 #include <aether/aether.h>
+#include <cstdint>
 #include <cstdlib>
 #include <cstring>
 #include <string>
@@ -152,17 +153,51 @@ inline std::string html_decode(const char* input) {
         }
 
         if (p[1] == '#') {
-            const char* end = std::strchr(p + 2, ';');
-            if (!end) { result += *p++; continue; }
+            const char* cursor = p + 2;
+            uint32_t base = 10;
+            if (*cursor == 'x' || *cursor == 'X') {
+                base = 16;
+                ++cursor;
+            }
+            const auto digit_value = [base](char c) -> int {
+                if (c >= '0' && c <= '9') return c - '0';
+                if (base == 16 && c >= 'a' && c <= 'f') return c - 'a' + 10;
+                if (base == 16 && c >= 'A' && c <= 'F') return c - 'A' + 10;
+                return -1;
+            };
+            if (digit_value(*cursor) < 0) { result += *p++; continue; }
 
-            unsigned int codepoint = 0;
-            if (p[2] == 'x' || p[2] == 'X')
-                codepoint = std::strtoul(p + 3, nullptr, 16);
-            else
-                codepoint = std::strtoul(p + 2, nullptr, 10);
+            constexpr uint32_t max_codepoint = 0x10FFFF;
+            uint32_t codepoint = 0;
+            bool too_large = false;
+            for (int digit = digit_value(*cursor); digit >= 0; digit = digit_value(*cursor)) {
+                // Keep consuming digits after overflow, but never wrap or truncate the value.
+                if (!too_large) {
+                    const auto value = static_cast<uint32_t>(digit);
+                    if (codepoint > (max_codepoint - value) / base)
+                        too_large = true;
+                    else
+                        codepoint = codepoint * base + value;
+                }
+                ++cursor;
+            }
+            if (*cursor == ';') ++cursor;
+
+            // HTML replaces zero, surrogates and out-of-range values, but preserves
+            // other controls and noncharacters. C1 references use this legacy map.
+            static constexpr uint32_t c1_replacements[] = {
+                0x20AC, 0x0081, 0x201A, 0x0192, 0x201E, 0x2026, 0x2020, 0x2021,
+                0x02C6, 0x2030, 0x0160, 0x2039, 0x0152, 0x008D, 0x017D, 0x008F,
+                0x0090, 0x2018, 0x2019, 0x201C, 0x201D, 0x2022, 0x2013, 0x2014,
+                0x02DC, 0x2122, 0x0161, 0x203A, 0x0153, 0x009D, 0x017E, 0x0178,
+            };
+            if (too_large || codepoint == 0 || (codepoint >= 0xD800 && codepoint <= 0xDFFF))
+                codepoint = 0xFFFD;
+            else if (codepoint >= 0x80 && codepoint <= 0x9F)
+                codepoint = c1_replacements[codepoint - 0x80];
 
             utf8_encode(codepoint, result);
-            p = end + 1;
+            p = cursor;
             continue;
         }
 
