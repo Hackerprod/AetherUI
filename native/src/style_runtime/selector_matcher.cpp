@@ -262,9 +262,11 @@ static bool matches_compound(const compound_selector_s& compound, aether_node_s*
         if (!ci_equals(std::string_view(node->tag_name), std::string_view(compound.type_name)))
             return false;
     }
-    if (!compound.id.empty()) {
+    if (!compound.ids.empty()) {
         auto it = node->attributes.find("id");
-        if (it == node->attributes.end() || it->second != compound.id) return false;
+        if (it == node->attributes.end()) return false;
+        for (const auto& id : compound.ids)
+            if (it->second != id) return false;
     }
     for (auto& cls : compound.classes)
         if (!has_class(node, cls)) return false;

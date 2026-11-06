@@ -383,6 +383,29 @@ if(AETHERUI_BUILD_TESTS)
     target_include_directories(aether_selector_escape_parser_test PRIVATE include src/style_runtime)
     add_test(NAME aether.selector-escape-parser COMMAND aether_selector_escape_parser_test)
 
+    # Every direct ID occurrence is a constraint and contributes specificity.
+    add_executable(aether_selector_multiple_ids_parser_test tests/test_selector_multiple_ids_parser.cpp
+        src/style_runtime/selector_parser.cpp)
+    target_include_directories(aether_selector_multiple_ids_parser_test PRIVATE include src/style_runtime)
+    add_test(NAME aether.selector-multiple-ids-parser COMMAND aether_selector_multiple_ids_parser_test)
+
+    add_executable(aether_selector_multiple_ids_compiler_test tests/test_selector_multiple_ids_compiler.cpp
+        src/style_runtime/style_source_compiler.cpp src/style_runtime/selector_parser.cpp
+        src/style_runtime/rule_index.cpp src/style_runtime/media_condition.cpp
+        src/style_runtime/css_variable_tokens.cpp src/css/css_length.cpp)
+    target_include_directories(aether_selector_multiple_ids_compiler_test PRIVATE include src/style_runtime)
+    target_compile_definitions(aether_selector_multiple_ids_compiler_test PRIVATE AETHER_CSS_NUMERIC_ONLY)
+    target_link_libraries(aether_selector_multiple_ids_compiler_test PRIVATE AetherUI::Core)
+    add_test(NAME aether.selector-multiple-ids-compiler COMMAND aether_selector_multiple_ids_compiler_test)
+
+    add_executable(aether_selector_multiple_ids_test tests/test_selector_multiple_ids.cpp)
+    target_link_libraries(aether_selector_multiple_ids_test PRIVATE AetherUI::Core)
+    add_test(NAME aether.selector-multiple-ids COMMAND aether_selector_multiple_ids_test)
+    if(MSVC)
+        target_compile_options(aether_selector_multiple_ids_parser_test PRIVATE /utf-8)
+        target_compile_options(aether_selector_multiple_ids_test PRIVATE /utf-8)
+    endif()
+
     # Comment boundaries, trivia and An+B without exporting private AST types.
     add_executable(aether_selector_comments_parser_test tests/test_selector_comments_parser.cpp
         src/style_runtime/selector_parser.cpp)

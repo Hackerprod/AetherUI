@@ -21,8 +21,9 @@ void name(const std::string& source, const std::string& expected, bool type = fa
     check(valid, "valid name");
     if (!valid) return;
     check(parsed.steps.size() == 1, "one compound");
-    const auto& value = type ? parsed.steps[0].compound.type_name : parsed.steps[0].compound.id;
-    check(value == expected, "decoded name");
+    const auto& compound = parsed.steps[0].compound;
+    check(type ? compound.type_name == expected : compound.ids == std::vector<std::string>{expected},
+          "decoded name");
     check((type ? parsed.anchor.type_name : parsed.anchor.id) == expected, "same decoded anchor");
     check(parsed.specificity == (type ? specificity_s{0,0,1} : specificity_s{1,0,0}), "name specificity");
 }

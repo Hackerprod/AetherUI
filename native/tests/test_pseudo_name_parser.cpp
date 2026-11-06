@@ -30,7 +30,7 @@ void same(const compiled_selector_s& a, const compiled_selector_s& b, const std:
         check(x.relation_to_next == y.relation_to_next, p + ".combinator");
         const auto& c = x.compound; const auto& d = y.compound;
         check(c.type_name == d.type_name, p + ".type");
-        check(c.id == d.id, p + ".id");
+        check(c.ids == d.ids, p + ".ids");
         check(c.classes == d.classes, p + ".classes/order");
         check(c.attributes.size() == d.attributes.size(), p + ".attributes.size");
         for (size_t j = 0; j < std::min(c.attributes.size(), d.attributes.size()); ++j) {
@@ -239,7 +239,7 @@ void sensitive_arguments() {
             const auto& b = (*list)[1].steps[0].compound;
             check(a.type_name == "div", source + " type normalized separately");
             check(a.classes == std::vector<std::string>{"Item"} && b.classes == std::vector<std::string>{"item"}, source + " class identity");
-            check(a.id == "Target" && b.id == "target", source + " ID identity");
+            check(a.ids == std::vector<std::string>{"Target"} && b.ids == std::vector<std::string>{"target"}, source + " ID identity");
             check(a.attributes.size() == 1 && b.attributes.size() == 1, source + " attribute count");
             if (a.attributes.size() != 1 || b.attributes.size() != 1) continue;
             check(a.attributes[0].name == "data-V" && b.attributes[0].name == "data-v", source + " attribute names");

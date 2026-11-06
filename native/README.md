@@ -468,6 +468,48 @@ start-tag self-closing and attribute behavior remain unchanged. The C-string
 input ABI does not support embedded NUL. Parsing does not execute scripts or
 automatically apply the embedded styles; hosts supply CSS to the style runtime.
 
+## Multiple IDs in a compound selector
+
+Every ID occurrence in a compound is retained and matched as a conjunction.
+`#target#target` matches `id="target"` and has specificity `(2,0,0)`.
+`#target#other` is equally valid syntax and has the same specificity, but cannot
+match one element. IDs are case-sensitive after CSS escape decoding. Repetition
+is not deduplicated, and IDs separated by a combinator constrain different nodes.
+
+Impossible branches remain in logical selector lists and compiled rules.
+`:is(#never#other,.item)` can match `.item` with specificity `(2,0,0)`;
+`:not(#target#other)` matches an element whose ID is `target`.
+`:is`, `:not` and `:has` retain their maximum-branch specificity, while `:where`
+contributes zero without losing its dependencies. Existing strict/forgiving list
+policies and the prohibition on pseudo-elements inside `:has` are unchanged.
+
+The index uses the first direct ID of the rightmost compound, never an ID from
+an alternative, ancestor or descendant. A candidate still passes the full matcher.
+Changing an ID requires explicit resolution of a subtree containing every affected
+subject, including ancestors for `:has` and sibling subjects. This adds no automatic
+attribute invalidation. Generated `::before`/`::after` subjects use the host identity.
+The public C ABI, DOM ID lookup and stylesheet ordering/capacity contracts are unchanged.
+
+`aether.selector-multiple-ids-parser` checks full AST vectors, decoded identity,
+specificity, dependencies and recovery. `aether.selector-multiple-ids-compiler`
+checks publication, anchors, candidates and transactional limits.
+`aether.selector-multiple-ids` checks the public ABI, cascade, repeated ID mutations,
+incremental state changes, stylesheet lifecycle and real generated content.
+Checks stay active under `NDEBUG`; size cases include 0, 1, 2, 3, 32 and 1024 IDs.
+The public test observes fresh updates for changed subjects and keeps only scalar
+snapshots for unchanged subjects; `aether_style_map_get` is currently a stub.
+
+The semantics were compared with Chromium source at
+[`7fe04cd3b6456bd7baec869f6a5efaebd6e79b71`](https://github.com/chromium/chromium/tree/7fe04cd3b6456bd7baec869f6a5efaebd6e79b71):
+[`ConsumeCompoundSelector`/`ConsumeId`](https://github.com/chromium/chromium/blob/7fe04cd3b6456bd7baec869f6a5efaebd6e79b71/third_party/blink/renderer/core/css/parser/css_selector_parser.cc#L1316-L1326)
+retain successive simple selectors,
+[`SpecificityForOneSelector`](https://github.com/chromium/chromium/blob/7fe04cd3b6456bd7baec869f6a5efaebd6e79b71/third_party/blink/renderer/core/css/css_selector.cc#L245-L270)
+counts each ID, and
+[`SelectorChecker::CheckOne`](https://github.com/chromium/chromium/blob/7fe04cd3b6456bd7baec869f6a5efaebd6e79b71/third_party/blink/renderer/core/css/selector_checker.cc#L1538-L1540)
+compares each ID with the element's ID. This is source-level reference, not a
+Chromium execution or visual comparison. Chromium's packed specificity saturation,
+quirks mode and broader selector grammar are not imported.
+
 ## Pseudo-selector name identity
 
 Supported pseudoclass names are ASCII case-insensitive after CSS escape decoding:

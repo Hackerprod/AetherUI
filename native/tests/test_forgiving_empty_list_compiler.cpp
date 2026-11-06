@@ -76,7 +76,7 @@ void empty_pseudo(const compiled_selector_s& selector, pseudo_selector_kind_t ki
     require(compound.pseudos.size() == 1 && compound.pseudos[0].kind == kind &&
             compound.pseudos[0].nested && compound.pseudos[0].nested->empty(),
             "empty forgiving argument is present and has no sentinel branch");
-    require(compound.id.empty() && compound.type_name.empty() && compound.attributes.empty(),
+    require(compound.ids.empty() && compound.type_name.empty() && compound.attributes.empty(),
             "discarded branches leave no outer simple selectors");
 }
 void group_identity_and_media() {
@@ -186,7 +186,7 @@ void metadata_and_index() {
                 s.specificity == (i == 5 ? specificity_s{1,0,0} : specificity_s{0,0,0}),
                 "valid impossible branch retains metadata, WHERE still zeros specificity");
         const auto& p = s.steps[0].compound.pseudos[0];
-        require(p.nested && p.nested->size() == 2 && (*p.nested)[1].steps[0].compound.id == "ghost",
+        require(p.nested && p.nested->size() == 2 && (*p.nested)[1].steps[0].compound.ids == std::vector<std::string>{"ghost"},
                 "valid impossible branch is not discarded or flattened");
     }
     rule_index_s index;

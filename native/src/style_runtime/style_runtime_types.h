@@ -222,7 +222,8 @@ struct pseudo_selector_s {
 
 struct compound_selector_s {
     std::string type_name;
-    std::string id;
+    // Preserve every decoded occurrence: IDs are conjunctive and each adds specificity.
+    std::vector<std::string> ids;
     std::vector<std::string> classes;
     std::vector<attribute_selector_s> attributes;
     std::vector<pseudo_selector_s> pseudos;

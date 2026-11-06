@@ -41,7 +41,7 @@ void same(const compiled_selector_s& a, const compiled_selector_s& b, const std:
         check(x.relation_to_next == y.relation_to_next, p + ".combinator");
         const auto& c = x.compound; const auto& d = y.compound;
         check(c.type_name == d.type_name, p + ".type");
-        check(c.id == d.id, p + ".id");
+        check(c.ids == d.ids, p + ".ids");
         check(c.classes == d.classes, p + ".classes/order");
         check(c.attributes.size() == d.attributes.size(), p + ".attributes.size");
         for (size_t j = 0; j < std::min(c.attributes.size(), d.attributes.size()); ++j) {

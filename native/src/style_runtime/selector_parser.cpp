@@ -567,8 +567,8 @@ static bool try_parse_compound(parser_s& p, compound_selector_s& compound) {
         if (c == '#') {
             ++p.index;
             auto val = p.read_identifier();
-            if (val.empty() || !compound.id.empty()) return false;
-            compound.id = std::move(val);
+            if (val.empty()) return false;
+            compound.ids.push_back(std::move(val));
             p.specificity = p.specificity + specificity_s{1, 0, 0};
             p.dependencies = p.dependencies | SELECTOR_DEP_SELF_ID;
             consumed = true;
@@ -677,7 +677,8 @@ static bool selector_parse_core(parser_s& p, compiled_selector_s& out) {
 
     /* Anchor from rightmost compound (index 0 after reversal = original last) */
     auto& rightmost = out.steps[0].compound;
-    out.anchor.id        = rightmost.id;
+    // Any match satisfies the first direct ID; nested IDs are not subject anchors.
+    out.anchor.id        = rightmost.ids.empty() ? std::string() : rightmost.ids.front();
     out.anchor.class_name = rightmost.classes.empty() ? std::string() : rightmost.classes[0];
     out.anchor.type_name  = rightmost.type_name;
 
