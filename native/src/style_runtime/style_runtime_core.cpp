@@ -6,6 +6,7 @@
 #include "../dom/dom_types.h"
 #include "style_property_registry_internal.h"
 #include "style_runtime_types.h"
+#include "style_source_limits.h"
 #include "css_variable_tokens.h"
 #include "custom_property_scope_internal.h"
 
@@ -52,6 +53,42 @@ struct aether_style_runtime_s {
     std::unordered_map<int64_t, std::unique_ptr<compiled_style_sheet_s>> sheets;
     std::unordered_map<aether_node_s*, std::unique_ptr<runtime_node_state_s>> states;
     rule_index_s index;
+};
+
+// An add must finish its transaction before invoking consumer code. Each call
+// owns its batch and captures its recipient, so callbacks may add/remove sheets
+// without invalidating candidate handles/IDs or redirecting an existing batch.
+struct stylesheet_diagnostics_s {
+    struct message_s {
+        std::optional<std::string> code, property, value, message;
+    };
+    aether_style_diagnostic_fn callback;
+    void* user_data;
+    std::vector<message_s> messages;
+
+    stylesheet_diagnostics_s(aether_style_diagnostic_fn fn, void* data)
+        : callback(fn), user_data(data) {}
+
+    static std::optional<std::string> copy(const char* text) {
+        return text ? std::optional<std::string>(text) : std::nullopt;
+    }
+    static void collect(const char* code, const char* property, const char* value,
+                        const char* message, void* data) {
+        auto& batch = *static_cast<stylesheet_diagnostics_s*>(data);
+        batch.messages.push_back({copy(code), copy(property), copy(value), copy(message)});
+    }
+    aether_style_diagnostic_fn collector() const noexcept {
+        return callback ? collect : nullptr;
+    }
+    void replay() const {
+        if (!callback) return;
+        for (const auto& entry : messages) {
+            callback(entry.code ? entry.code->c_str() : nullptr,
+                     entry.property ? entry.property->c_str() : nullptr,
+                     entry.value ? entry.value->c_str() : nullptr,
+                     entry.message ? entry.message->c_str() : nullptr, user_data);
+        }
+    }
 };
 
 static aether_style_update_s* make_style_update(aether_node_s* node,
@@ -912,22 +949,39 @@ AETHER_API aether_status_t aether_style_runtime_add_stylesheet(
     aether_style_runtime_t runtime, const char* source, int32_t layer, const char* source_name,
     int64_t* out_handle, int32_t* out_rule_count) {
     if (!runtime || !source) return AETHER_ERROR_NULL_ARG;
-    const auto handle = runtime->next_sheet_handle++;
-    auto sheet = std::make_unique<compiled_style_sheet_s>();
-    sheet->handle = handle;
-    sheet->layer = static_cast<style_sheet_layer>(layer);
-    sheet->source_name = source_name ? source_name : "";
-    auto status = style_source_compile(source, handle, layer, sheet->rules, runtime->next_rule_id,
-                                       runtime->diag_cb, runtime->diag_user_data);
-    if (status != AETHER_OK) return status;
-    for (size_t i = 0; i < sheet->rules.size(); ++i)
-        sheet->rules[i].source_order = static_cast<int32_t>(i);
-    if (out_rule_count) *out_rule_count = static_cast<int32_t>(sheet->rules.size());
-    runtime->sheets[handle] = std::move(sheet);
-    rebuild_index(runtime);
-    runtime->states.clear();
-    if (out_handle) *out_handle = handle;
-    return AETHER_OK;
+    stylesheet_diagnostics_s diagnostics(runtime->diag_cb, runtime->diag_user_data);
+    const auto collector = diagnostics.collector();
+    const auto status = [&]() -> aether_status_t {
+        if (!style_sheet_handle_available(runtime->next_sheet_handle)) {
+            if (collector) collector("AETHER-CSS-LIMIT", "", "",
+                "The cumulative stylesheet handle capacity is exhausted.", &diagnostics);
+            return AETHER_ERROR_INVALID_STATE;
+        }
+        const auto handle = runtime->next_sheet_handle;
+        auto next_rule_id = runtime->next_rule_id;
+        auto sheet = std::make_unique<compiled_style_sheet_s>();
+        sheet->handle = handle;
+        sheet->layer = static_cast<style_sheet_layer>(layer);
+        sheet->source_name = source_name ? source_name : "";
+        const auto result = style_source_compile(source, handle, layer, sheet->rules, next_rule_id,
+                                                collector, &diagnostics);
+        if (result != AETHER_OK) return result;
+        // Preserve the compiler's global positions, including the shared position
+        // of selectors in one list. ID capacity already bounds this narrowing.
+        const auto rule_count = static_cast<int32_t>(sheet->rules.size());
+        runtime->sheets[handle] = std::move(sheet);
+        rebuild_index(runtime);
+        runtime->states.clear();
+        runtime->next_sheet_handle = handle + 1;
+        runtime->next_rule_id = next_rule_id;
+        if (out_handle) *out_handle = handle;
+        if (out_rule_count) *out_rule_count = rule_count;
+        return AETHER_OK;
+    }(); // Failed staging is destroyed before any user callback can run.
+    diagnostics.replay();
+    // Callbacks may have changed sheets, counters, or resolved state. Never read
+    // or write runtime here, and never replay from a destructor during unwind.
+    return status;
 }
 
 AETHER_API aether_bool_t aether_style_runtime_remove_stylesheet(

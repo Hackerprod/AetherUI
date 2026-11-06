@@ -1051,6 +1051,14 @@ AETHER_API void aether_style_runtime_destroy(aether_style_runtime_t runtime);
    defaults by adding them at the engine-defaults layer (layer 0). */
 AETHER_API const char* aether_style_runtime_defaults_css(void);
 
+/* Add diagnostics run synchronously, in order, after this call's transaction has
+   committed or been discarded. Successful outputs are written before callbacks.
+   The callback and user_data registered at entry serve the whole batch; changing
+   registration affects new calls (including nested adds), not this batch. Keep
+   captured callback/user_data valid until the active call returns. Nested adds
+   receive later global rule positions. Explicit callback mutations survive even
+   if this add failed, or may remove this add's successful sheet. This does not
+   authorize destroying an active runtime or general reentrancy during resolve. */
 AETHER_API aether_status_t aether_style_runtime_add_stylesheet(
     aether_style_runtime_t runtime,
     const char* source,

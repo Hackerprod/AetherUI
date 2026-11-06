@@ -33,6 +33,80 @@ production consumer today — every real caller goes through `style_runtime/`. I
 `ComputedStyle`, `CssLength`, and `ColorRgba` are the value types layout and the display-list builder
 still consume directly. Don't add new cascade logic there; extend `style_runtime/` instead.
 
+### Stylesheet order and lifetime limits
+
+The style runtime compares declarations by important, inline, engine layer, selector
+specificity, global rule position, then declaration position within that rule. A later
+successfully added stylesheet wins an otherwise equal tie. This does not make the last
+sheet win over important declarations, higher layers, or more specific selectors.
+Engine layers retain AetherUI's existing ordering, including for important declarations;
+they are not a general implementation of CSS `@layer`.
+
+Rule positions continue across additions. Selectors in one list have distinct rule IDs
+but share a source position. Media activation only changes eligibility, never position.
+Removing a sheet, clearing caches, and rebuilding the index do not renumber survivors.
+Removing and re-adding a sheet places it after existing sheets, even with the same name
+or text. The .NET reload path uses this remove/add contract; multiple API calls are not
+a single transaction.
+
+Each runtime can assign rule IDs 1 through `INT32_MAX-1` and sheet handles 1 through
+`INT64_MAX-1`, cumulatively over its lifetime. The maximum value is reserved as an
+exhausted next-ID sentinel. Removed IDs and handles are not recycled. An empty or
+recovered-invalid sheet that emits no rules can still be added with exhausted rule
+capacity if a handle remains. Inactive media rules consume IDs like other rules.
+Stylesheet and inline source text must fit in `INT32_MAX` bytes, excluding the null
+terminator. These guards also bound declaration positions and public rule counts.
+
+Controlled capacity failures return `AETHER_ERROR_INVALID_STATE` and emit
+`AETHER-CSS-LIMIT` through an installed diagnostic callback. A rejected sheet leaves
+existing sheets, index, cached styles, counters, and output arguments unchanged before
+delivering diagnostics. Any explicit changes made by a diagnostic callback are separate
+operations and are not undone by the rejected call.
+Compilation stages the whole sheet, including nested media, before publication.
+An oversized inline block is ignored in full with the same diagnostic; resolution
+continues with stylesheet declarations, inheritance, and initial values. The resolution
+ABI returns updates rather than the inline compiler's private status. An exhausted
+runtime can continue resolving and removing sheets; create a new runtime to reset its
+lifetime counters. This contract covers controlled compilation/capacity errors, not a
+general strong exception guarantee for every allocation failure.
+
+Diagnostics from `add_stylesheet` are collected with owned payloads, then delivered
+synchronously in order after the entire add has committed or its staging has been
+discarded. Successful outputs, counters, index, and cache invalidation are complete
+before the first callback. A callback can add another sheet, which receives later
+global positions, or remove the just-added sheet. The outer call does not restore
+counters, reinsert sheets, or invalidate styles resolved by callbacks afterward.
+
+Each add captures its callback and user data at entry. Changing the registration
+affects new calls, including nested adds, but not remaining messages in the current
+batch. Keep captured callbacks and user data valid until their active calls return.
+Message strings remain borrowed only for each callback's duration; copy them to retain
+them. A null callback avoids collecting messages. Batches are local to calls, and
+nested delivery finishes before the next outer message. Callbacks are never invoked
+from the buffer destructor. This contract is specific to adding sheets: it does not
+make every diagnostic during style resolution reentrant, permit destruction of an
+active runtime, or permit exceptions from user callbacks to cross the C ABI.
+
+Media compilation uses a per-call arena that owns allocated nodes rather than shared
+edges. Aborts delete each new node once, including operands discarded by constant
+folding. Success deletes unreachable local nodes and transfers reachable nodes to the
+existing raw-pointer contract. This change does not repair the historical ownership
+of reachable media graphs in successfully added sheets. Compiler memory tests explicitly
+clean their successful graphs so they can isolate rollback and orphan cleanup.
+
+`aether.stylesheet-source-order` exercises the public cascade and lifecycle.
+`aether.stylesheet-source-order-compiler` covers metadata, priorities, boundary guards,
+rollback, and shared media graphs. `aether.stylesheet-source-order-runtime` builds a
+private copy of the core for counter/cache/map checks and injects a reduced source-size
+predicate only in its compiler translation unit, exercising inline rejection without
+allocating gigabytes. It changes no production limit or installed ABI. All new checks
+remain active with `NDEBUG`. Run the focused compiler test with ASan and leak detection
+as well as UBSan; passing a run with leak detection disabled is not leak validation.
+`aether.stylesheet-diagnostic-reentrancy` additionally checks the public diagnostic
+transaction boundary, nested additions/removals, batch payloads, and callback capture.
+The white-box runtime test covers those operations near ID/handle/source limits and
+checks that maps and cached states computed during callbacks survive the outer return.
+
 ### Transition property module
 
 `style_runtime/transition_properties.cpp` privately owns the four transition longhands,

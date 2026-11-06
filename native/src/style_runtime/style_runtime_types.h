@@ -378,11 +378,16 @@ inline void media_condition_destroy(media_condition_s* node) {
     delete node;
 }
 
-media_condition_s* media_condition_and(media_condition_s* left, media_condition_s* right);
-media_condition_s* media_condition_or(media_condition_s* left, media_condition_s* right);
-media_condition_s* media_condition_not(media_condition_s* value);
+struct media_condition_allocation_scope_s;
+media_condition_s* media_condition_and(media_condition_s* left, media_condition_s* right,
+    media_condition_allocation_scope_s* scope = nullptr);
+media_condition_s* media_condition_or(media_condition_s* left, media_condition_s* right,
+    media_condition_allocation_scope_s* scope = nullptr);
+media_condition_s* media_condition_not(media_condition_s* value,
+    media_condition_allocation_scope_s* scope = nullptr);
 bool media_condition_matches(const media_condition_s* node, const aether_style_environment_t* env);
-media_condition_s* media_condition_parse(const char* source, aether_style_diagnostic_fn diag, void* diag_data, int32_t offset);
+media_condition_s* media_condition_parse(const char* source, aether_style_diagnostic_fn diag,
+    void* diag_data, int32_t offset, media_condition_allocation_scope_s* scope = nullptr);
 
 // ═══ Compiled rule & stylesheet ════════════════════════════════
 
@@ -396,6 +401,7 @@ struct compiled_rule_s {
     std::vector<custom_property_declaration_s>   custom_declarations;
     std::vector<compiled_content_declaration_s>  content_declarations;
     std::vector<compiled_shorthand_declaration_s> shorthand_declarations;
+    // Global within the runtime; selectors from one rule share this position.
     int32_t source_order = 0;
 };
 
@@ -421,8 +427,8 @@ struct cascade_priority_t {
     bool inline_ = false;
     style_sheet_layer layer = style_sheet_layer::engine_defaults;
     specificity_s specificity = {};
-    int32_t source_order = 0;
-    int32_t decl_order = 0;
+    int32_t source_order = 0; // Global rule position, not a sheet-local index.
+    int32_t decl_order = 0;   // Position within this rule's declaration block.
 };
 
 int cascade_priority_compare(const cascade_priority_t* a, const cascade_priority_t* b);

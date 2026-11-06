@@ -1,7 +1,16 @@
 #include "style_runtime_types.h"
+#include "media_condition_allocation_scope.h"
 #include "css_component_tokens.h"
 #include "../css/css_length_internal.h"
 #include <string_view>
+
+static media_condition_s* allocate_media_node(media_condition_allocation_scope_s* scope) {
+    return scope ? scope->make_node() : new media_condition_s();
+}
+
+static void discard_unreturned_node(media_condition_s* node, media_condition_allocation_scope_s* scope) {
+    if (!scope) delete node;
+}
 
 // ═══ Media condition AST — factory functions ═══════════════════
 //
@@ -12,34 +21,36 @@
 // All composite nodes are heap-allocated. The three static constants
 // (Always / Never / Unknown) are never freed.
 
-media_condition_s* media_condition_and(media_condition_s* left, media_condition_s* right) {
+media_condition_s* media_condition_and(media_condition_s* left, media_condition_s* right,
+    media_condition_allocation_scope_s* scope) {
     if (left  == media_condition_always()) return right;
     if (right == media_condition_always()) return left;
     if (left  == media_condition_never() || right == media_condition_never()) {
         return media_condition_never();
     }
-    auto* node = new media_condition_s();
+    auto* node = allocate_media_node(scope);
     node->kind  = media_condition_s::kind_t::and_;
     node->left  = left;
     node->right = right;
     return node;
 }
 
-media_condition_s* media_condition_or(media_condition_s* left, media_condition_s* right) {
+media_condition_s* media_condition_or(media_condition_s* left, media_condition_s* right,
+    media_condition_allocation_scope_s* scope) {
     if (left  == media_condition_never())  return right;
     if (right == media_condition_never())  return left;
     if (left  == media_condition_always() || right == media_condition_always()) {
         return media_condition_always();
     }
-    auto* node = new media_condition_s();
+    auto* node = allocate_media_node(scope);
     node->kind  = media_condition_s::kind_t::or_;
     node->left  = left;
     node->right = right;
     return node;
 }
 
-media_condition_s* media_condition_not(media_condition_s* value) {
-    auto* node = new media_condition_s();
+media_condition_s* media_condition_not(media_condition_s* value, media_condition_allocation_scope_s* scope) {
+    auto* node = allocate_media_node(scope);
     node->kind  = media_condition_s::kind_t::not_;
     node->inner = value;
     return node;
@@ -296,7 +307,8 @@ static media_condition_s* parse_term(
     const std::string& source,
     aether_style_diagnostic_fn diag,
     void* diag_data,
-    int32_t /*offset*/)
+    int32_t /*offset*/,
+    media_condition_allocation_scope_s* scope)
 {
     std::string trimmed = media_trim(source);
 
@@ -334,7 +346,7 @@ static media_condition_s* parse_term(
                       ("Invalid media length '" + value + "'.").c_str());
             return media_condition_unknown();
         }
-        auto* node = new media_condition_s();
+        auto* node = allocate_media_node(scope);
         node->kind = media_condition_s::kind_t::length_feature;
         node->length_value = length_val;
         if (name == "min-width")      node->length_feature = media_condition_s::length_feature_t::min_width;
@@ -348,7 +360,7 @@ static media_condition_s* parse_term(
 
     // prefers-color-scheme
     if (name == "prefers-color-scheme") {
-        auto* node = new media_condition_s();
+        auto* node = allocate_media_node(scope);
         node->kind = media_condition_s::kind_t::enum_feature;
         node->enum_feature = media_condition_s::enum_feature_t::color_scheme;
         std::string lv = str_to_lower(value);
@@ -357,7 +369,7 @@ static media_condition_s* parse_term(
         else {
             emit_diag(diag, diag_data, "AUIMED005", name.c_str(), value.c_str(),
                       ("Invalid value '" + value + "' for media feature '" + name + "'.").c_str());
-            delete node;
+            discard_unreturned_node(node, scope);
             return media_condition_unknown();
         }
         return node;
@@ -365,7 +377,7 @@ static media_condition_s* parse_term(
 
     // pointer
     if (name == "pointer") {
-        auto* node = new media_condition_s();
+        auto* node = allocate_media_node(scope);
         node->kind = media_condition_s::kind_t::enum_feature;
         node->enum_feature = media_condition_s::enum_feature_t::pointer_accuracy;
         std::string lv = str_to_lower(value);
@@ -375,7 +387,7 @@ static media_condition_s* parse_term(
         else {
             emit_diag(diag, diag_data, "AUIMED005", name.c_str(), value.c_str(),
                       ("Invalid value '" + value + "' for media feature '" + name + "'.").c_str());
-            delete node;
+            discard_unreturned_node(node, scope);
             return media_condition_unknown();
         }
         return node;
@@ -383,7 +395,7 @@ static media_condition_s* parse_term(
 
     // prefers-reduced-motion
     if (name == "prefers-reduced-motion") {
-        auto* node = new media_condition_s();
+        auto* node = allocate_media_node(scope);
         node->kind = media_condition_s::kind_t::enum_feature;
         node->enum_feature = media_condition_s::enum_feature_t::motion_preference;
         std::string lv = str_to_lower(value);
@@ -392,7 +404,7 @@ static media_condition_s* parse_term(
         else {
             emit_diag(diag, diag_data, "AUIMED005", name.c_str(), value.c_str(),
                       ("Invalid value '" + value + "' for media feature '" + name + "'.").c_str());
-            delete node;
+            discard_unreturned_node(node, scope);
             return media_condition_unknown();
         }
         return node;
@@ -408,7 +420,8 @@ static media_condition_s* parse_alternative(
     const media_alternative& alternative,
     aether_style_diagnostic_fn diag,
     void* diag_data,
-    int32_t offset)
+    int32_t offset,
+    media_condition_allocation_scope_s* scope)
 {
     auto text = [&](size_t i) {
         const auto& term = alternative.terms[i];
@@ -444,22 +457,23 @@ static media_condition_s* parse_alternative(
         const auto media_type = text(first);
         result = str_iequals(media_type, "all") || str_iequals(media_type, "screen")
             ? media_condition_always() : media_condition_never();
-    } else result = parse_term(text(first), diag, diag_data, offset);
+    } else result = parse_term(text(first), diag, diag_data, offset, scope);
     for (size_t i = first + 2; i < alternative.terms.size(); i += 2)
-        result = media_condition_and(result, parse_term(text(i), diag, diag_data, offset));
-    return negate ? media_condition_not(result) : result;
+        result = media_condition_and(result, parse_term(text(i), diag, diag_data, offset, scope), scope);
+    return negate ? media_condition_not(result, scope) : result;
 }
 
 media_condition_s* media_condition_parse(
     const char* source,
     aether_style_diagnostic_fn diag,
     void* diag_data,
-    int32_t offset)
+    int32_t offset,
+    media_condition_allocation_scope_s* scope)
 {
     if (!source) return media_condition_never();
     const auto components = media_scan(source);
     media_condition_s* result = media_condition_never();
     for (const auto& alternative : components.alternatives)
-        result = media_condition_or(result, parse_alternative(components, alternative, diag, diag_data, offset));
+        result = media_condition_or(result, parse_alternative(components, alternative, diag, diag_data, offset, scope), scope);
     return result;
 }

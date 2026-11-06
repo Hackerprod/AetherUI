@@ -343,6 +343,42 @@ if(AETHERUI_BUILD_TESTS)
     target_link_libraries(aether_selector_comments_compiler_test PRIVATE AetherUI::Core)
     add_test(NAME aether.selector-comments-compiler COMMAND aether_selector_comments_compiler_test)
 
+    add_executable(aether_stylesheet_source_order_test tests/test_stylesheet_source_order.cpp)
+    target_link_libraries(aether_stylesheet_source_order_test PRIVATE AetherUI::Core)
+    add_test(NAME aether.stylesheet-source-order COMMAND aether_stylesheet_source_order_test)
+
+    add_executable(aether_stylesheet_diagnostic_reentrancy_test tests/test_stylesheet_diagnostic_reentrancy.cpp)
+    target_link_libraries(aether_stylesheet_diagnostic_reentrancy_test PRIVATE AetherUI::Core)
+    add_test(NAME aether.stylesheet-diagnostic-reentrancy COMMAND aether_stylesheet_diagnostic_reentrancy_test)
+
+    add_executable(aether_stylesheet_source_order_compiler_test tests/test_stylesheet_source_order_compiler.cpp
+        src/style_runtime/style_source_compiler.cpp src/style_runtime/selector_parser.cpp
+        src/style_runtime/media_condition.cpp src/style_runtime/css_variable_tokens.cpp
+        src/style_runtime/cascade.cpp src/css/css_length.cpp)
+    target_include_directories(aether_stylesheet_source_order_compiler_test PRIVATE src/style_runtime)
+    target_compile_definitions(aether_stylesheet_source_order_compiler_test PRIVATE AETHER_CSS_NUMERIC_ONLY)
+    target_link_libraries(aether_stylesheet_source_order_compiler_test PRIVATE AetherUI::Core)
+    add_test(NAME aether.stylesheet-source-order-compiler COMMAND aether_stylesheet_source_order_compiler_test)
+
+    # White-box runtime counters plus a test-only reduced source-size predicate.
+    # Compile real core sources into this executable, without exporting test hooks
+    # or changing the library's limits. The test TU includes runtime_core.cpp.
+    get_target_property(source_order_runtime_sources aether_core SOURCES)
+    list(REMOVE_ITEM source_order_runtime_sources
+        src/style_runtime/style_runtime_core.cpp src/style_runtime/style_source_compiler.cpp)
+    add_executable(aether_stylesheet_source_order_runtime_test
+        tests/test_stylesheet_source_order_runtime.cpp tests/test_stylesheet_source_order_small_source.cpp
+        ${source_order_runtime_sources})
+    target_include_directories(aether_stylesheet_source_order_runtime_test PRIVATE include)
+    target_compile_definitions(aether_stylesheet_source_order_runtime_test PRIVATE AETHER_EXPORTS)
+    if(MSVC)
+        target_compile_options(aether_stylesheet_source_order_runtime_test PRIVATE /W4 /utf-8)
+        target_compile_definitions(aether_stylesheet_source_order_runtime_test PRIVATE _CRT_SECURE_NO_WARNINGS NOMINMAX)
+    else()
+        target_compile_options(aether_stylesheet_source_order_runtime_test PRIVATE -Wall -Wextra -pedantic -ffp-contract=off)
+    endif()
+    add_test(NAME aether.stylesheet-source-order-runtime COMMAND aether_stylesheet_source_order_runtime_test)
+
     # Pseudo-name identity and recursive metadata without exporting private AST types.
     add_executable(aether_pseudo_name_parser_test tests/test_pseudo_name_parser.cpp
         src/style_runtime/selector_parser.cpp)

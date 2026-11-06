@@ -94,11 +94,8 @@ int main(){
         expect_both(.6f);
         plain.sheet(".card.active{opacity:.8}", 1);
         commented.sheet(".card/**/.active{opacity:.8}", 1);
-        // Existing runtime behavior, not a CSS-wide cascade conformance claim:
-        // add_stylesheet resets source_order to each sheet's rule index. Thus
-        // the first sheet's second rule (1) beats the newer sheet's first (0).
-        // Keep this test scoped to selector-comment parity and record that caveat.
-        expect_both(.6f);
+        // Equal layer and specificity: the later sheet has global source order.
+        expect_both(.8f);
     });
     run("stylesheet EOF comments do not fabricate rules", [] {
         Fixture swallowed;

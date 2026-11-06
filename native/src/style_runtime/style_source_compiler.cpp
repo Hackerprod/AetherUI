@@ -1,4 +1,7 @@
 #include "style_runtime_types.h"
+#include "style_source_limits.h"
+#include "media_condition_allocation_scope.h"
+#include <type_traits>
 #include "css_component_tokens.h"
 #include "css_important.h"
 #include "style_property_registry_internal.h"
@@ -300,7 +303,13 @@ static declaration_compilation_result compile_declarations(
 
 // ═══ Compile range (recursive) ═════════════════════════════════════════
 
-static void compile_range(
+static aether_status_t source_limit_error(aether_style_diagnostic_fn callback, void* user_data,
+                                         const char* reason) {
+    if (callback) callback("AETHER-CSS-LIMIT", "", "", reason, user_data);
+    return AETHER_ERROR_INVALID_STATE;
+}
+
+static aether_status_t compile_range(
     const std::string& source,
     const std::string& original,
     int32_t start,
@@ -312,7 +321,8 @@ static void compile_range(
     int32_t& rule_id_counter,
     std::vector<compiled_rule_s>& out_rules,
     aether_style_diagnostic_fn diagnostics_callback,
-    void* diagnostics_user_data)
+    void* diagnostics_user_data,
+    media_condition_allocation_scope_s& media_scope)
 {
     int32_t index = start;
     while (index < end) {
@@ -353,12 +363,13 @@ static void compile_range(
 
             if (name == "media") {
                 media_condition_s* media = media_condition_parse(
-                    prelude.c_str(), nullptr, nullptr, static_cast<int32_t>(at_offset));
-                media_condition_s* combined = media_condition_and(inherited_condition, media);
-                compile_range(
+                    prelude.c_str(), nullptr, nullptr, at_offset, &media_scope);
+                media_condition_s* combined = media_condition_and(inherited_condition, media, &media_scope);
+                const auto status = compile_range(
                     source, original, delimiter + 1, closing, combined,
                     sheet_handle, layer, registry, rule_id_counter, out_rules,
-                    diagnostics_callback, diagnostics_user_data);
+                    diagnostics_callback, diagnostics_user_data, media_scope);
+                if (status != AETHER_OK) return status;
             }
 
             index = closing + 1;
@@ -391,6 +402,10 @@ static void compile_range(
             (!declarations.properties.empty() || !declarations.custom.empty() || !declarations.content.empty() ||
              !declarations.shorthands.empty()))
         {
+            // Reserve the whole selector group before incrementing any ID.
+            if (!style_rule_ids_fit(rule_id_counter, selectors.size()))
+                return source_limit_error(diagnostics_callback, diagnostics_user_data,
+                    "The cumulative stylesheet rule ID capacity is exhausted.");
             int32_t source_order = rule_id_counter;
             for (auto& sel : selectors) {
                 compiled_rule_s rule;
@@ -410,6 +425,7 @@ static void compile_range(
 
         index = closing + 1;
     }
+    return AETHER_OK;
 }
 
 // ═══ Public API: stylesheet compilation ════════════════════════════════
@@ -424,6 +440,12 @@ aether_status_t style_source_compile(
     void* diagnostics_user_data)
 {
     if (!source) return AETHER_ERROR_NULL_ARG;
+    if (!style_source_size_fits(std::strlen(source)))
+        return source_limit_error(diagnostics_callback, diagnostics_user_data,
+            "The stylesheet source exceeds the 32-bit byte limit.");
+    if (!style_rule_ids_fit(out_rule_id_counter, 0))
+        return source_limit_error(diagnostics_callback, diagnostics_user_data,
+            "The next stylesheet rule ID is invalid.");
 
     auto* registry = style_property_registry_get_global();
     if (!registry) return AETHER_ERROR_INVALID_STATE;
@@ -437,7 +459,10 @@ aether_status_t style_source_compile(
     style_sheet_layer sheet_layer = static_cast<style_sheet_layer>(layer);
     media_condition_s* always = media_condition_always();
 
-    compile_range(
+    media_condition_allocation_scope_s media_scope;
+    std::vector<compiled_rule_s> staged;
+    int32_t next_rule_id = out_rule_id_counter;
+    const auto status = compile_range(
         cleaned,
         original,
         0,
@@ -446,10 +471,24 @@ aether_status_t style_source_compile(
         sheet_handle,
         sheet_layer,
         registry,
-        out_rule_id_counter,
-        out_rules,
+        next_rule_id,
+        staged,
         diagnostics_callback,
-        diagnostics_user_data);
+        diagnostics_user_data,
+        media_scope);
+    if (status != AETHER_OK) return status;
+
+    // All potentially allocating preparation precedes publication. The arena
+    // also owns nodes that folding discarded before producing any rule root.
+    const auto reached = media_condition_allocation_scope_s::reachable_from(staged);
+    if (staged.size() > out_rules.max_size() - out_rules.size())
+        return source_limit_error(diagnostics_callback, diagnostics_user_data,
+            "The compiled rule output capacity is exhausted.");
+    static_assert(std::is_nothrow_move_constructible_v<compiled_rule_s>);
+    out_rules.reserve(out_rules.size() + staged.size());
+    for (auto& rule : staged) out_rules.push_back(std::move(rule));
+    out_rule_id_counter = next_rule_id;
+    media_scope.release_reachable(reached);
 
     return AETHER_OK;
 }
@@ -465,6 +504,9 @@ aether_status_t style_source_compile_inline(
     void* diagnostics_user_data)
 {
     if (!source) return AETHER_ERROR_NULL_ARG;
+    if (!style_source_size_fits(std::strlen(source)))
+        return source_limit_error(diagnostics_callback, diagnostics_user_data,
+            "The entire inline style was ignored because it exceeds the 32-bit byte limit.");
 
     auto* registry = style_property_registry_get_global();
     if (!registry) return AETHER_ERROR_INVALID_STATE;

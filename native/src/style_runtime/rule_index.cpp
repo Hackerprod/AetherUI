@@ -51,7 +51,8 @@ void rule_index_rebuild(
 {
     rule_index_clear(idx);
 
-    // Sort sheets by layer then handle to preserve cascade source order.
+    // Keep rebuilding deterministic. Cascade correctness comes from each rule's
+    // global source_order, not this insertion order or later bucket traversal.
     std::vector<const compiled_style_sheet_s*> sorted = sheets;
     std::sort(sorted.begin(), sorted.end(),
         [](const compiled_style_sheet_s* a, const compiled_style_sheet_s* b) {
