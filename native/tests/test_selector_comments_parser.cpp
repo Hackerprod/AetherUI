@@ -123,10 +123,14 @@ int main() {
         std::vector<compiled_selector_s> list;
         check(selector_parse_list((bad+",.safe").c_str(),list),"top-level recovery");
         check(list.size()==1 && list[0].anchor.class_name=="safe", "top-level exact surviving branch");
-        for (const std::string pseudo : {"is", "where", "has"}) {
+        for (const std::string pseudo : {"is", "where"}) {
             equivalent(":"+pseudo+"(.safe)", ":"+pseudo+"("+bad+",.safe)");
             equivalent(":is(:"+pseudo+"(.safe))", ":is(:"+pseudo+"("+bad+",.safe))");
         }
+        invalid(":has("+bad+",.safe)");
+        invalid(":is(:has("+bad+",.safe))");
+        for (const std::string outer : {"is", "where"})
+            equivalent(":"+outer+"(.fallback)", ":"+outer+"(:has("+bad+",.safe),.fallback)");
         invalid(":not("+bad+",.safe)");
     }
     if (parse(":is(#bad:hover/**/name,.safe)",s)) {

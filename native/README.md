@@ -500,7 +500,7 @@ The stylesheet compiler retains the original selector bytes across nested
 `@media` blocks alongside its existing, offset-preserving comment mask for
 rule discovery, media and declarations. This correction does not change value,
 custom-property, shorthand, inline-style or importance parsing. Selector lists
-keep their existing forgiving/strict policies, including strict `:not()`.
+use strict `:not()`/`:has()` and forgiving `:is()`/`:where()` policies.
 An+B keeps checked int32 arithmetic and existing syntax; comments cannot join
 separate numeric tokens. For example `+/**/n` is valid but `+/**/2` and
 `-/**/n` are not. An unfinished comment consumes through EOF, so it cannot
@@ -513,6 +513,50 @@ unchanged declarations. `aether.selector-comments-runtime` checks public-ABI
 matching, mutations, cascade parity and generated pseudo-elements. Checks remain
 active with `NDEBUG`. This adds no selector syntax, public ABI or global parser
 work/depth limit, and does not establish general CSS or browser conformance.
+
+## Strict lists in `:has()`
+
+Within AetherUI's existing selector subset, every argument branch of `:has()`
+must parse completely. An unknown pseudo, malformed attribute or escape, empty
+branch, invalid An+B, or dangling combinator rejects the whole `:has()`. No
+partial AST, specificity, dependencies or rule is retained. This applies after
+pseudo-name escape decoding and ASCII case folding, including `:HAS()`.
+
+Each nested function still owns its list policy. `:has(:is(.ready,:unknown))`
+is valid because `:is()` discards the invalid branch. In
+`:is(:has(.ready,:unknown),.safe)`, only `.safe` survives; `:where()` recovers
+the same way with zero specificity. `:not()` remains strict. Empty or entirely
+invalid `:is()`/`:where()` lists remain rejected. The top-level selector-list
+API also retains its existing forgiving behavior.
+
+Valid `:has()` lists use the maximum specificity of all their branches, even a
+branch that does not match. Descendant anchoring, logical DOM boundaries,
+generated-node exclusion and state-change resolution are unchanged. After DOM
+mutations, explicitly resolve a common ancestor of the affected subjects.
+A sheet whose selectors are all rejected still has its normal handle/lifetime;
+adding or removing it can clear style caches and produce legitimate updates.
+
+This is atomic list acceptance, not full browser selector conformance. Leading
+relative combinators (`:has(> .child)`, `+`, `~`) remain unsupported, including
+when mixed with valid branches. Internal combinators (`:has(.mid > .leaf)`)
+remain supported. Existing nested `:has()` behavior is preserved, unlike
+Chromium's nesting restriction; no new pseudo names, namespace syntax,
+`:scope`, or `nth-child(... of ...)` support is added.
+The list-acceptance comparison is source-based against Chromium revision
+[`7fe04cd3b6456bd7baec869f6a5efaebd6e79b71`](https://github.com/chromium/chromium/blob/7fe04cd3b6456bd7baec869f6a5efaebd6e79b71/third_party/blink/renderer/core/css/parser/css_selector_parser.cc):
+`ConsumeRelativeSelectorList` rejects a failed branch, and `kPseudoHas` checks
+the whole list before publishing. This comparison does not require or imply
+executing Chromium or validating rendering parity.
+
+`aether.has-strict-list-parser` checks recursive ASTs, metadata, transactional
+output, protected delimiters and malformed branches. `aether.has-strict-list`
+checks public-ABI rule counts, cascade, recovery, media, stylesheet lifecycle,
+DOM mutations and repeated state transitions. `aether.has-strict-list-compiler`
+checks preserved declarations, rule IDs, media conditions, index buckets and
+caller-owned rules after rejected blocks. All keep checks active under
+`NDEBUG`; existing relative-anchor and generated-selector tests remain separate
+controls. These bounded checks do not establish unlimited recursion depth or
+global linear-time parsing. No public ABI, export or dependency is added.
 
 ## Empty-element selectors
 

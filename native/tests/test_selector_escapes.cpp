@@ -254,10 +254,10 @@ void strings_functions() {
             f.sheet(std::string(".bad\\")+nl+"name{opacity:.8}",0); f.resolve();
             for(const char* id:{"target","prefix","suffix","innocent"}) f.expect(f.node(id),.2f);
         });
-        run("has-local-escape-recovery",[&] {
+        run("has-strict-invalid-escape-rejection",[&] {
             Fixture f("<body><div id='host' class='host'><i id='child' class='safe'></i></div><div id='innocent' class='host'></div></body>");
-            f.sheet(std::string(".host:has(.bad\\")+nl+"name,.safe){opacity:.8}",1); f.resolve();
-            f.expect(f.node("host"),.8f); f.expect(f.node("child"),.2f); f.expect(f.node("innocent"),.2f);
+            f.sheet(std::string(".host:has(.bad\\")+nl+"name,.safe){opacity:.8}",0); f.resolve();
+            f.expect(f.node("host"),.2f); f.expect(f.node("child"),.2f); f.expect(f.node("innocent"),.2f);
         });
         for (const char* pseudo:{"is","where","not"}) {
             const bool strict = std::strcmp(pseudo,"not")==0;

@@ -353,14 +353,15 @@ void invalid_and_recovery() {
         f.sheet(std::string(".Item:") + spelling + "(.Item{opacity:.8}.continuation{opacity:.6}", 0);
         f.resolve(); f.expect(f.node("Target"), .2f); f.expect(f.node("next"), .2f);
     });
-    const std::pair<const char*, bool> lists[] = {
-        {"IS(.Item,:UNKNOWN)", true}, {"WHERE(#Bad:UNKNOWN,.Item)", true},
-        {"IS(:NOT(.Item,:UNKNOWN),.fallback)", false}, {"NOT(:IS(.Item,:UNKNOWN))", false},
-        {"IS(#Target:EMPTY,.fallback)", true}, {"HAS(> .Child,.Child)", false}
+    struct ListCase { const char* selector; int rules; bool matches; };
+    const ListCase lists[] = {
+        {"IS(.Item,:UNKNOWN)", 1, true}, {"WHERE(#Bad:UNKNOWN,.Item)", 1, true},
+        {"IS(:NOT(.Item,:UNKNOWN),.fallback)", 1, false}, {"NOT(:IS(.Item,:UNKNOWN))", 1, false},
+        {"IS(#Target:EMPTY,.fallback)", 1, true}, {"HAS(> .Child,.Child)", 0, false}
     };
-    for (const auto& c : lists) run("list-policy/" + std::string(c.first), [&] {
-        Fixture f(identity_html); f.sheet(std::string(".Item:") + c.first + "{opacity:.8}", 1);
-        f.resolve(); f.expect(f.node("Target"), c.second ? .8f : .2f);
+    for (const auto& c : lists) run("list-policy/" + std::string(c.selector), [&] {
+        Fixture f(identity_html); f.sheet(std::string(".Item:") + c.selector + "{opacity:.8}", c.rules);
+        f.resolve(); f.expect(f.node("Target"), c.matches ? .8f : .2f);
     });
 }
 } // namespace

@@ -193,9 +193,13 @@ void metadata_and_policies() {
         for (const auto& name : spellings(fn)) {
             const auto start = ":" + name;
             invalid(start + "(:UNKNOWN)");
-            if (std::string(fn) == "not") { invalid(start + "(.Item,:UNKNOWN)"); continue; }
+            if (std::string(fn) == "not" || std::string(fn) == "has") {
+                invalid(start + "(.Item,:UNKNOWN)");
+                invalid(start + "(#Bad:UNKNOWN,.Item)");
+                continue;
+            }
             const int classes = std::string(fn) == "where" ? 0 : 1;
-            const unsigned deps = std::string(fn) == "has" ? 129 : 1;
+            const unsigned deps = 1;
             const auto source = start + "(#Bad:UNKNOWN,.Item)";
             meta(source, {0,classes,0}, deps, 1);
             compiled_selector_s s;
@@ -217,7 +221,7 @@ void metadata_and_policies() {
     }
     for (const auto& name : spellings("has")) {
         invalid(":" + name + "(> .Child)");
-        meta(":" + name + "(> .Child,.Child)", {0,1,0},129,1);
+        invalid(":" + name + "(> .Child,.Child)");
     }
 }
 void sensitive_arguments() {
@@ -263,8 +267,8 @@ void negatives_and_elements() {
         for (const auto& n : spellings(fn)) {
             // Decoded punctuation remains identifier data, not another pseudo.
             const auto balanced = ":" + n + R"((:\3a HOVER,.safe))";
-            if (std::string(fn) == "not") invalid(balanced);
-            else meta(balanced, {0,std::string(fn) == "where" ? 0 : 1,0}, std::string(fn) == "has" ? 129 : 1,1);
+            if (std::string(fn) == "not" || std::string(fn) == "has") invalid(balanced);
+            else meta(balanced, {0,std::string(fn) == "where" ? 0 : 1,0}, 1,1);
         }
     }
     for (const char* element : {"before", "after"}) {

@@ -504,8 +504,10 @@ static bool try_parse_pseudo(parser_s& p, pseudo_selector_s& pseudo,
     /* :is() :where() :not() :has() */
     if (name == "is" || name == "where" || name == "not" || name == "has") {
         std::vector<compiled_selector_s> nested;
-        const auto policy = name == "not" ? selector_list_policy_t::Strict
-                                          : selector_list_policy_t::Forgiving;
+        // not/has accept their entire list atomically; is/where recover locally.
+        const auto policy = (name == "not" || name == "has")
+            ? selector_list_policy_t::Strict
+            : selector_list_policy_t::Forgiving;
         if (!selector_parse_list_view(body, nested, policy)) return false;
         pseudo_selector_kind_t kind;
         if      (name == "is")   kind = PSEUDO_IS;

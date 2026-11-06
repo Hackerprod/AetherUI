@@ -66,19 +66,45 @@ int main() {
         invalid(std::string("#a\\")+nl+"b");
         invalid(std::string("[data-x=\"a")+nl+"b\"]");
         invalid(std::string(":not([data-x=\"bad")+nl+"],.safe)");
-        for (const char* pseudo : {"is", "where", "has"}) {
+        for (const char* pseudo : {"is", "where"}) {
             compiled_selector_s parsed;
             auto source = std::string(".outer:")+pseudo+"(#bad:hover\\"+nl+"x,.safe)";
             bool valid = parse(source.c_str(),parsed);
             check(valid, "local invalid escape recovery");
             if (valid) {
                 check(parsed.specificity == specificity_s{0,std::string(pseudo)=="where"?1:2,0}, "rejected ID specificity isolated");
-                auto deps = SELECTOR_DEP_SELF_CLASS;
-                if (std::string(pseudo)=="has") deps = deps | SELECTOR_DEP_DESCENDANT;
-                check(parsed.dependencies == deps, "rejected state/ID dependencies isolated");
+                check(parsed.dependencies == SELECTOR_DEP_SELF_CLASS, "rejected state/ID dependencies isolated");
             }
             source = std::string(":is(.outer:")+pseudo+"([data-x=\"bad"+nl+"],.safe))";
             check(parse(source.c_str(),parsed), "nested bad string recovery");
+        }
+        const std::string invalid_escape = std::string(".outer:has(#bad:hover\\")+nl+"x,.safe)";
+        const std::string invalid_string = std::string(".outer:has([data-x=\"bad")+nl+"],.safe)";
+        for (const auto& bad : {invalid_escape, invalid_string}) {
+            invalid(bad);
+            invalid(":is("+bad+")");
+            for (const std::string outer : {"is", "where"}) {
+                compiled_selector_s recovered;
+                const auto source = ":"+outer+"("+bad+",.fallback)";
+                const bool valid = parse(source.c_str(), recovered);
+                check(valid, "outer forgiving fallback after strict has rejection");
+                if (!valid) continue;
+                check(recovered.specificity == specificity_s{0,outer=="where"?0:1,0},
+                      "rejected has specificity isolated");
+                check(recovered.dependencies == SELECTOR_DEP_SELF_CLASS,
+                      "rejected has ID/state/descendant dependencies isolated");
+                check(recovered.steps.size()==1 && recovered.steps[0].compound.pseudos.size()==1,
+                      "outer fallback compound shape");
+                if (recovered.steps.size()!=1 || recovered.steps[0].compound.pseudos.size()!=1) continue;
+                const auto& nested = recovered.steps[0].compound.pseudos[0].nested;
+                check(nested && nested->size()==1, "exactly one surviving fallback");
+                if (!nested || nested->size()!=1) continue;
+                const auto& fallback = (*nested)[0];
+                check(fallback.anchor.class_name=="fallback" && fallback.anchor.id.empty(),
+                      "fallback anchor has no rejected ID");
+                check(fallback.steps.size()==1 && fallback.steps[0].compound.pseudos.empty(),
+                      "rejected has leaves no nested pseudo");
+            }
         }
     }
     compiled_selector_s parsed;
