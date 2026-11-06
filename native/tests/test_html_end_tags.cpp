@@ -64,7 +64,7 @@ void verify_node(aether_doc_t doc, aether_node_t actual, aether_node_t parent,
     check(aether_node_get_parent(actual) == parent, path + " parent");
     if (expected.type == AETHER_NODE_ELEMENT) {
         String tag(aether_element_get_tag_name(actual));
-        check(tag.equals(expected.tag), path + " original tag spelling");
+        check(tag.equals(expected.tag), path + " canonical ASCII tag name");
         std::map<std::string, std::string> attrs;
         const int32_t count = aether_element_get_attribute_count(actual);
         check(count == (expected.id.empty() ? 0 : 1), path + " attribute count");
@@ -238,7 +238,7 @@ void matched() {
     fixture("matched-ancestor", "<div id=closed><x-inner id=inner></div><span id=after>A</span>",
             {element("div", "closed", {element("x-inner", "inner")}), span("after", "A")});
     fixture("matched-mixed-case", "<DiV id=closed><x-inner></dIv><span id=after>A</span>",
-            {element("DiV", "closed", {element("x-inner")}), span("after", "A")});
+            {element("div", "closed", {element("x-inner")}), span("after", "A")});
     fixture("matched-custom", "<x-host id=closed><x-inner></X-HOST><span id=after>A</span>",
             {element("x-host", "closed", {element("x-inner")}), span("after", "A")});
     fixture("nearest-identical-name", "<div id=outer><div id=inner></div><span id=after>A</span></div><span id=tail>B</span>",

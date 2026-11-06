@@ -98,7 +98,7 @@ void normalize(Node& node) {
 
 void compare(const Node& actual, const Node& expected, const std::string& path) {
     check(actual.type == expected.type, path + " type");
-    check(actual.name == expected.name, path + " original tag spelling");
+    check(actual.name == expected.name, path + " canonical ASCII tag name");
     check(actual.value == expected.value, path + " exact text bytes");
     check(actual.attributes == expected.attributes, path + " complete attributes");
     check(actual.children.size() == expected.children.size(), path + " child count/order");
@@ -294,17 +294,18 @@ void compatibility() {
             else if (c >= 'a' && c <= 'z') c = static_cast<char>(c - ('a' - 'A'));
         }
         fixture("ASCII initial/" + tag, "<" + tag + " id=valid>X</" + close + "><span id=after>B</span>",
-                {element(tag, {text("X")}, {{"id", "valid"}}), span()});
+                {element(std::string(1, initial >= 'A' && initial <= 'Z' ? static_cast<char>(initial + ('a' - 'A')) : initial) + "-tag",
+                         {text("X")}, {{"id", "valid"}}), span()});
     }
     for (const auto& tag : {"h1", "x-widget", "a_b", "a:b", "a.b"})
         fixture(std::string("name tail/") + tag, std::string("<") + tag + ">X</" + tag + ">",
                 {element(tag, {text("X")})});
     fixture("voids and simplified self close", "<BR><img src=x.png><x-child /><span id=after>B</span>",
-            {element("BR"), element("img", {}, {{"src", "x.png"}}), element("x-child"), span()});
+            {element("br"), element("img", {}, {{"src", "x.png"}}), element("x-child"), span()});
     fixture("attributes preserve complete map",
             "<SpAn id=after class='kept' title='a>b &amp; c' data-x=https://x/y ID=Upper "
             "id=ignored class=lost hidden></sPaN>",
-            {element("SpAn", {}, {{"id", "after"}, {"class", "kept"}, {"title", "a>b & c"},
+            {element("span", {}, {{"id", "after"}, {"class", "kept"}, {"title", "a>b & c"},
                                   {"data-x", "https://x/y"}, {"ID", "Upper"}, {"hidden", ""}})});
     fixture("comment content", "<!-- <2> --><span id=after>B</span>", {comment(" <2> "), span()});
     run("comment incomplete", "<body id=fixture><!-- <2>", {body({comment(" <2>")})});
@@ -317,7 +318,7 @@ void compatibility() {
         const auto close = tag == "script" ? "ScRiPt" : "sTyLe";
         const std::string raw = "A<2 < span> &lt; <!--x--> <b>X";
         fixture("raw/" + tag, "<" + tag + " id=raw>" + raw + "</" + close + " ><span id=after>B</span>",
-                {element(tag, {text(raw)}, {{"id", "raw"}}), span()});
+                {element(tag == "script" ? "script" : "style", {text(raw)}, {{"id", "raw"}}), span()});
     }
     run("raw EOF close is not boundary", "<body id=fixture><script>x</script",
         {body({element("script", {text("x</script")})})});

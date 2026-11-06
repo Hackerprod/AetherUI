@@ -5,6 +5,7 @@ find_package(AetherUI 0.1 CONFIG REQUIRED)
 
 add_executable(aether_package_consumer main.c)
 target_link_libraries(aether_package_consumer PRIVATE AetherUI::Core)
+set_target_properties(aether_package_consumer PROPERTIES C_STANDARD 11 C_STANDARD_REQUIRED YES)
 
 if(WIN32)
     add_custom_command(

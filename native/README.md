@@ -264,8 +264,10 @@ Go).
 An ordinary start tag begins only when an ASCII letter immediately follows `<`.
 Otherwise the parser emits that `<` as text and processes the next source byte
 normally, preserving whitespace and later real tags. Entity-decoded text is not
-parsed again as markup. Tag spelling and the existing name-tail grammar remain
-unchanged, as do comment, declaration, processing-instruction, end-tag and raw
+parsed again as markup. Every accepted start-tag name is canonicalized from ASCII
+`A`–`Z` to `a`–`z` before creating the element, including unknown names such as
+`X-CuStOm` and `A_B:C.D9`. The existing name-tail grammar remains unchanged,
+as do comment, declaration, processing-instruction, end-tag and raw
 `style`/`script` handling. This is a bounded correction, not general HTML5
 conformance; malformed end tags and incomplete valid start tags retain their
 existing simplified behavior.
@@ -273,6 +275,32 @@ existing simplified behavior.
 `aether.html-tag-open` uses public ABI checks active under `NDEBUG` for ASCII
 boundaries, actual EOF, reconsumption, complete trees/attributes, parent relations,
 ID lookup, reparsing and the real style runtime.
+
+This intentionally changes the observable result of `aether_element_get_tag_name`:
+HTML parsed as `<DiV>` now returns `div`, not the original spelling. The binary C
+ABI, exported types, signatures and version are unchanged. Attribute names are
+not canonicalized: `id` and `ID` remain distinct, and an exact duplicate still
+keeps its first value. Attribute values, ID/class values, text and raw-text bytes
+are not case-folded. This is ASCII normalization, not locale-dependent or Unicode
+case folding, and adds no XML, SVG/MathML namespace or custom-element semantics.
+
+The normalization boundary follows Chromium's tokenizer at
+[`7fe04cd3b6456bd7baec869f6a5efaebd6e79b71`](https://github.com/chromium/chromium/blob/7fe04cd3b6456bd7baec869f6a5efaebd6e79b71/third_party/blink/renderer/core/html/parser/html_tokenizer.cc#L361-L425):
+the start-tag initial and remaining name characters use ASCII lowercase. This is
+a source comparison of token identity, not a claim of Chromium's full grammar,
+tree construction, or the web DOM's `Element.tagName` presentation contract.
+
+`aether.html-tag-names` checks literal getter results, nonfirst HTML-root selection,
+BODY lookup, all four focusable controls, all void elements, mixed/stray closes,
+attribute and ID preservation, complete and long names, and replacement/version
+lifecycle through the public C ABI. `aether.html-tag-name-consumers` additionally
+checks native control classification, actual geometry and display-list text,
+BR line-break semantics and author overrides, and the HTML canvas background.
+Both use explicit checks active under `NDEBUG`. The historical tag-open, end-tag
+and raw-text corpora retain their inputs and tree/text checks with canonical name
+expectations. Run these with the complete native suite, C11 smoke test and
+installed package consumer. Native execution does not establish .NET execution,
+Chromium execution or visual equivalence.
 
 ### Duplicate HTML attributes
 
@@ -426,8 +454,8 @@ self-closing behavior for non-void elements remain unchanged.
 
 An end tag with no matching open element leaves the insertion context intact.
 A matching tag closes the nearest open element with that name and its open
-descendants, using ASCII case-insensitive comparison while preserving the DOM's
-original tag spelling. Previously closed, void and self-closed elements cannot
+descendants, using ASCII case-insensitive comparison against the DOM's canonical
+start-tag names. Previously closed, void and self-closed elements cannot
 satisfy a later end tag. The document sentinel is never removed.
 
 `aether.html-end-tags` checks literal public-ABI trees, parent/ancestor relations,
@@ -445,8 +473,8 @@ O(depth × closes) visits. Token consumption and EOF recovery are unchanged.
 ## HTML style and script text
 
 `style` and `script` names are matched ASCII case-insensitively when entering
-their text mode and recognizing the matching end tag. Public DOM tag names keep
-their original spelling. Their content is one literal text child (or no child
+their text mode and recognizing the matching end tag. Public DOM tag names are
+canonical ASCII lowercase. Their content is one literal text child (or no child
 when empty): entities, apparent markup, UTF-8 and CR/LF bytes are preserved.
 A matching `</name` ends the text only when followed by `>`, `/`, or HTML
 whitespace (space, tab, LF, FF, CR). Suffixes such as `</styleX>` and a name at

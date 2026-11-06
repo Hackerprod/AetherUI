@@ -238,6 +238,9 @@ class HtmlParser {
             return;
         }
         std::string tag_name = read_name();
+        // Canonical HTML element identity; read_name also serves attributes,
+        // whose spelling and values must remain untouched.
+        std::transform(tag_name.begin(), tag_name.end(), tag_name.begin(), ascii_lower);
 
         aether_node_s* element = create_element(tag_name, doc);
         bool self_closing = false;
