@@ -90,9 +90,20 @@ void matrix() {
     for (const std::string body : {".ready,:aether-unknown", ":aether-unknown,.ready",
             ".ready,", ",.ready", ".ready,,.other", ".ready,:nth-child(bogus)", ".ready,.other >"})
         invalid(".card:has("+body+")");
-    for (const std::string fn : {"is", "where", "has", "not"})
-        for (const std::string body : {"", " ", "/**/", ":unknown", ":unknown,:nth-child(bogus)"})
-            invalid(":"+fn+"("+body+")");
+    for (const std::string body : {"", " ", "/**/", ":unknown", ":unknown,:nth-child(bogus)"}) {
+        for (const std::string fn : {"has", "not"}) invalid(":"+fn+"("+body+")");
+        for (const std::string fn : {"is", "where"}) {
+            compiled_selector_s s;
+            if (parse(":"+fn+"("+body+")", s)) {
+                const bool shape = s.steps.size()==1 && s.steps[0].compound.pseudos.size()==1;
+                check(shape, "empty forgiving shape");
+                if (!shape) continue;
+                const auto& pseudo = s.steps[0].compound.pseudos[0];
+                check(pseudo.nested && pseudo.nested->empty(), "present empty forgiving list");
+                check(s.specificity==specificity_s{0,0,0} && s.dependencies==0, "empty forgiving metadata");
+            }
+        }
+    }
     // Valid syntax is independent of whether a DOM could match these branches.
     for (const std::string body : {".ready", ".ready,.other", ".missing", "body .leaf",
             ".mid > .leaf", ".pre + .leaf", ".pre ~ .leaf", ":has(.leaf)",

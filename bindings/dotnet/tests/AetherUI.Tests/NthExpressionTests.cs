@@ -87,7 +87,7 @@ internal static class NthExpressionTests
         Fixture("guards .item:nth-last-of-type(2n+1)", ".item:nth-last-of-type(2n+1){opacity:.8;}", 0, "FFF");
         Fixture("guards .item:nth-child(n+-1),#b", ".item:nth-child(n+-1),#b{opacity:.8;}", 1, "FTF");
         Fixture("guards .item:is(:nth-child(n+-1),#b)", ".item:is(:nth-child(n+-1),#b){opacity:.8;}", 1, "FTF");
-        Fixture("guards .item:is(:nth-child(n+-1))", ".item:is(:nth-child(n+-1)){opacity:.8;}", 0, "FFF");
+        Fixture("guards .item:is(:nth-child(n+-1))", ".item:is(:nth-child(n+-1)){opacity:.8;}", 1, "FFF");
         Fixture("has parent", "#parent:has(.item:nth-child(2n+1)){opacity:.8;}", 1, "FFF", parentExpected: .8f);
         Fixture("cascade specificity", ".item:nth-child(2n+1){opacity:.8;}.item{opacity:.4;}", 2, "TFT", .8f, .4f);
         Fixture("cascade order", ".item:nth-child(2n+1){opacity:.8;}.item{opacity:.4;}.item:nth-child(2n+1){opacity:.6;}", 3, "TFT", .6f, .4f);

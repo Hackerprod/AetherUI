@@ -139,7 +139,7 @@ void nth_expression_guards() {
     nth_fixture("guards .item:nth-last-of-type(2n+1)", ".item:nth-last-of-type(2n+1){opacity:.8;}", 0, "FFF");
     nth_fixture("guards .item:nth-child(n+-1),#b", ".item:nth-child(n+-1),#b{opacity:.8;}", 1, "FTF");
     nth_fixture("guards .item:is(:nth-child(n+-1),#b)", ".item:is(:nth-child(n+-1),#b){opacity:.8;}", 1, "FTF");
-    nth_fixture("guards .item:is(:nth-child(n+-1))", ".item:is(:nth-child(n+-1)){opacity:.8;}", 0, "FFF");
+    nth_fixture("guards .item:is(:nth-child(n+-1))", ".item:is(:nth-child(n+-1)){opacity:.8;}", 1, "FFF");
     nth_fixture("has parent", "#parent:has(.item:nth-child(2n+1)){opacity:.8;}", 1, "FFF", .8f, .2f, .8f);
     nth_fixture("cascade specificity", ".item:nth-child(2n+1){opacity:.8;}.item{opacity:.4;}", 2, "TFT", .8f, .4f);
     nth_fixture("cascade order", ".item:nth-child(2n+1){opacity:.8;}.item{opacity:.4;}.item:nth-child(2n+1){opacity:.6;}", 3, "TFT", .6f, .4f);

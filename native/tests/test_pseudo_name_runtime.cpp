@@ -337,8 +337,8 @@ void state_changes() {
 void invalid_and_recovery() {
     const char* balanced[] = {
         "unknown", "UNKNOWN", "hover()", "HOVER()", "empty(1)", "EMPTY(1)", "is", "IS", "not()", "NOT()",
-        "where( )", "WHERE( )", "nth-child(bogus)", "NTH-CHILD(bogus)", "nth-child(2n of .Item)", "NTH-CHILD(2n of .Item)",
-        "not(.Item,:unknown)", "NOT(.Item,:UNKNOWN)", "is(:unknown)", "IS(:UNKNOWN)", "has(> .Child)", "HAS(> .Child)",
+        "nth-child(bogus)", "NTH-CHILD(bogus)", "nth-child(2n of .Item)", "NTH-CHILD(2n of .Item)",
+        "not(.Item,:unknown)", "NOT(.Item,:UNKNOWN)", "has(> .Child)", "HAS(> .Child)",
         "hover-extra", "HOVER-extra", "\\0 HOVER", "\\d800 HOVER", "\\110000 HOVER", "\\3a HOVER", "IS\\28 (.Item)",
         "\xc5\xbf" "ELECTED", "\\17f ELECTED", "\xc4\xb0S(.Item)", "\\130 S(.Item)", "h\xce\xbfver", "h\\3bf ver"
     };
@@ -347,6 +347,12 @@ void invalid_and_recovery() {
         f.sheet(std::string(".Item:") + pseudo + "{opacity:.8}.continuation{opacity:.6}", 1);
         f.resolve(); f.expect(f.node("Target"), .2f); f.expect(f.node("next"), .6f);
     });
+    for (const char* pseudo : {"where( )", "WHERE( )", "is(:unknown)", "IS(:UNKNOWN)"})
+        run("empty-forgiving-continuation/" + std::string(pseudo), [&] {
+            Fixture f("<body><div id='Target' class='Item'></div><div id='next' class='continuation'></div></body>");
+            f.sheet(std::string(".Item:") + pseudo + "{opacity:.8}.continuation{opacity:.6}", 2);
+            f.resolve(); f.expect(f.node("Target"), .2f); f.expect(f.node("next"), .6f);
+        });
     for (const char* spelling : {"is", "IS", "\\49 S"}) run("unclosed-prelude/" + std::string(spelling), [&] {
         Fixture f("<body><div id='Target' class='Item'></div><div id='next' class='continuation'></div></body>");
         // Existing scanner baseline: an unclosed prelude prevents finding either rule block.

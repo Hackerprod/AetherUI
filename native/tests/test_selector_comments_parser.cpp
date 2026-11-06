@@ -128,7 +128,7 @@ int main() {
             equivalent(":is(:"+pseudo+"(.safe))", ":is(:"+pseudo+"("+bad+",.safe))");
         }
         invalid(":has("+bad+",.safe)");
-        invalid(":is(:has("+bad+",.safe))");
+        equivalent(":is()", ":is(:has("+bad+",.safe))");
         for (const std::string outer : {"is", "where"})
             equivalent(":"+outer+"(.fallback)", ":"+outer+"(:has("+bad+",.safe),.fallback)");
         invalid(":not("+bad+",.safe)");

@@ -192,12 +192,13 @@ void metadata_and_policies() {
     for (const char* fn : {"is", "where", "not", "has"}) {
         for (const auto& name : spellings(fn)) {
             const auto start = ":" + name;
-            invalid(start + "(:UNKNOWN)");
             if (std::string(fn) == "not" || std::string(fn) == "has") {
+                invalid(start + "(:UNKNOWN)");
                 invalid(start + "(.Item,:UNKNOWN)");
                 invalid(start + "(#Bad:UNKNOWN,.Item)");
                 continue;
             }
+            meta(start + "(:UNKNOWN)", {0,0,0}, 0, 0);
             const int classes = std::string(fn) == "where" ? 0 : 1;
             const unsigned deps = 1;
             const auto source = start + "(#Bad:UNKNOWN,.Item)";
@@ -251,16 +252,21 @@ void sensitive_arguments() {
     equivalent(":nth-child(2n+1)", canonical_only ? ":nth-child(2N+1)" : ":NTH-CHILD(2N+1)");
 }
 void negatives_and_elements() {
+    meta(":WHERE( )", {0,0,0}, 0, 0);
     for (const auto& e : catalog) {
         for (const auto& n : spellings(e.name)) {
             if (e.kind <= PSEUDO_ONLY_CHILD) invalid(":" + n + "(1)");
-            else { invalid(":" + n); invalid(":" + n + "()"); invalid(":" + n + "(.Item"); }
+            else {
+                invalid(":" + n); invalid(":" + n + "(.Item");
+                if (e.kind == PSEUDO_IS || e.kind == PSEUDO_WHERE) meta(":" + n + "()", {0,0,0}, 0, 0);
+                else invalid(":" + n + "()");
+            }
         }
     }
     for (const auto& n : spellings("nth-child")) {
         invalid(":" + n + "(bogus)"); invalid(":" + n + "(2n of .Item)");
     }
-    for (const char* source : {":UNKNOWN", ":HOVER-extra", ":WHERE( )", ":hover()", ":before", ":BEFORE", "::hover", "::BEFORE()", "::unknown", "::before::after", ".Item::BEFORE > .Child",
+    for (const char* source : {":UNKNOWN", ":HOVER-extra", ":hover()", ":before", ":BEFORE", "::hover", "::BEFORE()", "::unknown", "::before::after", ".Item::BEFORE > .Child",
         R"(::\42EFORE)", R"(:\ACTIVE)", R"(:\0 HOVER)", R"(:\d800 HOVER)", R"(:\110000 HOVER)", R"(:is\28 (.Item))", R"(:\3a HOVER)",
         ":\xc5\xbf" "ELECTED", ":\xc4\xb0" "S(.Item)", ":h\xce\xbf" "ver", R"(:\17f ELECTED)", R"(:\130 S(.Item))", R"(:h\3bf ver)", ":ho\\\nver"}) invalid(source);
     for (const char* fn : {"is", "where", "has", "not"}) {

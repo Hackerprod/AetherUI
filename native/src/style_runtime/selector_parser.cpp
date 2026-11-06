@@ -269,7 +269,7 @@ static bool try_parse_pseudo(parser_s& p, pseudo_selector_s& pseudo,
 static bool try_parse_nth(std::string_view source, nth_expression_s& expr);
 static bool try_map_state(std::string_view name,
                           style_pseudo_state_t& required, style_pseudo_state_t& forbidden);
-enum class selector_list_policy_t { Forgiving, Strict };
+enum class selector_list_policy_t { ForgivingNonEmpty, ForgivingAllowEmpty, StrictNonEmpty };
 
 static bool selector_parse_list_view(std::string_view source, std::vector<compiled_selector_s>& out,
                                      selector_list_policy_t policy);
@@ -454,7 +454,7 @@ static bool try_parse_pseudo(parser_s& p, pseudo_selector_s& pseudo,
     std::string_view body;
     bool has_body = false;
     if (!p.eof() && p.peek() == '(') {
-        if (!p.peek_balanced_body(body) || body.empty()) return false;
+        if (!p.peek_balanced_body(body)) return false;
         has_body = true;
     }
 
@@ -504,10 +504,11 @@ static bool try_parse_pseudo(parser_s& p, pseudo_selector_s& pseudo,
     /* :is() :where() :not() :has() */
     if (name == "is" || name == "where" || name == "not" || name == "has") {
         std::vector<compiled_selector_s> nested;
-        // not/has accept their entire list atomically; is/where recover locally.
+        // not/has require a nonempty, entirely valid list. is/where recover
+        // locally and retain a present-empty argument when no branch survives.
         const auto policy = (name == "not" || name == "has")
-            ? selector_list_policy_t::Strict
-            : selector_list_policy_t::Forgiving;
+            ? selector_list_policy_t::StrictNonEmpty
+            : selector_list_policy_t::ForgivingAllowEmpty;
         if (!selector_parse_list_view(body, nested, policy)) return false;
         pseudo_selector_kind_t kind;
         if      (name == "is")   kind = PSEUDO_IS;
@@ -687,12 +688,12 @@ static bool selector_parse_list_view(std::string_view source, std::vector<compil
         const bool valid = !part.empty() && selector_parse_core(sub, sel);
         sub.skip_trivia();
         if (!valid || !sub.eof()) {
-            if (policy == selector_list_policy_t::Strict) return false;
+            if (policy == selector_list_policy_t::StrictNonEmpty) return false;
             continue;
         }
         parsed.push_back(std::move(sel));
     }
-    if (parsed.empty()) return false;
+    if (parsed.empty() && policy != selector_list_policy_t::ForgivingAllowEmpty) return false;
     // Publish only after the complete list succeeds; preserve the caller's prefix.
     for (auto& sel : parsed) out.push_back(std::move(sel));
     return true;
@@ -714,5 +715,5 @@ bool selector_parse_list(const char* source, std::vector<compiled_selector_s>& o
     if (!source) return false;
     std::string_view sv(source);
     if (sv.empty()) return false;
-    return selector_parse_list_view(sv, out, selector_list_policy_t::Forgiving);
+    return selector_parse_list_view(sv, out, selector_list_policy_t::ForgivingNonEmpty);
 }

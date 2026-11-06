@@ -526,8 +526,14 @@ Each nested function still owns its list policy. `:has(:is(.ready,:unknown))`
 is valid because `:is()` discards the invalid branch. In
 `:is(:has(.ready,:unknown),.safe)`, only `.safe` survives; `:where()` recovers
 the same way with zero specificity. `:not()` remains strict. Empty or entirely
-invalid `:is()`/`:where()` lists remain rejected. The top-level selector-list
-API also retains its existing forgiving behavior.
+invalid `:is()`/`:where()` arguments are valid lists with zero branches and never
+match. Their nested AST list remains present, with zero specificity and no
+nested dependencies. Thus `:not(:is())` is valid and matches eligible subjects,
+while `:has(:is())` is valid but never matches. `:not()` and `:has()` themselves
+still reject empty arguments or any invalid branch. The top-level selector-list
+API remains forgiving but requires at least one valid selector; `:is(),.safe`
+retains both selectors and compiles both rules, even though the first never matches.
+This extends the previously documented scope of the strict-HAS cycle.
 
 Valid `:has()` lists use the maximum specificity of all their branches, even a
 branch that does not match. Descendant anchoring, logical DOM boundaries,
@@ -732,3 +738,30 @@ limitation for non-inherited properties, and existing `revert`-as-`initial` beha
 not change the public ABI or require browser execution. The current custom-property scope
 is independent of ordinary computed values, so offering staged values or `unset` at their
 original priority is equivalent to pending candidates in this runtime.
+
+### Empty forgiving arguments
+
+Only `:is()` and `:where()` permit a valid zero-branch argument list. Empty
+branches, comments-only bodies and syntactically invalid branches are discarded.
+Balanced outer parentheses remain mandatory; this does not repair unclosed
+functions, strings or comments. A valid but impossible branch, such as
+`#ghost:is()`, remains in its parent list and retains its ID specificity and
+dependencies. A rejected branch such as `#ghost:hover:unknown` contributes neither.
+`:where()` still suppresses specificity, not dependencies of retained branches.
+
+The native `aether.forgiving-empty-list-parser` test checks the real AST, matching,
+metadata, strict boundaries, protected delimiters and repeated bounded nesting.
+`aether.forgiving-empty-list-compiler` checks rule IDs, shared group source order,
+media conditions, declaration preservation and index buckets.
+`aether.forgiving-empty-list` checks the public ABI, cascade, state-delta resolution
+on subjects/ancestors/descendants, explicit resolution after DOM mutations,
+stylesheet add/remove/readd and generated content. These checks remain active
+with `NDEBUG`; generated-node lifetimes are not inferred from update counts.
+
+Historical HAS, NOT, pseudo-name, escape, comment and nth tests retain their original
+corpora with updated expectations. The .NET integration runner registers
+`ForgivingEmptyListTests`, checking rule counts, computed opacity, nested
+composition, strict controls, cascade and repeated resolution. Execution results
+for native and .NET tests must be reported separately; adding these tests does
+not establish .NET execution, Chromium execution or visual equivalence. No new
+DOM invalidation contract, public ABI or global recursion limit is introduced.

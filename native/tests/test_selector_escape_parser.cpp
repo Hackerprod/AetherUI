@@ -82,8 +82,22 @@ int main() {
         const std::string invalid_string = std::string(".outer:has([data-x=\"bad")+nl+"],.safe)";
         for (const auto& bad : {invalid_escape, invalid_string}) {
             invalid(bad);
-            invalid(":is("+bad+")");
             for (const std::string outer : {"is", "where"}) {
+                compiled_selector_s empty;
+                const auto empty_source = ":"+outer+"("+bad+")";
+                const bool empty_valid = parse(empty_source.c_str(),empty);
+                check(empty_valid, "outer forgiving empty after strict has rejection");
+                if (empty_valid) {
+                    check(empty.specificity == specificity_s{0,0,0} && empty.dependencies == SELECTOR_DEP_NONE,
+                          "empty forgiving list discards bad string/escape metadata");
+                    const bool shape = empty.steps.size()==1 && empty.steps[0].compound.pseudos.size()==1;
+                    check(shape, "outer empty compound shape");
+                    if (shape) {
+                        const auto& pseudo = empty.steps[0].compound.pseudos[0];
+                        check(pseudo.kind == (outer=="is" ? PSEUDO_IS : PSEUDO_WHERE) &&
+                              pseudo.nested && pseudo.nested->empty(), "present empty forgiving AST");
+                    }
+                }
                 compiled_selector_s recovered;
                 const auto source = ":"+outer+"("+bad+",.fallback)";
                 const bool valid = parse(source.c_str(), recovered);

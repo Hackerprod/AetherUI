@@ -326,6 +326,25 @@ if(AETHERUI_BUILD_TESTS)
     target_link_libraries(aether_has_strict_list_compiler_test PRIVATE AetherUI::Core)
     add_test(NAME aether.has-strict-list-compiler COMMAND aether_has_strict_list_compiler_test)
 
+    # Empty forgiving arguments remain valid AST nodes, not universal selectors.
+    add_executable(aether_forgiving_empty_list_parser_test tests/test_forgiving_empty_list_parser.cpp
+        src/style_runtime/selector_parser.cpp src/style_runtime/selector_matcher.cpp)
+    target_include_directories(aether_forgiving_empty_list_parser_test PRIVATE include src/style_runtime)
+    add_test(NAME aether.forgiving-empty-list-parser COMMAND aether_forgiving_empty_list_parser_test)
+
+    add_executable(aether_forgiving_empty_list_compiler_test tests/test_forgiving_empty_list_compiler.cpp
+        src/style_runtime/style_source_compiler.cpp src/style_runtime/selector_parser.cpp
+        src/style_runtime/rule_index.cpp src/style_runtime/media_condition.cpp
+        src/style_runtime/css_variable_tokens.cpp src/css/css_length.cpp)
+    target_include_directories(aether_forgiving_empty_list_compiler_test PRIVATE include src/style_runtime)
+    target_compile_definitions(aether_forgiving_empty_list_compiler_test PRIVATE AETHER_CSS_NUMERIC_ONLY)
+    target_link_libraries(aether_forgiving_empty_list_compiler_test PRIVATE AetherUI::Core)
+    add_test(NAME aether.forgiving-empty-list-compiler COMMAND aether_forgiving_empty_list_compiler_test)
+
+    add_executable(aether_forgiving_empty_list_test tests/test_forgiving_empty_list.cpp)
+    target_link_libraries(aether_forgiving_empty_list_test PRIVATE AetherUI::Core)
+    add_test(NAME aether.forgiving-empty-list COMMAND aether_forgiving_empty_list_test)
+
     add_executable(aether_selector_attributes_test tests/test_selector_attributes.cpp)
     target_link_libraries(aether_selector_attributes_test PRIVATE AetherUI::Core)
     add_test(NAME aether.selector-attributes COMMAND aether_selector_attributes_test)
