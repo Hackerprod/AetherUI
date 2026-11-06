@@ -130,6 +130,21 @@ See the per-binding READMEs under `bindings/` for how each language enforces the
 idiom (`SafeHandle` in .NET, `AutoCloseable` in Java, an explicit `Close()` plus cgo pointer rules in
 Go).
 
+### Ordinary HTML tag openings
+
+An ordinary start tag begins only when an ASCII letter immediately follows `<`.
+Otherwise the parser emits that `<` as text and processes the next source byte
+normally, preserving whitespace and later real tags. Entity-decoded text is not
+parsed again as markup. Tag spelling and the existing name-tail grammar remain
+unchanged, as do comment, declaration, processing-instruction, end-tag and raw
+`style`/`script` handling. This is a bounded correction, not general HTML5
+conformance; malformed end tags and incomplete valid start tags retain their
+existing simplified behavior.
+
+`aether.html-tag-open` uses public ABI checks active under `NDEBUG` for ASCII
+boundaries, actual EOF, reconsumption, complete trees/attributes, parent relations,
+ID lookup, reparsing and the real style runtime.
+
 ### Duplicate HTML attributes
 
 Within each opening tag, the HTML parser keeps the first value for an exactly

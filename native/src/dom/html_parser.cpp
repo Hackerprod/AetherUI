@@ -6,6 +6,10 @@
 #include <vector>
 #include <string_view>
 
+static bool is_ascii_alpha(char c) {
+    return (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z');
+}
+
 static bool is_name_char(char c) {
     return std::isalnum(static_cast<unsigned char>(c)) ||
            c == '-' || c == '_' || c == ':' || c == '.';
@@ -225,16 +229,15 @@ class HtmlParser {
     }
 
     void parse_start_tag(std::vector<aether_node_s*>& stack, aether_doc_s* doc) {
-        size_t tag_start = pos;
         pos++;
-        skip_whitespace();
-        std::string tag_name = read_name();
-        if (tag_name.empty()) {
+        // Only an immediate ASCII letter opens an ordinary start tag. Emit
+        // just '<' otherwise, leaving the next byte for the normal dispatcher.
+        if (end() || !is_ascii_alpha(current())) {
             stack.back()->children.push_back(create_text("<", doc));
             stack.back()->children.back()->parent = stack.back();
-            pos = std::min(tag_start + 1, len);
             return;
         }
+        std::string tag_name = read_name();
 
         aether_node_s* element = create_element(tag_name, doc);
         bool self_closing = false;

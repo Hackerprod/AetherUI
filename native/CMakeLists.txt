@@ -134,6 +134,10 @@ if(AETHERUI_BUILD_TESTS)
     target_link_libraries(aether_html_end_tags_test PRIVATE AetherUI::Core)
     add_test(NAME aether.html-end-tags COMMAND aether_html_end_tags_test)
 
+    add_executable(aether_html_tag_open_test tests/test_html_tag_open.cpp)
+    target_link_libraries(aether_html_tag_open_test PRIVATE AetherUI::Core)
+    add_test(NAME aether.html-tag-open COMMAND aether_html_tag_open_test)
+
     add_executable(aether_dom_id_order_test tests/test_dom_id_order.cpp)
     target_link_libraries(aether_dom_id_order_test PRIVATE AetherUI::Core)
     add_test(NAME aether.dom-id-order COMMAND aether_dom_id_order_test)
