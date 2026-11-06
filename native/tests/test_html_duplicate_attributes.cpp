@@ -471,13 +471,12 @@ void consumer_and_mutation_cases() {
 }
 
 void case_diagnostics() {
-    // Deliberately separate from HTML-conformance claims. ASCII folding needs
-    // its own parser/getter/setter/selector design; values must not be folded.
-    simple("diagnostic_identical_uppercase_names", "DATA-X=First DATA-X=last", {{"DATA-X", "First"}});
-    simple("diagnostic_case_distinct_keys_existing_behavior", "DATA-X=First data-x=first",
-           {{"DATA-X", "First"}, {"data-x", "first"}});
-    simple("diagnostic_case_distinct_duplicates", "DATA-X=First data-x=first DATA-X=last data-x=Last",
-           {{"DATA-X", "First"}, {"data-x", "first"}});
+    // Preserve the historical inputs as normative ASCII identity regressions.
+    simple("ascii_identical_uppercase_names", "DATA-X=First DATA-X=last", {{"data-x", "First"}});
+    simple("ascii_equivalent_keys_first_wins", "DATA-X=First data-x=first",
+           {{"data-x", "First"}});
+    simple("ascii_equivalent_duplicate_names", "DATA-X=First data-x=first DATA-X=last data-x=Last",
+           {{"data-x", "First"}});
 }
 } // namespace
 

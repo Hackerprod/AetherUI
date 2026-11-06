@@ -88,7 +88,7 @@ void roots_and_focus() {
     }
     check(aether_element_is_focusable(d.id("ordinary")) == AETHER_FALSE, "ordinary element is not focusable");
     check(aether_element_is_focusable(d.id("tab")) == AETHER_TRUE, "lowercase tabindex retained");
-    check(aether_element_is_focusable(d.id("notab")) == AETHER_FALSE, "attribute names not normalized");
+    check(aether_element_is_focusable(d.id("notab")) == AETHER_TRUE, "ASCII-equivalent tabindex is focusable");
 }
 void names() {
     context = "complete name normalization";
@@ -125,14 +125,13 @@ void attributes() {
     auto node = d.id("AbC");
     tag(node, "div"); tag(d.id("abc"), "span");
     check(node != d.id("abc"), "IDs differing only in case stay distinct");
-    check(!d.id("Other") && !d.id("ABC"), "uppercase attribute and ID value not folded");
+    check(!d.id("Other") && !d.id("ABC"), "duplicate ID discarded and ID value not folded");
     const std::map<std::string, std::string> expected = {
-        {"id", "AbC"}, {"ID", "Other"}, {"class", "Foo foo"}, {"DATA-X", "UP&"},
-        {"data-x", "Down"}, {"data-url", "https://Host/Path?Q=ABC"}, {"title", "CAF\xC3\x89"}
+        {"id", "AbC"}, {"class", "Foo foo"}, {"data-x", "UP&"}, {"data-url", "https://Host/Path?Q=ABC"}, {"title", "CAF\xC3\x89"}
     };
     std::map<std::string, std::string> actual;
     const auto count = aether_element_get_attribute_count(node);
-    check(count == static_cast<int32_t>(expected.size()), "attribute count and exact duplicate first-wins");
+    check(count == static_cast<int32_t>(expected.size()), "attribute count and ASCII-equivalent duplicate first-wins");
     for (int32_t i = 0; i < count; ++i)
         actual.emplace(take(aether_element_get_attribute_name(node, i)), take(aether_element_get_attribute_value(node, i)));
     check(actual == expected, "complete literal attribute map");

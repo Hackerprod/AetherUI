@@ -242,7 +242,7 @@ void sensitive_arguments() {
             check(a.ids == std::vector<std::string>{"Target"} && b.ids == std::vector<std::string>{"target"}, source + " ID identity");
             check(a.attributes.size() == 1 && b.attributes.size() == 1, source + " attribute count");
             if (a.attributes.size() != 1 || b.attributes.size() != 1) continue;
-            check(a.attributes[0].name == "data-V" && b.attributes[0].name == "data-v", source + " attribute names");
+            check(a.attributes[0].name == "data-v" && b.attributes[0].name == "data-v", source + " canonical attribute names");
             check(a.attributes[0].value == "AbC" && b.attributes[0].value == "abc", source + " attribute values");
             check(!a.attributes[0].case_insensitive && b.attributes[0].case_insensitive, source + " attribute flags");
         }

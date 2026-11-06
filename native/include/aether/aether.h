@@ -627,6 +627,15 @@ AETHER_API char*              aether_node_get_text_content(aether_node_t node);
 AETHER_API int64_t            aether_node_get_style_node_id(aether_node_t node);
 
 /* Element-specific */
+/* Attribute names use ASCII A-Z -> a-z identity, including get/set/has queries.
+   Enumeration returns canonical names in sorted key order. Parser duplicates
+   keep the first source occurrence; explicit set replaces that value. Values
+   and non-ASCII name bytes are never folded; set does not decode HTML entities.
+   Get returns an owned string (empty if present-empty), or NULL if absent/invalid.
+   Has tests presence, including empty or "false" values. These queries do not
+   mutate attributes/version. Set does not bump document version or invalidate
+   runtime style: explicitly resolve an affected subtree with its needed ancestors
+   and siblings. Existing handle/string lifetimes and argument rules apply. */
 AETHER_API char*           aether_element_get_tag_name(aether_node_t element);
 AETHER_API char*           aether_element_get_attribute(aether_node_t element, const char* name);
 AETHER_API int32_t         aether_element_get_attribute_count(aether_node_t element);

@@ -1,4 +1,5 @@
 #include "dom_types.h"
+#include "html_attribute_name.h"
 #include "../abi/aether_abi.h"
 #include <cctype>
 
@@ -17,7 +18,7 @@ AETHER_API char* aether_element_get_tag_name(aether_node_t element) {
 
 AETHER_API char* aether_element_get_attribute(aether_node_t element, const char* name) {
     if (!element || element->type != AETHER_NODE_ELEMENT || !name) return nullptr;
-    auto it = element->attributes.find(name);
+    auto it = element->attributes.find(aether::canonical_html_attribute_name(name));
     return (it != element->attributes.end()) ? aether::strdup(it->second.c_str()) : nullptr;
 }
 
@@ -49,7 +50,7 @@ AETHER_API aether_status_t aether_element_set_attribute(
         return AETHER_ERROR_NULL_ARG;
     }
 
-    const std::string attribute_name(name);
+    const std::string attribute_name = aether::canonical_html_attribute_name(name);
     if (attribute_name == "id") {
         auto* root = element;
         while (root->parent) root = root->parent;
@@ -72,7 +73,7 @@ AETHER_API aether_status_t aether_element_set_attribute(
 
 AETHER_API aether_bool_t aether_element_has_attribute(aether_node_t element, const char* name) {
     if (!element || element->type != AETHER_NODE_ELEMENT || !name) return AETHER_FALSE;
-    return element->attributes.count(name) ? AETHER_TRUE : AETHER_FALSE;
+    return element->attributes.count(aether::canonical_html_attribute_name(name)) ? AETHER_TRUE : AETHER_FALSE;
 }
 
 AETHER_API aether_bool_t aether_element_has_class(aether_node_t element, const char* class_name) {

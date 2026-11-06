@@ -306,7 +306,7 @@ void compatibility() {
             "<SpAn id=after class='kept' title='a>b &amp; c' data-x=https://x/y ID=Upper "
             "id=ignored class=lost hidden></sPaN>",
             {element("span", {}, {{"id", "after"}, {"class", "kept"}, {"title", "a>b & c"},
-                                  {"data-x", "https://x/y"}, {"ID", "Upper"}, {"hidden", ""}})});
+                                  {"data-x", "https://x/y"}, {"hidden", ""}})});
     fixture("comment content", "<!-- <2> --><span id=after>B</span>", {comment(" <2> "), span()});
     run("comment incomplete", "<body id=fixture><!-- <2>", {body({comment(" <2>")})});
     run("doctype before body", "<!DOCTYPE html><body id=fixture><span id=after>B</span>", {body({span()})});

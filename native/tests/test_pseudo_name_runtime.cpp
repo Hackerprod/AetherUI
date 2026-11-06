@@ -232,7 +232,7 @@ void cascade_and_arguments() {
         {".Item", true}, {".item", false}, {".\\49 tem", true}, {".\\69 tem", false},
         {"#Target", true}, {"#target", false}, {"[data-v='AbC']", true}, {"[data-v='abc']", false},
         {"[data-v='\\41 bC']", true}, {"[data-v='abc' i]", true}, {"[data-v='abc' I]", true},
-        {"[data-v='abc' s]", false}, {"[data-v='abc' S]", false}, {"[data-V='AbC']", false},
+        {"[data-v='abc' s]", false}, {"[data-v='abc' S]", false}, {"[data-V='AbC']", true},
         {".HOVER", false}, {"#IS", false}, {"[data-v='HOVER']", false}
     };
     for (const char* function : {"is", "IS", "where", "WHERE", "not", "NOT"}) for (const auto& arg : args)

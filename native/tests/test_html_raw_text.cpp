@@ -212,7 +212,7 @@ void sequences_and_controls() {
     run("mixed-sequence", "<body><STYLE id=a>A&amp;</sTyLe><script id=b>B<b id=phantom></SCRIPT><StYlE id=c></style><ScRiPt id=d>D</script><p id=after>tail</p></body>",
         {raw("style", "A&amp;", "a"), raw("script", "B<b id=phantom>", "b"), raw("style", "", "c"), raw("script", "D", "d"), after()});
     run("ordinary-controls", "<body><DiV id=normal DATA-X='UP&amp;' data-path=a/b>Hi &amp; &#60; &#x3C;</dIv><IMG id=image src=/a.png><STYLE id=empty /><script id=empty2 /><p id=after>tail</p></body>",
-        {element("div", {{"id", "normal"}, {"DATA-X", "UP&"}, {"data-path", "a/b"}}, {text("Hi & < <")}),
+        {element("div", {{"id", "normal"}, {"data-x", "UP&"}, {"data-path", "a/b"}}, {text("Hi & < <")}),
          element("img", {{"id", "image"}, {"src", "/a.png"}}), raw("style", "", "empty"), raw("script", "", "empty2"), after()});
     run("adjacent-slash-attribute", "<body><div id=wrap data-path=a/b/><span id=child></span></div><p id=after>tail</p></body>",
         {element("div", {{"id", "wrap"}, {"data-path", "a/b/"}}, {element("span", {{"id", "child"}})}), after()});
