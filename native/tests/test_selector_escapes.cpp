@@ -170,8 +170,9 @@ void hex_unicode() {
         identity("hex-terminator",std::string("#\\70")+term+"lain","plain","id");
         identity("six-hex-terminator",std::string("#\\000070")+term+"lain","plain","id");
     }
-    const std::pair<const char*,const char*> cases[] = {
-        {R"(\31 23)","123"},{R"(\00003123)","123"},{R"(\000070lain)","plain"},
+    struct HexCase { const char* first; const char* second; bool literal_valid = true; };
+    const HexCase cases[] = {
+        {R"(\31 23)","123",false},{R"(\00003123)","123",false},{R"(\000070lain)","plain"},
         {R"(\61b)","\xD8\x9B"},{R"(\61 b)","ab"},{R"(\000061b)","ab"},
         {R"(\80)","\xC2\x80"},{R"(\7ff)","\xDF\xBF"},{R"(\800)","\xE0\xA0\x80"},
         {R"(\d7ff)","\xED\x9F\xBF"},{R"(\e000)","\xEE\x80\x80"},{R"(\ffff)","\xEF\xBF\xBF"},
@@ -181,7 +182,10 @@ void hex_unicode() {
     };
     for (const auto& c:cases) {
         identity(std::string("hex/")+c.first,std::string("#")+c.first,c.second,"id");
-        identity(std::string("literal/")+c.first,std::string("#")+c.second,c.second,"id");
+        // A decoded numeric ID is legal in HTML, but its unescaped source is
+        // an unrestricted hash rather than an ID selector. Keep both controls.
+        identity(std::string("literal/")+c.first,std::string("#")+c.second,c.second,"id",
+                 c.literal_valid ? 1 : 0,c.literal_valid);
     }
     for (const char* replacement:{R"(\0)",R"(\d800)",R"(\dfff)",R"(\110000)",R"(\ffffff)"})
         identity("replacement",std::string("#")+replacement,"\xEF\xBF\xBD","id");

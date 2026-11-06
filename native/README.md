@@ -510,6 +510,57 @@ compares each ID with the element's ID. This is source-level reference, not a
 Chromium execution or visual comparison. Chromium's packed specificity saturation,
 quirks mode and broader selector grammar are not imported.
 
+## CSS identifier starts in selectors
+
+Identifier admission uses the source spelling before escape decoding. A name
+starts with an ASCII letter, `_`, a valid non-ASCII scalar or an escape. A leading
+`-` must be followed by one of those starts or another `-`. Digits and dashes
+remain valid later in a name. Thus `.123`, `#123`, `.-1`, `-` and `[data-x=123]`
+are invalid selectors; `.\31 23`, `#\31 23`, `.\-1`, `\-` and
+`[data-x="123"]` remain valid. Numeric HTML IDs, classes and attribute values
+are unchanged. Quoted values retain their existing string rules.
+
+A literal `-->` at the start of an ident is a CDC token, so `.-->a` is invalid.
+The hash path is different: `#-->a` remains ID `--`, a child combinator and type
+`a`. Comments or escapes prevent CDC formation: `.--/**/>a` and `.-\->a` are
+valid, while `.--\>a` is one class named `-->a`. CDC is not searched inside an
+already-started name; `.a-->b` still means class `a--` followed by child type `b`.
+
+Admission neither joins comments nor changes structural recovery. `./**/name`
+is valid but `#/**/name` is not a hash ID. Escaped punctuation stays name data,
+including in a rejected branch. UTF-8 validation, hex escape terminators,
+replacement scalars and the private selector API's trailing-escape behavior
+remain unchanged. The parser does not import custom-property restrictions:
+`--` is a valid general identifier.
+
+The public selector-list API still discards invalid branches and requires a
+survivor. IS/WHERE discard invalid branches and may remain present but empty;
+NOT/HAS reject an invalid argument branch. Rejected branches contribute no
+specificity, dependencies, anchors, rule IDs or source positions. A valid
+never-matching `:is(.123)` still publishes one rule. For example,
+`:is(#123,.item)` has only class specificity, while `:is(#\31 23,.item)` retains
+the valid ID branch and its specificity. No AST, matcher, ABI or binding change
+is needed.
+
+The source comparison uses Chromium revision
+[`7fe04cd3b6456bd7baec869f6a5efaebd6e79b71`](https://github.com/chromium/chromium/blob/7fe04cd3b6456bd7baec869f6a5efaebd6e79b71/third_party/blink/renderer/core/css/parser/css_parser_idioms.cc#L74-L86):
+`NextCharsAreIdentifier` defines the start rule,
+[`Hash` and `HyphenMinus`](https://github.com/chromium/chromium/blob/7fe04cd3b6456bd7baec869f6a5efaebd6e79b71/third_party/blink/renderer/core/css/parser/css_tokenizer.cc#L89-L115)
+distinguish hash ID from contextual CDC, and
+[`ConsumeId`/`ConsumeClass`](https://github.com/chromium/chromium/blob/7fe04cd3b6456bd7baec869f6a5efaebd6e79b71/third_party/blink/renderer/core/css/parser/css_selector_parser.cc#L1484-L1508)
+require those token kinds. This is a bounded source comparison, not Chromium
+execution, a full tokenizer implementation, stylesheet-list policy parity or
+visual conformance.
+
+`aether.selector-identifier-start-parser` checks source/decoded distinctions,
+UTF-8, EOF, comments, CDC ASTs and metadata recovery.
+`aether.selector-identifier-start-compiler` checks publication, contiguous IDs,
+shared order/media/declarations, indexes and capacity.
+`aether.selector-identifier-start-runtime` checks the public ABI, cascade,
+mutations, repeated state transitions and stylesheet/generated-content lifetime.
+All checks remain active under `NDEBUG`; CMake/CTest, direct native builds and
+binding execution are separate validation stages.
+
 ## Pseudo-selector name identity
 
 Supported pseudoclass names are ASCII case-insensitive after CSS escape decoding:

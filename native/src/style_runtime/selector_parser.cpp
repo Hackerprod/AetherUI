@@ -44,14 +44,37 @@ static bool is_css_newline(char c) {
     return c == '\n' || c == '\r' || c == '\f';
 }
 
-static bool is_identifier_start(char c) {
+static bool is_name_start(char c) {
     const auto u = static_cast<unsigned char>(c);
     return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
-           c == '_' || c == '-' || u >= 128;
+           c == '_' || u >= 128;
 }
 
-static bool is_identifier_part(char c) {
-    return is_identifier_start(c) || (c >= '0' && c <= '9');
+static bool is_name_part(char c) {
+    return is_name_start(c) || (c >= '0' && c <= '9') || c == '-';
+}
+
+// Admission uses source bytes. Escaped digits/dashes remain valid identifiers,
+// even though their decoded spelling could not start an unescaped identifier.
+static bool is_valid_escape_at(std::string_view source, size_t index) {
+    return index < source.size() && source[index] == '\\' &&
+           (index + 1 == source.size() || !is_css_newline(source[index + 1]));
+}
+
+static bool would_start_identifier(std::string_view source, size_t index) {
+    if (index >= source.size()) return false;
+    const char first = source[index];
+    if (is_name_start(first) || is_valid_escape_at(source, index)) return true;
+    if (first != '-' || index + 1 == source.size()) return false;
+    const char second = source[index + 1];
+    return is_name_start(second) || second == '-' || is_valid_escape_at(source, index + 1);
+}
+
+static bool would_start_ident_name(std::string_view source, size_t index) {
+    // A literal CDC precedes ident tokenization, but not name consumption after
+    // '#': #-->a is hash ID "--", child combinator, type a. Keep that exception
+    // out of both the common identifier predicate and the structural scanner.
+    return would_start_identifier(source, index) && source.substr(index, 3) != "-->";
 }
 
 static int hex_digit(char c) {
@@ -150,11 +173,21 @@ static bool consume_name(std::string_view source, size_t& index, std::string* ou
     while (index < source.size()) {
         if (source[index] == '\\') {
             if (!consume_escape(source, index, out, false)) return false;
-        } else if (is_identifier_part(source[index])) {
+        } else if (is_name_part(source[index])) {
             if (!consume_scalar(source, index, out)) return false;
         } else break;
     }
     return index > start;
+}
+
+// Structural recovery still consumes names, including invalid identifier starts.
+// Only semantic identifier positions use these admission wrappers.
+static bool consume_identifier(std::string_view source, size_t& index, std::string* out) {
+    return would_start_ident_name(source, index) && consume_name(source, index, out);
+}
+
+static bool consume_hash_id(std::string_view source, size_t& index, std::string* out) {
+    return would_start_identifier(source, index) && consume_name(source, index, out);
 }
 
 // A bad-string newline ends the token, leaving real following delimiters visible
@@ -182,7 +215,7 @@ static bool next_structure(std::string_view source, size_t& index, size_t& offse
             continue;
         } else if (c == '\'' || c == '"') {
             consume_string(source, index, nullptr);
-        } else if (is_identifier_part(c) || c == '\\') {
+        } else if (is_name_part(c) || c == '\\') {
             consume_name(source, index, nullptr);
         } else {
             offset = index++;
@@ -244,7 +277,13 @@ struct parser_s {
 
     std::string read_identifier() {
         std::string value;
-        if (!consume_name(source, index, &value)) return {};
+        if (!consume_identifier(source, index, &value)) return {};
+        return value;
+    }
+
+    std::string read_hash_id() {
+        std::string value;
+        if (!consume_hash_id(source, index, &value)) return {};
         return value;
     }
 
@@ -303,7 +342,7 @@ static bool read_attribute_value(parser_s& p, std::string& value) {
     if (p.eof()) return false;
     if (p.peek() == '\'' || p.peek() == '"')
         return consume_string(p.source, p.index, &value);
-    return consume_name(p.source, p.index, &value);
+    return consume_identifier(p.source, p.index, &value);
 }
 
 /* ── Attribute selector parser ────────────────────────────────────── */
@@ -554,7 +593,7 @@ static bool try_parse_compound(parser_s& p, compound_selector_s& compound) {
     if (!p.eof() && p.peek() == '*') {
         ++p.index;
         consumed = true;
-    } else if (!p.eof() && (is_identifier_start(p.peek()) || p.peek() == '\\')) {
+    } else if (would_start_ident_name(p.source, p.index)) {
         compound.type_name = to_lower_ascii(p.read_identifier());
         if (compound.type_name.empty()) return false;
         p.specificity = p.specificity + specificity_s{0, 0, 1};
@@ -566,7 +605,7 @@ static bool try_parse_compound(parser_s& p, compound_selector_s& compound) {
         char c = p.peek();
         if (c == '#') {
             ++p.index;
-            auto val = p.read_identifier();
+            auto val = p.read_hash_id();
             if (val.empty()) return false;
             compound.ids.push_back(std::move(val));
             p.specificity = p.specificity + specificity_s{1, 0, 0};

@@ -47,8 +47,9 @@ int main() {
     name("#\\7f ", "\x7f");
     name(std::string("#\\")+'\x7f', "\x7f");
     name("\\64 IV", "div", true);
-    // Unescaped numeric spellings previously accepted by the parser stay valid.
-    name("#123", "123");
+    // Hash ID admission is based on source spelling, before decoding.
+    invalid("#123");
+    name(R"(#\31 23)", "123");
     invalid(std::string("#a")+'\x7f');
     invalid(std::string("#a")+'\xc0'+'\xaf');
     invalid(std::string("#a")+'\xe2');
