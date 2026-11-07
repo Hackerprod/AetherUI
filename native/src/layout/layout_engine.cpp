@@ -712,6 +712,24 @@ static float layout_atomic_control(
         aether_thicknessf_vertical(border));
 }
 
+// Anonymous flex wrappers have one inherited style and own a single CSS text
+// sequence. Join raw DOM text before transformation/tokenization so node and
+// comment boundaries cannot change shaping, whitespace or break opportunities.
+// The children remain borrowed aliases; no authored node or text is modified.
+static bool collect_anonymous_flex_text_items(
+    aether_node_s* element,
+    const BoxStyleSnapshot& style,
+    std::vector<inline_item_s>& output)
+{
+    if (!element->anonymous_flex_owner) return false;
+    std::string text;
+    for (const auto* child : element->children) {
+        if (child->type == AETHER_NODE_TEXT) text.append(child->text);
+    }
+    collect_text_items(element, style, text, output);
+    return true;
+}
+
 /* ── LayoutFlowChildren ────────────────────────────────────────────── */
 
 float layout_flow_children(
@@ -726,6 +744,10 @@ float layout_flow_children(
 {
     float cursor_y = content.y;
     std::vector<inline_item_s> inline_items;
+    if (collect_anonymous_flex_text_items(parent, parent_style, inline_items)) {
+        return layout_inline_items(engine, styles, parent_box, inline_items,
+            content.x, content.y, content.width, content.height, containing_height, parent_style, result);
+    }
     bool has_pending_margin = false;
     float pending_margin = 0.f;
 
@@ -1064,6 +1086,11 @@ float measure_intrinsic_width(
         inline_items.clear();
     };
 
+    if (collect_anonymous_flex_text_items(element, style, inline_items)) {
+        flush_inline();
+        return content_width + aether_thicknessf_horizontal(padding) + aether_thicknessf_horizontal(border);
+    }
+
     for (auto* child : element->children) {
         const auto role = append_inline_node(engine, styles, element, style, child, inline_items);
         if (role != inline_node_role_e::block_content) continue;
@@ -1078,6 +1105,7 @@ float measure_intrinsic_width(
 float measure_intrinsic_height(
     const aether_layout_engine_s* engine,
     const StyleLookup* styles,
+    aether_layout_result_s* result,
     aether_node_s* element,
     const BoxStyleSnapshot& style,
     aether_thicknessf padding, aether_thicknessf border,
@@ -1090,26 +1118,14 @@ float measure_intrinsic_height(
             aether_thicknessf_vertical(padding) + aether_thicknessf_vertical(border);
     }
 
+    const bool flex = style.display == AETHER_DISPLAY_FLEX;
+    const bool row = flex && style.flex_direction == AETHER_FLEX_DIRECTION_ROW;
     float content_height = 0.f;
-    int block_child_count = 0;
-    std::vector<inline_item_s> inline_items;
-    auto flush_inline = [&]() {
-        if (inline_items.empty()) return;
-        const float inline_height = measure_inline_items_height(
-            engine, styles, inline_items, content_width, style, nullptr, element);
-        if (style.display == AETHER_DISPLAY_FLEX && style.flex_direction == AETHER_FLEX_DIRECTION_ROW) {
-            content_height = std::max(content_height, inline_height);
-        } else {
-            content_height += inline_height;
-        }
-        inline_items.clear();
+    const auto add_height = [&](float height) {
+        if (row) content_height = std::max(content_height, height);
+        else content_height += height;
     };
-
-    for (auto* child : element->children) {
-        const auto role = append_inline_node(engine, styles, element, style, child, inline_items);
-        if (role != inline_node_role_e::block_content) continue;
-        flush_inline();
-        ++block_child_count;
+    const auto measure_child = [&](aether_node_s* child) {
         const auto child_style = get_style(styles, child);
         const auto child_padding = resolve_padding_edges(engine, child_style.padding, content_width, child_style);
         const auto child_border = resolve_border_edges(engine, child_style, content_width);
@@ -1121,20 +1137,37 @@ float measure_intrinsic_height(
                 child_height += aether_thicknessf_vertical(child_padding) + aether_thicknessf_vertical(child_border);
             }
         } else {
-            child_height = measure_intrinsic_height(engine, styles, child, child_style,
+            child_height = measure_intrinsic_height(engine, styles, result, child, child_style,
                                                     child_padding, child_border, content_width);
         }
-        child_height += aether_thicknessf_vertical(child_margin);
-        if (style.display == AETHER_DISPLAY_FLEX && style.flex_direction == AETHER_FLEX_DIRECTION_ROW) {
-            content_height = std::max(content_height, child_height);
-        } else {
-            content_height += child_height;
+        add_height(child_height + aether_thicknessf_vertical(child_margin));
+    };
+
+    if (flex) {
+        // Reuse this result's exact item sequence and synthetic overlay. Inline
+        // elements, text wrappers and block elements are all real flex items.
+        const auto& children = collect_flex_items(styles, result, element, style);
+        for (auto* child : children) measure_child(child);
+        if (!row && !children.empty()) {
+            content_height += (children.size() - 1) * layout_used_gap(styles, element, style, true, 0.f, false);
         }
-    }
-    flush_inline();
-    if (style.display == AETHER_DISPLAY_FLEX &&
-        style.flex_direction == AETHER_FLEX_DIRECTION_COLUMN) {
-        content_height += std::max(0, block_child_count - 1) * layout_used_gap(styles, element, style, true, 0.f, false);
+    } else {
+        std::vector<inline_item_s> inline_items;
+        const auto flush_inline = [&]() {
+            if (inline_items.empty()) return;
+            add_height(measure_inline_items_height(
+                engine, styles, inline_items, content_width, style, result, element));
+            inline_items.clear();
+        };
+        if (!collect_anonymous_flex_text_items(element, style, inline_items)) {
+            for (auto* child : element->children) {
+                const auto role = append_inline_node(engine, styles, element, style, child, inline_items);
+                if (role != inline_node_role_e::block_content) continue;
+                flush_inline();
+                measure_child(child);
+            }
+        }
+        flush_inline();
     }
     return content_height + aether_thicknessf_vertical(padding) + aether_thicknessf_vertical(border);
 }
@@ -1179,7 +1212,7 @@ static float measure_inline_items_height(
             const float width = measure_child_natural_width(
                 engine, styles, item.element, available_width, result, aether_intrinsic_size_mode_e::max_content);
             const float height = measure_intrinsic_height(
-                engine, styles, item.element, style, padding, border, available_width);
+                engine, styles, result, item.element, style, padding, border, available_width);
             append_fragment(width, height, false);
             continue;
         }
@@ -1212,10 +1245,7 @@ static float measure_intrinsic_flex_width(
     // text run and gives flex-shrink an artificially small automatic minimum.
     const auto& children = collect_flex_items(styles, result, element, style);
     if (children.empty()) {
-        std::vector<inline_item_s> inline_items;
-        collect_inline_element(engine, styles, element, style, inline_items);
-        return measure_inline_items_intrinsic_width(engine, styles, inline_items, maximum, result, mode) +
-            aether_thicknessf_horizontal(padding) + aether_thicknessf_horizontal(border);
+        return aether_thicknessf_horizontal(padding) + aether_thicknessf_horizontal(border);
     }
 
     std::vector<float> child_widths;

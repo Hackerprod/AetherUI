@@ -1190,6 +1190,21 @@ if(AETHERUI_BUILD_TESTS)
     endif()
     add_test(NAME aether.layout-immutable-consumers COMMAND aether_layout_immutable_consumers_test)
 
+    # Share authentic core objects between these private tests. Direct object
+    # linkage enables internal assertions and process-local allocation failure
+    # injection without expanding the installed ABI.
+    add_library(aether_flex_text_test_core OBJECT ${immutable_layout_core_sources})
+    target_include_directories(aether_flex_text_test_core PRIVATE include src)
+    target_compile_definitions(aether_flex_text_test_core PRIVATE AETHER_EXPORTS)
+    foreach(flex_text_test lifetime sequences)
+        add_executable(aether_flex_text_${flex_text_test}_test
+            tests/test_flex_text_${flex_text_test}.cpp
+            $<TARGET_OBJECTS:aether_flex_text_test_core>)
+        target_include_directories(aether_flex_text_${flex_text_test}_test PRIVATE include src)
+        target_compile_definitions(aether_flex_text_${flex_text_test}_test PRIVATE AETHER_EXPORTS)
+        add_test(NAME aether.flex-text-${flex_text_test} COMMAND aether_flex_text_${flex_text_test}_test)
+    endforeach()
+
     # The test includes the authentic layout engine to exercise its private
     # final validator. Compile every other core source exactly once, without a DSO.
     get_target_property(intrusive_registry_core_sources aether_core SOURCES)

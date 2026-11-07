@@ -126,12 +126,15 @@ const std::vector<aether_node_s*>& collect_flex_items(
             direct_text_run.push_back(node);
             continue;
         }
-        flush_direct_text();
+        // Comments and boxes suppressed by display:none do not interrupt the
+        // CSS text sequence. Visible out-of-flow boxes do form a boundary.
         if (node->type != AETHER_NODE_ELEMENT) continue;
         const auto child_style = get_style(styles, node);
+        if (child_style.display == AETHER_DISPLAY_NONE) continue;
+        flush_direct_text();
         const bool out_of_flow = child_style.position == AETHER_POSITION_ABSOLUTE ||
             child_style.position == AETHER_POSITION_FIXED;
-        if (child_style.display != AETHER_DISPLAY_NONE && !out_of_flow) {
+        if (!out_of_flow) {
             items.push_back(node);
         }
     }
@@ -353,7 +356,7 @@ static resolved_flex_children_s resolve_flex_children(
                                       aether_intrinsic_size_mode_e::min_content)
             : automatic_main_size
                 ? flex_box_main_size(base_box, false)
-                : measure_intrinsic_height(engine, styles, children[index], child_style,
+                : measure_intrinsic_height(engine, styles, result, children[index], child_style,
                                            child_padding, child_border, content.width);
         const int32_t main_axis_overflow = horizontal ? child_style.overflow_x : child_style.overflow_y;
         item.automatic_minimum = {
@@ -516,49 +519,9 @@ float layout_flex_children(
 {
     const auto& children = collect_flex_items(styles, result, parent, style);
 
-    if (children.empty()) {
-        // flex container with only text content — fall back to inline flow
-        std::vector<inline_item_s> inline_items;
-        for (auto* node : parent->children) {
-            if (node->type == AETHER_NODE_TEXT) {
-                collect_text_items(parent, style, node->text, inline_items);
-            }
-        }
-        if (inline_items.empty()) return 0.f;
-        // Text nodes are anonymous flex items. In a row they align on the main axis through
-        // justify-content; in a column, align-items controls their horizontal position.
-        auto inline_style = style;
-        if (style.flex_direction == AETHER_FLEX_DIRECTION_ROW) {
-            inline_style.text_align = style.justify_content == AETHER_JUSTIFY_CENTER
-                ? AETHER_TEXT_ALIGN_CENTER
-                : style.justify_content == AETHER_JUSTIFY_END
-                    ? AETHER_TEXT_ALIGN_END
-                    : AETHER_TEXT_ALIGN_START;
-        } else {
-            inline_style.text_align = style.align_items == AETHER_ALIGN_CENTER
-                ? AETHER_TEXT_ALIGN_CENTER
-                : style.align_items == AETHER_ALIGN_END
-                    ? AETHER_TEXT_ALIGN_END
-                    : AETHER_TEXT_ALIGN_START;
-        }
-        float used_height = layout_inline_items(engine, styles, parent_box, inline_items,
-                                                content.x, content.y, content.width, content.height, containing_height, inline_style, result);
-        if (has_definite_height) {
-            float vertical_free = std::max(0.f, content.height - used_height);
-            float dy = 0.f;
-            const int vertical_alignment = style.flex_direction == AETHER_FLEX_DIRECTION_ROW
-                ? style.align_items
-                : style.justify_content;
-            if (vertical_alignment == AETHER_ALIGN_CENTER || vertical_alignment == AETHER_JUSTIFY_CENTER) dy = vertical_free / 2;
-            else if (vertical_alignment == AETHER_ALIGN_END || vertical_alignment == AETHER_JUSTIFY_END) dy = vertical_free;
-            if (dy != 0.f) {
-                for (auto* child : parent_box->children) {
-                    offset_box(child, 0, dy);
-                }
-            }
-        }
-        return used_height;
-    }
+    // The collector is authoritative, including suppression of whitespace-only
+    // sequences. Never reconstruct discarded text through an inline fallback.
+    if (children.empty()) return 0.f;
 
     const bool horizontal = style.flex_direction != AETHER_FLEX_DIRECTION_COLUMN;
     const bool main_size_is_definite = horizontal || has_definite_height;

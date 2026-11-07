@@ -133,6 +133,7 @@ float measure_intrinsic_width(
 float measure_intrinsic_height(
     const aether_layout_engine_s* engine,
     const StyleLookup* styles,
+    aether_layout_result_s* result,
     aether_node_s* element,
     const BoxStyleSnapshot& style,
     aether_thicknessf padding, aether_thicknessf border,
