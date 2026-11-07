@@ -63,6 +63,37 @@ jobs:
             exit "$build_status"
           fi
 
+          if [[ "$RUNNER_OS" == "Linux" ]]; then
+            # Keep the Ubuntu build parallelism bounded while collecting diagnostics.
+            (
+              echo "::group::Linux build resources (before)"
+              printf 'Runner image: %s %s\n' "${ImageOS:-unknown}" "${ImageVersion:-unknown}"
+              printf 'Runner architecture: %s\n' "${RUNNER_ARCH:-unknown}"
+              nproc
+              free -h
+              df -h .
+              echo "::endgroup::"
+            ) || true
+
+            build_command=(cmake --build artifacts/build/native-ci --config Release --parallel 3)
+            if [[ -x /usr/bin/time ]]; then
+              build_command=(/usr/bin/time -v "${build_command[@]}")
+            fi
+            if "${build_command[@]}"; then
+              build_status=0
+            else
+              build_status=$?
+            fi
+
+            (
+              echo "::group::Linux build resources (after)"
+              free -h
+              df -h .
+              echo "::endgroup::"
+            ) || true
+            exit "$build_status"
+          fi
+
           cmake --build artifacts/build/native-ci --config Release --parallel
 
       - name: Test
