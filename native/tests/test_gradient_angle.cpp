@@ -5,6 +5,7 @@
 #include <bit>
 #include <cerrno>
 #include <charconv>
+#include <cfenv>
 #include <clocale>
 #include <cmath>
 #include <cstdint>
@@ -34,12 +35,42 @@ struct Result {
     uint32_t x = 0, y = 0;
     bool operator==(const Result&) const = default;
 };
+struct Direction { float x, y; };
+#if defined(_MSC_VER)
+__declspec(noinline)
+#else
+__attribute__((noinline))
+#endif
+Direction paired_direction(float radians) {
+    return {std::sin(radians), -std::cos(radians)};
+}
+void diagnose_direction(const std::string& source, float degrees, float radians,
+                        float actual_x, float actual_y, int rounding_before, int rounding_after) {
+    const auto paired = paired_direction(radians);
+    // Indirect calls retain the separate scalar libm paths for diagnosis.
+    float (*volatile scalar_sin)(float) = static_cast<float (*)(float)>(std::sin);
+    float (*volatile scalar_cos)(float) = static_cast<float (*)(float)>(std::cos);
+    const float separate_x = scalar_sin(radians);
+    const float separate_y = -scalar_cos(radians);
+    const auto bits = [](float value) { return std::bit_cast<uint32_t>(value); };
+    const float residue = std::fmod(degrees, 360.f);
+    std::fprintf(stderr,
+        "ANGLE DIAGNOSTIC [%s] locale=%s rounding(before/after)=%d/%d degrees=%a/%08x residue=%a/%08x radians=%a/%08x\n"
+        "  product=(%a/%08x,%a/%08x) paired=(%a/%08x,%a/%08x) scalar=(%a/%08x,%a/%08x)\n",
+        source.c_str(), current().c_str(), rounding_before, rounding_after, static_cast<double>(degrees), bits(degrees),
+        static_cast<double>(residue), bits(residue), static_cast<double>(radians), bits(radians),
+        static_cast<double>(actual_x), bits(actual_x), static_cast<double>(actual_y), bits(actual_y),
+        static_cast<double>(paired.x), bits(paired.x), static_cast<double>(paired.y), bits(paired.y),
+        static_cast<double>(separate_x), bits(separate_x), static_cast<double>(separate_y), bits(separate_y));
+}
 Result parse(const std::string& source, bool expected, const char* numeric = nullptr) {
     const auto before = current();
     aether_linear_gradient g{73, 91, nullptr, 5};
     aether_linear_gradient_parse_info_s info{true};
     errno = ERANGE;
+    const int rounding_before = std::fegetround();
     const bool valid = aether_linear_gradient_try_parse(source.c_str(), &g, &info);
+    const int rounding_after = std::fegetround();
     check(valid == expected, source + " validity");
     check(before == current(), source + " preserves caller locale");
     if (!valid) {
@@ -58,9 +89,10 @@ Result parse(const std::string& source, bool expected, const char* numeric = nul
             check(value.valid, "reference converts finite C float");
             constexpr float pi = 3.14159265358979323846f;
             const float r = std::fmod(value.value, 360.f) * pi / 180.f;
-            check(std::bit_cast<uint32_t>(g.direction_x) == std::bit_cast<uint32_t>(std::sin(r)) &&
-                  std::bit_cast<uint32_t>(g.direction_y) == std::bit_cast<uint32_t>(-std::cos(r)),
-                  source + " matches signed fmod float reference on this platform");
+            const bool matches = std::bit_cast<uint32_t>(g.direction_x) == std::bit_cast<uint32_t>(std::sin(r)) &&
+                                 std::bit_cast<uint32_t>(g.direction_y) == std::bit_cast<uint32_t>(-std::cos(r));
+            if (!matches) diagnose_direction(source, value.value, r, g.direction_x, g.direction_y, rounding_before, rounding_after);
+            check(matches, source + " matches signed fmod float reference on this platform");
             check(!info.uses_fixed_corner_direction, "angle is not a corner approximation");
         }
     }
