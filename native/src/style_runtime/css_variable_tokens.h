@@ -25,6 +25,8 @@ enum class css_variable_escape_tail { none, backslash, hex, hex_cr };
 struct css_variable_token {
     css_variable_token_kind kind = css_variable_token_kind::end;
     size_t begin = 0, end = 0;
+    // Absolute end of the numeric prefix for Number, Percentage and Dimension.
+    size_t numeric_end = 0;
     char delimiter = 0;
     bool is_var = false, dashed = false;
     // Syntax consumers may recover EOF; legacy readers retain kind::error.

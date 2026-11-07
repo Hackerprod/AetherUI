@@ -77,8 +77,9 @@ int main() {
     aether_background_shorthand_s background;
     require(aether_background_shorthand_try_parse("7px/**/11px / 20px/**/30px", background), "background synthetic slash");
     aether_transform_list transform{};
-    require(aether_transform_list_try_parse("translate(7%11px)/**/scale(2)", &transform), "transform components and functions");
+    require(aether_transform_list_try_parse("translate(7%,11px)/**/scale(2)", &transform), "transform components and functions");
     aether_transform_list_free(&transform);
+    require(!aether_transform_list_try_parse("translate(7%11px)", &transform), "transform arguments require commas even at token boundaries");
     require(!aether_transform_list_try_parse("translate/**/(7px)", &transform), "transform function boundary");
     require(!aether_transform_list_try_parse("translate(10/**/px)", &transform), "transform dimension boundary");
     aether_backdrop_filter_list filters{};

@@ -8,6 +8,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <string>
 
 namespace {
 
@@ -28,12 +29,13 @@ aether_text_metrics_t measure(const char* text, const aether_computed_style_t*, 
     return {text ? static_cast<float>(std::strlen(text)) : 0.f, 1.f, .8f};
 }
 
-struct diagnostics_s { int count = 0; const char* code = nullptr; const char* property = nullptr; };
+// Callback payloads are borrowed only for the duration of the call.
+struct diagnostics_s { int count = 0; std::string code, property; };
 void diagnostic(const char* code, const char* property, const char*, const char*, void* user_data) {
     auto* diagnostics = static_cast<diagnostics_s*>(user_data);
     ++diagnostics->count;
-    diagnostics->code = code;
-    diagnostics->property = property;
+    diagnostics->code = code ? code : "";
+    diagnostics->property = property ? property : "";
 }
 
 } // namespace
@@ -151,8 +153,8 @@ int main() {
     }
     aether_style_updates_free(updates, update_count);
     require(found_item, "transform fixture item did not receive a computed style");
-    require(diagnostics.count == 1 && std::strcmp(diagnostics.code, "AETHER-CSS-TRANSFORM") == 0 &&
-            std::strcmp(diagnostics.property, "transform") == 0,
+    require(diagnostics.count == 1 && diagnostics.code == "AETHER-CSS-TRANSFORM" &&
+            diagnostics.property == "transform",
             "unsupported 3D transforms must emit a dedicated diagnostic instead of silently disappearing");
 
     aether_style_map_t styles = nullptr;

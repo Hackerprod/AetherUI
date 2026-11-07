@@ -205,6 +205,7 @@ css_variable_token css_variable_lexer::next() {
             cursor_ = exponent;
             while (digit(read(cursor_)) && !failed_) ++cursor_;
         }
+        t.numeric_end = cursor_;
         if (ident_at(cursor_)) { name(v, u, d); t.serialization = category::dimension; }
         else if (read(cursor_) == '%') { ++cursor_; t.serialization = category::percentage; }
         return finish(css_variable_token_kind::other);

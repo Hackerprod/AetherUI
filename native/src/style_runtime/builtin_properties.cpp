@@ -378,12 +378,18 @@ static property_apply_result_s bi_shadow_parse_failure(const char* source, bool 
 }
 
 static bool bi_try_transform(const char* src, std::string& out) {
-    std::string t = str_trim(src);
-    if (t.empty()) return false;
-    // The checked applicator owns complete grammar validation so malformed
-    // deferred var() values receive an explicit AETHER-CSS-TRANSFORM report.
-    out = t;
+    // Deferred validation may pass out.c_str() as src. Own it before writing out.
+    const std::string value = str_trim(src ? src : "");
+    aether_transform_list parsed{};
+    if (!aether_transform_list_try_parse(value.c_str(), &parsed)) return false;
+    aether_transform_list_free(&parsed);
+    out = value;
     return true;
+}
+
+static property_apply_result_s bi_transform_parse_failure(const char*) {
+    return property_apply_result_s::failure("AETHER-CSS-TRANSFORM",
+        "The transform value is not a supported 2D transform list.");
 }
 
 static bool bi_try_transform_origin(const char* src, std::string& out) {
@@ -443,8 +449,7 @@ static void bi_inherit_transform_origin(aether_computed_style_t* style,
 static property_apply_result_s bi_apply_transform(aether_computed_style_t* style, const std::string& value) {
     aether_transform_list parsed{};
     if (!aether_transform_list_try_parse(value.c_str(), &parsed)) {
-        return property_apply_result_s::failure("AETHER-CSS-TRANSFORM",
-            "The transform value is not a supported 2D transform list.");
+        return bi_transform_parse_failure(value.c_str());
     }
     aether_transform_list_free(&style->transforms);
     style->transforms = parsed;
@@ -1235,7 +1240,7 @@ void builtin_properties_register(style_property_registry_s* reg) {
 
     reg->register_property_checked("transform", false,
         STYLE_IMPACT_COMPOSITE | STYLE_IMPACT_HITTEST, "none", bi_try_transform,
-        bi_apply_transform);
+        bi_apply_transform, bi_transform_parse_failure);
 
     reg->register_property_checked("transform-origin", false,
         STYLE_IMPACT_COMPOSITE | STYLE_IMPACT_HITTEST, "50% 50%", bi_try_transform_origin,

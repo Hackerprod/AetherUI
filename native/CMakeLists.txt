@@ -391,6 +391,15 @@ if(AETHERUI_BUILD_TESTS)
     target_link_libraries(aether_transform_origin_dispatch_test PRIVATE AetherUI::Core)
     add_test(NAME aether.transform-origin-dispatch COMMAND aether_transform_origin_dispatch_test)
 
+    add_executable(aether_transform_dispatch_test tests/test_transform_dispatch.cpp
+        src/style_runtime/builtin_properties.cpp src/style_runtime/transition_properties.cpp
+        src/style_runtime/shadow_values.cpp src/style_runtime/css_variable_tokens.cpp
+        src/css/css_length.cpp src/css/background_layers.cpp src/css/linear_gradient.cpp
+        src/css/border_radii.cpp src/css/backdrop_filters.cpp src/css/transforms.cpp)
+    target_compile_definitions(aether_transform_dispatch_test PRIVATE AETHER_CSS_NUMERIC_ONLY)
+    target_link_libraries(aether_transform_dispatch_test PRIVATE AetherUI::Core)
+    add_test(NAME aether.transform-dispatch COMMAND aether_transform_dispatch_test)
+
     add_executable(aether_background_layers_test tests/test_background_layers.cpp src/css/background_layers.cpp src/css/linear_gradient.cpp src/style_runtime/css_variable_tokens.cpp)
     target_link_libraries(aether_background_layers_test PRIVATE AetherUI::Core)
     add_test(NAME aether.background-layers COMMAND aether_background_layers_test)
@@ -838,6 +847,34 @@ if(AETHERUI_BUILD_TESTS)
     target_link_libraries(aether_transform_origin_runtime_test PRIVATE AetherUI::Core)
     add_test(NAME aether.transform-origin-runtime COMMAND aether_transform_origin_runtime_test)
 
+    add_executable(aether_transform_parser_test tests/test_transform_parser.cpp
+        src/css/transforms.cpp src/style_runtime/css_variable_tokens.cpp src/css/css_length.cpp)
+    target_compile_definitions(aether_transform_parser_test PRIVATE AETHER_CSS_NUMERIC_ONLY)
+    target_include_directories(aether_transform_parser_test PRIVATE src/css)
+    target_link_libraries(aether_transform_parser_test PRIVATE AetherUI::Core)
+    add_test(NAME aether.transform-parser COMMAND aether_transform_parser_test)
+
+    add_executable(aether_transform_runtime_test tests/test_transform_runtime.cpp)
+    target_link_libraries(aether_transform_runtime_test PRIVATE AetherUI::Core)
+    add_test(NAME aether.transform-runtime COMMAND aether_transform_runtime_test)
+
+    add_executable(aether_transform_locale_test tests/test_transform_locale.cpp
+        src/css/transforms.cpp src/style_runtime/css_variable_tokens.cpp src/css/css_length.cpp)
+    target_compile_definitions(aether_transform_locale_test PRIVATE AETHER_CSS_NUMERIC_ONLY)
+    target_link_libraries(aether_transform_locale_test PRIVATE AetherUI::Core)
+    add_test(NAME aether.transform-locale COMMAND aether_transform_locale_test)
+    set_tests_properties(aether.transform-locale PROPERTIES RUN_SERIAL TRUE)
+
+    if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        add_executable(aether_transform_locale_failure_test tests/test_transform_locale_failure.cpp
+            src/css/transforms.cpp src/style_runtime/css_variable_tokens.cpp src/css/css_length.cpp)
+        target_compile_definitions(aether_transform_locale_failure_test PRIVATE AETHER_CSS_NUMERIC_ONLY)
+        target_link_libraries(aether_transform_locale_failure_test PRIVATE AetherUI::Core)
+        target_link_options(aether_transform_locale_failure_test PRIVATE
+            "-Wl,--wrap=newlocale" "-Wl,--wrap=freelocale" "-Wl,--wrap=strtof_l"
+            "-Wl,--wrap=strtod_l" "-Wl,--wrap=strtof" "-Wl,--wrap=strtod")
+        add_test(NAME aether.transform-locale-failure COMMAND aether_transform_locale_failure_test)
+    endif()
 
     add_executable(aether_table_layout_test tests/test_table_layout.cpp src/layout/table_layout.cpp)
     target_include_directories(aether_table_layout_test PRIVATE src/layout)
