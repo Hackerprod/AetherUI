@@ -1188,6 +1188,19 @@ if(AETHERUI_BUILD_TESTS)
     endif()
     add_test(NAME aether.layout-immutable-consumers COMMAND aether_layout_immutable_consumers_test)
 
+    # The test includes the authentic layout engine to exercise its private
+    # final validator. Compile every other core source exactly once, without a DSO.
+    get_target_property(intrusive_registry_core_sources aether_core SOURCES)
+    list(REMOVE_ITEM intrusive_registry_core_sources src/layout/layout_engine.cpp)
+    add_executable(aether_layout_intrusive_registry_test tests/test_layout_intrusive_registry.cpp
+        ${intrusive_registry_core_sources})
+    target_include_directories(aether_layout_intrusive_registry_test PRIVATE include src src/layout)
+    target_compile_definitions(aether_layout_intrusive_registry_test PRIVATE AETHER_EXPORTS)
+    if(NOT MSVC)
+        target_compile_options(aether_layout_intrusive_registry_test PRIVATE -ffp-contract=off)
+    endif()
+    add_test(NAME aether.layout-intrusive-registry COMMAND aether_layout_intrusive_registry_test)
+
     # Standalone resolver tests also compile both authentic scope readers.
     # Satisfy their private implementation dependencies without exporting them.
     get_property(reader_targets DIRECTORY PROPERTY BUILDSYSTEM_TARGETS)

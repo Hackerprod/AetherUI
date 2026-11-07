@@ -47,6 +47,15 @@ int main() {
             result.find_primary_box(element) == replacement,
         "destroying a published subtree must remove stale element and text entries without unpublishing its replacement");
 
+    // Registration for ownership must not depend on publication policy.
+    result.records_boxes = false;
+    auto* provisional = result.create_box();
+    require(provisional->owner == &result && result.live_box_count == 5,
+        "unpublished provisional boxes must still be owned");
+    delete provisional;
+    require(result.paint_order.size() == 1 && result.paint_order.front() == replacement,
+        "removing an unpublished box must preserve the survivor paint order");
+
     delete replacement;
     require(result.paint_order.empty() && result.find_primary_box(element) == nullptr,
         "destroying the replacement must remove its final paint and primary-box entries");
@@ -55,5 +64,6 @@ int main() {
     result.root = nullptr;
     require(result.live_box_count == 0,
         "recursive layout-box destruction must release every descendant exactly once");
+    require(result.allocated_boxes.empty(), "all registry links must be removed");
     return 0;
 }

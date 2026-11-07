@@ -2,35 +2,58 @@
 #include "../css/style_map_types.h"
 #include "../dom/dom_types.h"
 
-aether_layout_result_s::~aether_layout_result_s() {
+void LayoutBoxRegistry::link(aether_layout_box_s* box) noexcept {
+    assert(box && !box->owner && !box->registry_prev_ && !box->registry_next_);
+    box->registry_next_ = head_;
+    if (head_) head_->registry_prev_ = box;
+    head_ = box;
+}
+
+void LayoutBoxRegistry::unlink(aether_layout_box_s* box) noexcept {
+    assert(box && box->owner);
+    if (box->registry_prev_) box->registry_prev_->registry_next_ = box->registry_next_;
+    else { assert(head_ == box); head_ = box->registry_next_; }
+    if (box->registry_next_) box->registry_next_->registry_prev_ = box->registry_prev_;
+    box->registry_prev_ = nullptr;
+    box->registry_next_ = nullptr;
+}
+
+void aether_layout_result_s::release_box(aether_layout_box_s* box) noexcept {
+    assert(box && box->owner == this && live_box_count > 0);
+    unregister_box(box);
+    allocated_boxes.unlink(box);
+    box->owner = nullptr;
+    --live_box_count;
+}
+
+aether_layout_result_s::~aether_layout_result_s() noexcept {
     if (abandoned) {
         // Failed preparations may contain detached provisional trees. Sever their
-        // edges before reclaiming the allocation set, avoiding duplicate deletes.
+        // edges before reclaiming the allocation registry, avoiding duplicate deletes.
         for (auto* box : allocated_boxes) box->children.clear();
         while (!allocated_boxes.empty()) delete *allocated_boxes.begin();
         root = nullptr;
     }
     delete root;
+    assert(allocated_boxes.empty());
     assert(live_box_count == 0 && "all layout boxes must be owned by the final tree or released explicitly");
 
 }
 
-aether_layout_box_s::~aether_layout_box_s() {
+aether_layout_box_s::~aether_layout_box_s() noexcept {
     // Unpublish before recursively freeing descendants: a re-layout may delete
     // a previously published subtree while the result remains live.
-    if (owner) { owner->allocated_boxes.erase(this); owner->unregister_box(this); }
+    if (owner) owner->release_box(this);
     for (auto* child : children) delete child;
-    if (owner) owner->release_box();
 }
 
 aether_layout_box_s* aether_layout_result_s::create_box() {
     auto box_owner = std::make_unique<aether_layout_box_s>();
     auto* box = box_owner.get();
-    allocated_boxes.insert(box);
-    box_owner.release();
+    allocated_boxes.link(box);
     box->owner = this;
     ++live_box_count;
-    return box;
+    return box_owner.release();
 }
 
 namespace {

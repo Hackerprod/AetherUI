@@ -33,6 +33,37 @@ enum layout_box_kind_t : int32_t {
 
 struct aether_layout_result_s;
 struct aether_style_map_s;
+struct aether_layout_box_s;
+
+// Allocation ownership is independent of the tree and published paint indexes.
+// This view has no allocating operations; only the result can change membership.
+class LayoutBoxRegistry {
+public:
+    class iterator {
+    public:
+        aether_layout_box_s* operator*() const noexcept { return box_; }
+        iterator& operator++() noexcept;
+        bool operator==(iterator other) const noexcept { return box_ == other.box_; }
+        bool operator!=(iterator other) const noexcept { return !(*this == other); }
+    private:
+        friend class LayoutBoxRegistry;
+        explicit iterator(aether_layout_box_s* box) noexcept : box_(box) {}
+        aether_layout_box_s* box_;
+    };
+    LayoutBoxRegistry() noexcept = default;
+    LayoutBoxRegistry(const LayoutBoxRegistry&) = delete;
+    LayoutBoxRegistry& operator=(const LayoutBoxRegistry&) = delete;
+    LayoutBoxRegistry(LayoutBoxRegistry&&) = delete;
+    LayoutBoxRegistry& operator=(LayoutBoxRegistry&&) = delete;
+    iterator begin() const noexcept { return iterator(head_); }
+    iterator end() const noexcept { return iterator(nullptr); }
+    bool empty() const noexcept { return head_ == nullptr; }
+private:
+    friend struct aether_layout_result_s;
+    void link(aether_layout_box_s* box) noexcept;
+    void unlink(aether_layout_box_s* box) noexcept;
+    aether_layout_box_s* head_ = nullptr;
+};
 
 struct aether_layout_box_s {
     aether_layout_result_s* owner = nullptr;
@@ -68,7 +99,12 @@ struct aether_layout_box_s {
     aether_rectf padding_box{};
     aether_rectf content_box{};
 
-    ~aether_layout_box_s();
+    aether_layout_box_s() = default;
+    aether_layout_box_s(const aether_layout_box_s&) = delete;
+    aether_layout_box_s& operator=(const aether_layout_box_s&) = delete;
+    aether_layout_box_s(aether_layout_box_s&&) = delete;
+    aether_layout_box_s& operator=(aether_layout_box_s&&) = delete;
+    ~aether_layout_box_s() noexcept;
 
     void add_child(aether_layout_box_s* child) { children.push_back(child); }
 
@@ -78,7 +114,17 @@ struct aether_layout_box_s {
         for (auto* c : children) n += c->descendants_and_self();
         return n;
     }
+private:
+    friend class LayoutBoxRegistry;
+    aether_layout_box_s* registry_prev_ = nullptr;
+    aether_layout_box_s* registry_next_ = nullptr;
 };
+
+// Keep traversal usable by internal header consumers linked to the hidden core.
+inline LayoutBoxRegistry::iterator& LayoutBoxRegistry::iterator::operator++() noexcept {
+    box_ = box_->registry_next_;
+    return *this;
+}
 
 inline aether::style::ComputedStyleReadView layout_box_style(
     const aether_layout_box_s* box, const StyleLookup& styles, BoxStylePolicy policy)
@@ -209,24 +255,25 @@ struct aether_layout_result_s {
     bool records_boxes = true;
     size_t live_box_count = 0;
     bool abandoned = false;
-    std::unordered_set<aether_layout_box_s*> allocated_boxes;
+    LayoutBoxRegistry allocated_boxes;
 
-    ~aether_layout_result_s();
+    aether_layout_result_s() = default;
+    aether_layout_result_s(const aether_layout_result_s&) = delete;
+    aether_layout_result_s& operator=(const aether_layout_result_s&) = delete;
+    aether_layout_result_s(aether_layout_result_s&&) = delete;
+    aether_layout_result_s& operator=(aether_layout_result_s&&) = delete;
+    ~aether_layout_result_s() noexcept;
 
     aether_layout_box_s* create_box();
     // Published boxes may be replaced by a later layout pass. Destruction must
     // remove the exact instance, including text fragments that have no primary
     // box entry, before its storage can be reused.
-    void unregister_box(aether_layout_box_s* box) {
+    void unregister_box(aether_layout_box_s* box) noexcept {
         paint_order.erase(std::remove(paint_order.begin(), paint_order.end(), box), paint_order.end());
         if (box->element) {
             const auto it = primary_boxes.find(box->element);
             if (it != primary_boxes.end() && it->second == box) primary_boxes.erase(it);
         }
-    }
-    void release_box() {
-        assert(live_box_count > 0);
-        --live_box_count;
     }
 
     aether_layout_box_s* find_primary_box(aether_node_s* element) const {
@@ -245,6 +292,8 @@ struct aether_layout_result_s {
     }
 
 private:
+    friend struct aether_layout_box_s;
+    void release_box(aether_layout_box_s* box) noexcept;
     static aether_node_s* hit_test_recursive(aether_layout_box_s* box, float x, float y,
                                               const StyleLookup& styles, BoxStylePolicy policy,
                                               aether_scroll_offset_fn offsets, void* data) {
