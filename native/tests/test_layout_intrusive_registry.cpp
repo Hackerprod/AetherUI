@@ -43,6 +43,7 @@ static aether_layout_box_s* observed_child = nullptr;
 static aether_layout_box_s* watched_boxes[16]{};
 static unsigned watched_deletes[16]{};
 static bool child_observed = false;
+static aether_layout_result_s* final_result = nullptr;
 
 static size_t count_boxes(const aether_layout_result_s& result) {
     size_t count = 0;
@@ -77,7 +78,17 @@ static void* allocate(size_t size) {
 static void deallocate(void* pointer) noexcept {
     if (!pointer) return;
     if (tracking) {
-        for (size_t i = 0; i < 16; ++i) if (watched_boxes[i] == pointer) ++watched_deletes[i];
+        for (size_t i = 0; i < 16; ++i) if (watched_boxes[i] == pointer) {
+            ++watched_deletes[i];
+            if (final_result) {
+                // Box lifetime has ended; inspect only the still-live result
+                // members and remaining registry, never the reclaimed box.
+                CHECK(final_result->paint_order.empty());
+                CHECK(final_result->primary_boxes.empty());
+                CHECK(!contains(*final_result, pointer));
+                count_boxes(*final_result);
+            }
+        }
         if (pointer == observed_child) {
             CHECK(observed_result && !contains(*observed_result, observed_parent));
             CHECK(!contains(*observed_result, observed_child));
@@ -167,11 +178,62 @@ static void disconnected_abandonment(bool with_root) {
         if (with_root) result.root = watched_boxes[0];
         watched_boxes[0]->children = {watched_boxes[1], watched_boxes[2]};
         watched_boxes[3]->children = {watched_boxes[4], watched_boxes[2]};
+        aether_node_s nodes[2];
+        watched_boxes[0]->element = &nodes[0];
+        watched_boxes[3]->element = &nodes[1];
+        result.primary_boxes = {{&nodes[0], watched_boxes[0]}, {&nodes[1], watched_boxes[3]}};
+        result.paint_order = {watched_boxes[0], watched_boxes[1], watched_boxes[3], watched_boxes[5]};
+        final_result = &result;
         // A duplicate edge and isolated box are safe only with two-phase cleanup.
         CHECK(count_boxes(result) == 6);
         calls = 0; fail_at = 0; injected = false;
     }
+    final_result = nullptr;
     fail_at = -1;
+    CHECK(calls == 0 && !injected);
+    for (size_t i = 0; i < 6; ++i) {
+        CHECK(watched_deletes[i] == 1); watched_boxes[i] = nullptr;
+    }
+    CHECK(live_allocations == before_count && live_bytes == before_bytes);
+}
+
+// Deallocation is after each box destructor, not its entry. The wide tree
+// ensures later siblings remain indexed in the unoptimized implementation.
+static void final_release_with_pins() {
+    aether_node_s nodes[6];
+    const auto before_count = live_allocations, before_bytes = live_bytes;
+    auto* result = new aether_layout_result_s();
+    for (size_t i = 0; i < 6; ++i) {
+        auto* box = result->create_box();
+        watched_boxes[i] = box; watched_deletes[i] = 0;
+        box->element = &nodes[i]; box->border_box = {float(i), 2, 30, 40};
+        if (i) result->root->children.push_back(box); else result->root = box;
+        result->paint_order.push_back(box); result->primary_boxes.emplace(&nodes[i], box);
+    }
+    {
+        LayoutOperationPin outer(result);
+        {
+            LayoutOperationPin inner(result);
+            aether_layout_result_destroy(result); // Release external ownership exactly once.
+            CHECK(result->references == 2);
+            for (size_t i = 0; i < 6; ++i) {
+                CHECK(!watched_deletes[i]);
+                CHECK(result->paint_order[i] == watched_boxes[i]);
+                CHECK(result->find_primary_box(&nodes[i]) == watched_boxes[i]);
+                CHECK(watched_boxes[i]->border_box.x == float(i));
+                CHECK(watched_boxes[i]->border_box.y == 2 && watched_boxes[i]->border_box.width == 30 &&
+                    watched_boxes[i]->border_box.height == 40);
+            }
+            CHECK(result->root == watched_boxes[0] && count_boxes(*result) == 6);
+        }
+        CHECK(result->references == 1 && result->paint_order.size() == 6 && count_boxes(*result) == 6);
+        for (size_t i = 0; i < 6; ++i) CHECK(!watched_deletes[i]);
+        final_result = result;
+        calls = 0; fail_at = 0; injected = false;
+    }
+    // No access to result or boxes after the last pin. Addresses are only
+    // compared by the ledger while the owning result's members are alive.
+    final_result = nullptr; fail_at = -1;
     CHECK(calls == 0 && !injected);
     for (size_t i = 0; i < 6; ++i) {
         CHECK(watched_deletes[i] == 1); watched_boxes[i] = nullptr;
@@ -223,6 +285,9 @@ static void clone_oom_and_independence() {
         source.primary_boxes.emplace(child->element, child);
         source.paint_order.push_back(child);
     }
+    const auto original_order = source.paint_order;
+    const auto original_primary = source.primary_boxes;
+    const auto original_children = source.root->children;
     const auto before_count = live_allocations, before_bytes = live_bytes;
     bool complete = false;
     long failures = 0;
@@ -241,6 +306,8 @@ static void clone_oom_and_independence() {
             CHECK(injected && status == AETHER_ERROR_OUT_OF_MEMORY && output == &source);
             ++failures;
         }
+        CHECK(source.paint_order == original_order && source.primary_boxes == original_primary &&
+            source.root->children == original_children);
         CHECK(count_boxes(source) == 3 && source.root->text.size() == 256 &&
             std::all_of(source.root->text.begin(), source.root->text.end(), [](char c) { return c == 'r'; }));
         CHECK(source.root->children[0]->text.size() == 128 && source.paint_order.size() == 2);
@@ -308,6 +375,7 @@ int main() {
     unlink_before_children();
     disconnected_abandonment(false);
     disconnected_abandonment(true);
+    final_release_with_pins();
     disconnected_validation();
     clone_oom_and_independence();
     clone_stress_plateau();

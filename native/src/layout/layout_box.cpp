@@ -27,6 +27,11 @@ void aether_layout_result_s::release_box(aether_layout_box_s* box) noexcept {
 }
 
 aether_layout_result_s::~aether_layout_result_s() noexcept {
+    // Final release (or private preparation cleanup), after operation pins are
+    // gone: these non-owning indexes no longer have consumers. Empty them once
+    // so per-box unregister does not repeatedly scan the final paint order.
+    paint_order.clear();
+    primary_boxes.clear();
     if (abandoned) {
         // Failed preparations may contain detached provisional trees. Sever their
         // edges before reclaiming the allocation registry, avoiding duplicate deletes.

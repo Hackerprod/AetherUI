@@ -1,6 +1,8 @@
 #include "../src/layout/layout_types.h"
 #include "../src/layout/input_hit_test.h"
 #include "../src/css/style_freeze.h"
+#include "../src/rendering/display_list_types.h"
+#include <cstring>
 #include <aether/aether_contextual_style.h>
 #include <aether/aether_contextual_transitions.h>
 #include <cstdio>
@@ -129,7 +131,11 @@ static void selection_and_clone() {
 struct DestroyContext { aether_layout_result_t layout; aether_style_map_s* wrapper; int calls = 0; };
 static aether_scroll_offset_t destroy_handles(aether_node_t, void* opaque) {
     auto& context = *static_cast<DestroyContext*>(opaque); ++context.calls;
+    auto* borrowed = context.layout; // Outer operation keeps this borrow alive.
+    REQUIRE(borrowed && borrowed->paint_order.size() == 1);
     aether_layout_result_destroy(context.layout); context.layout = nullptr;
+    REQUIRE(aether_layout_result_hit_test(borrowed, 5, 5) == borrowed->root->element);
+    REQUIRE(borrowed->find_primary_box(borrowed->root->element) == borrowed->root);
     delete context.wrapper; context.wrapper = nullptr;
     return {2, 0};
 }
@@ -143,6 +149,19 @@ static void callback_pins() {
     REQUIRE(aether_layout_result_hit_test_with_styles_and_scroll_offsets(frame, wrapper, 5, 5,
         destroy_handles, &context) == &node);
     REQUIRE(context.calls == 1 && !context.layout && !context.wrapper);
+
+    frame = layout(assets, &node, value);
+    wrapper = new aether_style_map_s(); wrapper->current = map;
+    context = {frame, wrapper};
+    aether_input_hit_part_t part = AETHER_INPUT_HIT_NONE; aether_node_t owner = nullptr;
+    aether_input_hit_part_t control_part = AETHER_INPUT_HIT_NONE; aether_node_t control_owner = nullptr;
+    const auto offsets = +[](aether_node_t, void*) -> aether_scroll_offset_t { return {2, 0}; };
+    REQUIRE(aether_layout_result_hit_test_input(frame, wrapper, 5, 5, offsets, nullptr,
+        &control_part, &control_owner) == AETHER_OK);
+    REQUIRE(aether_layout_result_hit_test_input(frame, wrapper, 5, 5, destroy_handles, &context,
+        &part, &owner) == AETHER_OK);
+    REQUIRE(context.calls == 1 && !context.layout && !context.wrapper);
+    REQUIRE(part == control_part && owner == control_owner);
 
     const StyleLookup lookup(assets, {}, false);
     aether_layout_engine_s engine; engine.measure_styles = &lookup; engine.measure_document = doc.identity;
@@ -163,6 +182,102 @@ static void callback_pins() {
     try { (void)engine_measure_text(&engine, "x", &box, 0, &node); }
     catch (const std::runtime_error&) { rejected = true; }
     REQUIRE(rejected);
+}
+static bool same_rect(const aether_rectf& a, const aether_rectf& b) {
+    return a.x == b.x && a.y == b.y && a.width == b.width && a.height == b.height;
+}
+static bool same_length(const aether_css_length& a, const aether_css_length& b) {
+    return a.value == b.value && a.unit == b.unit;
+}
+// Compare every active field emitted by this deliberately image-only fixture,
+// not padding bytes, pointer values, a checksum, or only command counts.
+static void same_image_commands(aether_display_list_t a, aether_display_list_t b) {
+    REQUIRE(!a->commands.empty() && a->commands.size() == b->commands.size());
+    bool image = false;
+    for (size_t i = 0; i < a->commands.size(); ++i) {
+        const auto& x = a->commands[i]; const auto& y = b->commands[i];
+        REQUIRE(x.tag == y.tag);
+        switch (x.tag) {
+        case AETHER_PAINT_BEGIN_PAINT_CHUNK: case AETHER_PAINT_END_PAINT_CHUNK:
+            REQUIRE(x.data.paint_chunk.style_node_id == y.data.paint_chunk.style_node_id); break;
+        case AETHER_PAINT_POP_CLIP: break; // No active payload.
+        case AETHER_PAINT_PUSH_CLIP: {
+            REQUIRE(same_rect(x.data.push_clip.rect, y.data.push_clip.rect));
+            const auto& p = x.data.push_clip.radii; const auto& q = y.data.push_clip.radii;
+            REQUIRE(p.top_left_x == q.top_left_x && p.top_left_y == q.top_left_y &&
+                p.top_right_x == q.top_right_x && p.top_right_y == q.top_right_y &&
+                p.bottom_right_x == q.bottom_right_x && p.bottom_right_y == q.bottom_right_y &&
+                p.bottom_left_x == q.bottom_left_x && p.bottom_left_y == q.bottom_left_y);
+            break;
+        }
+        case AETHER_PAINT_DRAW_BACKGROUND_IMAGE: {
+            image = true;
+            const auto& p = x.data.draw_background_image; const auto& q = y.data.draw_background_image;
+            REQUIRE(p.source && q.source && std::strcmp(p.source, q.source) == 0);
+            REQUIRE(same_rect(p.paint_rect, q.paint_rect) && same_rect(p.source_rect, q.source_rect) &&
+                same_rect(p.destination_rect, q.destination_rect));
+            REQUIRE(same_length(p.position_x, q.position_x) && same_length(p.position_y, q.position_y) &&
+                same_length(p.size_x, q.size_x) && same_length(p.size_y, q.size_y));
+            REQUIRE(p.size_kind == q.size_kind && p.repeat_x == q.repeat_x && p.repeat_y == q.repeat_y &&
+                p.opacity == q.opacity && p.has_resolved_geometry == q.has_resolved_geometry);
+            break;
+        }
+        default: std::fprintf(stderr, "unexpected image fixture command %d\n", int(x.tag)); REQUIRE(false);
+        }
+    }
+    REQUIRE(image);
+}
+static void display_callback_pins() {
+    aether_doc_s doc; aether_node_s node; node.type = AETHER_NODE_ELEMENT;
+    auto raw = aether_computed_style_default();
+    aether_background_layer layer{}; layer.kind = AETHER_BACKGROUND_LAYER_IMAGE_URL;
+    layer.image_source = const_cast<char*>("asset://pin");
+    layer.repeat_x = layer.repeat_y = AETHER_BACKGROUND_NO_REPEAT;
+    raw.background_layers = {&layer, 1};
+    FrozenStyleRef value; REQUIRE(freeze_style(raw, value) == AETHER_OK);
+    auto map = version({record(&node, value)}, &doc);
+    const auto assets = std::make_shared<const LayoutAssets>(map, nullptr, value);
+    for (bool node_route : {false, true}) {
+        auto* frame = layout(assets, &node, value); frame->root->scroll = {};
+        auto* wrapper = new aether_style_map_s(); wrapper->current = map;
+        aether_display_list_builder_s builder, nested_builder;
+        const auto build = [node_route, &node](aether_display_list_builder_t b, aether_layout_result_t l,
+            aether_style_map_t m, aether_display_list_t* out) {
+            return node_route ? aether_display_list_build_node_with_styles(b, l, m, &node, nullptr, out)
+                              : aether_display_list_build_with_styles(b, l, m, nullptr, out);
+        };
+        const auto dimensions = +[](const char*, aether_sizef* size, void*) -> aether_bool_t {
+            *size = {20, 30}; return AETHER_TRUE;
+        };
+        builder.image_dimensions = nested_builder.image_dimensions = dimensions;
+        aether_display_list_t control = nullptr, output = nullptr;
+        REQUIRE(build(&builder, frame, wrapper, &control) == AETHER_OK);
+        struct Context {
+            aether_layout_result_t frame; aether_style_map_t wrapper; aether_node_t node;
+            aether_display_list_builder_t nested; aether_display_list_t control; bool node_route; int calls = 0;
+        } context{frame, wrapper, &node, &nested_builder, control, node_route};
+        builder.image_dimensions_data = &context;
+        builder.image_dimensions = +[](const char*, aether_sizef* size, void* data) -> aether_bool_t {
+            auto& c = *static_cast<Context*>(data); ++c.calls;
+            REQUIRE(c.calls == 1);
+            auto* borrowed = c.frame;
+            aether_layout_result_destroy(c.frame); c.frame = nullptr;
+            aether_style_map_destroy(c.wrapper); c.wrapper = nullptr;
+            REQUIRE(borrowed->paint_order.size() == 1 && borrowed->find_primary_box(c.node) == borrowed->root);
+            aether_display_list_t nested = nullptr;
+            REQUIRE((c.node_route ? aether_display_list_build_node_with_styles(c.nested, borrowed, nullptr,
+                c.node, nullptr, &nested) : aether_display_list_build_with_styles(c.nested, borrowed,
+                nullptr, nullptr, &nested)) == AETHER_OK);
+            same_image_commands(c.control, nested); aether_display_list_destroy(nested);
+            REQUIRE(!c.nested->layout && !c.nested->style_pin);
+            *size = {20, 30}; return AETHER_TRUE;
+        };
+        REQUIRE(build(&builder, frame, wrapper, &output) == AETHER_OK);
+        REQUIRE(context.calls == 1 && !context.frame && !context.wrapper);
+        REQUIRE(!builder.layout && !builder.style_pin && !builder.canvas_background_source);
+        same_image_commands(control, output);
+        aether_display_list_destroy(output); aether_display_list_destroy(control);
+    }
 }
 static void clone_oom() {
     aether_node_s node; node.type = AETHER_NODE_ELEMENT;
@@ -315,6 +430,6 @@ static void geometry_document_without_map() {
     }
 }
 int main() {
-    selection_and_clone(); callback_pins(); clone_oom(); overlay_and_callback_new_oom(); runtime_context_and_anonymous(); geometry_document_without_map();
+    selection_and_clone(); callback_pins(); display_callback_pins(); clone_oom(); overlay_and_callback_new_oom(); runtime_context_and_anonymous(); geometry_document_without_map();
     std::cout << "immutable layout selection, clone, callback pins, and new-allocation OOM passed\n";
 }
