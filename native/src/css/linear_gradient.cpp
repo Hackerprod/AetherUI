@@ -1,6 +1,7 @@
 #include <new>
 #include "../style_runtime/css_component_values.h"
 #include "linear_gradient.h"
+#include "css_numeric_conversion_internal.h"
 
 #include <algorithm>
 #include <cmath>
@@ -35,22 +36,38 @@ enum class direction_result { not_a_direction, valid, invalid };
 
 direction_result try_parse_direction(const std::string& source, float& x, float& y,
                                      bool& uses_fixed_corner_direction) {
-    const auto components = css_split_components(source);
+    css_component_cursor cursor(source);
+    css_component_value first;
+    if (!cursor.next(first)) return direction_result::invalid;
+    if (first.token.serialization == css_variable_serialization::dimension) {
+        css_component_value extra;
+        if (cursor.next(extra) || !cursor.valid() || first.token.end != first.end ||
+            lowercase(source.substr(first.token.numeric_end, first.end - first.token.numeric_end)) != "deg")
+            return direction_result::invalid;
+
+        // Let the CSS lexer, not a C number parser, define the numeric span.
+        // In particular, 0x10deg is the number 0 with unit x10deg, not 16deg.
+        aether::css::c_numeric_locale locale;
+        const auto degrees = locale.parse_float(source.substr(first.begin, first.token.numeric_end - first.begin));
+        // Finite ERANGE (subnormal or signed underflow to zero) remains valid.
+        if (!degrees.valid) return direction_result::invalid;
+        constexpr float pi = 3.14159265358979323846f;
+        const float radians = std::fmod(degrees.value, 360.f) * pi / 180.f;
+        const float direction_x = std::sin(radians);
+        const float direction_y = -std::cos(radians);
+        if (!std::isfinite(direction_x) || !std::isfinite(direction_y)) return direction_result::invalid;
+        x = direction_x;
+        y = direction_y;
+        return direction_result::valid;
+    }
+
+    bool valid_components = false;
+    const auto components = css_split_components(source, &valid_components);
+    if (!valid_components) return direction_result::invalid;
     std::string direction;
     for (const auto& component : components) {
         if (!direction.empty()) direction += ' ';
         direction += lowercase(component);
-    }
-    if (direction.size() > 3 && direction.ends_with("deg")) {
-        const auto degrees_text = direction.substr(0, direction.size() - 3);
-        char* end = nullptr;
-        const float degrees = std::strtof(degrees_text.c_str(), &end);
-        if (end == degrees_text.c_str() || *end != '\0' || !std::isfinite(degrees)) return direction_result::invalid;
-        constexpr float pi = 3.14159265358979323846f;
-        const float radians = degrees * pi / 180.f;
-        x = std::sin(radians);
-        y = -std::cos(radians);
-        return direction_result::valid;
     }
 
     if (!direction.starts_with("to ")) return direction_result::not_a_direction;

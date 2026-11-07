@@ -373,6 +373,32 @@ if(AETHERUI_BUILD_TESTS)
     target_link_libraries(aether_linear_gradient_test PRIVATE AetherUI::Core)
     add_test(NAME aether.linear-gradient COMMAND aether_linear_gradient_test)
 
+    add_executable(aether_gradient_angle_test tests/test_gradient_angle.cpp
+        src/css/linear_gradient.cpp src/style_runtime/css_variable_tokens.cpp)
+    target_link_libraries(aether_gradient_angle_test PRIVATE AetherUI::Core Threads::Threads)
+    add_test(NAME aether.gradient-angle COMMAND aether_gradient_angle_test)
+    set_tests_properties(aether.gradient-angle PROPERTIES RUN_SERIAL TRUE)
+
+    add_executable(aether_gradient_angle_runtime_test tests/test_gradient_angle_runtime.cpp)
+    target_link_libraries(aether_gradient_angle_runtime_test PRIVATE AetherUI::Core)
+    add_test(NAME aether.gradient-angle-runtime COMMAND aether_gradient_angle_runtime_test)
+    set_tests_properties(aether.gradient-angle-runtime PROPERTIES RUN_SERIAL TRUE)
+
+    if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        # Interpose the real gradient, dispatch and numeric conversion sources.
+        add_executable(aether_gradient_angle_failure_test tests/test_gradient_angle_failure.cpp
+            src/style_runtime/builtin_properties.cpp src/style_runtime/transition_properties.cpp
+            src/style_runtime/shadow_values.cpp src/style_runtime/css_variable_tokens.cpp
+            src/css/css_length.cpp src/css/background_layers.cpp src/css/linear_gradient.cpp
+            src/css/color_rgba.cpp src/css/border_radii.cpp src/css/backdrop_filters.cpp src/css/transforms.cpp)
+        target_compile_definitions(aether_gradient_angle_failure_test PRIVATE AETHER_CSS_NUMERIC_ONLY)
+        target_link_libraries(aether_gradient_angle_failure_test PRIVATE AetherUI::Core)
+        target_link_options(aether_gradient_angle_failure_test PRIVATE
+            "-Wl,--wrap=newlocale" "-Wl,--wrap=freelocale" "-Wl,--wrap=strtof_l"
+            "-Wl,--wrap=strtod_l" "-Wl,--wrap=strtof" "-Wl,--wrap=strtod")
+        add_test(NAME aether.gradient-angle-failure COMMAND aether_gradient_angle_failure_test)
+    endif()
+
     add_executable(aether_gradient_boundary_test tests/test_gradient_boundary.cpp
         src/css/linear_gradient.cpp src/css/background_layers.cpp src/style_runtime/css_variable_tokens.cpp)
     target_link_libraries(aether_gradient_boundary_test PRIVATE AetherUI::Core)
@@ -1167,6 +1193,12 @@ if(AETHERUI_BUILD_TESTS)
             src/css/frozen_measure_read.cpp src/css/style_freeze.cpp
             src/style_runtime/frozen_runtime_metadata.cpp)
     endforeach()
+    if(TARGET aether_gradient_angle_failure_test)
+        target_sources(aether_gradient_angle_failure_test PRIVATE
+            src/css/computed_style.cpp src/css/frozen_style.cpp src/css/frozen_c_string.cpp
+            src/css/frozen_measure_read.cpp src/css/style_freeze.cpp
+            src/style_runtime/frozen_runtime_metadata.cpp)
+    endif()
     foreach(string_reader_test aether_shorthand_var_test aether_style_map_lifetime_test aether_measure_computed_test
             aether_style_revisions_atomic_test)
         target_sources(${string_reader_test} PRIVATE src/css/frozen_c_string.cpp)
