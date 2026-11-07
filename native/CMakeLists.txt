@@ -1216,3 +1216,43 @@ if(AETHERUI_BUILD_TESTS)
         endif()
     endforeach()
 endif()
+
+if(AETHERUI_BUILD_TESTS AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    # Link the real core objects so wrapping reaches every checked-edge call.
+    get_target_property(checked_edges_core_sources aether_core SOURCES)
+    add_executable(aether_layout_checked_edges_test tests/test_layout_checked_edges.cpp
+        ${checked_edges_core_sources})
+    target_include_directories(aether_layout_checked_edges_test PRIVATE include src)
+    target_compile_definitions(aether_layout_checked_edges_test PRIVATE AETHER_EXPORTS)
+    set_target_properties(aether_layout_checked_edges_test PROPERTIES INTERPROCEDURAL_OPTIMIZATION FALSE)
+    target_compile_options(aether_layout_checked_edges_test PRIVATE -ffp-contract=off -fno-lto)
+    target_link_options(aether_layout_checked_edges_test PRIVATE -fno-lto -Wl,--wrap=aether_css_length_resolve)
+    add_test(NAME aether.layout-checked-edges COMMAND aether_layout_checked_edges_test)
+
+    add_executable(aether_layout_checked_edges_atomic_test tests/test_layout_checked_edges_atomic.cpp
+        ${checked_edges_core_sources})
+    target_include_directories(aether_layout_checked_edges_atomic_test PRIVATE include src)
+    target_compile_definitions(aether_layout_checked_edges_atomic_test PRIVATE AETHER_EXPORTS)
+    set_target_properties(aether_layout_checked_edges_atomic_test PROPERTIES INTERPROCEDURAL_OPTIMIZATION FALSE)
+    target_compile_options(aether_layout_checked_edges_atomic_test PRIVATE -ffp-contract=off -fno-lto)
+    target_link_options(aether_layout_checked_edges_atomic_test PRIVATE -fno-lto
+        -Wl,--wrap=malloc -Wl,--wrap=calloc -Wl,--wrap=realloc)
+    add_test(NAME aether.layout-checked-edges-atomic COMMAND aether_layout_checked_edges_atomic_test)
+endif()
+
+if(AETHERUI_BUILD_TESTS AND NOT MSVC)
+    # Keep every test translation unit on the same floating-point contract as
+    # the core without changing the core's benchmark-comparable compiler flags.
+    get_property(fp_test_targets DIRECTORY PROPERTY BUILDSYSTEM_TARGETS)
+    foreach(fp_test_target IN LISTS fp_test_targets)
+        if(NOT "${fp_test_target}" STREQUAL "aether_core")
+            get_target_property(fp_test_type ${fp_test_target} TYPE)
+            if(fp_test_type STREQUAL "EXECUTABLE" OR fp_test_type STREQUAL "OBJECT_LIBRARY")
+                get_target_property(fp_test_options ${fp_test_target} COMPILE_OPTIONS)
+                if(NOT "-ffp-contract=off" IN_LIST fp_test_options)
+                    target_compile_options(${fp_test_target} PRIVATE -ffp-contract=off)
+                endif()
+            endif()
+        endif()
+    endforeach()
+endif()

@@ -55,31 +55,48 @@ float resolve(const aether_layout_engine_s* e,
     return used;
 }
 
+// Keep all four validations ahead of normalization and border-style suppression.
+static aether_thicknessf resolve_checked_edges(const aether_layout_engine_s* e,
+                                               aether_css_edges edges, float reference,
+                                               const BoxStyleSnapshot& style) {
+    const float left = resolve(e, edges.left, reference, style);
+    const float top = resolve(e, edges.top, reference, style);
+    const float right = resolve(e, edges.right, reference, style);
+    const float bottom = resolve(e, edges.bottom, reference, style);
+    return {left, top, right, bottom};
+}
+
+static aether_thicknessf normalize_checked_edges(aether_thicknessf edges, bool allow_negative) {
+    const auto normalize = [allow_negative](float value) {
+        // resolve permits non-finite values only for AUTO, whose used edge is zero.
+        if (!std::isfinite(value)) return 0.f;
+        return allow_negative ? value : std::max(0.f, value);
+    };
+    return {normalize(edges.left), normalize(edges.top),
+            normalize(edges.right), normalize(edges.bottom)};
+}
+
 aether_thicknessf resolve_padding_edges(const aether_layout_engine_s* e,
                                         aether_css_edges edges, float reference,
                                         const BoxStyleSnapshot& style) {
-    for (const auto value : {edges.left, edges.top, edges.right, edges.bottom})
-        (void)resolve(e, value, reference, style);
-    return aether_resolve_box_edges(edges, reference, style.font_size, e ? e->root_font_size : 16.f,
-                                    e ? e->viewport_width : 0.f, e ? e->viewport_height : 0.f, false);
+    return normalize_checked_edges(resolve_checked_edges(e, edges, reference, style), false);
 }
 
 aether_thicknessf resolve_margin_edges(const aether_layout_engine_s* e,
                                        aether_css_edges edges, float reference,
                                        const BoxStyleSnapshot& style) {
-    for (const auto value : {edges.left, edges.top, edges.right, edges.bottom})
-        (void)resolve(e, value, reference, style);
-    return aether_resolve_box_edges(edges, reference, style.font_size, e ? e->root_font_size : 16.f,
-                                    e ? e->viewport_width : 0.f, e ? e->viewport_height : 0.f, true);
+    return normalize_checked_edges(resolve_checked_edges(e, edges, reference, style), true);
 }
 
 aether_thicknessf resolve_border_edges(const aether_layout_engine_s* e,
                                        const BoxStyleSnapshot& style,
                                        float reference) {
-    for (const auto value : {style.border_width.left, style.border_width.top, style.border_width.right, style.border_width.bottom})
-        (void)resolve(e, value, reference, style);
-    return aether_resolve_border_edges(style, reference, e ? e->root_font_size : 16.f,
-                                       e ? e->viewport_width : 0.f, e ? e->viewport_height : 0.f);
+    auto edges = normalize_checked_edges(resolve_checked_edges(e, style.border_width, reference, style), false);
+    if (!aether_border_style_occupies_space(style.border_styles.left)) edges.left = 0;
+    if (!aether_border_style_occupies_space(style.border_styles.top)) edges.top = 0;
+    if (!aether_border_style_occupies_space(style.border_styles.right)) edges.right = 0;
+    if (!aether_border_style_occupies_space(style.border_styles.bottom)) edges.bottom = 0;
+    return edges;
 }
 
 BoxStyleSnapshot get_style(const StyleLookup* styles, aether_node_s* el) {
