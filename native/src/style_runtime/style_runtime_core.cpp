@@ -435,10 +435,10 @@ static runtime_node_state_s* compute_node(aether_style_runtime_s* runtime, aethe
     measures->parent_font_size = parent ? parent->style.style.font_size : measures->document->initial_font_size;
     measures->self_font_size = measures->parent_font_size;
     next.font_size = measures->self_font_size;
-    if (parent) measures->property_dependencies["font-size"] = MEASURE_PARENT;
+    if (parent) measure_set_property_dependencies(*measures, "font-size", MEASURE_PARENT);
     if (parent && parent->style.measures) {
         measures->line_height = parent->style.measures->line_height;
-        measures->property_dependencies["line-height"] = MEASURE_PARENT;
+        measure_set_property_dependencies(*measures, "line-height", MEASURE_PARENT);
     }
     const bool document_element = !node->is_generated && node->type == AETHER_NODE_ELEMENT &&
         ((!node->parent) || (node->parent->type == AETHER_NODE_DOCUMENT &&
@@ -587,9 +587,10 @@ static runtime_node_state_s* compute_node(aether_style_runtime_s* runtime, aethe
                                     aether_computed_style_t& style,
                                     color_resolution_state_s& references,
                                     const std::string& value,
-                                    bool emit_diagnostics) {
-        measures->property_dependencies[definition.name] = measure_source_dependencies(value);
-        property_apply_context_s context{&style, &references, measures.get()};
+                                    bool emit_diagnostics,
+                                    measure_apply_state_s& destination) {
+        destination.set_property_dependencies(measure_source_dependencies(value));
+        property_apply_context_s context{&style, &references, &destination};
         property_apply_result_s apply_result{};
         if (definition.apply_with_context_checked) {
             apply_result = definition.apply_with_context_checked(context, value);
@@ -684,17 +685,19 @@ static runtime_node_state_s* compute_node(aether_style_runtime_s* runtime, aethe
         }
         }
         auto apply_selected = [&](aether_computed_style_t& style,
-                                  color_resolution_state_s& references, bool emit_diagnostics) {
+                                  color_resolution_state_s& references, bool emit_diagnostics,
+                                  measure_apply_state_s& destination) {
             if (explicit_inherit) {
                 if (definition.inherit_context) {
-                    property_apply_context_s context{&style, &references, measures.get(), &parent->color_references};
+                    property_apply_context_s context{&style, &references, &destination, &parent->color_references};
                     definition.inherit_context(context, parent->style.style, parent->style.measures.get());
                 } else definition.inherit_explicit(&style, parent->style.style);
                 return true;
             }
-            return apply_property_value(definition, style, references, value, emit_diagnostics);
+            return apply_property_value(definition, style, references, value, emit_diagnostics, destination);
         };
-        if (!apply_selected(next, color_references, true)) return false;
+        measure_apply_state_s selected_measures(*measures, definition.name);
+        if (!apply_selected(next, color_references, true, selected_measures)) return false;
         bool property_changed = previous_style == nullptr;
         if (previous_style) {
             aether_computed_style_handle_s previous_handle{};
@@ -703,15 +706,17 @@ static runtime_node_state_s* compute_node(aether_style_runtime_s* runtime, aethe
             next_style_guard_s probe_guard{&probe};
             if (aether_computed_style_copy(&previous_handle, &probe) == AETHER_OK) {
                 color_resolution_state_s probe_references = found->second->color_references;
-                const auto saved_measures = *measures;
-                if (apply_selected(probe, probe_references, false)) {
+                // Read the candidate AFTER the winning declaration, while the
+                // flat and symbolic color references deliberately start at OLD.
+                measure_property_delta_s delta;
+                measure_apply_state_s probe_measures(*measures, delta, definition.name);
+                if (apply_selected(probe, probe_references, false, probe_measures)) {
                     resolve_symbolic_colors(probe, probe_references);
                     normalize_overflow_axes(probe);
                     property_changed = !style_equal(*previous_style, probe);
                 } else {
                     property_changed = true;
                 }
-                *measures = saved_measures;
                 aether_computed_style_free(&probe);
                 probe_guard.value = nullptr;
             } else {
@@ -761,7 +766,7 @@ static runtime_node_state_s* compute_node(aether_style_runtime_s* runtime, aethe
         }
     }
 
-    for (const auto& property : measures->property_dependencies) measures->dependencies |= property.second;
+    measure_recompute_dependencies(*measures);
     const bool is_new_node = found == runtime->states.end();
     const auto* old_measures = is_new_node ? nullptr : found->second->style.measures.get();
     const bool contextual_geometry_changed = old_measures &&

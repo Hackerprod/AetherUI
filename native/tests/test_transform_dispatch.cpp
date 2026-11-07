@@ -21,7 +21,8 @@ int main() {
         check(transform->apply_checked(&parent,"translate(40px,50%)").success,"seed computed parent transform");
         measure_state_s pm, cm; pm.self_font_size=20; cm.self_font_size=10;
         pm.property_dependencies["transform"]=MEASURE_SELF_FONT|MEASURE_PERCENTAGE;
-        property_apply_context_s context{&child,nullptr,&cm};
+        measure_apply_state_s measures(cm, transform->name);
+        property_apply_context_s context{&child,nullptr,&measures};
         transform->inherit_context(context,parent,&pm);
         check(child.transforms.count==1 && child.transforms.items!=parent.transforms.items,"inherit has independent owned transform list");
         check(child.transforms.items[0].x.unit==AETHER_CSS_UNIT_PX && child.transforms.items[0].x.value==40,"inherit retains computed length despite child font");

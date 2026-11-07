@@ -11,7 +11,7 @@ namespace {
 static shadow_value_error parse_component(const std::string& source,
                                                       bool allow_inset, bool allow_spread,
                                                       aether_shadow& shadow,
-                                                      bool& uses_current_color, const measure_state_s* measures) {
+                                                      bool& uses_current_color, const measure_inputs_s* measures) {
     std::vector<std::string> tokens;
     bool valid = false;
     tokens = css_split_components(source, &valid);
@@ -71,7 +71,7 @@ static shadow_value_error parse_component(const std::string& source,
 }
 
 shadow_value_error shadow_list_parse(const std::string& source, bool box,
-    parsed_shadow_list& output, const shadow_storage_policy& storage, const measure_state_s* measures) {
+    parsed_shadow_list& output, const shadow_storage_policy& storage, const measure_inputs_s* measures) {
     parsed_shadow_list parsed;
     const auto value = str_trim(source);
     if (str_iequals(value, "none")) {
@@ -104,7 +104,7 @@ shadow_value_error shadow_list_parse(const std::string& source, bool box,
 
 shadow_value_error shadow_list_apply(const std::string& source, bool box,
     aether_shadow_list& destination, std::vector<bool>& references,
-    const shadow_storage_policy& storage, const measure_state_s* measures) {
+    const shadow_storage_policy& storage, const measure_inputs_s* measures) {
     parsed_shadow_list parsed;
     const auto error = shadow_list_parse(source, box, parsed, storage, measures);
     if (error != shadow_value_error::none) return error;

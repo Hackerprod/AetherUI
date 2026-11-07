@@ -8,6 +8,9 @@
 #include <algorithm>
 #include <stdexcept>
 #include <vector>
+#include <optional>
+#include <span>
+#include <utility>
 
 struct document_measure_context_s {
     float viewport_width = 0, viewport_height = 0;
@@ -44,6 +47,129 @@ struct measure_state_s {
     uint32_t dependencies = 0;
     std::unordered_map<std::string, uint32_t> property_dependencies;
 };
+// A unit conversion observes only these numeric inputs. It never owns or
+// copies a node's lists/dependency table, and cannot mutate the document.
+struct measure_inputs_s {
+    float self_font_size;
+    float viewport_width, viewport_height;
+    float initial_font_size, root_font_size;
+};
+inline measure_inputs_s measure_make_inputs(const measure_state_s& state, float self_font_size) {
+    const auto& d = *state.document;
+    return {self_font_size, d.viewport_width, d.viewport_height, d.initial_font_size, d.root_font_size};
+}
+inline uint32_t measure_property_dependencies(const measure_state_s& state, const std::string& property) {
+    const auto found = state.property_dependencies.find(property);
+    return found == state.property_dependencies.end() ? 0 : found->second;
+}
+inline void measure_set_property_dependencies(measure_state_s& state, const std::string& property, uint32_t flags) {
+    // Absence is the canonical representation of zero, including replacement
+    // of inherited/contextual flags by an absolute declaration.
+    if (flags) state.property_dependencies.insert_or_assign(property, flags);
+    else state.property_dependencies.erase(property);
+}
+inline void measure_recompute_dependencies(measure_state_s& state) noexcept {
+    state.dependencies = 0;
+    for (const auto& property : state.property_dependencies) state.dependencies |= property.second;
+}
+
+// No engaged vectors, dependency map or document owner is constructed for a
+// probe. Only the selected property's writes become owned local output.
+struct measure_property_delta_s {
+    std::optional<float> self_font_size;
+    std::optional<measure_line_height_s> line_height;
+    std::optional<aether_css_length> row_gap, column_gap;
+    std::optional<std::vector<measure_background_position_s>> background_positions;
+    std::optional<std::vector<measure_background_size_s>> background_sizes;
+    std::optional<uint32_t> property_dependencies;
+};
+
+// Ephemeral, deeply const reads. A view never escapes the operation retaining
+// its base. Do not retain a list span across replacement of that local output.
+class measure_read_view_s {
+    const measure_state_s* base_;
+    const measure_property_delta_s* delta_;
+    const std::string* property_;
+public:
+    explicit measure_read_view_s(const measure_state_s& base) noexcept
+        : base_(&base), delta_(nullptr), property_(nullptr) {}
+    measure_read_view_s(const measure_state_s& base, const measure_property_delta_s& delta,
+                       const std::string& property) noexcept
+        : base_(&base), delta_(&delta), property_(&property) {}
+    float parent_font_size() const noexcept { return base_->parent_font_size; }
+    float self_font_size() const noexcept {
+        return delta_ && delta_->self_font_size ? *delta_->self_font_size : base_->self_font_size;
+    }
+    measure_line_height_s line_height() const noexcept {
+        return delta_ && delta_->line_height ? *delta_->line_height : base_->line_height;
+    }
+    aether_css_length row_gap() const noexcept {
+        return delta_ && delta_->row_gap ? *delta_->row_gap : base_->row_gap;
+    }
+    aether_css_length column_gap() const noexcept {
+        return delta_ && delta_->column_gap ? *delta_->column_gap : base_->column_gap;
+    }
+    std::span<const measure_background_position_s> background_positions() const noexcept {
+        return delta_ && delta_->background_positions ? *delta_->background_positions : base_->background_positions;
+    }
+    std::span<const measure_background_size_s> background_sizes() const noexcept {
+        return delta_ && delta_->background_sizes ? *delta_->background_sizes : base_->background_sizes;
+    }
+    uint32_t property_dependencies(const std::string& property) const {
+        if (delta_ && delta_->property_dependencies && property == *property_)
+            return *delta_->property_dependencies;
+        return measure_property_dependencies(*base_, property);
+    }
+    measure_inputs_s inputs() const { return measure_make_inputs(*base_, self_font_size()); }
+    measure_inputs_s inputs_with_self_font(float font) const { return measure_make_inputs(*base_, font); }
+};
+
+// The applicator has exactly one destination: the exclusive candidate builder
+// or a property-local delta over a const candidate. There is no mutable access
+// to a borrowed base, and a probe never needs to restore the candidate.
+class measure_apply_state_s {
+    measure_state_s* target_;
+    const measure_state_s* base_;
+    measure_property_delta_s* delta_;
+    const std::string* property_;
+public:
+    measure_apply_state_s(measure_state_s& target, const std::string& property) noexcept
+        : target_(&target), base_(&target), delta_(nullptr), property_(&property) {}
+    measure_apply_state_s(const measure_state_s& base, measure_property_delta_s& delta,
+                          const std::string& property) noexcept
+        : target_(nullptr), base_(&base), delta_(&delta), property_(&property) {}
+    measure_apply_state_s(const measure_apply_state_s&) = delete;
+    measure_apply_state_s& operator=(const measure_apply_state_s&) = delete;
+    measure_read_view_s read() const noexcept {
+        return delta_ ? measure_read_view_s(*base_, *delta_, *property_) : measure_read_view_s(*base_);
+    }
+    uint32_t property_dependencies() const { return read().property_dependencies(*property_); }
+    void set_property_dependencies(uint32_t flags) {
+        if (target_) measure_set_property_dependencies(*target_, *property_, flags);
+        else delta_->property_dependencies = flags;
+    }
+    void set_self_font_size(float value) noexcept {
+        if (target_) target_->self_font_size = value; else delta_->self_font_size = value;
+    }
+    void set_line_height(measure_line_height_s value) noexcept {
+        if (target_) target_->line_height = value; else delta_->line_height = value;
+    }
+    void set_row_gap(aether_css_length value) noexcept {
+        if (target_) target_->row_gap = value; else delta_->row_gap = value;
+    }
+    void set_column_gap(aether_css_length value) noexcept {
+        if (target_) target_->column_gap = value; else delta_->column_gap = value;
+    }
+    void set_background_positions(std::vector<measure_background_position_s> values) noexcept {
+        if (target_) target_->background_positions = std::move(values);
+        else delta_->background_positions.emplace(std::move(values));
+    }
+    void set_background_sizes(std::vector<measure_background_size_s> values) noexcept {
+        if (target_) target_->background_sizes = std::move(values);
+        else delta_->background_sizes.emplace(std::move(values));
+    }
+};
+
 inline uint32_t measure_source_dependencies(std::string source) {
     for (auto& c : source) if (c >= 'A' && c <= 'Z') c += 'a' - 'A';
     uint32_t flags = source.find('%') != std::string::npos ? MEASURE_PERCENTAGE : 0;
@@ -54,19 +180,18 @@ inline uint32_t measure_source_dependencies(std::string source) {
     if (source.find("vw") != std::string::npos || source.find("vh") != std::string::npos) flags |= MEASURE_VIEWPORT;
     return flags;
 }
-inline aether_css_length measure_compute_length(aether_css_length v, const measure_state_s& state) {
+inline aether_css_length measure_compute_length(aether_css_length v, const measure_inputs_s& state) {
     if (v.unit == AETHER_CSS_UNIT_AUTO || v.unit == AETHER_CSS_UNIT_PERCENT) return v;
-    const auto& d = *state.document;
     double px = v.value;
     double percent = 0;
     switch (v.unit) {
     case AETHER_CSS_UNIT_EM: px *= state.self_font_size; break;
-    case AETHER_CSS_UNIT_REM: px *= d.root_font_size; break;
-    case AETHER_CSS_UNIT_VW: px *= d.viewport_width / 100.; break;
-    case AETHER_CSS_UNIT_VH: px *= d.viewport_height / 100.; break;
+    case AETHER_CSS_UNIT_REM: px *= state.root_font_size; break;
+    case AETHER_CSS_UNIT_VW: px *= state.viewport_width / 100.; break;
+    case AETHER_CSS_UNIT_VH: px *= state.viewport_height / 100.; break;
     case AETHER_CSS_UNIT_LINEAR:
-        px += double(v.linear_em) * state.self_font_size + double(v.linear_rem) * d.root_font_size +
-              double(v.linear_vw) * d.viewport_width / 100. + double(v.linear_vh) * d.viewport_height / 100.;
+        px += double(v.linear_em) * state.self_font_size + double(v.linear_rem) * state.root_font_size +
+              double(v.linear_vw) * state.viewport_width / 100. + double(v.linear_vh) * state.viewport_height / 100.;
         percent = v.linear_percent; break;
     default: break;
     }
@@ -76,6 +201,10 @@ inline aether_css_length measure_compute_length(aether_css_length v, const measu
     result.unit = v.unit == AETHER_CSS_UNIT_LINEAR ? AETHER_CSS_UNIT_LINEAR : AETHER_CSS_UNIT_PX;
     result.value = static_cast<float>(px); result.linear_percent = static_cast<float>(percent);
     return result;
+}
+inline aether_css_length measure_compute_length(aether_css_length v, const measure_state_s& state) {
+    if (v.unit == AETHER_CSS_UNIT_AUTO || v.unit == AETHER_CSS_UNIT_PERCENT) return v;
+    return measure_compute_length(v, measure_make_inputs(state, state.self_font_size));
 }
 enum class measure_used_kind_e { resolved, automatic, deferred_percentage, unbounded, invalid };
 struct measure_used_length_s { measure_used_kind_e kind; float px; };
@@ -104,14 +233,20 @@ inline float measure_used_line_height(const measure_state_s* state, const aether
         state->self_font_size * (state->line_height.kind == measure_line_height_kind_e::normal ? 1.2f : state->line_height.value);
 }
 
-inline void measure_apply_background_longhands(aether_computed_style_t& style, const measure_state_s& m) {
+inline void measure_apply_background_longhands(aether_computed_style_t& style, measure_read_view_s m) {
+    const auto positions = m.background_positions();
+    const auto sizes = m.background_sizes();
     for (int32_t i = 0; i < style.background_layers.count; ++i) {
         auto& layer = style.background_layers.items[i];
-        const auto& position = m.background_positions[static_cast<size_t>(i) % m.background_positions.size()];
-        const auto& size = m.background_sizes[static_cast<size_t>(i) % m.background_sizes.size()];
+        const auto& position = positions[static_cast<size_t>(i) % positions.size()];
+        const auto& size = sizes[static_cast<size_t>(i) % sizes.size()];
         layer.position_x = position.x; layer.position_y = position.y;
         layer.size_kind = size.kind; layer.size_x = size.x; layer.size_y = size.y;
     }
+}
+
+inline void measure_apply_background_longhands(aether_computed_style_t& style, const measure_state_s& m) {
+    measure_apply_background_longhands(style, measure_read_view_s(m));
 }
 
 // Computed values freeze font/viewport-dependent components once. Percentages

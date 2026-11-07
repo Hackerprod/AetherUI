@@ -401,6 +401,15 @@ if(AETHERUI_BUILD_TESTS)
     target_link_libraries(aether_transform_dispatch_test PRIVATE AetherUI::Core)
     add_test(NAME aether.transform-dispatch COMMAND aether_transform_dispatch_test)
 
+    add_executable(aether_measure_property_scratch_test tests/test_measure_property_scratch.cpp
+        src/style_runtime/builtin_properties.cpp src/style_runtime/transition_properties.cpp
+        src/style_runtime/shadow_values.cpp src/style_runtime/css_variable_tokens.cpp
+        src/css/css_length.cpp src/css/background_layers.cpp src/css/linear_gradient.cpp
+        src/css/border_radii.cpp src/css/backdrop_filters.cpp src/css/transforms.cpp)
+    target_compile_definitions(aether_measure_property_scratch_test PRIVATE AETHER_CSS_NUMERIC_ONLY)
+    target_link_libraries(aether_measure_property_scratch_test PRIVATE AetherUI::Core)
+    add_test(NAME aether.measure-property-scratch COMMAND aether_measure_property_scratch_test)
+
     add_executable(aether_background_layers_test tests/test_background_layers.cpp src/css/background_layers.cpp src/css/linear_gradient.cpp src/style_runtime/css_variable_tokens.cpp)
     target_link_libraries(aether_background_layers_test PRIVATE AetherUI::Core)
     add_test(NAME aether.background-layers COMMAND aether_background_layers_test)

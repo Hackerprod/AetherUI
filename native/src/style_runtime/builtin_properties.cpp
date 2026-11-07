@@ -375,14 +375,16 @@ static property_apply_result_s bi_shadow_result(shadow_value_error error, bool b
 
 static property_apply_result_s bi_apply_box_shadow(property_apply_context_s& context,
                                                    const std::string& value) {
+    const auto inputs = context.measures ? context.measures->read().inputs() : measure_inputs_s{};
     return bi_shadow_result(shadow_list_apply(value, true, context.style->box_shadows,
-        context.color_resolution->box_shadow_uses_current_color, {}, context.measures), true);
+        context.color_resolution->box_shadow_uses_current_color, {}, context.measures ? &inputs : nullptr), true);
 }
 
 static property_apply_result_s bi_apply_text_shadow(property_apply_context_s& context,
                                                     const std::string& value) {
+    const auto inputs = context.measures ? context.measures->read().inputs() : measure_inputs_s{};
     return bi_shadow_result(shadow_list_apply(value, false, context.style->text_shadows,
-        context.color_resolution->text_shadow_uses_current_color, {}, context.measures), false);
+        context.color_resolution->text_shadow_uses_current_color, {}, context.measures ? &inputs : nullptr), false);
 }
 
 static bool bi_try_shadow(const char* source, std::string& output, bool box) {
@@ -1631,19 +1633,19 @@ void builtin_properties_register(style_property_registry_s* reg) {
                     copied.items[i].repeat_y = AETHER_BACKGROUND_REPEAT;
                 }
                 aether_background_layer_list_free(&s.background_layers); s.background_layers = copied;
-                measure_apply_background_longhands(s, *c.measures);
+                measure_apply_background_longhands(s, c.measures->read());
             } else if (name == "background-position") {
-                c.measures->background_positions = pm ? pm->background_positions :
-                    std::vector<measure_background_position_s>{measure_background_position_s{}};
-                measure_apply_background_longhands(s, *c.measures);
+                c.measures->set_background_positions(pm ? pm->background_positions :
+                    std::vector<measure_background_position_s>{measure_background_position_s{}});
+                measure_apply_background_longhands(s, c.measures->read());
             } else if (name == "background-size") {
-                c.measures->background_sizes = pm ? pm->background_sizes :
-                    std::vector<measure_background_size_s>{measure_background_size_s{}};
-                measure_apply_background_longhands(s, *c.measures);
+                c.measures->set_background_sizes(pm ? pm->background_sizes :
+                    std::vector<measure_background_size_s>{measure_background_size_s{}});
+                measure_apply_background_longhands(s, c.measures->read());
             }
             uint32_t dep = MEASURE_PARENT;
-            if (pm) { const auto it = pm->property_dependencies.find(name); if (it != pm->property_dependencies.end()) dep |= it->second & MEASURE_PERCENTAGE; }
-            c.measures->property_dependencies[name] = dep;
+            if (pm) dep |= measure_property_dependencies(*pm, name) & MEASURE_PERCENTAGE;
+            c.measures->set_property_dependencies(dep);
         };
     }
 
@@ -1662,18 +1664,18 @@ void builtin_properties_register(style_property_registry_s* reg) {
                     return property_apply_result_s::failure("AETHER-CSS-BACKGROUND-POSITION", "Invalid background-position list.");
                 std::vector<measure_background_position_s> computed;
                 computed.reserve(parsed.size());
-                for (const auto& item : parsed) computed.push_back({measure_compute_length(item.x,*c.measures),measure_compute_length(item.y,*c.measures)});
-                c.measures->background_positions = std::move(computed);
+                for (const auto& item : parsed) computed.push_back({measure_compute_length(item.x, c.measures->read().inputs()),measure_compute_length(item.y, c.measures->read().inputs())});
+                c.measures->set_background_positions(std::move(computed));
             } else {
                 std::vector<aether_background_size_s> parsed;
                 if (!aether_background_size_list_try_parse(value, parsed))
                     return property_apply_result_s::failure("AETHER-CSS-BACKGROUND-SIZE", "Invalid background-size list.");
                 std::vector<measure_background_size_s> computed;
                 computed.reserve(parsed.size());
-                for (const auto& item : parsed) computed.push_back({item.kind,measure_compute_length(item.x,*c.measures),measure_compute_length(item.y,*c.measures)});
-                c.measures->background_sizes = std::move(computed);
+                for (const auto& item : parsed) computed.push_back({item.kind,measure_compute_length(item.x, c.measures->read().inputs()),measure_compute_length(item.y, c.measures->read().inputs())});
+                c.measures->set_background_sizes(std::move(computed));
             }
-            measure_apply_background_longhands(*c.style, *c.measures);
+            measure_apply_background_longhands(*c.style, c.measures->read());
             return {};
         };
     }
@@ -1715,47 +1717,50 @@ void builtin_properties_register(style_property_registry_s* reg) {
         definition.apply_with_context = [name, field, legacy](property_apply_context_s& c, const std::string& value) {
             if (!c.measures) { if (legacy) legacy(c.style, value); return; }
             auto& m = *c.measures;
-            m.property_dependencies[name] = measure_source_dependencies(value);
+            m.set_property_dependencies(measure_source_dependencies(value));
             if (name == "font-size") {
-                auto units = m; units.self_font_size = m.parent_font_size;
+                const auto units = m.read().inputs_with_self_font(m.read().parent_font_size());
                 aether_css_length parsed;
-                float font = m.document->initial_font_size;
+                float font = units.initial_font_size;
                 if (aether_css_length_try_parse(value.c_str(), &parsed)) {
                     const auto computed = measure_compute_length(parsed, units);
-                    const auto used = measure_resolve_used_length(computed, m.parent_font_size, true);
+                    const auto used = measure_resolve_used_length(computed, m.read().parent_font_size(), true);
                     if (used.kind != measure_used_kind_e::resolved)
                         throw std::overflow_error("Invalid computed font-size percentage");
                     font = used.px;
-                } else if (value == "smaller") font = m.parent_font_size / 1.2f;
-                else if (value == "larger") font = m.parent_font_size * 1.2f;
+                } else if (value == "smaller") font = m.read().parent_font_size() / 1.2f;
+                else if (value == "larger") font = m.read().parent_font_size() * 1.2f;
                 else {
                     static const char* names[] = {"xx-small","x-small","small","medium","large","x-large","xx-large"};
                     static const float factors[] = {.6f,.75f,.89f,1.f,1.2f,1.5f,2.f};
                     for (int i = 0; i < 7; ++i) if (value == names[i]) font *= factors[i];
                 }
                 if (!std::isfinite(font)) throw std::overflow_error("Non-finite computed font-size");
-                c.style->font_size = m.self_font_size = std::max(0.f, font);
-                auto& dep = m.property_dependencies[name];
+                c.style->font_size = std::max(0.f, font);
+                m.set_self_font_size(c.style->font_size);
+                auto dep = m.property_dependencies();
                 if (dep & (MEASURE_SELF_FONT | MEASURE_PERCENTAGE)) dep = (dep & ~MEASURE_SELF_FONT) | MEASURE_PARENT;
+                m.set_property_dependencies(dep);
                 return;
             }
             if (name == "line-height") {
-                if (value == "normal") m.line_height = {};
+                if (value == "normal") m.set_line_height({});
                 else {
                     aether::css::calc_value_s parsed;
                     if (bi_read_line_height(value, parsed)) {
                         if (parsed.kind == aether::css::calc_value_kind_e::number)
-                            m.line_height = {measure_line_height_kind_e::number, std::max(0.f, static_cast<float>(parsed.number))};
+                            m.set_line_height({measure_line_height_kind_e::number, std::max(0.f, static_cast<float>(parsed.number))});
                         else {
-                            const auto used = measure_resolve_used_length(measure_compute_length(parsed.length, m), m.self_font_size, true);
+                            const auto used = measure_resolve_used_length(measure_compute_length(parsed.length, m.read().inputs()), m.read().self_font_size(), true);
                             if (used.kind != measure_used_kind_e::resolved)
                                 throw std::overflow_error("Invalid computed line-height percentage");
-                            m.line_height = {measure_line_height_kind_e::absolute_css_px, std::max(0.f, used.px)};
+                            m.set_line_height({measure_line_height_kind_e::absolute_css_px, std::max(0.f, used.px)});
                         }
                     }
                 }
-                const double used_height = m.line_height.kind == measure_line_height_kind_e::absolute_css_px ? m.line_height.value :
-                    double(m.self_font_size) * (m.line_height.kind == measure_line_height_kind_e::normal ? 1.2 : m.line_height.value);
+                const auto line_height = m.read().line_height();
+                const double used_height = line_height.kind == measure_line_height_kind_e::absolute_css_px ? line_height.value :
+                    double(m.read().self_font_size()) * (line_height.kind == measure_line_height_kind_e::normal ? 1.2 : line_height.value);
                 if (!std::isfinite(used_height) || used_height > std::numeric_limits<float>::max())
                     throw std::overflow_error("Non-finite computed line-height");
                 if (legacy) legacy(c.style, value); // Explicit legacy projection, never consumed by contextual layout.
@@ -1764,30 +1769,29 @@ void builtin_properties_register(style_property_registry_s* reg) {
             if (name == "row-gap" || name == "column-gap") {
                 aether_css_length parsed;
                 if (aether_css_length_try_parse(value.c_str(), &parsed)) {
-                    const auto computed = measure_compute_length(parsed, m);
-                    (name == "row-gap" ? m.row_gap : m.column_gap) = computed;
+                    const auto computed = measure_compute_length(parsed, m.read().inputs());
+                    if (name == "row-gap") m.set_row_gap(computed); else m.set_column_gap(computed);
                 }
                 if (legacy) legacy(c.style, value);
                 return;
             }
             if (legacy) legacy(c.style, value);
-            if (auto* length = field(*c.style)) *length = measure_compute_length(*length, m);
+            if (auto* length = field(*c.style)) *length = measure_compute_length(*length, m.read().inputs());
         };
         definition.inherit_context = [name, field](property_apply_context_s& c, const aether_computed_style_t& parent, const measure_state_s* pm) {
             if (auto* dst = field(*c.style)) {
                 auto copy = parent;
                 *dst = *field(copy);
                 if (name == "flex-basis") c.style->flex_basis.kind = parent.flex_basis.kind;
-            } else if (name == "font-size") c.style->font_size = c.measures->self_font_size = parent.font_size;
-            else if (name == "line-height") { c.style->line_height = parent.line_height; if (pm) c.measures->line_height = pm->line_height; }
-            else if (pm && name == "row-gap") c.measures->row_gap = pm->row_gap;
-            else if (pm && name == "column-gap") c.measures->column_gap = pm->column_gap;
+            } else if (name == "font-size") { c.style->font_size = parent.font_size; c.measures->set_self_font_size(parent.font_size); }
+            else if (name == "line-height") { c.style->line_height = parent.line_height; if (pm) c.measures->set_line_height(pm->line_height); }
+            else if (pm && name == "row-gap") c.measures->set_row_gap(pm->row_gap);
+            else if (pm && name == "column-gap") c.measures->set_column_gap(pm->column_gap);
             uint32_t inherited_dependencies = MEASURE_PARENT;
             if (pm) {
-                auto inherited = pm->property_dependencies.find(name);
-                if (inherited != pm->property_dependencies.end()) inherited_dependencies |= inherited->second & MEASURE_PERCENTAGE;
+                inherited_dependencies |= measure_property_dependencies(*pm, name) & MEASURE_PERCENTAGE;
             }
-            c.measures->property_dependencies[name] = inherited_dependencies;
+            c.measures->set_property_dependencies(inherited_dependencies);
         };
     }
 

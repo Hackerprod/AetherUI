@@ -64,7 +64,7 @@ struct color_resolution_state_s {
 struct property_apply_context_s {
     aether_computed_style_t* style = nullptr;
     color_resolution_state_s* color_resolution = nullptr;
-    measure_state_s* measures = nullptr;
+    measure_apply_state_s* measures = nullptr;
     const color_resolution_state_s* parent_color_resolution = nullptr;
 };
 
