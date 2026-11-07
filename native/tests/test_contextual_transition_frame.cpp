@@ -27,6 +27,21 @@ void* operator new(std::size_t size) {
 }
 void operator delete(void* value) noexcept { std::free(value); }
 void operator delete(void* value, std::size_t) noexcept { std::free(value); }
+void* operator new[](std::size_t size) { return ::operator new(size); }
+void operator delete[](void* value) noexcept { std::free(value); }
+void operator delete[](void* value, std::size_t) noexcept { std::free(value); }
+
+// Route nothrow and array allocations through the same fault allocator. This
+// keeps ASan allocation families matched instead of suppressing its checks.
+void* operator new(std::size_t size, const std::nothrow_t&) noexcept {
+    try { return ::operator new(size); } catch (...) { return nullptr; }
+}
+void* operator new[](std::size_t size, const std::nothrow_t&) noexcept {
+    try { return ::operator new[](size); } catch (...) { return nullptr; }
+}
+void operator delete(void* value, const std::nothrow_t&) noexcept { std::free(value); }
+void operator delete[](void* value, const std::nothrow_t&) noexcept { std::free(value); }
+
 
 static void equal(float actual, float expected) {
     if (std::abs(actual - expected) > .01f) {

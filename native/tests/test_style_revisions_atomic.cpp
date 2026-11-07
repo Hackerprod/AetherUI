@@ -14,6 +14,17 @@ void* operator new[](std::size_t n) { return ::operator new(n); }
 void operator delete(void* p) noexcept { std::free(p); }
 void operator delete[](void* p) noexcept { std::free(p); }
 void operator delete(void* p, std::size_t) noexcept { std::free(p); }
+// Route nothrow and array allocations through the same fault allocator. This
+// keeps ASan allocation families matched instead of suppressing its checks.
+void* operator new(std::size_t size, const std::nothrow_t&) noexcept {
+    try { return ::operator new(size); } catch (...) { return nullptr; }
+}
+void* operator new[](std::size_t size, const std::nothrow_t&) noexcept {
+    try { return ::operator new[](size); } catch (...) { return nullptr; }
+}
+void operator delete(void* value, const std::nothrow_t&) noexcept { std::free(value); }
+void operator delete[](void* value, const std::nothrow_t&) noexcept { std::free(value); }
+
 void operator delete[](void* p, std::size_t) noexcept { std::free(p); }
 static unsigned checks = 0;
 static void require(bool ok, const char* message) { ++checks; if (!ok) { std::fprintf(stderr,"FAIL %s\n",message); std::exit(1); } }
