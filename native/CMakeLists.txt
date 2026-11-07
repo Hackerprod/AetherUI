@@ -1205,6 +1205,18 @@ if(AETHERUI_BUILD_TESTS)
         add_test(NAME aether.flex-text-${flex_text_test} COMMAND aether_flex_text_${flex_text_test}_test)
     endforeach()
 
+    add_executable(aether_flex_cross_auto_test tests/test_flex_cross_auto.cpp)
+    target_link_libraries(aether_flex_cross_auto_test PRIVATE AetherUI::Core)
+    add_test(NAME aether.flex-cross-auto COMMAND aether_flex_cross_auto_test)
+
+    # Use authentic core objects for the full layout/clone allocation sweep.
+    add_executable(aether_flex_cross_auto_lifetime_test
+        tests/test_flex_cross_auto_lifetime.cpp
+        $<TARGET_OBJECTS:aether_flex_text_test_core>)
+    target_include_directories(aether_flex_cross_auto_lifetime_test PRIVATE include src)
+    target_compile_definitions(aether_flex_cross_auto_lifetime_test PRIVATE AETHER_EXPORTS)
+    add_test(NAME aether.flex-cross-auto-lifetime COMMAND aether_flex_cross_auto_lifetime_test)
+
     # The test includes the authentic layout engine to exercise its private
     # final validator. Compile every other core source exactly once, without a DSO.
     get_target_property(intrusive_registry_core_sources aether_core SOURCES)

@@ -355,7 +355,7 @@ static float resolve_semantic_height(const aether_layout_engine_s* engine,
     return resolve(engine, value, height.value_or(0.f), style);
 }
 
-static float clamp_border_height(const aether_layout_engine_s* engine,
+float clamp_border_height(const aether_layout_engine_s* engine,
                                  const BoxStyleSnapshot& style,
                                  float height, float reference, float decorations,
                                  bool semantic_reference, aether_node_s* element) {
@@ -524,6 +524,7 @@ aether_layout_box_s* layout_element(
                                               child_percentage_height,
                                               style,
                                               std::isfinite(definite_content_height),
+                                              containing_height, height_decorations,
                                               result);
     } else if (style.display == AETHER_DISPLAY_TABLE) {
         content_height = layout_table_children(engine, styles, box, element,
@@ -599,27 +600,6 @@ aether_layout_box_s* layout_element(
 
     border_height = clamp_border_height(engine, style, border_height,
         containing_height.value_or(NAN), height_decorations, true, element);
-
-    // A horizontal flex container whose final height (explicit or min/max-clamped) exceeds its
-    // used content centers its cross axis (align-items center/end) like Chrome, instead of
-    // leaving items pinned to the top of the taller box.
-    if (style.display == AETHER_DISPLAY_FLEX &&
-        style.flex_direction != AETHER_FLEX_DIRECTION_COLUMN &&
-        !box->children.empty()) {
-        const float final_content_height = std::max(0.f,
-            border_height - aether_thicknessf_vertical(padding) - aether_thicknessf_vertical(border));
-        if (content_height < final_content_height) {
-            const float free = final_content_height - content_height;
-            for (auto* child : box->children) {
-                const auto child_style = child->element
-                    ? get_style(styles, child->element)
-                    : child->style;
-                const int32_t alignment = flex_cross_alignment(style, child_style);
-                if (alignment == AETHER_ALIGN_CENTER) offset_box(child, 0.f, free * 0.5f);
-                else if (alignment == AETHER_ALIGN_END) offset_box(child, 0.f, free);
-            }
-        }
-    }
 
     // Absolute and fixed descendants do not take part in normal-flow sizing. Their containing
     // block is this element's finished padding box (the final height resolved above).

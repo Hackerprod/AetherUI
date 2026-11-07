@@ -90,6 +90,12 @@ float layout_inline_items(
     const BoxStyleSnapshot& parent_style,
     aether_layout_result_s* result);
 
+// Shared min/max-height resolution. reference is the containing block's
+// semantic percentage height, never a flex container's numeric auto minimum.
+float clamp_border_height(const aether_layout_engine_s* engine,
+    const BoxStyleSnapshot& style, float height, float reference, float decorations,
+    bool semantic_reference, aether_node_s* element);
+
 float layout_flex_children(
     const aether_layout_engine_s* engine,
     const StyleLookup* styles,
@@ -99,6 +105,8 @@ float layout_flex_children(
     percentage_height_s containing_height,
     const BoxStyleSnapshot& style,
     bool has_definite_height,
+    percentage_height_s container_height_reference,
+    float height_decorations,
     aether_layout_result_s* result);
 
 float layout_table_children(
