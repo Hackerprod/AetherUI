@@ -5,6 +5,7 @@
 #include <bit>
 #include <cerrno>
 #include <charconv>
+#include <cfenv>
 #include <clocale>
 #include <cmath>
 #include <cstdint>
@@ -16,6 +17,8 @@
 #include <vector>
 
 namespace {
+static_assert(std::numeric_limits<float>::is_iec559 && std::numeric_limits<float>::digits == 24 &&
+              std::numeric_limits<float>::max_exponent == 128, "fixtures require IEEE binary32");
 unsigned checks = 0, failures = 0;
 void check(bool ok, const std::string& what) {
     ++checks;
@@ -34,6 +37,87 @@ struct Result {
     uint32_t x = 0, y = 0;
     bool operator==(const Result&) const = default;
 };
+uint32_t bits(float value) { return std::bit_cast<uint32_t>(value); }
+void direction_reference(const std::string& source, const aether_linear_gradient& actual,
+                         float degrees) {
+    const float residue = std::fmod(degrees, 360.f);
+    char buffer[64];
+    const auto formatted = std::to_chars(buffer, buffer + sizeof(buffer), residue);
+    check(formatted.ec == std::errc{}, "residue decimal formatting");
+    if (formatted.ec != std::errc{}) return;
+    const std::string number(buffer, formatted.ptr);
+    aether::css::c_numeric_locale locale;
+    const auto roundtrip = locale.parse_float(number);
+    check(roundtrip.valid && bits(roundtrip.value) == bits(residue), "residue roundtrip preserves signed float bits");
+    const std::string reduced_source = "linear-gradient(" + number + "deg,red,blue)";
+    aether_linear_gradient reduced{};
+    const bool valid = aether_linear_gradient_try_parse(reduced_source.c_str(), &reduced);
+    check(valid, "signed residue is a valid angle");
+    const bool same_reduction = valid && bits(actual.direction_x) == bits(reduced.direction_x) &&
+                                bits(actual.direction_y) == bits(reduced.direction_y);
+    check(same_reduction, source + " matches parser of signed float residue exactly");
+    const uint32_t reduced_x = bits(reduced.direction_x), reduced_y = bits(reduced.direction_y);
+    aether_linear_gradient_free(&reduced);
+
+    constexpr float pi = 3.14159265358979323846f;
+    const float radians = residue * pi / 180.f;
+    bool geometry = false;
+    if (std::fabs(radians) <= std::numeric_limits<float>::min()) {
+        // Under round-to-nearest, sine(r) rounds exactly to r and cosine(r)
+        // to 1 here. Keep zero sign, subnormals and underflow checks exact.
+        geometry = bits(actual.direction_x) == bits(radians) && actual.direction_y == -1.f;
+    } else {
+        // A compiler may combine float sin/cos while an independent oracle
+        // uses separate libm calls. Their last bits are not an API guarantee.
+        // Reuse the geometric tolerance of the periodicity/norm checks, while
+        // retaining strict sign and nonzero checks so tolerance cannot erase
+        // small angles. Float conversion/reduction stay exact above.
+        const double expected_x = std::sin(static_cast<double>(radians));
+        const double expected_y = -std::cos(static_cast<double>(radians));
+        const auto close = [](float value, double expected) {
+            return std::isfinite(value) && value != 0.f &&
+                   std::signbit(value) == std::signbit(expected) &&
+                   std::fabs(static_cast<double>(value) - expected) <= 5e-7;
+        };
+        geometry = close(actual.direction_x, expected_x) && close(actual.direction_y, expected_y);
+    }
+    if (!geometry || !same_reduction) std::fprintf(stderr,
+        "DIRECTION [%s] degrees=%a/%08x residue=%a/%08x radians=%a/%08x actual=(%a/%08x,%a/%08x) reduced=(%08x,%08x)\n",
+        source.c_str(), static_cast<double>(degrees), bits(degrees),
+        static_cast<double>(residue), bits(residue), static_cast<double>(radians), bits(radians),
+        static_cast<double>(actual.direction_x), bits(actual.direction_x),
+        static_cast<double>(actual.direction_y), bits(actual.direction_y), reduced_x, reduced_y);
+    check(geometry, source + " has signed, accurate float-angle geometry");
+}
+void numeric_policy() {
+    struct Fixture { const char* text; uint32_t converted, residue; };
+    // These binary32 fixtures are independent of the parser and its formatter.
+    // In particular (2^128 - 2^105) mod 360 is exactly 104.
+    const Fixture fixtures[] = {
+        {"3.4028233e+38", 0x7f7ffffeu, 0x42d00000u},
+        {"-3.4028233e+38", 0xff7ffffeu, 0xc2d00000u},
+        {"3.4028235e38", 0x7f7fffffu, 0x00000000u},
+        {"-3.4028235e38", 0xff7fffffu, 0x80000000u},
+        {"1e-40", 0x000116c2u, 0x000116c2u},
+        {"-1e-40", 0x800116c2u, 0x800116c2u},
+        {"1e-999", 0x00000000u, 0x00000000u},
+        {"-1e-999", 0x80000000u, 0x80000000u},
+        {"0", 0x00000000u, 0x00000000u}, {"-0", 0x80000000u, 0x80000000u},
+        {"1.0000000596046448", 0x3f800001u, 0x3f800001u}
+    };
+    for (const auto& fixture : fixtures) {
+        aether::css::c_numeric_locale locale;
+        const auto converted = locale.parse_float(fixture.text);
+        check(converted.valid && bits(converted.value) == fixture.converted,
+              std::string(fixture.text) + " has known C-float bits");
+        check(converted.valid && bits(std::fmod(converted.value, 360.f)) == fixture.residue,
+              std::string(fixture.text) + " has known signed residue bits");
+    }
+    for (const char* text : {"3.4028236e38", "-3.4028236e38", "1e100", "-1e100"}) {
+        aether::css::c_numeric_locale locale;
+        check(!locale.parse_float(text).valid, std::string(text) + " overflows float");
+    }
+}
 Result parse(const std::string& source, bool expected, const char* numeric = nullptr) {
     const auto before = current();
     aether_linear_gradient g{73, 91, nullptr, 5};
@@ -56,11 +140,7 @@ Result parse(const std::string& source, bool expected, const char* numeric = nul
             aether::css::c_numeric_locale locale;
             const auto value = locale.parse_float(numeric);
             check(value.valid, "reference converts finite C float");
-            constexpr float pi = 3.14159265358979323846f;
-            const float r = std::fmod(value.value, 360.f) * pi / 180.f;
-            check(std::bit_cast<uint32_t>(g.direction_x) == std::bit_cast<uint32_t>(std::sin(r)) &&
-                  std::bit_cast<uint32_t>(g.direction_y) == std::bit_cast<uint32_t>(-std::cos(r)),
-                  source + " matches signed fmod float reference on this platform");
+            if (value.valid) direction_reference(source, g, value.value);
             check(!info.uses_fixed_corner_direction, "angle is not a corner approximation");
         }
     }
@@ -76,7 +156,7 @@ std::vector<Case> cases() {
     std::vector<Case> all;
     for (const char* number : {"0", "-0", "+0", "+.5", "12.5", "-12.5", "1e2", "1E+2", "1e-2",
             "372.5", "-347.5", "90", "450", "-270", "180", "540", "-180", "360", "-360", "720", "-720",
-            "1.0000000596046448", "3e38", "-3e38", "3.4028234e38",
+            "1.0000000596046448", "3e38", "-3e38", "3.4028233e+38", "-3.4028233e+38", "3.4028234e38",
             "3.4028235e38", "1e-40", "-1e-40", "1e-999", "-1e-999", "0e999999", "-0e999999"})
         all.push_back({gradient(std::string(number) + "deg"), true, number});
     for (float value : {std::numeric_limits<float>::max(), -std::numeric_limits<float>::max(),
@@ -130,6 +210,7 @@ int main(int argc, char** argv) {
     const bool require_all = argc == 2 && std::string(argv[1]) == "--require-all";
     if (argc > 2 || (argc == 2 && !require_all)) return 2;
     const auto original = current();
+    check(std::fegetround() == FE_TONEAREST, "numeric policy fixtures require round-to-nearest");
     {
         LocaleGuard restore;
         std::vector<std::string> locales{"C"};
@@ -156,12 +237,13 @@ int main(int argc, char** argv) {
         for (const auto& c : all) baseline.push_back(parse(c.text, c.valid, c.numeric.empty() ? nullptr : c.numeric.c_str()));
         for (const auto& locale : locales) {
             select(locale);
+            numeric_policy();
             for (size_t i = 0; i < all.size(); ++i) {
                 const auto& c = all[i];
                 check(parse(c.text, c.valid, c.numeric.empty() ? nullptr : c.numeric.c_str()) == baseline[i],
                       locale + " matches C validity and direction bits");
             }
-            // Geometric periodicity is tolerant, unlike same-platform reference bits.
+            // Geometric periodicity is tolerant; signed-residue and locale checks stay exact.
             for (const char* angle : {"372.5deg", "-347.5deg"}) {
                 aether_linear_gradient a{}, b{};
                 check(aether_linear_gradient_try_parse(gradient("12.5deg").c_str(), &a) &&
