@@ -8,13 +8,11 @@
 namespace aether::style {
 
 class ImmutableUtf8 {
-    const bool present_;
-    const ImmutableArray<char> bytes_;
+    const FrozenCString text_;
 public:
-    ImmutableUtf8() noexcept : present_(false) {}
-    explicit ImmutableUtf8(std::string_view text)
-        : present_(true), bytes_(ImmutableArray<char>::generate(text.size(), [&](size_t i) { return text[i]; })) {}
-    Utf8ReadView view() const noexcept { return {present_, bytes_.view()}; }
+    ImmutableUtf8() noexcept = default;
+    explicit ImmutableUtf8(std::string_view text) : text_(text) {}
+    Utf8ReadView view() const noexcept { return Utf8ReadView(text_); }
 };
 class FrozenGradient {
     const float direction_x_ = 0, direction_y_ = 0;

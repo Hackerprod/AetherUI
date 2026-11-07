@@ -1,4 +1,4 @@
-// Compile the three additive .cpp files into THIS executable and link with
+// Compile the helper .cpp files (including frozen_c_string.cpp) into THIS executable and link with
 // -Wl,--wrap=malloc,--wrap=free. Wrapping a precompiled DSO is insufficient.
 #include "frozen_style_test_support.h"
 #include <new>
@@ -7,22 +7,26 @@
 extern "C" void* __real_malloc(size_t);
 extern "C" void __real_free(void*);
 namespace fault {
-enum class Mode { none, cpp, c };
+enum class Mode { none, cpp, ordinary, aligned, c };
+const char* label(Mode m) { return m==Mode::cpp?"combined-new":m==Mode::ordinary?"ordinary-new":m==Mode::aligned?"aligned-new":"malloc"; }
+long ordinary_calls=0,aligned_calls=0,malloc_calls=0;
 Mode mode=Mode::none;
 long remaining=-1,calls=0,cpp_alloc=0,cpp_free=0,c_alloc=0,c_free=0;
 bool hit=false;
 bool reject(Mode selected) noexcept {
-    if(mode!=selected)return false;
+    if(mode==Mode::none)return false;
+    if(selected==Mode::ordinary)++ordinary_calls;else if(selected==Mode::aligned)++aligned_calls;else ++malloc_calls;
+    if(mode!=selected && !(mode==Mode::cpp && selected!=Mode::c))return false;
     ++calls;
     if(remaining--==0){hit=true;return true;}
     return false;
 }
-void arm(Mode selected,long index){remaining=index;calls=cpp_alloc=cpp_free=c_alloc=c_free=0;hit=false;mode=selected;}
+void arm(Mode selected,long index){remaining=index;ordinary_calls=aligned_calls=malloc_calls=0;calls=cpp_alloc=cpp_free=c_alloc=c_free=0;hit=false;mode=selected;}
 void disarm(){mode=Mode::none;}
 void* cpp_allocate(size_t size,size_t align=0) {
-    if(reject(Mode::cpp))throw std::bad_alloc();
+    if(reject(align?Mode::aligned:Mode::ordinary))throw std::bad_alloc();
     void* p=nullptr;
-    if(align) { if(posix_memalign(&p,align,size?size:1))p=nullptr; }
+    if(align) { if(posix_memalign(&p,align<sizeof(void*)?sizeof(void*):align,size?size:1))p=nullptr; }
     else p=__real_malloc(size?size:1);
     if(!p)throw std::bad_alloc();
     if(mode!=Mode::none)++cpp_alloc;
@@ -57,16 +61,16 @@ void balanced_failure() {
     need(fault::cpp_alloc==fault::cpp_free,"failure releases every successful new allocation");
     need(fault::c_alloc==fault::c_free,"failure releases every successful C allocation including ledger insertion failure");
 }
-void freeze_sweep(const Builder& builder) {
+void freeze_sweep(const Builder& builder, fault::Mode mode) {
     FrozenStyleRef previous;ok(freeze_style(builder.flat,previous),"baseline freeze");
     for(long index=0;index<1000;++index) {
         auto output=previous;
-        fault::arm(fault::Mode::cpp,index);auto status=freeze_style(builder.flat,output);fault::disarm();
+        fault::arm(mode,index);auto status=freeze_style(builder.flat,output);fault::disarm();
         if(fault::hit) {
             need(status==AETHER_ERROR_OUT_OF_MEMORY&&output==previous,"freeze OOM preserves exact owner");balanced_failure();
             ok(freeze_style(builder.flat,output),"freeze clean retry");
             snapshot_test::Flat exported;ok(export_owned_flat(output->view(),&exported.value),"retry export");equal(builder.flat,exported.value);
-        } else {ok(status,"uninjected freeze success");need(index==fault::calls&&index>0,"all new sites swept");std::printf("freeze new sites=%ld\n",index);return;}
+        } else {ok(status,"uninjected freeze success");need(index==fault::calls,"all new sites swept");std::printf("freeze %s sites=%ld\n",fault::label(mode),index);return;}
     }need(false,"freeze sweep bound");
 }
 void export_sweep(const FrozenStyleRef& source, fault::Mode mode,bool callback) {
@@ -89,12 +93,12 @@ void export_sweep(const FrozenStyleRef& source, fault::Mode mode,bool callback) 
             else ok(export_owned_flat(source->view(),&output.value),"export clean retry");
             equal(callback?*copy->get():output.value,expected.value);
         } else {
-            ok(status,"uninjected export success");equal(callback?*copy->get():output.value,expected.value);need(index==fault::calls&&index>0,"all selected allocation sites swept");
-            std::printf("%s %s sites=%ld\n",callback?"callback":"export",mode==fault::Mode::cpp?"new":"malloc",index);return;
+            ok(status,"uninjected export success");equal(callback?*copy->get():output.value,expected.value);need(index==fault::calls,"all selected allocation sites swept");
+            std::printf("%s %s sites=%ld\n",callback?"callback":"export",fault::label(mode),index);return;
         }
     }need(false,"export sweep bound");
 }
-void measure_sweep() {
+void measure_sweep(fault::Mode mode) {
     std::shared_ptr<const FrozenDocumentMeasureContext> document;
     ok(freeze_document({800,600,16,19,7,11},document),"document setup");
     MeasureScalarValues scalar{};scalar.dependencies=3;
@@ -104,9 +108,9 @@ void measure_sweep() {
     ok(freeze_measures(scalar,document,positions,sizes,deps,previous),"metadata setup");
     for(long i=0;i<1000;++i) {
         auto output=previous;
-        fault::arm(fault::Mode::cpp,i);auto status=freeze_measures(scalar,document,positions,sizes,deps,output);fault::disarm();
+        fault::arm(mode,i);auto status=freeze_measures(scalar,document,positions,sizes,deps,output);fault::disarm();
         if(fault::hit){need(status==AETHER_ERROR_OUT_OF_MEMORY&&output==previous,"metadata output unchanged");balanced_failure();ok(freeze_measures(scalar,document,positions,sizes,deps,output),"metadata retry");}
-        else {ok(status,"metadata success");need(i==fault::calls&&i>0,"metadata complete sweep");std::printf("measures new sites=%ld\n",i);return;}
+        else {ok(status,"metadata success");need(i==fault::calls,"metadata complete sweep");std::printf("measures %s sites=%ld\n",fault::label(mode),i);return;}
     }need(false,"metadata sweep bound");
 }
 void document_sweep() {
@@ -116,7 +120,7 @@ void document_sweep() {
         auto output=previous;
         fault::arm(fault::Mode::cpp,i);auto status=freeze_document({900,700,17,20,8,12},output);fault::disarm();
         if(fault::hit){need(status==AETHER_ERROR_OUT_OF_MEMORY&&output==previous,"document owner unchanged");balanced_failure();ok(freeze_document({900,700,17,20,8,12},output),"document retry");}
-        else{ok(status,"document success");need(i==fault::calls&&i>0,"document complete sweep");std::printf("document new sites=%ld\n",i);return;}
+        else{ok(status,"document success");need(i==fault::calls,"document complete sweep");std::printf("document new sites=%ld\n",i);return;}
     }need(false,"document sweep bound");
 }
 void callback_cleanup(const FrozenStyleRef& source) {
@@ -130,10 +134,59 @@ void callback_cleanup(const FrozenStyleRef& source) {
     inner.reset();outer.reset();fault::disarm();
     balanced_failure();need(fault::c_alloc>0&&fault::cpp_alloc>0,"ledger success allocations actually tracked");
 }
+void string_sweep() {
+    for(auto text:{std::string_view(""),std::string_view("a\0z",3)}) {
+        auto previous=std::make_shared<const ImmutableUtf8>("sentinel");
+        for(auto mode:{fault::Mode::cpp,fault::Mode::ordinary,fault::Mode::aligned,fault::Mode::c}) {
+            bool complete=false;
+            for(long i=0;i<100;++i) {
+                auto out=previous;bool failed=false;
+                fault::arm(mode,i);
+                try {out=std::make_shared<const ImmutableUtf8>(text);}catch(const std::bad_alloc&){failed=true;}
+                fault::disarm();
+                if(fault::hit) {
+                    need(failed&&out==previous&&out->view().equals("sentinel"),"string OOM atomic owner");balanced_failure();
+                    out=std::make_shared<const ImmutableUtf8>(text);need(out->view().equals(text),"string clean retry");
+                } else {
+                    need(!failed&&fault::calls==i&&out->view().equals(text)&&out->view().c_str()[text.size()]==0,"string terminal success");
+                    std::printf("string size=%zu %s sites=%ld\n",text.size(),fault::label(mode),i);complete=true;break;
+                }
+            }
+            need(complete,"string sweep complete");
+        }
+    }
+}
+void noalloc_reads(const FrozenStyleRef& source) {
+    ImmutableUtf8 binary(std::string_view("a\0z",3)), empty("");
+    std::shared_ptr<const FrozenDocumentMeasureContext> document;
+    ok(freeze_document({},document),"noalloc document");
+    MeasureScalarValues scalars{};scalars.dependencies=1;
+    MeasureBackgroundPosition position{};MeasureBackgroundSize size{};
+    PropertyDependencyInput dependency{std::string_view("x\0y",3),1};
+    std::shared_ptr<const FrozenMeasures> measures;
+    ok(freeze_measures(scalars,document,{&position,1},{&size,1},{&dependency,1},measures),"noalloc measures");
+    const auto* pointer=binary.view().c_str();
+    fault::arm(fault::Mode::cpp,-1);
+    for(int i=0;i<1000;++i) {
+        ImmutableUtf8 copy(binary),moved(std::move(copy));
+        auto v=moved.view();
+        need(v.present()&&v.size()==3&&v[2]=='z'&&v.c_str()==pointer&&v.bytes().data()==pointer&&v.equals(std::string_view("a\0z",3)),"binary reads");
+        need(empty.view().c_str()[0]==0&&measures->dependency(dependency.name)==1,"empty and dependency reads");
+        for(const auto& layer:source->view().background_layers()) {
+            auto text=layer.view().image_source;
+            need(text.bytes().size()==text.size(),"image span extent");
+            if(text.present())need(text.c_str()[text.size()]==0,"image termination");
+        }
+    }
+    fault::disarm();
+    need(fault::ordinary_calls==0&&fault::aligned_calls==0&&fault::malloc_calls==0,"all reader allocation families zero");
+}
 int main() {
-    Builder builder;freeze_sweep(builder);measure_sweep();document_sweep();
+    Builder builder;
+    for(auto mode:{fault::Mode::cpp,fault::Mode::ordinary,fault::Mode::aligned,fault::Mode::c}) {freeze_sweep(builder,mode);measure_sweep(mode);}
+    document_sweep();string_sweep();
     FrozenStyleRef frozen;ok(freeze_style(builder.flat,frozen),"shared source");
-    callback_cleanup(frozen);
-    for(auto mode:{fault::Mode::cpp,fault::Mode::c})for(bool callback:{false,true})export_sweep(frozen,mode,callback);
+    callback_cleanup(frozen);noalloc_reads(frozen);
+    for(auto mode:{fault::Mode::cpp,fault::Mode::ordinary,fault::Mode::aligned,fault::Mode::c})for(bool callback:{false,true})export_sweep(frozen,mode,callback);
     std::puts("PASS frozen OOM: exhaustive first-uninjected-success, independent new/malloc, atomic owners/output and balanced partial cleanup");
 }

@@ -47,6 +47,7 @@ template<class Ref,class Factory> void sweep(Ref old,Factory factory,const char*
     for(long i=0;i<10000;++i) {
         Ref out=old;
         const long before=fault::live;
+        const long calls_before=fault::calls;
         fault::remaining=i;fault::hit=false;
         const auto status=factory(out);
         fault::remaining=-1;
@@ -54,7 +55,8 @@ template<class Ref,class Factory> void sweep(Ref old,Factory factory,const char*
             need(status==AETHER_ERROR_OUT_OF_MEMORY,label);
             need(out==old,"OOM output atomicity");
             need(fault::live==before,"OOM allocations balanced");
-        } else {need(status==AETHER_OK,label);success=true;std::printf("%s: %ld injected failures then success\n",label,i);break;}
+            need(factory(out)==AETHER_OK,"clean retry after every injected failure");
+        } else {need(status==AETHER_OK,label);need(fault::calls-calls_before==i,"terminal sweep index matches calls");success=true;std::printf("%s: %ld injected failures then success\n",label,i);break;}
     }
     need(success,"sweep reached clean success");
 }
@@ -146,4 +148,17 @@ void measures() {
     input.line_height.kind=measure_line_height_kind_e::normal;input.background_sizes.clear();
     need(freeze_runtime_measures(input,document,result)==AETHER_ERROR_INVALID_STATE&&result==saved,"empty lists not silently repaired");
 }
-int main(){const auto before=fault::live;scopes();colors();measures();need(fault::live==before,"all owners balanced");std::printf("allocation families: new=%ld new[]=%ld aligned=%ld nothrow=%ld\n",fault::scalar_calls,fault::array_calls,fault::aligned_calls,fault::nothrow_calls);std::puts("frozen runtime metadata PASS (200000 scopes, OOM sweeps, noalloc reads)");}
+void binary_measure_snapshot() {
+    FrozenDocumentRef document;need(freeze_document({},document)==AETHER_OK,"binary document");
+    measure_state_s input;
+    const std::string key("width\0suffix",12);
+    input.property_dependencies.emplace(key,MEASURE_PERCENTAGE);input.dependencies=MEASURE_PERCENTAGE;
+    FrozenMeasuresRef result;need(freeze_runtime_measures(input,document,result)==AETHER_OK,"binary runtime measures");
+    auto pin=result;const auto name=result->property_dependencies()[0].name();const auto* pointer=name.c_str();
+    input.property_dependencies.clear();result.reset();
+    const long calls=fault::calls;
+    need(name.equals(key)&&name.size()==12&&name.c_str()==pointer&&pointer[12]==0&&name.bytes().data()==pointer,"binary name pinned after source destruction");
+    need(pin->dependency(key)==MEASURE_PERCENTAGE&&pin->dependency("width")==0,"binary full key lookup");
+    need(fault::calls==calls,"binary snapshot read no allocations");
+}
+int main(){const auto before=fault::live;scopes();colors();measures();binary_measure_snapshot();need(fault::live==before,"all owners balanced");std::printf("allocation families: new=%ld new[]=%ld aligned=%ld nothrow=%ld\n",fault::scalar_calls,fault::array_calls,fault::aligned_calls,fault::nothrow_calls);std::puts("frozen runtime metadata PASS (200000 scopes, OOM sweeps, noalloc reads)");}

@@ -15,6 +15,37 @@ static_assert(std::forward_iterator<ReadOnlyArrayView<int>::const_iterator>);
 template<class T> concept MutableData = requires(T x) { x.data(); };
 template<class T> concept Release = requires(T x) { x.release(); };
 static_assert(!MutableData<ImmutableArray<int>> && !Release<ImmutableArray<int>>);
+static_assert(std::is_same_v<decltype(std::declval<Utf8ReadView>().c_str()),const char*>);
+static_assert(std::is_same_v<decltype(std::declval<Utf8ReadView>().bytes()),std::span<const char>>);
+static_assert(!std::is_constructible_v<Utf8ReadView,const FrozenCString&>);
+static_assert(!std::is_constructible_v<Utf8ReadView,const char*,size_t>);
+void strings() {
+    ImmutableUtf8 absent, empty("");
+    need(!absent.view().present()&&!absent.view().c_str()&&absent.view().bytes().empty()&&!absent.view().equals(""),"absent string");
+    auto e=empty.view();need(e.present()&&e.empty()&&e.c_str()&&*e.c_str()==0&&e.equals("")&&e.bytes().data()==e.c_str(),"present empty owns terminator");
+    const std::string expected("a\0z\xc3\xa9",5);
+    std::shared_ptr<const ImmutableUtf8> pin;
+    const char* pointer=nullptr;
+    {
+        std::string source=expected;
+        auto original=std::make_shared<const ImmutableUtf8>(std::string_view(source));
+        pointer=original->view().c_str(); pin=original;
+        ImmutableUtf8 copied(*original),moved(std::move(copied));
+        need(moved.view().c_str()==pointer&&copied.view().c_str()==pointer,"wrapper shares immutable storage");
+        source.assign("changed");original.reset();
+    }
+    const auto v=pin->view();need(v.c_str()==pointer&&v.size()==expected.size()&&v.equals(expected)&&v.c_str()[v.size()]==0,"pin preserves binary UTF8");
+    need(v.bytes().data()==pointer&&v.bytes().size()==5&&!v.equals(std::string_view("a\0x\xc3\xa9",5))&&!v.equals("a"),"size-aware equality and span");
+    auto layers=ImmutableArray<FrozenBackgroundLayer>::generate(1,[&](size_t){return FrozenBackgroundLayer({}, {}, ImmutableUtf8(expected));});
+    auto payload=std::make_shared<const FrozenStylePayload>(std::move(layers),ImmutableArray<aether_backdrop_filter>{},FrozenGradient{},ImmutableArray<aether_transform_operation>{},ImmutableArray<aether_shadow>{},ImmutableArray<aether_shadow>{});
+    auto style=std::make_shared<const FrozenStyle>(StyleScalars{},payload);
+    auto second=std::make_shared<const FrozenStyle>(StyleScalars{},style->payload_owner());
+    const auto text=style->view().background_layers()[0].view().image_source;
+    need(second->view().background_layers()[0].view().image_source.c_str()==text.c_str(),"shared payload string identity");
+    snapshot_test::Flat out;ok(export_owned_flat(style->view(),&out.value),"binary internal export");
+    need(out.value.background_layers.items[0].image_source!=text.c_str()&&std::memcmp(out.value.background_layers.items[0].image_source,expected.data(),expected.size())==0&&out.value.background_layers.items[0].image_source[expected.size()]==0,"export copies all binary bytes even inactive kind");
+    out.value.background_layers.items[0].image_source[2]='X';need(text.equals(expected),"export does not alias frozen");
+}
 struct alignas(256) Counted {
     static inline int alive=0, destroyed=0;
     const int value;
@@ -59,7 +90,7 @@ void measures() {
     auto before=result;need(freeze_measures(scalars,nullptr,{},{},{},result)!=AETHER_OK&&result==before,"bad metadata preserves output");
 }
 int main() {
-    arrays();measures();
+    arrays();measures();strings();
     FrozenStyleRef frozen;
     snapshot_test::Flat first,second;
     {

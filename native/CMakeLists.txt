@@ -420,7 +420,8 @@ if(AETHERUI_BUILD_TESTS)
     add_test(NAME aether.measure-property-scratch COMMAND aether_measure_property_scratch_test)
 
     add_executable(aether_frozen_style_test tests/test_frozen_style.cpp
-        src/css/frozen_style.cpp src/css/style_freeze.cpp src/css/style_c_export.cpp)
+        src/css/frozen_style.cpp src/css/style_freeze.cpp src/css/style_c_export.cpp
+        src/css/frozen_c_string.cpp)
     target_include_directories(aether_frozen_style_test PRIVATE src)
     target_link_libraries(aether_frozen_style_test PRIVATE AetherUI::Core)
     add_test(NAME aether.frozen-style COMMAND aether_frozen_style_test)
@@ -436,7 +437,8 @@ if(AETHERUI_BUILD_TESTS)
         # Compile the exporter here so its C allocations, not an already-linked
         # shared library, are reached by the independent allocator wrappers.
         add_executable(aether_frozen_style_oom_test tests/test_frozen_style_oom.cpp
-            src/css/frozen_style.cpp src/css/style_freeze.cpp src/css/style_c_export.cpp)
+            src/css/frozen_style.cpp src/css/style_freeze.cpp src/css/style_c_export.cpp
+            src/css/frozen_c_string.cpp)
         target_include_directories(aether_frozen_style_oom_test PRIVATE src)
         target_link_libraries(aether_frozen_style_oom_test PRIVATE AetherUI::Core)
         target_link_options(aether_frozen_style_oom_test PRIVATE "-Wl,--wrap=malloc" "-Wl,--wrap=free")

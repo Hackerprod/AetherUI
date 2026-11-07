@@ -1,6 +1,8 @@
 #pragma once
 #include <aether/aether.h>
 #include "immutable_array.h"
+#include "frozen_c_string.h"
+#include <span>
 #include <array>
 #include <cstring>
 #include <string_view>
@@ -79,21 +81,29 @@ struct StyleScalars {
     }
 };
 
-// No char-array pointer is exposed from slot storage. C strings are created in
-// independent C-owned buffers by the exporter, including their trailing NUL.
+// Borrowed from an owner-held real const-char array. The caller must retain
+// ImmutableUtf8 or its transitive style/measures owner throughout every use.
+class ImmutableUtf8;
 class Utf8ReadView {
-    bool present_ = false;
-    ReadOnlyArrayView<char> bytes_;
+    const char* bytes_ = nullptr;
+    size_t size_ = 0;
+    friend class ImmutableUtf8;
+    explicit Utf8ReadView(const FrozenCString& text) noexcept
+        : bytes_(text.c_str()), size_(text.size()) {}
 public:
     Utf8ReadView() noexcept = default;
-    Utf8ReadView(bool present, ReadOnlyArrayView<char> bytes) noexcept : present_(present), bytes_(bytes) {}
-    bool present() const noexcept { return present_; }
-    size_t size() const noexcept { return bytes_.size(); }
-    bool empty() const noexcept { return bytes_.empty(); }
-    const char& operator[](size_t index) const noexcept { return bytes_[index]; }
-    ReadOnlyArrayView<char> bytes() const noexcept { return bytes_; }
+    bool present() const noexcept { return bytes_ != nullptr; }
+    size_t size() const noexcept { return size_; }
+    bool empty() const noexcept { return size_ == 0; }
+    const char& operator[](size_t index) const noexcept {
+        assert(index < size_); return bytes_[index];
+    }
+    const char* c_str() const noexcept { return bytes_; }
+    std::span<const char> bytes() const noexcept {
+        return bytes_ ? std::span<const char>(bytes_, size_) : std::span<const char>{};
+    }
     bool equals(std::string_view value) const noexcept {
-        if (!present_ || size() != value.size()) return false;
+        if (!present() || size() != value.size()) return false;
         for (size_t i = 0; i < size(); ++i) if (bytes_[i] != value[i]) return false;
         return true;
     }
