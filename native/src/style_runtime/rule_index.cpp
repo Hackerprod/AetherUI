@@ -24,6 +24,7 @@ static std::string type_key(const std::string& s) {
 }
 
 void rule_index_clear(rule_index_s* idx) {
+    idx->invalidate_pseudo_capabilities();
     idx->by_id.clear();
     idx->by_class.clear();
     idx->by_type.clear();
@@ -32,6 +33,7 @@ void rule_index_clear(rule_index_s* idx) {
 }
 
 void rule_index_add(rule_index_s* idx, const compiled_rule_s* rule) {
+    idx->invalidate_pseudo_capabilities();
     idx->dependencies = idx->dependencies | rule->selector.dependencies;
     const auto& anchor = rule->selector.anchor;
 
@@ -50,6 +52,7 @@ void rule_index_rebuild(
     rule_index_s* idx,
     const std::vector<const compiled_style_sheet_s*>& sheets)
 {
+    idx->invalidate_pseudo_capabilities();
     rule_index_clear(idx);
 
     // Keep rebuilding deterministic. Cascade correctness comes from each rule's

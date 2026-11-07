@@ -235,6 +235,26 @@ void atomic_rejection() {
     }
 }
 
+void manual_capabilities() {
+    rule_index_s index;
+    auto unknown = [&] {
+        require(index.may_target_pseudo(aether_pseudo_element_t::before) &&
+                index.may_target_pseudo(aether_pseudo_element_t::after) &&
+                index.may_target_pseudo(static_cast<aether_pseudo_element_t>(99)),
+                "manual index never proves absence");
+    };
+    unknown(); rule_index_clear(&index); unknown();
+    compiled_style_sheet_s sheet;
+    sheet.rules.emplace_back();
+    rule_index_add(&index, &sheet.rules.front()); unknown();
+    rule_index_rebuild(&index, {&sheet}); unknown();
+    sheet.rules.front().selector.pseudo_element = aether_pseudo_element_t::before; unknown();
+    sheet.rules.front().selector.pseudo_element = aether_pseudo_element_t::after; unknown();
+    sheet.rules.front().selector.pseudo_element = static_cast<aether_pseudo_element_t>(99); unknown();
+    rule_index_rebuild(&index, {}); unknown();
+    auto copy = index; std::swap(index, copy); unknown();
+}
+
 void metadata_and_index() {
     struct Case { const char* selector; specificity_s specificity; unsigned dependencies; };
     const unsigned cls = SELECTOR_DEP_SELF_CLASS, desc = SELECTOR_DEP_DESCENDANT, id = SELECTOR_DEP_SELF_ID;
@@ -300,7 +320,7 @@ int main() {
     },{"top","right","bottom","left"});
     registry.seal();
     try {
-        recovered_rules(); atomic_rejection(); metadata_and_index();
+        recovered_rules(); atomic_rejection(); metadata_and_index(); manual_capabilities();
         std::printf("has pseudo-element compiler: %d checks passed\n",checks);
         return 0;
     } catch (const std::exception& e) {

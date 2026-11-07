@@ -100,6 +100,8 @@ struct aether_style_runtime_s {
     aether_node_s* legacy_inheritance_root = nullptr; // Candidate-only compatibility boundary.
     std::thread::id owner_thread = std::this_thread::get_id();
     rule_index_s index;
+    static rule_index_s prepare_rule_index(const aether_style_runtime_s* runtime,
+        const compiled_style_sheet_s* extra = nullptr, int64_t omit = 0);
 };
 
 struct aether_style_revision_handle_s { std::shared_ptr<const style_revision_s> value; };
@@ -328,14 +330,26 @@ static bool style_equal(ComputedStyleReadView av, const aether_computed_style_t&
             a.transition_timing == b.transition_timing;
 }
 
-static rule_index_s prepare_rule_index(const aether_style_runtime_s* runtime,
-    const compiled_style_sheet_s* extra = nullptr, int64_t omit = 0) {
+rule_index_s aether_style_runtime_s::prepare_rule_index(const aether_style_runtime_s* runtime,
+    const compiled_style_sheet_s* extra, int64_t omit) {
     std::vector<const compiled_style_sheet_s*> sheets;
     sheets.reserve(runtime->sheets.size() + (extra ? 1 : 0));
     for (const auto& pair : runtime->sheets) if (pair.first != omit) sheets.push_back(pair.second.get());
     if (extra) sheets.push_back(extra);
     rule_index_s prepared;
     rule_index_rebuild(&prepared, sheets);
+    // No match/media/state/content filtering: even a content-free pseudo rule
+    // can produce diagnostics. Unknown future kinds force the full path.
+    bool complete = true;
+    for (const auto* sheet : sheets) for (const auto& rule : sheet->rules) {
+        switch (rule.selector.pseudo_element) {
+        case aether_pseudo_element_t::none: break;
+        case aether_pseudo_element_t::before: prepared.before_possible_ = true; break;
+        case aether_pseudo_element_t::after: prepared.after_possible_ = true; break;
+        default: complete = false; break;
+        }
+    }
+    prepared.pseudo_capabilities_complete_ = complete;
     return prepared;
 }
 
@@ -879,6 +893,7 @@ static std::shared_ptr<aether_node_s> create_generated_node() {
 static std::shared_ptr<aether_node_s> prepare_generated_pseudo(
     aether_style_runtime_s* staged, aether_node_s* host, PreparedNodeResult* host_state,
     aether_pseudo_element_t pseudo) {
+    if (!staged->index.may_target_pseudo(pseudo)) return {};
     auto generated = create_generated_node();
     generated->type = AETHER_NODE_ELEMENT; generated->parent = host;
     generated->tag_name = host->tag_name; generated->attributes = host->attributes;
@@ -979,7 +994,7 @@ AETHER_API aether_status_t aether_style_runtime_add_stylesheet(
         // Preserve the compiler's global positions, including the shared position
         // of selectors in one list. ID capacity already bounds this narrowing.
         const auto rule_count = static_cast<int32_t>(sheet->rules.size());
-        auto index = prepare_rule_index(runtime, sheet.get());
+        auto index = aether_style_runtime_s::prepare_rule_index(runtime, sheet.get());
         runtime->sheets.emplace(handle, std::move(sheet)); // Last fallible allocation.
         using std::swap;
         swap(runtime->index, index);
@@ -1004,7 +1019,7 @@ AETHER_API aether_bool_t aether_style_runtime_remove_stylesheet(
     if (!runtime || runtime->preparing || runtime->owner_thread != std::this_thread::get_id() ||
         !runtime->sheets.count(sheet_handle)) return AETHER_FALSE;
     try {
-        auto index = prepare_rule_index(runtime, nullptr, sheet_handle);
+        auto index = aether_style_runtime_s::prepare_rule_index(runtime, nullptr, sheet_handle);
         using std::swap;
         swap(runtime->index, index);
         runtime->sheets.erase(sheet_handle);

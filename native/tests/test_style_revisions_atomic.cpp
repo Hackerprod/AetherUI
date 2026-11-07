@@ -36,14 +36,14 @@ static unsigned checks = 0;
 static void require(bool ok, const char* message) { ++checks; if (!ok) { std::fprintf(stderr,"FAIL %s\n",message); std::exit(1); } }
 static bool near(float a,float b) { return std::fabs(a-b)<.001f; }
 struct Fixture {
-    aether_doc_t doc{}; aether_style_runtime_t runtime{}; aether_node_t node{};
+    aether_doc_t doc{}; aether_style_runtime_t runtime{}; aether_node_t node{}; int64_t sheet{};
     Fixture() {
         require(aether_doc_create(&doc)==AETHER_OK,"create doc");
         require(aether_doc_parse_html(doc,"<html><body><div id='x'></div></body></html>")==AETHER_OK,"parse");
         node=aether_doc_get_element_by_id(doc,"x");
         aether_style_environment_t env{800,600,1,16,0,0,0};
         require(aether_style_runtime_create(nullptr,&env,nullptr,nullptr,&runtime)==AETHER_OK,"create runtime");
-        int64_t id{}; require(aether_style_runtime_add_stylesheet(runtime,"#x{width:16px;height:20px}#x::before{content:'old';width:3px}",0,"atomic",&id,nullptr)==AETHER_OK,"sheet");
+        require(aether_style_runtime_add_stylesheet(runtime,"*{display:block}#x{width:16px;height:20px}#x::before{content:'old';display:block;width:3px;height:4px}",0,"atomic",&sheet,nullptr)==AETHER_OK,"sheet");
     }
     ~Fixture() { aether_style_runtime_destroy(runtime); aether_doc_destroy(doc); }
     aether_style_revision_t resolve(const aether_style_environment_t* env=nullptr) {
@@ -114,6 +114,100 @@ static void fault_prepare() {
     pmr_fault_test::require_sweep_coverage(pmr_family, sweep_start, require);
     aether_computed_style_handle_destroy(old);aether_style_revision_destroy(g0);
 }
+static uint64_t retained_generation(aether_style_runtime_t runtime) {
+    aether_style_revision_t revision{};
+    require(aether_style_runtime_retain_revision(runtime,&revision)==AETHER_OK,"retain generation");
+    auto generation=aether_style_revision_generation(revision);
+    aether_style_revision_destroy(revision);return generation;
+}
+
+static void final_pseudo_removal() {
+    Fixture f; auto old=f.resolve(); auto* pseudo=f.node->children.front(); auto token=pseudo->identity;
+    aether_style_map_t map{}; require(aether_style_revision_create_map(old,&map)==AETHER_OK,"retained pseudo map");
+    aether_layout_engine_t engine{}; aether_layout_result_t frame{};
+    require(aether_layout_create(nullptr,nullptr,&engine)==AETHER_OK,"retained frame engine");
+    require(aether_layout_layout(engine,f.doc,map,800,600,nullptr,nullptr,&frame)==AETHER_OK,"retained pseudo frame");
+    auto box=aether_layout_result_find_primary_box(frame,pseudo);
+    require(box!=nullptr,"frame contains pseudo");
+    const auto bounds=aether_layout_box_get_border_box(box);
+    aether_style_transaction_t stale{};
+    require(aether_style_runtime_prepare_revision(f.runtime,f.doc,nullptr,&stale)==AETHER_OK,"prepare borrowed rules");
+    // Keep a normal sheet so removal rebuild really allocates retained buckets.
+    int64_t normal{}; require(aether_style_runtime_add_stylesheet(f.runtime,"#x{width:16px}",0,"normal",&normal,nullptr)==AETHER_OK,"normal retained sheet");
+    // Prepare again after adding the normal sheet, so only removal stales it.
+    aether_style_transaction_destroy(stale);
+    require(aether_style_runtime_prepare_revision(f.runtime,f.doc,nullptr,&stale)==AETHER_OK,"prepare before removal");
+    bool removed=false; unsigned failures=0;
+    for(long allocation=0;allocation<20000;++allocation) {
+        aether_style_transaction_destroy(stale); stale=nullptr;
+        require(aether_style_runtime_prepare_revision(f.runtime,f.doc,nullptr,&stale)==AETHER_OK,"fresh pre-removal candidate");
+        const auto generation=retained_generation(f.runtime);
+        fail_after=allocation;fault_delivered=false;
+        bool result=aether_style_runtime_remove_stylesheet(f.runtime,f.sheet); fail_after=-1;
+        if(result) {require(!fault_delivered,"remove cannot swallow fault");removed=true;break;}
+        ++failures;require(fault_delivered,"remove failure is injected");
+        require(retained_generation(f.runtime)==generation,"failed remove preserves generation");
+        require(f.node->children.front()==pseudo&&token->attached,"failed removal leaves live pseudo");
+        auto retry=f.resolve(); require(f.node->children.front()->children.front()->text=="old","failed rebuild retains pseudo rules");
+        aether_style_revision_destroy(retry);
+        // Re-resolve replaces leaves; retain the original via old/map/frame.
+        pseudo=f.node->children.front(); token=pseudo->identity;
+    }
+    require(removed&&failures>0,"remove sweep covers actual allocations");
+    aether_style_revision_t last{};
+    require(aether_style_runtime_retain_revision(f.runtime,&last)==AETHER_OK,"retain exact final live pseudo revision");
+    aether_style_revision_t rejected=reinterpret_cast<aether_style_revision_t>(1);
+    require(aether_style_runtime_commit_revision(f.runtime,stale,&rejected)==AETHER_ERROR_INVALID_STATE&&rejected==nullptr,"removed-sheet stale commit rejected");
+    aether_style_transaction_destroy(stale); // Candidate rules have been destroyed.
+    require(!f.node->children.empty()&&token->attached,"removal alone does not mutate live tree");
+    bool committed=false; failures=0;
+    for(long allocation=0;allocation<20000;++allocation) {
+        aether_style_transaction_t tx{}; fail_after=allocation; fault_delivered=false;
+        auto status=aether_style_runtime_prepare_revision(f.runtime,f.doc,nullptr,&tx); fail_after=-1;
+        if(status==AETHER_OK) {
+            require(!fault_delivered,"absent-pseudo prepare cannot swallow fault");
+            aether_style_revision_t current{};
+            require(aether_style_runtime_commit_revision(f.runtime,tx,&current)==AETHER_OK,"commit final retirement");
+            require(f.node->children.empty()&&!token->attached&&token->alive,"last pseudo retired and retained");
+            require(pseudo->children.front()->text=="old","exact final leaf readable after retirement");
+            bool retired=false;
+            for(int i=0;i<aether_style_revision_change_count(current);++i) {
+                aether_node_t changed{};aether_computed_style_handle_t style{};
+                require(aether_style_revision_get_change(current,i,&changed,&style,nullptr)==AETHER_OK,"retirement change entry");
+                if(changed==pseudo) {require(style==nullptr,"retirement has no current style");retired=true;}
+                aether_computed_style_handle_destroy(style);
+            }
+            require(retired,"exact final leaf appears in retired changes");
+            aether_style_revision_destroy(current);aether_style_transaction_destroy(tx);committed=true;break;
+        }
+        ++failures;require(fault_delivered&&status==AETHER_ERROR_OUT_OF_MEMORY&&tx==nullptr,"absent-pseudo prepare OOM");
+        require(f.node->children.front()==pseudo&&token->attached,"failed prepare preserves old links");
+    }
+    require(committed&&failures>0,"absent-pseudo sweep covers actual allocations");
+    auto retained=aether_style_map_get(map,f.node);require(retained&&near(retained->style.width.value,16),"retained map readable after retirement");
+    require(near(aether_layout_box_get_border_box(box).width,bounds.width),"retained frame unchanged");
+    aether_computed_style_handle_destroy(retained);aether_layout_result_destroy(frame);aether_layout_destroy(engine);
+    aether_style_map_destroy(map);aether_style_revision_destroy(old);aether_style_revision_destroy(last);
+}
+
+static void fault_pseudo_add() {
+    Fixture f; auto old=f.resolve();
+    bool completed=false;unsigned failures=0;
+    for(long allocation=0;allocation<20000;++allocation) {
+        const auto generation=retained_generation(f.runtime);
+        auto* live=f.node->children.front();
+        int64_t sheet=-1;int32_t count=-1;fail_after=allocation;fault_delivered=false;
+        auto status=aether_style_runtime_add_stylesheet(f.runtime,"#x::after{content:'new'}",0,"after",&sheet,&count);fail_after=-1;
+        if(status==AETHER_OK) {require(!fault_delivered&&sheet==2&&count==1,"successful add publishes IDs once");completed=true;break;}
+        ++failures;require(fault_delivered&&status==AETHER_ERROR_OUT_OF_MEMORY&&sheet==-1&&count==-1,"add OOM preserves outputs");
+        require(retained_generation(f.runtime)==generation&&f.node->children.front()==live,"add OOM preserves revision and links");
+        auto revision=f.resolve();require(f.node->children.size()==1&&f.node->children.front()->children.front()->text=="old","add OOM preserves rules");aether_style_revision_destroy(revision);
+    }
+    require(completed&&failures>0,"add sweep covers actual allocations");
+    auto current=f.resolve();require(f.node->children.size()==2&&f.node->children.back()->children.front()->text=="new","new kind visible after retry");
+    aether_style_revision_destroy(current);aether_style_revision_destroy(old);
+}
+
 static void fault_map() {
     Fixture f;auto g0=f.resolve();aether_style_map_t map{};require(aether_style_runtime_create_resolved_style_map(f.runtime,f.doc,&map)==AETHER_OK,"legacy map");
     aether_element_set_attribute(f.node,"style","width:72px");auto g1=f.resolve();
@@ -165,5 +259,5 @@ static void legacy_scope_is_not_contextual() {
     aether_computed_style_handle_destroy(current);aether_computed_style_handle_destroy(isolated);aether_computed_style_handle_destroy(old);
     aether_style_map_destroy(legacy);aether_style_revision_destroy(original);aether_style_revision_destroy(restored);
 }
-int main(){legacy_scope_is_not_contextual();revisions_and_stale();fault_prepare();fault_map();reentrant_diagnostics();
+int main(){final_pseudo_removal();fault_pseudo_add();legacy_scope_is_not_contextual();revisions_and_stale();fault_prepare();fault_map();reentrant_diagnostics();
     std::printf("style revision atomic: %u checks passed, %zu aligned failures\n",checks,aligned_test_failures);}

@@ -486,6 +486,23 @@ struct rule_index_s {
     std::unordered_map<std::string, std::vector<const compiled_rule_s*>> by_type;
     std::vector<const compiled_rule_s*> universal;
     selector_dependency_flags dependencies = SELECTOR_DEP_NONE;
+
+    // Only the opaque runtime certifies a complete set of runtime-owned rules.
+    // Generic indexes borrow mutable rules and must always remain conservative.
+    bool may_target_pseudo(aether_pseudo_element_t kind) const noexcept {
+        if (!pseudo_capabilities_complete_) return true;
+        switch (kind) {
+        case aether_pseudo_element_t::before: return before_possible_;
+        case aether_pseudo_element_t::after: return after_possible_;
+        default: return true;
+        }
+    }
+    void invalidate_pseudo_capabilities() noexcept { pseudo_capabilities_complete_ = false; }
+private:
+    friend struct aether_style_runtime_s;
+    bool before_possible_ = false;
+    bool after_possible_ = false;
+    bool pseudo_capabilities_complete_ = false;
 };
 
 void rule_index_clear(rule_index_s* idx);

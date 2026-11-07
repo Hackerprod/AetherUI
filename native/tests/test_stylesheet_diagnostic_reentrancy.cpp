@@ -96,6 +96,21 @@ struct Fixture {
         aether_style_updates_free(updates,n); return copy(latest);
     }
 };
+void pseudo_capability_reentrancy() {
+    Fixture f; Callback c; f.callback(&c); int64_t pseudo=0;
+    c.action=[&](size_t i) {if(i==0) pseudo=f.add("#target::before{content:'nested'}");};
+    auto trigger=f.add(".a{width:calc(1px + 1deg)}");
+    f.read(false);check(f.generated=="nested","compile replay publishes pseudo capability");
+    c.events.clear();c.action=[&](size_t i) {if(i==0)f.remove(pseudo);};
+    // A pseudo rule WITHOUT content must still cascade and report deferred failure.
+    auto deferred=f.add("#target::after{width:var(--missing)}");
+    f.read(false);
+    check(c.events.size()==1&&c.events[0].property=="width","content-free pseudo keeps resolution diagnostic");
+    check(f.generated=="nested","outer resolution retains its committed pseudo before replay");
+    c.action={}; f.read(false);check(f.generated.empty(),"resolve replay removal visible next call");
+    f.remove(deferred);f.remove(trigger); f.read(false);check(f.generated.empty(),"all pseudo rules removed");
+}
+
 void original_and_committed_outputs() {
     Fixture f; Callback c; f.callback(&c);
     int64_t outer=-11,nested=-12; int32_t count=-13,nested_count=-14;
@@ -235,7 +250,7 @@ void all_consumers_and_passive() {
 }
 }
 int main() {
-    original_and_committed_outputs(); fifo_and_depth(); callback_mutations();
+    pseudo_capability_reentrancy(); original_and_committed_outputs(); fifo_and_depth(); callback_mutations();
     callback_capture_and_other_runtime(); all_consumers_and_passive();
     std::printf("stylesheet diagnostic reentrancy: %d checks, %d failures\n",checks,failures);
     return failures?1:0;
