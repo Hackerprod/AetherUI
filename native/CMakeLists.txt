@@ -1167,7 +1167,8 @@ if(AETHERUI_BUILD_TESTS)
             src/css/frozen_measure_read.cpp src/css/style_freeze.cpp
             src/style_runtime/frozen_runtime_metadata.cpp)
     endforeach()
-    foreach(string_reader_test aether_shorthand_var_test aether_style_map_lifetime_test aether_measure_computed_test)
+    foreach(string_reader_test aether_shorthand_var_test aether_style_map_lifetime_test aether_measure_computed_test
+            aether_style_revisions_atomic_test)
         target_sources(${string_reader_test} PRIVATE src/css/frozen_c_string.cpp)
     endforeach()
     add_executable(aether_frozen_paint_kernel_readers_test tests/test_frozen_paint_kernel_readers.cpp

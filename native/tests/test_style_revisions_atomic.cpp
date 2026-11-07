@@ -11,7 +11,9 @@
 #include <string>
 static long fail_after = -1;
 static bool fault_delivered = false;
-void* operator new(std::size_t n) { if (fail_after >= 0 && fail_after-- == 0) { fault_delivered = true; throw std::bad_alloc(); } if (auto p = std::malloc(n ? n : 1)) return p; throw std::bad_alloc(); }
+static size_t ordinary_test_calls = 0, ordinary_test_failures = 0;
+void* operator new(std::size_t n) {
+    ++ordinary_test_calls; if (fail_after >= 0 && fail_after-- == 0) { fault_delivered = true; ++ordinary_test_failures; throw std::bad_alloc(); } if (auto p = std::malloc(n ? n : 1)) return p; throw std::bad_alloc(); }
 void* operator new[](std::size_t n) { return ::operator new(n); }
 void operator delete(void* p) noexcept { std::free(p); }
 void operator delete[](void* p) noexcept { std::free(p); }
@@ -29,6 +31,7 @@ void operator delete[](void* value, const std::nothrow_t&) noexcept { std::free(
 
 void operator delete[](void* p, std::size_t) noexcept { std::free(p); }
 #include "fault_inject_aligned.h"
+#include "fault_inject_pmr_contract.h"
 static unsigned checks = 0;
 static void require(bool ok, const char* message) { ++checks; if (!ok) { std::fprintf(stderr,"FAIL %s\n",message); std::exit(1); } }
 static bool near(float a,float b) { return std::fabs(a-b)<.001f; }
@@ -83,11 +86,13 @@ static void revisions_and_stale() {
     aether_style_map_destroy(map);aether_style_revision_destroy(g0);aether_style_revision_destroy(g1);aether_style_revision_destroy(g2);
 }
 static void fault_prepare() {
+    const auto pmr_family = pmr_fault_test::qualify(require);
     Fixture f;auto g0=f.resolve();auto old=lookup(g0,f.node);auto* pseudo=f.node->children.front();
     const auto baseline=aether_style_revision_generation(g0);
     aether_element_set_attribute(f.node,"style","width:3rem;box-shadow:1px 2px red");
     aether_style_environment_t env{1000,700,1,20,0,0,0};
     int failed=0;bool completed=false;
+    const pmr_fault_test::Counters sweep_start;
     for(long allocation=0;allocation<20000;++allocation) {
         aether_style_transaction_t tx=reinterpret_cast<aether_style_transaction_t>(1);
         fail_after=allocation;fault_delivered=false;
@@ -106,6 +111,7 @@ static void fault_prepare() {
         aether_style_revision_destroy(retained);require(near(old->style.width.value,16),"failed prepare preserves old style");
     }
     require(completed&&failed>50,"fault sweep covers preparation allocations");
+    pmr_fault_test::require_sweep_coverage(pmr_family, sweep_start, require);
     aether_computed_style_handle_destroy(old);aether_style_revision_destroy(g0);
 }
 static void fault_map() {
@@ -160,5 +166,4 @@ static void legacy_scope_is_not_contextual() {
     aether_style_map_destroy(legacy);aether_style_revision_destroy(original);aether_style_revision_destroy(restored);
 }
 int main(){legacy_scope_is_not_contextual();revisions_and_stale();fault_prepare();fault_map();reentrant_diagnostics();
-    require(aligned_test_calls>0&&aligned_test_failures>0,"prepare sweep reaches and fails aligned PMR family");
     std::printf("style revision atomic: %u checks passed, %zu aligned failures\n",checks,aligned_test_failures);}

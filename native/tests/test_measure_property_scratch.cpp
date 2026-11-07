@@ -19,9 +19,11 @@ bool count_allocations = false;
 bool fault_delivered = false;
 unsigned checks = 0;
 }
+static size_t ordinary_test_calls = 0, ordinary_test_failures = 0;
 void* operator new(std::size_t n) {
+    ++ordinary_test_calls;
     if (count_allocations) ++allocations;
-    if (fail_after >= 0 && fail_after-- == 0) { fault_delivered = true; throw std::bad_alloc(); }
+    if (fail_after >= 0 && fail_after-- == 0) { fault_delivered = true; ++ordinary_test_failures; throw std::bad_alloc(); }
     if (void* p = std::malloc(n ? n : 1)) return p;
     throw std::bad_alloc();
 }
@@ -36,6 +38,7 @@ void operator delete(void* p, const std::nothrow_t&) noexcept { std::free(p); }
 void operator delete[](void* p, const std::nothrow_t&) noexcept { std::free(p); }
 #define AETHER_TEST_ALIGNED_NOTE() do { if (count_allocations) ++allocations; } while (false)
 #include "fault_inject_aligned.h"
+#include "fault_inject_pmr_contract.h"
 
 namespace {
 void need(bool condition, const char* message) {
@@ -328,6 +331,7 @@ struct Runtime {
     }
 };
 void runtime_faults_and_metadata() {
+    const auto pmr_family = pmr_fault_test::qualify(need);
     Runtime f; auto g0 = f.resolve(); auto old = f.lookup(g0);
     const auto old_measures = frozen_measure_test::snapshot(*old->measures);
     Flat old_flat(old->style);
@@ -339,6 +343,7 @@ void runtime_faults_and_metadata() {
     auto clean_g1 = clean.resolve(); auto clean_style = clean.lookup(clean_g1);
     const auto generation = aether_style_revision_generation(g0);
     bool succeeded = false; unsigned failures = 0;
+    const pmr_fault_test::Counters sweep_start;
     for (long index = 0; index < 20000; ++index) {
         aether_style_transaction_t tx = reinterpret_cast<aether_style_transaction_t>(1);
         fail_after = index; fault_delivered = false;
@@ -375,6 +380,7 @@ void runtime_faults_and_metadata() {
         aether_computed_style_handle_destroy(style); aether_style_revision_destroy(current);
     }
     need(succeeded && failures > 0, "runtime sweep completed");
+    pmr_fault_test::require_sweep_coverage(pmr_family, sweep_start, need);
     equal_state(old_measures, frozen_measure_test::snapshot(*old->measures));
     equal_flat(old_flat.value, old->style);
     need(old->style.font_size == 40 && old->style.background_layers.items[0].position_x.value == 20, "retained OLD remains intact after retry");
@@ -387,6 +393,5 @@ int main() {
     style_property_registry_s registry; builtin_properties_register(&registry); registry.seal();
     zero_allocation_scratch(); owned_delta_aliases(); sparse_dependencies(); equivalent_applicators(registry); inheritance(registry);
     local_faults(registry); runtime_faults_and_metadata();
-    need(aligned_test_calls > 0 && aligned_test_failures > 0, "runtime sweep reaches and fails aligned PMR family");
     std::printf("measure property scratch: %u checks passed, %zu aligned failures\n", checks, aligned_test_failures);
 }

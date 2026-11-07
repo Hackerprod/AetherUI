@@ -1,6 +1,7 @@
 #pragma once
 // Included once by fault harnesses that already define fail_after and
-// fault_delivered. PMR new_delete_resource reaches these aligned families.
+// fault_delivered. Keep aligned families intercepted even on libraries that
+// route normally aligned PMR allocations through ordinary operator new.
 #include <cstddef>
 #include <cstdlib>
 #include <limits>
