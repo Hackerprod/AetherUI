@@ -1,0 +1,50 @@
+#pragma once
+#include "immutable_style_backing.h"
+struct style_revision_s;
+namespace aether::style {
+enum class MapMode { legacy_partial, legacy_complete, contextual };
+// Revision coherence is a producer precondition until the opaque revision is migrated.
+// Tokens must be authentic DOM controls. A dead token cannot dereference its owner.
+// Partial legacy may retain heterogeneous records and previous document epochs.
+struct MapVersionInput {
+    BackingRef backing = {};
+    MapMode mode = MapMode::legacy_partial;
+    std::shared_ptr<const style_revision_s> revision = {};
+    std::shared_ptr<node_identity_s> document_lifetime = {};
+    uint64_t document_identity = 0;
+    uint64_t generation = 0;
+    uint64_t structure_epoch = 0;
+    uint64_t input_epoch = 0;
+    uint64_t style_tree_epoch = 0;
+};
+class MapVersion;
+using MapVersionRef = std::shared_ptr<const MapVersion>;
+aether_status_t make_map_version(const MapVersionInput&, MapVersionRef&) noexcept;
+class MapVersion {
+    const BackingRef backing_;
+    const MapMode mode_;
+    const std::shared_ptr<const style_revision_s> revision_;
+    const std::shared_ptr<node_identity_s> document_lifetime_;
+    const uint64_t document_identity_;
+    const uint64_t generation_;
+    const uint64_t structure_epoch_;
+    const uint64_t input_epoch_;
+    const uint64_t style_tree_epoch_;
+    explicit MapVersion(const MapVersionInput&);
+    friend aether_status_t make_map_version(const MapVersionInput&, MapVersionRef&) noexcept;
+public:
+    const BackingRef& backing() const noexcept { return backing_; }
+    const MapMode& mode() const noexcept { return mode_; }
+    const std::shared_ptr<const style_revision_s>& revision() const noexcept { return revision_; }
+    const std::shared_ptr<node_identity_s>& document_lifetime() const noexcept { return document_lifetime_; }
+    const uint64_t& document_identity() const noexcept { return document_identity_; }
+    const uint64_t& generation() const noexcept { return generation_; }
+    const uint64_t& structure_epoch() const noexcept { return structure_epoch_; }
+    const uint64_t& input_epoch() const noexcept { return input_epoch_; }
+    const uint64_t& style_tree_epoch() const noexcept { return style_tree_epoch_; }
+    bool contextual() const noexcept { return mode_==MapMode::contextual; }
+};
+bool structure_valid(const MapVersion*) noexcept;
+bool inputs_current(const MapVersion*) noexcept;
+bool accepts_override(const MapVersion* base, const MapVersion* override_version) noexcept;
+}

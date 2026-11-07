@@ -24,6 +24,11 @@ add_library(aether_core SHARED
     src/css/frozen_style.cpp
     src/css/style_freeze.cpp
     src/css/style_c_export.cpp
+    src/css/frozen_c_string.cpp
+    src/css/frozen_node_record.cpp
+    src/css/immutable_style_backing.cpp
+    src/css/style_map_version.cpp
+    src/css/frozen_measure_read.cpp
     src/css/border_radii.cpp
     src/css/background_layers.cpp
     src/css/backdrop_filters.cpp
@@ -71,6 +76,7 @@ add_library(aether_core SHARED
     src/style_runtime/css_variable_tokens.cpp
     src/style_runtime/variable_resolver.cpp
     src/style_runtime/custom_property_scope.cpp
+    src/style_runtime/frozen_runtime_metadata.cpp
     src/style_runtime/media_condition.cpp
     src/style_runtime/style_diff.cpp
     src/style_runtime/style_source_compiler.cpp
@@ -419,6 +425,13 @@ if(AETHERUI_BUILD_TESTS)
     target_link_libraries(aether_frozen_style_test PRIVATE AetherUI::Core)
     add_test(NAME aether.frozen-style COMMAND aether_frozen_style_test)
 
+    add_executable(aether_frozen_backing_test tests/test_frozen_backing.cpp
+        src/css/frozen_c_string.cpp src/css/frozen_node_record.cpp
+        src/css/immutable_style_backing.cpp src/css/style_map_version.cpp
+        src/style_runtime/frozen_runtime_metadata.cpp)
+    target_include_directories(aether_frozen_backing_test PRIVATE include src)
+    add_test(NAME aether.frozen-backing COMMAND aether_frozen_backing_test)
+
     if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
         # Compile the exporter here so its C allocations, not an already-linked
         # shared library, are reached by the independent allocator wrappers.
@@ -428,6 +441,19 @@ if(AETHERUI_BUILD_TESTS)
         target_link_libraries(aether_frozen_style_oom_test PRIVATE AetherUI::Core)
         target_link_options(aether_frozen_style_oom_test PRIVATE "-Wl,--wrap=malloc" "-Wl,--wrap=free")
         add_test(NAME aether.frozen-style-oom COMMAND aether_frozen_style_oom_test)
+
+        add_executable(aether_frozen_backing_oom_test tests/test_frozen_backing_oom.cpp
+            src/css/frozen_c_string.cpp src/css/frozen_node_record.cpp
+            src/css/immutable_style_backing.cpp src/css/style_map_version.cpp)
+        target_include_directories(aether_frozen_backing_oom_test PRIVATE include src)
+        target_link_options(aether_frozen_backing_oom_test PRIVATE "-Wl,--wrap=malloc" "-Wl,--wrap=free")
+        add_test(NAME aether.frozen-backing-oom COMMAND aether_frozen_backing_oom_test)
+
+        add_executable(aether_frozen_runtime_metadata_test tests/test_frozen_runtime_metadata.cpp
+            src/style_runtime/frozen_runtime_metadata.cpp src/css/frozen_measure_read.cpp
+            src/css/frozen_c_string.cpp src/css/style_freeze.cpp src/css/css_length.cpp)
+        target_include_directories(aether_frozen_runtime_metadata_test PRIVATE include src)
+        add_test(NAME aether.frozen-runtime-metadata COMMAND aether_frozen_runtime_metadata_test)
     endif()
 
     add_executable(aether_background_layers_test tests/test_background_layers.cpp src/css/background_layers.cpp src/css/linear_gradient.cpp src/style_runtime/css_variable_tokens.cpp)
