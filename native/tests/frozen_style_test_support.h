@@ -60,7 +60,7 @@ struct Builder {
     Builder(const Builder&)=delete;
 };
 inline void equal(const aether_computed_style_t& a, const aether_computed_style_t& b) {
-    need(snapshot_test::style_equal(a,b), "complete fieldwise style equality");
+    need(snapshot_test::complete_style_equal(a,b), "complete fieldwise style equality");
     need(std::memcmp(a.font_family,b.font_family,64)==0,"all inline font bytes preserved");
     // Public semantic layer equality may ignore inactive union-like fields;
     // frozen export must preserve even these observable descriptors.
@@ -71,5 +71,18 @@ inline void equal(const aether_computed_style_t& a, const aether_computed_style_
         need(bool(x.image_source)==bool(y.image_source),"null/empty URL distinction");
         if(x.image_source) need(std::strcmp(x.image_source,y.image_source)==0,"URL contents");
     }
+}
+inline void disjoint_source(aether::style::ComputedStyleReadView source,const aether_computed_style_t& copy) {
+    if(!source.background_layers().empty())need(static_cast<const void*>(&source.background_layers()[0])!=copy.background_layers.items,"layer array differs from frozen");
+    for(size_t i=0;i<source.background_layers().size();++i) {
+        const auto layer=source.background_layers()[i].view();
+        if(layer.image_source.present())need(layer.image_source.c_str()!=copy.background_layers.items[i].image_source,"URL differs from frozen");
+        if(!layer.gradient.stops.empty())need(&layer.gradient.stops[0]!=copy.background_layers.items[i].gradient.stops,"nested stops differ from frozen");
+    }
+#define DISJOINT(field, pointer) if(!source.field().empty())need(&source.field()[0]!=copy.pointer,"payload differs from frozen: " #field)
+    DISJOINT(backdrop_filters,backdrop_filters.items);DISJOINT(transforms,transforms.items);
+    DISJOINT(text_shadows,text_shadows.items);DISJOINT(box_shadows,box_shadows.items);
+#undef DISJOINT
+    if(!source.text_gradient().stops.empty())need(&source.text_gradient().stops[0]!=copy.text_gradient.stops,"text stops differ from frozen");
 }
 }

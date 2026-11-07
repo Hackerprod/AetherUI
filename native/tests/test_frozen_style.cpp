@@ -19,6 +19,24 @@ static_assert(std::is_same_v<decltype(std::declval<Utf8ReadView>().c_str()),cons
 static_assert(std::is_same_v<decltype(std::declval<Utf8ReadView>().bytes()),std::span<const char>>);
 static_assert(!std::is_constructible_v<Utf8ReadView,const FrozenCString&>);
 static_assert(!std::is_constructible_v<Utf8ReadView,const char*,size_t>);
+static_assert(std::is_nothrow_default_constructible_v<CallbackStyleCopy>);
+static_assert(!std::is_copy_constructible_v<CallbackStyleCopy> && !std::is_copy_assignable_v<CallbackStyleCopy>);
+static_assert(!std::is_move_constructible_v<CallbackStyleCopy> && !std::is_move_assignable_v<CallbackStyleCopy>);
+void checked_sizes() {
+    using namespace export_detail;
+    const size_t max = std::numeric_limits<size_t>::max();
+    need(abi_count(0)==0 && abi_count(INT32_MAX)==INT32_MAX,"ABI count boundaries");
+    need(array_bytes(0,max)==0 && array_bytes(1,max)==max,"array multiplication boundaries");
+    need(string_bytes(0)==1 && string_bytes(max-1)==max,"string boundaries");
+    for (int which=0;which<3;++which) {
+        bool rejected=false;
+        try { if(which==0)(void)abi_count(size_t(INT32_MAX)+1);
+              if(which==1)(void)array_bytes(2,max/2+1);
+              if(which==2)(void)string_bytes(max); }
+        catch(const std::length_error&) { rejected=true; }
+        need(rejected,"overflow rejected without huge source/allocation");
+    }
+}
 void strings() {
     ImmutableUtf8 absent, empty("");
     need(!absent.view().present()&&!absent.view().c_str()&&absent.view().bytes().empty()&&!absent.view().equals(""),"absent string");
@@ -44,6 +62,11 @@ void strings() {
     need(second->view().background_layers()[0].view().image_source.c_str()==text.c_str(),"shared payload string identity");
     snapshot_test::Flat out;ok(export_owned_flat(style->view(),&out.value),"binary internal export");
     need(out.value.background_layers.items[0].image_source!=text.c_str()&&std::memcmp(out.value.background_layers.items[0].image_source,expected.data(),expected.size())==0&&out.value.background_layers.items[0].image_source[expected.size()]==0,"export copies all binary bytes even inactive kind");
+    CallbackStyleCopy frame;ok(frame.prepare(style->view()),"binary callback frame");
+    const auto* copied=frame.get()->background_layers.items[0].image_source;
+    need(copied!=text.c_str()&&copied!=out.value.background_layers.items[0].image_source&&
+        std::memcmp(copied,expected.data(),expected.size())==0&&copied[expected.size()]==0,"callback preserves embedded NUL and all bytes");
+    frame.get()->background_layers.items[0].image_source[2]='Q';need(text.equals(expected),"binary callback source intact");
     out.value.background_layers.items[0].image_source[2]='X';need(text.equals(expected),"export does not alias frozen");
 }
 struct alignas(256) Counted {
@@ -90,7 +113,7 @@ void measures() {
     auto before=result;need(freeze_measures(scalars,nullptr,{},{},{},result)!=AETHER_OK&&result==before,"bad metadata preserves output");
 }
 int main() {
-    arrays();measures();strings();
+    arrays();measures();strings();checked_sizes();
     FrozenStyleRef frozen;
     snapshot_test::Flat first,second;
     {
@@ -106,19 +129,52 @@ int main() {
     }
     snapshot_test::Flat after;ok(export_owned_flat(frozen->view(),&after.value),"export after builder destruction");equal(first.value,after.value);
     snapshot_test::mutate_payload(first.value);equal(second.value,after.value);
-    std::unique_ptr<CallbackStyleCopy> outer,inner;
-    ok(CallbackStyleCopy::create(frozen->view(),outer),"outer callback copy");
-    snapshot_test::mutate_payload(*outer->get());
-    ok(CallbackStyleCopy::create(frozen->view(),inner),"nested callback independent copy");
-    equal(*inner->get(),second.value);snapshot_test::disjoint(*outer->get(),*inner->get());
     aether_gradient_stop alien_stops[2]{};char alien_url[]="borrowed external";
-    // The descriptor root is const; layer descriptors and all payloads are
-    // mutable through the public ABI. Never free any loan or foreign storage.
-    for(int i=0;i<outer->get()->background_layers.count;++i) {
-        auto& layer=outer->get()->background_layers.items[i];
-        layer.gradient.stops=alien_stops;layer.gradient.stop_count=INT32_MAX;layer.image_source=alien_url;
+    {
+        CallbackStyleCopy outer;
+        need(!outer.get(),"fresh frame has no loan");
+        ok(outer.prepare(frozen->view()),"outer callback copy");
+        equal(*outer.get(),second.value);disjoint_source(frozen->view(),*outer.get());snapshot_test::disjoint(*outer.get(),second.value);
+        const auto* address=outer.get();const auto descriptors=*address;
+        need(outer.prepare(frozen->view())==AETHER_ERROR_INVALID_STATE && outer.get()==address,
+            "second prepare leaves ready loan intact");equal(*outer.get(),second.value);
+        snapshot_test::mutate_payload(*outer.get());
+        snapshot_test::mutate_payload(after.value);
+        std::vector<aether_background_layer> layers(address->background_layers.items,
+            address->background_layers.items+address->background_layers.count);
+        for(int i=0;i<address->background_layers.count;++i) {
+            auto& layer=address->background_layers.items[i];
+            layer.gradient.stops=i%2?nullptr:alien_stops;layer.gradient.stop_count=INT32_MAX;
+            layer.image_source=i%2?nullptr:alien_url;
+        }
+        {
+            CallbackStyleCopy inner;
+            ok(inner.prepare(frozen->view()),"nested callback independent copy");
+            equal(*inner.get(),second.value);snapshot_test::disjoint(*outer.get(),*inner.get());
+            auto original_buffers=descriptors;original_buffers.background_layers.items=layers.data();
+            snapshot_test::disjoint(original_buffers,*inner.get());
+            need(inner.get()!=address,"different inline roots");
+        }
+        need(outer.get()==address && address->background_layers.items==descriptors.background_layers.items &&
+            address->backdrop_filters.items==descriptors.backdrop_filters.items &&
+            address->text_gradient.stops==descriptors.text_gradient.stops &&
+            address->transforms.items==descriptors.transforms.items &&
+            address->text_shadows.items==descriptors.text_shadows.items &&
+            address->box_shadows.items==descriptors.box_shadows.items,"outer addresses survive nested scope");
+        for(int i=0;i<address->background_layers.count;++i) {
+            auto& layer=address->background_layers.items[i];
+            need(layer.image_source==(i%2?nullptr:alien_url) && layer.gradient.stops==(i%2?nullptr:alien_stops) &&
+                layer.gradient.stop_count==INT32_MAX,"outer rebind survives inner destruction");
+            layer=layers[size_t(i)];
+        }
+        equal(*outer.get(),after.value);
+        snapshot_test::Flat intact;ok(export_owned_flat(frozen->view(),&intact.value),"source after nested mutation");equal(intact.value,second.value);
+        for(int i=0;i<address->background_layers.count;++i) {
+            auto& layer=address->background_layers.items[i];
+            layer.gradient.stops=alien_stops;layer.gradient.stop_count=INT32_MAX;layer.image_source=alien_url;
+        }
     }
-    outer.reset();inner.reset();need(std::strcmp(alien_url,"borrowed external")==0,"foreign rebinding not freed or changed");
+    need(std::strcmp(alien_url,"borrowed external")==0&&alien_stops[0].offset==0,"foreign rebinding not freed or changed");
     snapshot_test::Flat last;ok(export_owned_flat(frozen->view(),&last.value),"export after callbacks");equal(last.value,second.value);
     auto old=frozen;Builder invalid;invalid.flat.transforms.count=-1;
     need(freeze_style(invalid.flat,frozen)==AETHER_ERROR_INVALID_STATE&&frozen==old,"invalid input preserves owner");

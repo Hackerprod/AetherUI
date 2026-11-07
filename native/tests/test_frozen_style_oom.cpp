@@ -6,6 +6,7 @@
 #include <cstdlib>
 extern "C" void* __real_malloc(size_t);
 extern "C" void __real_free(void*);
+static size_t ordinary_test_calls=0, ordinary_test_failures=0;
 namespace fault {
 enum class Mode { none, cpp, ordinary, aligned, c };
 const char* label(Mode m) { return m==Mode::cpp?"combined-new":m==Mode::ordinary?"ordinary-new":m==Mode::aligned?"aligned-new":"malloc"; }
@@ -23,11 +24,10 @@ bool reject(Mode selected) noexcept {
 }
 void arm(Mode selected,long index){remaining=index;ordinary_calls=aligned_calls=malloc_calls=0;calls=cpp_alloc=cpp_free=c_alloc=c_free=0;hit=false;mode=selected;}
 void disarm(){mode=Mode::none;}
-void* cpp_allocate(size_t size,size_t align=0) {
-    if(reject(align?Mode::aligned:Mode::ordinary))throw std::bad_alloc();
-    void* p=nullptr;
-    if(align) { if(posix_memalign(&p,align<sizeof(void*)?sizeof(void*):align,size?size:1))p=nullptr; }
-    else p=__real_malloc(size?size:1);
+void* cpp_allocate(size_t size) {
+    ++ordinary_test_calls;
+    if(reject(Mode::ordinary)){++ordinary_test_failures;throw std::bad_alloc();}
+    void* p=__real_malloc(size?size:1);
     if(!p)throw std::bad_alloc();
     if(mode!=Mode::none)++cpp_alloc;
     return p;
@@ -45,12 +45,14 @@ void operator delete(void* p) noexcept {fault::cpp_delete(p);}
 void operator delete[](void* p) noexcept {fault::cpp_delete(p);}
 void operator delete(void* p,size_t) noexcept {fault::cpp_delete(p);}
 void operator delete[](void* p,size_t) noexcept {fault::cpp_delete(p);}
-void* operator new(size_t n,std::align_val_t a){return fault::cpp_allocate(n,size_t(a));}
-void* operator new[](size_t n,std::align_val_t a){return fault::cpp_allocate(n,size_t(a));}
-void operator delete(void* p,std::align_val_t) noexcept {fault::cpp_delete(p);}
-void operator delete[](void* p,std::align_val_t) noexcept {fault::cpp_delete(p);}
-void operator delete(void* p,size_t,std::align_val_t) noexcept {fault::cpp_delete(p);}
-void operator delete[](void* p,size_t,std::align_val_t) noexcept {fault::cpp_delete(p);}
+static long& fail_after=fault::remaining;
+static bool& fault_delivered=fault::hit;
+#define AETHER_TEST_ALIGNED_REJECT() fault::reject(fault::Mode::aligned)
+#define AETHER_TEST_ALIGNED_ALLOCATED() do { if(fault::mode!=fault::Mode::none)++fault::cpp_alloc; } while(false)
+#define AETHER_TEST_ALIGNED_FREED(p) do { if((p)&&fault::mode!=fault::Mode::none)++fault::cpp_free; } while(false)
+#define AETHER_TEST_ALIGNED_SYSTEM_FREE(p) __real_free(p)
+#include "fault_inject_aligned.h"
+#include "fault_inject_pmr_contract.h"
 void* operator new(size_t n,const std::nothrow_t&) noexcept {try{return fault::cpp_allocate(n);}catch(...){return nullptr;}}
 void* operator new[](size_t n,const std::nothrow_t&) noexcept {try{return fault::cpp_allocate(n);}catch(...){return nullptr;}}
 void operator delete(void* p,const std::nothrow_t&) noexcept {fault::cpp_delete(p);}
@@ -75,28 +77,71 @@ void freeze_sweep(const Builder& builder, fault::Mode mode) {
 }
 void export_sweep(const FrozenStyleRef& source, fault::Mode mode,bool callback) {
     snapshot_test::Flat expected;ok(export_owned_flat(source->view(),&expected.value),"expected export");
+    bool registration_failed=false;
     for(long index=0;index<1000;++index) {
-        snapshot_test::Flat output;
-        output.value.opacity=123;std::strcpy(output.value.font_family,"output sentinel");
-        auto sentinel=output.value;
-        std::unique_ptr<CallbackStyleCopy> copy;
-        if(callback)ok(CallbackStyleCopy::create(source->view(),copy),"prior callback owner");
-        const auto* previous=copy.get();
+        bool failed=false;long sites=0;
         fault::arm(mode,index);
-        auto status=callback?CallbackStyleCopy::create(source->view(),copy):export_owned_flat(source->view(),&output.value);
-        fault::disarm();
-        if(fault::hit) {
-            need(status==AETHER_ERROR_OUT_OF_MEMORY,"every injected allocation failure reported");
-            need(copy.get()==previous,"callback output owner unchanged");
-            equal(output.value,sentinel);balanced_failure();
-            if(callback){ok(CallbackStyleCopy::create(source->view(),copy),"callback clean retry");}
-            else ok(export_owned_flat(source->view(),&output.value),"export clean retry");
-            equal(callback?*copy->get():output.value,expected.value);
-        } else {
-            ok(status,"uninjected export success");equal(callback?*copy->get():output.value,expected.value);need(index==fault::calls,"all selected allocation sites swept");
+        {
+            snapshot_test::Flat output;
+            output.value.opacity=123;std::strcpy(output.value.font_family,"output sentinel");
+            const auto sentinel=output.value;
+            CallbackStyleCopy copy;int callbacks=0;
+            const auto status=callback?copy.prepare(source->view()):export_owned_flat(source->view(),&output.value);
+            if(status==AETHER_OK&&callback)++callbacks;
+            failed=fault::hit;sites=fault::calls;
+            if(failed) {
+                need(status==AETHER_ERROR_OUT_OF_MEMORY,"every injected allocation failure reported");
+                need(!copy.get() && callbacks==0,"no partial loan or callback on OOM");
+                equal(output.value,sentinel);
+                // A first ledger registration fails after malloc succeeded.
+                if(callback && (mode==fault::Mode::ordinary||mode==fault::Mode::cpp) && index==0)
+                    registration_failed=fault::c_alloc==1 && fault::c_free==1;
+                // Retained vector capacity is released at frame destruction, not prepare failure.
+                fault::remaining=-1;
+                if(callback){ok(copy.prepare(source->view()),"same frame clean retry");}
+                else ok(export_owned_flat(source->view(),&output.value),"export clean retry");
+            } else ok(status,"uninjected export success");
+            equal(callback?*copy.get():output.value,expected.value);
+            if(callback) {
+                const auto* loan=copy.get();
+                need(copy.prepare(source->view())==AETHER_ERROR_INVALID_STATE && copy.get()==loan,"ready frame refuses replacement");
+                equal(*loan,expected.value);
+            }
+        }
+        fault::disarm();balanced_failure();
+        snapshot_test::Flat intact;ok(export_owned_flat(source->view(),&intact.value),"source after OOM/retry");equal(intact.value,expected.value);
+        if(!failed) {
+            need(index==sites,"all selected allocation sites swept");
+            if(callback && (mode==fault::Mode::ordinary||mode==fault::Mode::cpp))
+                need(registration_failed,"malloc success followed by ledger registration OOM covered");
             std::printf("%s %s sites=%ld\n",callback?"callback":"export",fault::label(mode),index);return;
         }
     }need(false,"export sweep bound");
+}
+void empty_frames() {
+    FrozenStyleRef empty; aether_computed_style_t flat{};
+    ok(freeze_style(flat,empty),"freeze truly empty source outside counters");
+    for(auto mode:{fault::Mode::cpp,fault::Mode::ordinary,fault::Mode::aligned,fault::Mode::c}) {
+        fault::arm(mode,0);
+        {
+            CallbackStyleCopy frame;
+            need(!frame.get(),"fresh empty frame null");
+            ok(frame.prepare(empty->view()),"empty frame ignores first-allocation fault");
+            equal(*frame.get(),flat);
+        }
+        fault::disarm();
+        need(!fault::hit&&fault::ordinary_calls==0&&fault::aligned_calls==0&&fault::malloc_calls==0,
+            "empty frame prepare/use/destruct has zero exporter allocations in every family");
+        balanced_failure();
+    }
+    aether_background_layer layer{};char text[]="";layer.image_source=text;
+    flat.background_layers={&layer,1};FrozenStyleRef present;
+    ok(freeze_style(flat,present),"freeze present-empty outside counters");
+    for(auto mode:{fault::Mode::cpp,fault::Mode::ordinary,fault::Mode::aligned,fault::Mode::c})export_sweep(present,mode,true);
+    fault::arm(fault::Mode::c,-1);
+    {CallbackStyleCopy frame;ok(frame.prepare(present->view()),"present-empty allocation");
+     need(frame.get()->background_layers.items[0].image_source && !*frame.get()->background_layers.items[0].image_source,"owned NUL byte");}
+    fault::disarm();balanced_failure();need(fault::c_alloc==2,"layer and present-empty terminator have separate malloc ownership");
 }
 void measure_sweep(fault::Mode mode) {
     std::shared_ptr<const FrozenDocumentMeasureContext> document;
@@ -126,12 +171,12 @@ void document_sweep() {
 void callback_cleanup(const FrozenStyleRef& source) {
     char alien[]="alien";aether_gradient_stop stops[1]{};
     fault::arm(fault::Mode::c,-1);
-    std::unique_ptr<CallbackStyleCopy> outer,inner;
-    auto s1=CallbackStyleCopy::create(source->view(),outer);
-    auto s2=CallbackStyleCopy::create(source->view(),inner);
+    { CallbackStyleCopy outer,inner;
+    auto s1=outer.prepare(source->view());
+    auto s2=inner.prepare(source->view());
     if(s1!=AETHER_OK||s2!=AETHER_OK){fault::disarm();need(false,"callback ledger setup");}
-    for(int i=0;i<outer->get()->background_layers.count;++i){auto& l=outer->get()->background_layers.items[i];l.image_source=alien;l.gradient.stops=stops;l.gradient.stop_count=INT32_MAX;}
-    inner.reset();outer.reset();fault::disarm();
+    for(int i=0;i<outer.get()->background_layers.count;++i){auto& l=outer.get()->background_layers.items[i];l.image_source=alien;l.gradient.stops=stops;l.gradient.stop_count=INT32_MAX;}
+    } fault::disarm();
     balanced_failure();need(fault::c_alloc>0&&fault::cpp_alloc>0,"ledger success allocations actually tracked");
 }
 void string_sweep() {
@@ -182,9 +227,15 @@ void noalloc_reads(const FrozenStyleRef& source) {
     need(fault::ordinary_calls==0&&fault::aligned_calls==0&&fault::malloc_calls==0,"all reader allocation families zero");
 }
 int main() {
+    fault::arm(fault::Mode::cpp,-1);
+    const auto pmr_family=pmr_fault_test::qualify(need);
+    fault::disarm();
+    const pmr_fault_test::Counters sweep_before;
     Builder builder;
     for(auto mode:{fault::Mode::cpp,fault::Mode::ordinary,fault::Mode::aligned,fault::Mode::c}) {freeze_sweep(builder,mode);measure_sweep(mode);}
     document_sweep();string_sweep();
+    pmr_fault_test::require_sweep_coverage(pmr_family,sweep_before,need);
+    empty_frames();
     FrozenStyleRef frozen;ok(freeze_style(builder.flat,frozen),"shared source");
     callback_cleanup(frozen);noalloc_reads(frozen);
     for(auto mode:{fault::Mode::cpp,fault::Mode::ordinary,fault::Mode::aligned,fault::Mode::c})for(bool callback:{false,true})export_sweep(frozen,mode,callback);

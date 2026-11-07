@@ -390,8 +390,8 @@ inline aether_text_metrics_t engine_measure_text(
     }
     const auto valid_node = [&]() { return !identity || (identity->owner == node && identity->alive && identity->attached); };
     if (!valid_node()) throw std::runtime_error("Retired text measurement node");
-    std::unique_ptr<aether::style::CallbackStyleCopy> copy;
-    const auto status = aether::style::CallbackStyleCopy::create(style->view(), copy);
+    aether::style::CallbackStyleCopy copy;
+    const auto status = copy.prepare(style->view());
     if (status == AETHER_ERROR_OUT_OF_MEMORY) throw std::bad_alloc();
     if (status != AETHER_OK) throw std::runtime_error("Invalid callback style");
     aether_text_metrics_t metrics{};
@@ -400,10 +400,10 @@ inline aether_text_metrics_t engine_measure_text(
         const float used = aether::style::measure_used_line_height(measures ? &*measures : nullptr, style->scalars());
         if (!std::isfinite(used)) throw std::overflow_error("Non-finite callback line height");
         const auto callback = e->contextual_text_measurer; void* data = e->contextual_text_measurer_data;
-        metrics = callback(text, copy->get(), used, max_width, data);
+        metrics = callback(text, copy.get(), used, max_width, data);
     } else {
         const auto callback = e->text_measurer; void* data = e->text_measurer_data;
-        metrics = callback(text, copy->get(), max_width, data);
+        metrics = callback(text, copy.get(), max_width, data);
     }
     if (!guard.valid() || !valid_node()) throw std::runtime_error("DOM mutated during text measurement");
     if (!std::isfinite(metrics.width) || !std::isfinite(metrics.height) || !std::isfinite(metrics.baseline) || metrics.width < 0.f || metrics.height < 0.f)

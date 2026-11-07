@@ -1,5 +1,7 @@
 #include "snapshot_test_support.h"
 #include <aether/aether_contextual_transitions.h>
+#include <climits>
+#include "../src/dom/dom_types.h"
 using namespace snapshot_test;
 
 static uint64_t complete_commands(aether_display_list_t list) {
@@ -29,28 +31,96 @@ static uint64_t complete_commands(aether_display_list_t list) {
     }return d.hash;
 }
 
+struct PaintList {
+    aether_display_list_t value{};
+    explicit PaintList(aether_display_list_t v):value(v){}
+    ~PaintList(){aether_display_list_destroy(value);}
+    PaintList(const PaintList&)=delete;
+};
+static bool text_equal(const char* a,const char* b) {return bool(a)==bool(b)&&(!a||std::strcmp(a,b)==0);}
+static bool command_equal(const aether_paint_command_t& a,const aether_paint_command_t& b) {
+    if(a.tag!=b.tag)return false;
+    const auto shadow_equal=[](const aether_shadow& x,const aether_shadow& y){return x.offset_x==y.offset_x&&
+        x.offset_y==y.offset_y&&x.blur_radius==y.blur_radius&&x.spread_radius==y.spread_radius&&eq(x.color,y.color)&&x.inset==y.inset;};
+#define LEAVES(name) const auto& x=a.data.name;const auto& y=b.data.name
+    switch(a.tag) {
+    case AETHER_PAINT_FILL_ROUNDED_RECT:{LEAVES(fill_rounded_rect);return eq(x.rect,y.rect)&&eq(x.radii,y.radii)&&eq(x.color,y.color);}
+    case AETHER_PAINT_DRAW_BOX_SHADOW:{LEAVES(draw_box_shadow);return eq(x.rect,y.rect)&&eq(x.radii,y.radii)&&shadow_equal(x.shadow,y.shadow);}
+    case AETHER_PAINT_FILL_ROUNDED_RECT_GRADIENT:{LEAVES(fill_rounded_rect_gradient);return eq(x.rect,y.rect)&&eq(x.radii,y.radii)&&eq(x.gradient_rect,y.gradient_rect)&&gradient_equal(x.gradient,y.gradient)&&x.opacity==y.opacity;}
+    case AETHER_PAINT_DRAW_TEXT:{LEAVES(draw_text);return text_equal(x.text,y.text)&&eq(x.rect,y.rect)&&std::memcmp(x.font_family,y.font_family,sizeof(x.font_family))==0&&x.font_size==y.font_size&&x.font_weight==y.font_weight&&x.text_align==y.text_align&&eq(x.color,y.color)&&x.wrap==y.wrap;}
+    case AETHER_PAINT_DRAW_TEXT_GRADIENT:{LEAVES(draw_text_gradient);return text_equal(x.text,y.text)&&eq(x.rect,y.rect)&&std::memcmp(x.font_family,y.font_family,sizeof(x.font_family))==0&&x.font_size==y.font_size&&x.font_weight==y.font_weight&&x.text_align==y.text_align&&gradient_equal(x.gradient,y.gradient)&&x.opacity==y.opacity;}
+    case AETHER_PAINT_DRAW_TEXT_SHADOW:{LEAVES(draw_text_shadow);return text_equal(x.text,y.text)&&eq(x.rect,y.rect)&&std::memcmp(x.font_family,y.font_family,sizeof(x.font_family))==0&&x.font_size==y.font_size&&x.font_weight==y.font_weight&&x.text_align==y.text_align&&shadow_equal(x.shadow,y.shadow)&&x.wrap==y.wrap;}
+    case AETHER_PAINT_DRAW_BACKGROUND_IMAGE:{LEAVES(draw_background_image);return text_equal(x.source,y.source)&&eq(x.paint_rect,y.paint_rect)&&eq(x.position_x,y.position_x)&&eq(x.position_y,y.position_y)&&x.size_kind==y.size_kind&&eq(x.size_x,y.size_x)&&eq(x.size_y,y.size_y)&&x.repeat_x==y.repeat_x&&x.repeat_y==y.repeat_y&&x.opacity==y.opacity&&eq(x.source_rect,y.source_rect)&&eq(x.destination_rect,y.destination_rect)&&x.has_resolved_geometry==y.has_resolved_geometry;}
+    case AETHER_PAINT_APPLY_BACKDROP_FILTER:{LEAVES(apply_backdrop_filter);
+        if(!eq(x.rect,y.rect)||!eq(x.radii,y.radii)||x.filters.count!=y.filters.count)return false;
+        for(int i=0;i<x.filters.count;++i){const auto& u=x.filters.items[i];const auto& v=y.filters.items[i];
+            if(u.kind!=v.kind||!eq(u.length_amount,v.length_amount)||u.scalar_amount!=v.scalar_amount)return false;}return true;}
+    case AETHER_PAINT_PUSH_TRANSFORM:{const auto& x=a.data.push_transform.matrix;const auto& y=b.data.push_transform.matrix;
+        return x.m11==y.m11&&x.m12==y.m12&&x.m21==y.m21&&x.m22==y.m22&&x.dx==y.dx&&x.dy==y.dy;}
+    case AETHER_PAINT_PUSH_CLIP:{LEAVES(push_clip);return eq(x.rect,y.rect)&&eq(x.radii,y.radii);}
+    case AETHER_PAINT_POP_CLIP:case AETHER_PAINT_POP_TRANSFORM:case AETHER_PAINT_POP_SCROLL_OFFSET:return true;
+    case AETHER_PAINT_PUSH_SCROLL_OFFSET:return a.data.push_scroll_offset.scroll_container_id==b.data.push_scroll_offset.scroll_container_id;
+    case AETHER_PAINT_DRAW_SCROLLBAR_CHROME:return a.data.draw_scrollbar_chrome.scroll_container_id==b.data.draw_scrollbar_chrome.scroll_container_id;
+    case AETHER_PAINT_BEGIN_PAINT_CHUNK:case AETHER_PAINT_END_PAINT_CHUNK:return a.data.paint_chunk.style_node_id==b.data.paint_chunk.style_node_id;
+    case AETHER_PAINT_STROKE_ROUNDED_RECT:{LEAVES(stroke_rounded_rect);return eq(x.rect,y.rect)&&eq(x.radii,y.radii)&&x.stroke_width==y.stroke_width&&eq(x.color,y.color);}
+    case AETHER_PAINT_FILL_BORDER_SIDE:{LEAVES(fill_border_side);return eq(x.outer_rect,y.outer_rect)&&eq(x.outer_radii,y.outer_radii)&&eq(x.inner_rect,y.inner_rect)&&eq(x.inner_radii,y.inner_radii)&&x.side==y.side&&x.style==y.style&&eq(x.color,y.color);}
+    default:fail("unexpected command in direct equality");
+    }
+#undef LEAVES
+}
+static bool commands_equal(const PaintList& a,const PaintList& b) {
+    const int count=aether_display_list_get_count(a.value);
+    if(count!=aether_display_list_get_count(b.value))return false;
+    for(int i=0;i<count;++i) {
+        aether_paint_command_t x{},y{};
+        ok(aether_display_list_get_command(a.value,i,&x),"left complete command");
+        ok(aether_display_list_get_command(b.value,i,&y),"right complete command");
+        const bool same=command_equal(x,y);aether_paint_command_free(&x);aether_paint_command_free(&y);
+        if(!same)return false;
+    }return true;
+}
+
 struct State {
     Fixture* fixture;
     aether_display_list_builder_t builder{};
     bool drop = false, mutate = false, edit_dom = false, text_gradient = false;
     int calls = 0;
+    bool contextual = false, external = false, nest = false;
+    int invalidation = -1;
+    const aether_computed_style_t* expected = nullptr;
+    const aether_computed_style_t* mutated = nullptr;
+    const aether_computed_style_t* outer = nullptr;
+    const aether_computed_style_t* original_buffers = nullptr;
 };
-static void nested_then_drop(State& s) {
+static aether_text_metrics_t caret(const char*,const aether_computed_style_t*,float,void*);
+static aether_text_metrics_t contextual_caret(const char*,const aether_computed_style_t*,float,float,void*);
+static void nested_then_drop(State& s,const aether_computed_style_t* outer = nullptr) {
     auto& f = *s.fixture;
     aether_display_list_t sentinel{};
     need(aether_display_list_build_with_styles(s.builder, f.layout, f.map, f.target, &sentinel)
         == AETHER_ERROR_INVALID_STATE, "same-builder reentry rejected");
     need(!sentinel, "same-builder reentry preserves output");
     aether_display_list_builder_t other{};
-    ok(aether_display_list_builder_create(nullptr, nullptr, &other), "nested painter");
-    ok(aether_display_list_build_with_styles(other, f.layout, f.map, nullptr, &sentinel), "other-builder reentry independent");
+    State inner{&f};inner.text_gradient=s.text_gradient;inner.contextual=s.contextual;inner.external=s.external;
+    inner.expected=s.expected;inner.outer=outer;inner.original_buffers=s.original_buffers;
+    ok(aether_display_list_builder_create(outer?caret:nullptr, &inner, &other), "nested painter");
+    inner.builder=other;
+    if(outer&&s.contextual)aether_display_list_builder_set_contextual_text_measurer(other,contextual_caret,&inner);
+    ok(aether_display_list_build_with_styles(other, f.layout, s.external?f.map:nullptr, outer?f.target:nullptr, &sentinel), "other-builder reentry independent");
+    if(outer)need(inner.calls==1,"nested focused caret really invokes a second live style frame");
     need(aether_display_list_get_count(sentinel) > 0, "nested commands present");
     aether_display_list_destroy(sentinel); aether_display_list_builder_destroy(other);
-    aether_style_map_destroy(f.map); f.map = nullptr;
-    aether_layout_result_destroy(f.layout); f.layout = nullptr;
+    if(s.drop) {
+        aether_style_map_destroy(f.map); f.map = nullptr;
+        aether_layout_result_destroy(f.layout); f.layout = nullptr;
+    }
 }
 static aether_text_metrics_t caret(const char*, const aether_computed_style_t* style, float, void* data) {
     auto& s = *static_cast<State*>(data); ++s.calls;
+    need(s.expected&&complete_style_equal(*style,*s.expected),"complete callback bytes match pinned source before mutation");
+    if(s.outer){need(style!=s.outer,"nested roots disjoint");disjoint(*style,*s.outer);disjoint(*style,*s.original_buffers);}
+    const auto descriptors=*style;
+    std::vector<aether_background_layer> mutated_layers;
     need(style->backdrop_filters.count > 0, "callback fixture has filters");
     need(style->transforms.count > 0, "callback fixture has transforms");
     need(style->text_shadows.count > 0 && style->box_shadows.count > 0, "callback fixture has both shadows");
@@ -72,6 +142,9 @@ static aether_text_metrics_t caret(const char*, const aether_computed_style_t* s
     }
     if (s.mutate) {
         mutate_payload(*style);
+        need(s.mutated&&complete_style_equal(*style,*s.mutated),"all legal payload mutations observed");
+        if(style->background_layers.count)mutated_layers.assign(style->background_layers.items,
+            style->background_layers.items+style->background_layers.count);
         // Nested descriptors may legally be rebound through a mutable layer.
         // Do not free or retain the callback's buffers. Original ledger owns them.
         for (int i = 0; i < style->background_layers.count; ++i) {
@@ -81,7 +154,30 @@ static aether_text_metrics_t caret(const char*, const aether_computed_style_t* s
             layer.gradient.stop_count = 999;
         }
     }
-    if (s.drop && s.calls == 1) nested_then_drop(s);
+    if ((s.drop||s.nest) && s.calls == 1) {
+        auto original_buffers=descriptors;original_buffers.background_layers.items=mutated_layers.data();
+        s.original_buffers=&original_buffers;
+        nested_then_drop(s,style);
+        s.original_buffers=nullptr;
+        need(same_payload_addresses(*style,descriptors),"outer payload addresses survive inner paint and owner teardown");
+        for(int i=0;i<style->background_layers.count;++i) {
+            auto& l=style->background_layers.items[i];
+            need(!l.image_source&&!l.gradient.stops&&l.gradient.stop_count==999,"outer legal rebind survives nested callback");
+            l=mutated_layers[size_t(i)];
+        }
+        need(complete_style_equal(*style,*s.mutated),"outer mutated bytes survive inner destruction");
+        auto handle=revision_handle(s.fixture->revision,s.fixture->target);Flat retained(handle);aether_computed_style_handle_destroy(handle);
+        need(complete_style_equal(retained.value,*s.expected),"source intact after nested callback and teardown");
+        for(int i=0;i<style->background_layers.count;++i) {
+            auto& l=style->background_layers.items[i];l.image_source=nullptr;l.gradient.stops=nullptr;l.gradient.stop_count=INT32_MAX;
+        }
+    }
+    switch(s.invalidation) {
+    case 0:++s.fixture->doc->identity->mutation_epoch;break;
+    case 1:++s.fixture->doc->identity->style_tree_epoch;break;
+    case 2:++s.fixture->doc->identity->structure_epoch;break;
+    case 3:ok(aether_node_remove_child(s.fixture->target->parent,s.fixture->target),"retire measured input during callback");break;
+    }
     if (s.edit_dom) ok(aether_element_set_attribute(s.fixture->target, "data-mutated", "yes"), "mutate DOM in caret");
     return {30, 24, 18};
 }
@@ -98,7 +194,7 @@ static aether_bool_t image(const char* source, aether_sizef* size, void* data) {
     if (s.edit_dom) ok(aether_element_set_attribute(s.fixture->target, "data-mutated", "yes"), "mutate DOM in image");
     *size = {20, 30}; return AETHER_TRUE;
 }
-static uint64_t caret_case(bool destructive, bool contextual, bool external, bool text_gradient) {
+static PaintList caret_case(bool destructive, bool contextual, bool external, bool text_gradient) {
     // The public clip implementation moves exactly one gradient into text_gradient.
     // Exercise that payload in a separate real CSS fixture, not an impossible
     // assumption that a two-layer gradient+URL declaration also creates it.
@@ -110,7 +206,9 @@ static uint64_t caret_case(bool destructive, bool contextual, bool external, boo
     }
     Fixture f(true, contextual, css.c_str()); f.build();
     auto original = map_flat(f.map, f.target);
+    auto mutated=map_flat(f.map,f.target);mutate_payload(mutated.value);
     State s{&f}; s.drop = destructive; s.mutate = destructive; s.text_gradient = text_gradient;
+    s.contextual=contextual;s.external=external;s.expected=&original.value;s.mutated=&mutated.value;
     ok(aether_display_list_builder_create(caret, &s, &s.builder), "caret builder");
     if (contextual) aether_display_list_builder_set_contextual_text_measurer(s.builder, contextual_caret, &s);
     aether_display_list_t output{};
@@ -119,11 +217,10 @@ static uint64_t caret_case(bool destructive, bool contextual, bool external, boo
     if (destructive) need(!f.map && !f.layout, "external owners released in callback");
     auto h = revision_handle(f.revision, f.target); Flat retained(h); aether_computed_style_handle_destroy(h);
     need(style_equal(original.value, retained.value), "callback payload/rebind did not mutate revision");
-    const auto result = complete_commands(output);
-    aether_display_list_destroy(output); aether_display_list_builder_destroy(s.builder);
-    return result;
+    aether_display_list_builder_destroy(s.builder);
+    return PaintList(output);
 }
-static uint64_t image_case(bool destructive, bool contextual, bool external) {
+static PaintList image_case(bool destructive, bool contextual, bool external) {
     Fixture f(false, contextual); f.build();
     State s{&f}; s.drop = destructive;
     ok(aether_display_list_builder_create(nullptr, nullptr, &s.builder), "image builder");
@@ -132,12 +229,12 @@ static uint64_t image_case(bool destructive, bool contextual, bool external) {
     ok(aether_display_list_build_with_styles(s.builder, f.layout, external ? f.map : nullptr, nullptr, &output), "image pin paint");
     need(s.calls > 0, "image callback executed");
     if (destructive) need(!f.map && !f.layout, "image external owners released");
-    const auto result = complete_commands(output);
-    aether_display_list_destroy(output); aether_display_list_builder_destroy(s.builder);
-    return result;
+    aether_display_list_builder_destroy(s.builder);
+    return PaintList(output);
 }
 static void mutation_failure(bool image_callback) {
     Fixture f(!image_callback); f.build(); State s{&f};
+    auto expected=map_flat(f.map,f.target);s.expected=&expected.value;
     ok(aether_display_list_builder_create(nullptr, nullptr, &s.builder), "prior builder");
     aether_display_list_t output{};
     ok(aether_display_list_build_with_styles(s.builder, f.layout, f.map, nullptr, &output), "prior output");
@@ -151,6 +248,31 @@ static void mutation_failure(bool image_callback) {
     need(output == previous && complete_commands(output) == digest, "callback failure preserves prior owned output");
     need(s.calls == 1, "no further callbacks after invalidation");
     aether_display_list_destroy(output); aether_display_list_builder_destroy(s.builder);
+}
+
+static void nested_epoch_abort_matrix() {
+    for(bool contextual:{false,true})for(bool external:{false,true})for(bool text_gradient:{false,true})
+    for(int invalidation=0;invalidation<4;++invalidation) {
+        std::string css=rich_css;
+        if(text_gradient)css.erase(css.find(",url(asset://snapshot)"),std::strlen(",url(asset://snapshot)"));
+        Fixture f(true,contextual,css.c_str());f.build();
+        auto expected=map_flat(f.map,f.target),mutated=map_flat(f.map,f.target);mutate_payload(mutated.value);
+        State s{&f};s.expected=&expected.value;s.mutated=&mutated.value;s.contextual=contextual;
+        s.external=external;s.text_gradient=text_gradient;s.nest=true;s.mutate=true;s.invalidation=invalidation;
+        ok(aether_display_list_builder_create(nullptr,nullptr,&s.builder),"epoch prior painter");
+        aether_display_list_t output{};
+        ok(aether_display_list_build_with_styles(s.builder,f.layout,external?f.map:nullptr,nullptr,&output),"epoch prior output");
+        const auto previous=output;const auto digest=complete_commands(output);
+        aether_display_list_builder_destroy(s.builder);
+        ok(aether_display_list_builder_create(caret,&s,&s.builder),"epoch callback painter");
+        if(contextual)aether_display_list_builder_set_contextual_text_measurer(s.builder,contextual_caret,&s);
+        auto* parent=f.target->parent;
+        need(aether_display_list_build_with_styles(s.builder,f.layout,external?f.map:nullptr,f.target,&output)
+            ==AETHER_ERROR_INVALID_STATE,"nested callback followed by epoch/node invalidation aborts");
+        need(s.calls==1&&output==previous&&complete_commands(output)==digest,"nested epoch abort preserves previous complete commands");
+        if(invalidation==3)ok(aether_node_append_child(parent,f.target),"restore detached input ownership for cleanup");
+        aether_display_list_destroy(output);aether_display_list_builder_destroy(s.builder);
+    }
 }
 
 struct DestroyDocument {
@@ -221,9 +343,9 @@ static void partial_map_document_destruction(bool external) {
 int main() {
     for (bool contextual : {false, true}) for (bool external : {false, true}) {
         for (bool text_gradient : {false, true})
-            need(caret_case(false, contextual, external, text_gradient) == caret_case(true, contextual, external, text_gradient),
+            need(commands_equal(caret_case(false, contextual, external, text_gradient), caret_case(true, contextual, external, text_gradient)),
                 "caret callback isolation command equivalence for every payload family");
-        need(image_case(false, contextual, external) == image_case(true, contextual, external), "image pin command equivalence");
+        need(commands_equal(image_case(false, contextual, external), image_case(true, contextual, external)), "image pin command equivalence");
     }
     aether_doc_t empty_doc{}; aether_layout_engine_t empty_engine{}; aether_layout_result_t empty_layout{};
     ok(aether_doc_create(&empty_doc), "empty-map doc");
@@ -232,7 +354,7 @@ int main() {
     ok(aether_layout_layout(empty_engine, empty_doc, nullptr, 300, 200, nullptr, nullptr, &empty_layout), "layout without map");
     ok(aether_contextual_transition_finalize_layout(empty_layout, nullptr), "valid empty-base finalize is not NULL_ARG");
     aether_layout_result_destroy(empty_layout); aether_layout_destroy(empty_engine); aether_doc_destroy(empty_doc);
-    mutation_failure(false); mutation_failure(true);
+    nested_epoch_abort_matrix();mutation_failure(false); mutation_failure(true);
     no_map_document_destruction(false); no_map_document_destruction(true);
     partial_map_document_destruction(false); partial_map_document_destruction(true);
     std::puts("frozen paint callback pins: PASS");

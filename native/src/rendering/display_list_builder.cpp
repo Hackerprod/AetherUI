@@ -328,7 +328,17 @@ static void paint_background_and_border(aether_display_list_builder_s* builder, 
 static bool box_has_scrollbar_chrome(const aether_display_list_builder_s* builder,
                                      aether_layout_box_s* box);
 
-static void paint_control(aether_display_list_builder_s* builder,
+// Keep the private callback frame out of each recursive paint_box activation.
+// Only the nonrecursive atomic-control branch needs this stack storage.
+#if defined(_MSC_VER)
+#define AETHER_PAINT_CONTROL_NOINLINE __declspec(noinline)
+#elif defined(__GNUC__) || defined(__clang__)
+#define AETHER_PAINT_CONTROL_NOINLINE __attribute__((noinline))
+#else
+#define AETHER_PAINT_CONTROL_NOINLINE
+#endif
+
+static AETHER_PAINT_CONTROL_NOINLINE void paint_control(aether_display_list_builder_s* builder,
                            aether_layout_box_s* box,
                            aether_node_s* focused_element,
                            const paint_context_s& ctx,
@@ -689,7 +699,7 @@ static bool box_has_scrollbar_chrome(const aether_display_list_builder_s* builde
 
 /* ── paint_control (opaque input text + caret) ────────────────────── */
 
-static void paint_control(aether_display_list_builder_s* builder,
+static AETHER_PAINT_CONTROL_NOINLINE void paint_control(aether_display_list_builder_s* builder,
                            aether_layout_box_s* box,
                            aether_node_s* focused_element,
                            const paint_context_s& ctx,
@@ -722,8 +732,8 @@ static void paint_control(aether_display_list_builder_s* builder,
     // Caret for focused input
     if (element == focused_element && (builder->contextual_text_measurer || builder->text_measurer)) {
         const auto measures = builder->style_pin->lookup().lookup_measures(element);
-        std::unique_ptr<aether::style::CallbackStyleCopy> callback_style;
-        const auto copy_status = aether::style::CallbackStyleCopy::create(view, callback_style);
+        aether::style::CallbackStyleCopy callback_style;
+        const auto copy_status = callback_style.prepare(view);
         if (copy_status == AETHER_ERROR_OUT_OF_MEMORY) throw std::bad_alloc();
         if (copy_status != AETHER_OK) throw std::runtime_error("Cannot copy callback style");
         const auto contextual_measurer = builder->contextual_text_measurer;
@@ -731,9 +741,9 @@ static void paint_control(aether_display_list_builder_s* builder,
         void* const callback_data = contextual_measurer
             ? builder->contextual_text_measurer_data : builder->text_measurer_data;
         auto metrics = checked_paint_callback(builder, [&] { return contextual_measurer
-            ? contextual_measurer(displayed.c_str(), callback_style->get(),
+            ? contextual_measurer(displayed.c_str(), callback_style.get(),
                 measure_used_line_height(measures ? &*measures : nullptr, style), box->content_box.width, callback_data)
-            : measurer(displayed.c_str(), callback_style->get(), box->content_box.width, callback_data); });
+            : measurer(displayed.c_str(), callback_style.get(), box->content_box.width, callback_data); });
         float caret_x = std::min(box->content_box.x + box->content_box.width - 1,
                                  box->content_box.x + metrics.width + 1);
         float caret_top = box->content_box.y
@@ -744,6 +754,8 @@ static void paint_control(aether_display_list_builder_s* builder,
                                {}, apply_opacity(style.color, ctx.effective_opacity));
     }
 }
+
+#undef AETHER_PAINT_CONTROL_NOINLINE
 
 /* ══════════════════════════════════════════════════════════════════════
    C ABI implementation

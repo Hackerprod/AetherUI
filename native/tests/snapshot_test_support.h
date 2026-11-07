@@ -35,6 +35,11 @@ inline bool eq(aether_corner_radius a, aether_corner_radius b) { return eq(a.hor
 inline bool eq(aether_border_radii a,aether_border_radii b) {
     return eq(a.top_left,b.top_left)&&eq(a.top_right,b.top_right)&&eq(a.bottom_left,b.bottom_left)&&eq(a.bottom_right,b.bottom_right);
 }
+inline bool eq(aether_corner_radii a,aether_corner_radii b) {
+    return a.top_left_x==b.top_left_x&&a.top_left_y==b.top_left_y&&a.top_right_x==b.top_right_x&&
+        a.top_right_y==b.top_right_y&&a.bottom_right_x==b.bottom_right_x&&a.bottom_right_y==b.bottom_right_y&&
+        a.bottom_left_x==b.bottom_left_x&&a.bottom_left_y==b.bottom_left_y;
+}
 inline bool gradient_equal(const aether_linear_gradient& a, const aether_linear_gradient& b) {
     if (a.direction_x!=b.direction_x || a.direction_y!=b.direction_y || a.stop_count!=b.stop_count) return false;
     for(int i=0;i<a.stop_count;++i) {
@@ -43,7 +48,7 @@ inline bool gradient_equal(const aether_linear_gradient& a, const aether_linear_
     }
     return true;
 }
-inline bool style_equal(const aether_computed_style_t& a,const aether_computed_style_t& b) {
+inline bool scalar_style_equal(const aether_computed_style_t& a,const aether_computed_style_t& b) {
 #define SAME(f) if(a.f!=b.f) return false
 #define VALUE(f) if(!eq(a.f,b.f)) return false
     SAME(display); SAME(flex_direction); SAME(justify_content); SAME(align_items); SAME(align_self);
@@ -59,10 +64,51 @@ inline bool style_equal(const aether_computed_style_t& a,const aether_computed_s
     SAME(transition_properties); SAME(transition_duration); SAME(transition_delay); SAME(transition_timing);
 #undef SAME
 #undef VALUE
-    return aether_background_layer_list_equal(&a.background_layers,&b.background_layers) &&
+    return true;
+}
+inline bool style_equal(const aether_computed_style_t& a,const aether_computed_style_t& b) {
+    return scalar_style_equal(a,b) && aether_background_layer_list_equal(&a.background_layers,&b.background_layers) &&
         aether_backdrop_filter_list_equal(&a.backdrop_filters,&b.backdrop_filters) &&
         gradient_equal(a.text_gradient,b.text_gradient) && aether_transform_list_equal(&a.transforms,&b.transforms) &&
         aether_shadow_list_equal(&a.text_shadows,&b.text_shadows) && aether_shadow_list_equal(&a.box_shadows,&b.box_shadows);
+}
+// Export-copy comparison includes inactive payload fields and every font byte.
+inline bool complete_style_equal(const aether_computed_style_t& a,const aether_computed_style_t& b) {
+    if(!scalar_style_equal(a,b)||std::memcmp(a.font_family,b.font_family,sizeof(a.font_family))||
+        a.background_layers.count!=b.background_layers.count||a.backdrop_filters.count!=b.backdrop_filters.count||
+        a.transforms.count!=b.transforms.count||a.text_shadows.count!=b.text_shadows.count||
+        a.box_shadows.count!=b.box_shadows.count||!gradient_equal(a.text_gradient,b.text_gradient))return false;
+    for(int i=0;i<a.background_layers.count;++i) {
+        const auto& x=a.background_layers.items[i];const auto& y=b.background_layers.items[i];
+        if(x.kind!=y.kind||!gradient_equal(x.gradient,y.gradient)||bool(x.image_source)!=bool(y.image_source)||
+            (x.image_source&&std::strcmp(x.image_source,y.image_source))||!eq(x.position_x,y.position_x)||
+            !eq(x.position_y,y.position_y)||!eq(x.size_x,y.size_x)||!eq(x.size_y,y.size_y)||
+            x.size_kind!=y.size_kind||x.repeat_x!=y.repeat_x||x.repeat_y!=y.repeat_y)return false;
+    }
+    for(int i=0;i<a.backdrop_filters.count;++i) {
+        const auto& x=a.backdrop_filters.items[i];const auto& y=b.backdrop_filters.items[i];
+        if(x.kind!=y.kind||!eq(x.length_amount,y.length_amount)||x.scalar_amount!=y.scalar_amount)return false;
+    }
+    for(int i=0;i<a.transforms.count;++i) {
+        const auto& x=a.transforms.items[i];const auto& y=b.transforms.items[i];
+        if(x.kind!=y.kind||!eq(x.x,y.x)||!eq(x.y,y.y)||x.scalar_x!=y.scalar_x||x.scalar_y!=y.scalar_y||
+            x.angle_radians!=y.angle_radians||x.matrix_a!=y.matrix_a||x.matrix_b!=y.matrix_b||
+            x.matrix_c!=y.matrix_c||x.matrix_d!=y.matrix_d||x.matrix_e!=y.matrix_e||x.matrix_f!=y.matrix_f)return false;
+    }
+    const auto shadows_equal=[](const aether_shadow_list& x,const aether_shadow_list& y) {
+        for(int i=0;i<x.count;++i) {
+            const auto& u=x.items[i];const auto& v=y.items[i];
+            if(u.offset_x!=v.offset_x||u.offset_y!=v.offset_y||u.blur_radius!=v.blur_radius||
+                u.spread_radius!=v.spread_radius||!eq(u.color,v.color)||u.inset!=v.inset)return false;
+        }return true;
+    };
+    return shadows_equal(a.text_shadows,b.text_shadows)&&shadows_equal(a.box_shadows,b.box_shadows);
+}
+// A shallow descriptor snapshot is used only while the original loan is alive.
+inline bool same_payload_addresses(const aether_computed_style_t& a,const aether_computed_style_t& b) {
+    return a.background_layers.items==b.background_layers.items&&a.backdrop_filters.items==b.backdrop_filters.items&&
+        a.text_gradient.stops==b.text_gradient.stops&&a.transforms.items==b.transforms.items&&
+        a.text_shadows.items==b.text_shadows.items&&a.box_shadows.items==b.box_shadows.items;
 }
 struct Flat {
     aether_computed_style_t value{};

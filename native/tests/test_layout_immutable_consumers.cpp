@@ -1,6 +1,7 @@
 #include "../src/layout/layout_types.h"
 #include "../src/layout/input_hit_test.h"
 #include "../src/css/style_freeze.h"
+#include "frozen_style_test_support.h"
 #include "../src/rendering/display_list_types.h"
 #include <cstring>
 #include <aether/aether_contextual_style.h>
@@ -332,6 +333,107 @@ static void overlay_and_callback_new_oom() {
     }
     REQUIRE(success);
 }
+struct NestedMeasure {
+    aether_layout_engine_s* inner;
+    const BoxStyleSnapshot* box;
+    const aether_computed_style_t* expected;
+    const aether_computed_style_t* mutated;
+    const aether_computed_style_t* outer = nullptr;
+    int calls = 0;
+    const aether_computed_style_t* original_buffers = nullptr;
+};
+static aether_text_metrics_t nested_measure(const char*, const aether_computed_style_t* copy, float, void* data) {
+    auto& c=*static_cast<NestedMeasure*>(data);++c.calls;
+    frozen_test::equal(*copy,*c.expected);
+    frozen_test::disjoint_source(c.box->view(),*copy);
+    if(c.outer) {
+        REQUIRE(copy!=c.outer);snapshot_test::disjoint(*copy,*c.outer);
+        snapshot_test::disjoint(*copy,*c.original_buffers);
+        return {10,12,9};
+    }
+    const auto descriptors=*copy;
+    snapshot_test::mutate_payload(*copy);
+    std::vector<aether_background_layer> layers(copy->background_layers.items,
+        copy->background_layers.items+copy->background_layers.count);
+    char alien[]="alien";aether_gradient_stop stops[1]{};
+    for(int i=0;i<copy->background_layers.count;++i) {
+        auto& l=copy->background_layers.items[i];l.image_source=i%2?nullptr:alien;
+        l.gradient.stops=i%2?nullptr:stops;l.gradient.stop_count=INT32_MAX;
+    }
+    auto original_buffers=descriptors;original_buffers.background_layers.items=layers.data();
+    c.original_buffers=&original_buffers;c.outer=copy;
+    REQUIRE(engine_measure_text(c.inner,"nested",c.box,0).width==10);
+    REQUIRE(c.outer==copy&&snapshot_test::same_payload_addresses(*copy,descriptors));
+    for(int i=0;i<copy->background_layers.count;++i) {
+        auto& l=copy->background_layers.items[i];
+        REQUIRE(l.image_source==(i%2?nullptr:alien)&&l.gradient.stops==(i%2?nullptr:stops)&&l.gradient.stop_count==INT32_MAX);
+        l=layers[size_t(i)];
+    }
+    frozen_test::equal(*copy,*c.mutated);
+    snapshot_test::Flat intact;
+    REQUIRE(export_owned_flat(c.box->view(),&intact.value)==AETHER_OK);
+    frozen_test::equal(intact.value,*c.expected);
+    c.outer=nullptr;
+    // Keep descriptors rebound on exit: destruction must not visit them.
+    for(int i=0;i<copy->background_layers.count;++i) {
+        auto& l=copy->background_layers.items[i];l.image_source=nullptr;l.gradient.stops=nullptr;l.gradient.stop_count=INT32_MAX;
+    }
+    REQUIRE(std::strcmp(alien,"alien")==0&&stops[0].offset==0);
+    return {10,12,9};
+}
+static aether_text_metrics_t contextual_nested_measure(const char* text,const aether_computed_style_t* copy,
+    float line_height,float width,void* data) {
+    REQUIRE(std::isfinite(line_height));return nested_measure(text,copy,width,data);
+}
+static void nested_rich_frames() {
+    frozen_test::Builder builder;FrozenStyleRef value;REQUIRE(freeze_style(builder.flat,value)==AETHER_OK);
+    BoxStyleSnapshot box(value);box.opacity=.123f; // scalar overrides accompany the pinned payload
+    snapshot_test::Flat expected,mutated;
+    REQUIRE(export_owned_flat(box.view(),&expected.value)==AETHER_OK);
+    REQUIRE(export_owned_flat(box.view(),&mutated.value)==AETHER_OK);snapshot_test::mutate_payload(mutated.value);
+    for(bool contextual:{false,true}) {
+        aether_layout_engine_s outer,inner;NestedMeasure context{&inner,&box,&expected.value,&mutated.value};
+        outer.text_measurer=inner.text_measurer=nested_measure;
+        outer.text_measurer_data=inner.text_measurer_data=&context;
+        if(contextual) {
+            outer.contextual_text_measurer=inner.contextual_text_measurer=contextual_nested_measure;
+            outer.contextual_text_measurer_data=inner.contextual_text_measurer_data=&context;
+        }
+        REQUIRE(engine_measure_text(&outer,"outer",&box,0).width==10&&context.calls==2);
+        snapshot_test::Flat intact;REQUIRE(export_owned_flat(box.view(),&intact.value)==AETHER_OK);
+        frozen_test::equal(intact.value,expected.value);
+    }
+}
+static void measure_epoch_abort_matrix() {
+    for(bool contextual:{false,true})for(int invalidation=0;invalidation<4;++invalidation) {
+        aether_doc_s doc;aether_node_s node;node.type=AETHER_NODE_ELEMENT;
+        const auto value=style(.5f);const auto map=version({record(&node,value)},&doc);
+        const auto assets=std::make_shared<const LayoutAssets>(map,nullptr,value);
+        const StyleLookup lookup(assets,{},false);const BoxStyleSnapshot box(value);
+        struct State {aether_doc_s* doc;aether_node_s* node;int invalidation;int calls=0;} state{&doc,&node,invalidation};
+        const auto callback=+[](const char*,const aether_computed_style_t*,float,void* data)->aether_text_metrics_t {
+            auto& c=*static_cast<State*>(data);++c.calls;
+            switch(c.invalidation) {
+            case 0:++c.doc->identity->mutation_epoch;break;
+            case 1:++c.doc->identity->style_tree_epoch;break;
+            case 2:++c.doc->identity->structure_epoch;break;
+            case 3:c.node->identity->attached=false;break;
+            }
+            return {10,12,9};
+        };
+        aether_layout_engine_s engine;engine.measure_document=doc.identity;engine.measure_styles=&lookup;
+        engine.text_measurer=callback;engine.text_measurer_data=&state;
+        struct Context {decltype(callback) callback_;State* state; } context{callback,&state};
+        if(contextual) {
+            engine.contextual_text_measurer=+[](const char* t,const aether_computed_style_t* s,float,float w,void* d) {
+                auto& c=*static_cast<Context*>(d);return c.callback_(t,s,w,c.state);
+            };engine.contextual_text_measurer_data=&context;
+        }
+        bool rejected=false;
+        try{(void)engine_measure_text(&engine,"x",&box,0,&node);}catch(const std::runtime_error&){rejected=true;}
+        REQUIRE(rejected&&state.calls==1);
+    }
+}
 static void runtime_context_and_anonymous() {
     aether_doc_t doc = nullptr; aether_style_runtime_t runtime = nullptr;
     REQUIRE(aether_doc_create(&doc) == AETHER_OK);
@@ -430,6 +532,6 @@ static void geometry_document_without_map() {
     }
 }
 int main() {
-    selection_and_clone(); callback_pins(); display_callback_pins(); clone_oom(); overlay_and_callback_new_oom(); runtime_context_and_anonymous(); geometry_document_without_map();
+    nested_rich_frames(); measure_epoch_abort_matrix(); selection_and_clone(); callback_pins(); display_callback_pins(); clone_oom(); overlay_and_callback_new_oom(); runtime_context_and_anonymous(); geometry_document_without_map();
     std::cout << "immutable layout selection, clone, callback pins, and new-allocation OOM passed\n";
 }

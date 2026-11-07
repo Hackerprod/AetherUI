@@ -461,9 +461,10 @@ if(AETHERUI_BUILD_TESTS)
     add_test(NAME aether.frozen-backing COMMAND aether_frozen_backing_test)
 
     if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
-        # Compile the exporter here so its C allocations, not an already-linked
-        # shared library, are reached by the independent allocator wrappers.
+        # Compile exporter AND owned free here: both allocation and destruction
+        # must reach wrappers, not calls inside an already-linked DSO.
         add_executable(aether_frozen_style_oom_test tests/test_frozen_style_oom.cpp
+            src/abi/aether_abi.cpp src/css/computed_style.cpp
             src/css/frozen_style.cpp src/css/style_freeze.cpp src/css/style_c_export.cpp
             src/css/frozen_c_string.cpp)
         target_include_directories(aether_frozen_style_oom_test PRIVATE src)
