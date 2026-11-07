@@ -35,6 +35,8 @@ static aether_text_metrics_t measure_text(const char* text, const aether_compute
     return {width, 1.f, .8f};
 }
 
+#include "transition_opacity_paint_cases.h"
+
 /* opacity: 1 -> 0 over 300ms linear. */
 static void test_opacity_linear(aether_node_t node, aether_node_t other_node) {
     aether_transition_runtime_t runtime = nullptr;
@@ -303,6 +305,327 @@ static void test_display_list_transform_override() {
     aether_doc_destroy(doc);
 }
 
+/* These checks intentionally use require, not assert: Release is a supported
+   validation configuration, including all calls that mutate the runtime. */
+struct RuntimeFixture {
+    aether_transition_runtime_t runtime = nullptr;
+    RuntimeFixture() {
+        require(aether_transition_runtime_create(&runtime) == AETHER_OK,
+            "fixture: runtime creation failed");
+    }
+    ~RuntimeFixture() { aether_transition_runtime_destroy(runtime); }
+    RuntimeFixture(const RuntimeFixture&) = delete;
+    RuntimeFixture& operator=(const RuntimeFixture&) = delete;
+};
+
+static aether_computed_style_t opacity_style(float opacity, float delay = 0.f) {
+    auto style = aether_computed_style_default();
+    style.opacity = opacity;
+    style.transition_properties = AETHER_TRANSITION_PROPERTY_OPACITY;
+    style.transition_duration = 1.f;
+    style.transition_delay = delay;
+    style.transition_timing = AETHER_TRANSITION_TIMING_LINEAR;
+    return style;
+}
+
+static void observe(aether_transition_runtime_t runtime, aether_node_t node,
+                    const aether_computed_style_t& before,
+                    const aether_computed_style_t& after, int64_t now) {
+    require(aether_transition_runtime_observe(runtime, node, &before, &after, now) == AETHER_OK,
+        "observe: valid styles must succeed");
+}
+
+static void check_opacity(aether_transition_runtime_t runtime, aether_node_t node,
+                          float expected, float tolerance = .00001f) {
+    float opacity = -9.f;
+    require(aether_transition_runtime_opacity_override(runtime, node, &opacity) == AETHER_TRUE,
+        "opacity: expected override missing");
+    require(near(opacity, expected, tolerance), "opacity: incorrect override value");
+}
+
+static void check_no_opacity(aether_transition_runtime_t runtime, aether_node_t node) {
+    float sentinel = -9.f;
+    require(aether_transition_runtime_opacity_override(runtime, node, &sentinel) == AETHER_FALSE,
+        "cancel: obsolete opacity override must disappear immediately");
+    require(sentinel == -9.f, "cancel: absent override must leave output untouched");
+}
+
+static void test_opacity_cancellation_matrix(aether_node_t node) {
+    for (int state = 0; state < 3; ++state) {
+        for (int reason = 0; reason < 3; ++reason) {
+            for (int changed = 0; changed < 2; ++changed) {
+                RuntimeFixture fixture;
+                const auto before = opacity_style(1.f, state == 0 ? 1.f : 0.f);
+                auto target = before;
+                target.opacity = 0.f;
+                observe(fixture.runtime, node, before, target, 0);
+                const int64_t now = state == 2 ? 1000 : 500;
+                require(aether_transition_runtime_tick(fixture.runtime, now) ==
+                    (state == 2 ? AETHER_FALSE : AETHER_TRUE), "matrix: unexpected initial activity");
+                check_opacity(fixture.runtime, node, state == 0 ? 1.f : state == 1 ? .5f : 0.f);
+                auto cancelled = target;
+                cancelled.opacity = changed ? .75f : target.opacity;
+                if (reason == 0) cancelled.transition_properties = 0;
+                if (reason == 1) cancelled.transition_properties = AETHER_TRANSITION_PROPERTY_TRANSFORM;
+                if (reason == 2) cancelled.transition_duration = 0.f;
+                std::printf("cancel matrix: state=%d reason=%d changed=%d\n", state, reason, changed);
+                observe(fixture.runtime, node, target, cancelled, now);
+                check_no_opacity(fixture.runtime, node); // Deliberately no intervening tick.
+                require(aether_transition_runtime_has_active(fixture.runtime) == AETHER_FALSE,
+                    "matrix: cancelled sole channel must not keep frames active");
+                observe(fixture.runtime, node, cancelled, cancelled, now);
+                require(aether_transition_runtime_tick(fixture.runtime, 10000) == AETHER_FALSE,
+                    "matrix: later tick must not resurrect cancelled activity");
+                check_no_opacity(fixture.runtime, node);
+            }
+        }
+    }
+    // The C ABI can supply negative finite duration, independently of CSS parsing.
+    RuntimeFixture fixture;
+    const auto before = opacity_style(1.f);
+    auto target = opacity_style(0.f);
+    observe(fixture.runtime, node, before, target, 0);
+    auto cancelled = target;
+    cancelled.transition_duration = -1.f;
+    observe(fixture.runtime, node, target, cancelled, 500);
+    check_no_opacity(fixture.runtime, node);
+    require(aether_transition_runtime_has_active(fixture.runtime) == AETHER_FALSE,
+        "negative duration: channel must be cancelled");
+}
+
+static void test_opacity_cancellation_boundaries(aether_node_t node) {
+    for (int boundary = 0; boundary < 3; ++boundary) {
+        for (int tick_first = 0; tick_first < 2; ++tick_first) {
+            RuntimeFixture fixture;
+            const auto before = opacity_style(1.f, .25f);
+            auto target = before;
+            target.opacity = 0.f;
+            observe(fixture.runtime, node, before, target, 100);
+            const int64_t now = boundary == 0 ? 350 : boundary == 1 ? 1350 : 1500;
+            if (tick_first) aether_transition_runtime_tick(fixture.runtime, now);
+            auto cancelled = target;
+            cancelled.transition_properties = 0;
+            observe(fixture.runtime, node, target, cancelled, now);
+            check_no_opacity(fixture.runtime, node);
+            require(aether_transition_runtime_tick(fixture.runtime, now) == AETHER_FALSE,
+                "boundary: cancelled channel must stay inactive");
+            require(aether_transition_runtime_tick(fixture.runtime, 10000) == AETHER_FALSE,
+                "boundary: subsequent tick must stay inactive");
+            check_no_opacity(fixture.runtime, node);
+        }
+    }
+    RuntimeFixture fixture;
+    const auto before = opacity_style(1.f, -2.f);
+    const auto target = opacity_style(0.f, -2.f);
+    observe(fixture.runtime, node, before, target, 0);
+    require(aether_transition_runtime_has_active(fixture.runtime) == AETHER_FALSE,
+        "negative delay: complete-at-install entry must not be active");
+    check_opacity(fixture.runtime, node, 0.f, 0.f);
+    auto cancelled = target;
+    cancelled.transition_duration = 0.f;
+    observe(fixture.runtime, node, target, cancelled, 0);
+    check_no_opacity(fixture.runtime, node);
+}
+
+static void test_opacity_cancellation_recovery(aether_node_t node) {
+    RuntimeFixture fixture;
+    for (int cycle = 0; cycle < 128; ++cycle) {
+        const int64_t base = cycle * 10000;
+        const auto before = opacity_style(1.f);
+        const auto target = opacity_style(0.f);
+        observe(fixture.runtime, node, before, target, base);
+        aether_transition_runtime_tick(fixture.runtime, base + (cycle % 2 ? 1000 : 500));
+        auto cancelled = target;
+        cancelled.opacity = .25f;
+        cancelled.transition_properties = 0;
+        observe(fixture.runtime, node, target, cancelled, base + 1000);
+        check_no_opacity(fixture.runtime, node);
+        auto reenabled = cancelled;
+        reenabled.transition_properties = AETHER_TRANSITION_PROPERTY_OPACITY;
+        observe(fixture.runtime, node, cancelled, reenabled, base + 1000);
+        check_no_opacity(fixture.runtime, node);
+        require(aether_transition_runtime_has_active(fixture.runtime) == AETHER_FALSE,
+            "recovery: enabling unchanged value must not revive a channel");
+        auto next = reenabled;
+        next.opacity = .75f;
+        observe(fixture.runtime, node, reenabled, next, base + 2000);
+        check_opacity(fixture.runtime, node, .25f, 0.f);
+        require(aether_transition_runtime_tick(fixture.runtime, base + 2500) == AETHER_TRUE,
+            "recovery: new transition must be active halfway");
+        check_opacity(fixture.runtime, node, .5f);
+        require(aether_transition_runtime_tick(fixture.runtime, base + 3000) == AETHER_FALSE,
+            "recovery: new transition must finish normally");
+        check_opacity(fixture.runtime, node, .75f, 0.f);
+        auto stopped = next;
+        stopped.transition_properties = 0;
+        observe(fixture.runtime, node, next, stopped, base + 3000);
+        check_no_opacity(fixture.runtime, node);
+    }
+}
+
+static void test_opacity_cancellation_isolation(aether_node_t node, aether_node_t other) {
+    for (int finished_transform = 0; finished_transform < 2; ++finished_transform) {
+        for (int zero_duration = 0; zero_duration < 2; ++zero_duration) {
+            RuntimeFixture fixture;
+            auto before = opacity_style(1.f);
+            before.transition_properties |= AETHER_TRANSITION_PROPERTY_TRANSFORM;
+            before.transforms = make_scale_list(1.f);
+            auto target = before;
+            target.opacity = 0.f;
+            target.transforms = make_scale_list(2.f);
+            observe(fixture.runtime, node, before, target, 0);
+            const auto other_before = opacity_style(1.f);
+            const auto other_target = opacity_style(0.f);
+            const int64_t start_other = finished_transform ? 1000 : 0;
+            if (finished_transform) {
+                require(aether_transition_runtime_tick(fixture.runtime, 1000) == AETHER_FALSE,
+                    "isolation: completed channels must not count as active");
+            }
+            observe(fixture.runtime, other, other_before, other_target, start_other);
+            const int64_t now = start_other + 500;
+            aether_transition_runtime_tick(fixture.runtime, now);
+            auto cancelled = target;
+            cancelled.transition_properties = AETHER_TRANSITION_PROPERTY_TRANSFORM;
+            if (zero_duration) cancelled.transition_duration = 0.f;
+            observe(fixture.runtime, node, target, cancelled, now);
+            check_no_opacity(fixture.runtime, node);
+            check_opacity(fixture.runtime, other, .5f);
+            aether_transform_matrix matrix{};
+            require(aether_transition_runtime_transform_override(fixture.runtime, node, &matrix) ==
+                (zero_duration ? AETHER_FALSE : AETHER_TRUE),
+                "isolation: transform eligibility must be independent of opacity mask");
+            if (!zero_duration) require(near(matrix.m11, finished_transform ? 2.f : 1.5f),
+                "isolation: transform sample must be preserved");
+            require(aether_transition_runtime_has_active(fixture.runtime) == AETHER_TRUE,
+                "isolation: other node must keep frames active");
+            aether_transition_runtime_tick(fixture.runtime, now + 250);
+            check_opacity(fixture.runtime, other, .25f);
+            if (!zero_duration) {
+                require(aether_transition_runtime_transform_override(fixture.runtime, node, &matrix) == AETHER_TRUE,
+                    "isolation: transform override lost after tick");
+                require(near(matrix.m11, finished_transform ? 2.f : 1.75f),
+                    "isolation: transform must keep its original clock");
+            }
+            require(aether_transition_runtime_tick(fixture.runtime, now + 500) == AETHER_FALSE,
+                "isolation: survivors must finish at their original deadlines");
+            check_no_opacity(fixture.runtime, node);
+            check_opacity(fixture.runtime, other, 0.f, 0.f);
+            if (!zero_duration) {
+                require(aether_transition_runtime_transform_override(fixture.runtime, node, &matrix) == AETHER_TRUE &&
+                    matrix.m11 == 2.f, "isolation: retained transform endpoint must be exact");
+            }
+            aether_computed_style_free(&before);
+            aether_computed_style_free(&target);
+        }
+    }
+}
+
+static void test_opacity_unchanged_eligible(aether_node_t node) {
+    for (int state = 0; state < 3; ++state) {
+        RuntimeFixture fixture;
+        const auto before = opacity_style(1.f, .25f);
+        const auto target = opacity_style(0.f, .25f);
+        observe(fixture.runtime, node, before, target, 0);
+        const int64_t now = state == 0 ? 100 : state == 1 ? 750 : 1250;
+        aether_transition_runtime_tick(fixture.runtime, now);
+        auto unchanged = target;
+        unchanged.font_size += 1.f;
+        unchanged.transition_duration = 3.f;
+        unchanged.transition_delay = 2.f;
+        unchanged.transition_timing = AETHER_TRANSITION_TIMING_EASE_IN;
+        observe(fixture.runtime, node, target, unchanged, now);
+        check_opacity(fixture.runtime, node, state == 0 ? 1.f : state == 1 ? .5f : 0.f);
+        require(aether_transition_runtime_has_active(fixture.runtime) ==
+            (state == 2 ? AETHER_FALSE : AETHER_TRUE), "eligible: unchanged value must keep original activity");
+        if (state < 2) {
+            require(aether_transition_runtime_tick(fixture.runtime, 1000) == AETHER_TRUE,
+                "eligible: unchanged value must not change clock");
+            check_opacity(fixture.runtime, node, .25f);
+        }
+        require(aether_transition_runtime_tick(fixture.runtime, 1250) == AETHER_FALSE,
+            "eligible: unchanged value must keep original endpoint time");
+        check_opacity(fixture.runtime, node, 0.f, 0.f);
+        auto tiny_change = unchanged;
+        tiny_change.opacity = .00005f;
+        observe(fixture.runtime, node, unchanged, tiny_change, 1300);
+        check_opacity(fixture.runtime, node, 0.f, 0.f);
+        require(aether_transition_runtime_has_active(fixture.runtime) == AETHER_FALSE,
+            "epsilon: sub-epsilon eligible difference must not create a new transition");
+    }
+}
+
+static void test_opacity_interruption(aether_node_t node) {
+    const float delays[] = {0.f, .25f, -.25f, -2.f};
+    for (float delay : delays) {
+        RuntimeFixture fixture;
+        const auto before = opacity_style(1.f);
+        const auto target = opacity_style(0.f);
+        observe(fixture.runtime, node, before, target, 0);
+        auto next = opacity_style(1.f, delay);
+        // No tick at 500: observe must sample the interrupted fade itself.
+        observe(fixture.runtime, node, target, next, 500);
+        check_opacity(fixture.runtime, node, delay < -1.f ? 1.f : delay < 0.f ? .625f : .5f);
+        if (delay > -1.f) {
+            const int64_t start = 500 + static_cast<int64_t>(delay * 1000.f);
+            require(aether_transition_runtime_tick(fixture.runtime, start + 500) == AETHER_TRUE,
+                "interruption: replacement must remain active halfway");
+            check_opacity(fixture.runtime, node, .75f);
+            require(aether_transition_runtime_tick(fixture.runtime, start + 1000) == AETHER_FALSE,
+                "interruption: replacement must complete on schedule");
+        } else require(aether_transition_runtime_has_active(fixture.runtime) == AETHER_FALSE,
+            "interruption: sufficiently negative delay must finish at installation");
+        check_opacity(fixture.runtime, node, 1.f, 0.f);
+    }
+    RuntimeFixture fixture;
+    auto before = opacity_style(1.f);
+    auto target = opacity_style(0.f);
+    target.transition_timing = AETHER_TRANSITION_TIMING_EASE_IN;
+    observe(fixture.runtime, node, before, target, 0);
+    auto next = opacity_style(1.f);
+    next.transition_timing = AETHER_TRANSITION_TIMING_EASE_OUT;
+    observe(fixture.runtime, node, target, next, 500);
+    const float from = 1.f - .315357f; // CSS cubic-bezier(.42, 0, 1, 1) at p=.5.
+    check_opacity(fixture.runtime, node, from, .002f);
+    aether_transition_runtime_tick(fixture.runtime, 1000);
+    check_opacity(fixture.runtime, node, from + (1.f - from) * .684643f, .002f);
+    require(aether_transition_runtime_tick(fixture.runtime, 1500) == AETHER_FALSE,
+        "nonlinear interruption: replacement must finish");
+    check_opacity(fixture.runtime, node, 1.f, 0.f);
+}
+
+static void test_opacity_invalid_arguments(aether_node_t node, aether_node_t other) {
+    RuntimeFixture fixture;
+    const auto before = opacity_style(1.f);
+    auto target = opacity_style(0.f);
+    observe(fixture.runtime, node, before, target, 0);
+    aether_transition_runtime_tick(fixture.runtime, 500);
+    auto cancelled = target;
+    cancelled.transition_properties = 0;
+    require(aether_transition_runtime_observe(nullptr, node, &target, &cancelled, 700) == AETHER_ERROR_NULL_ARG,
+        "null: runtime observe must reject null");
+    require(aether_transition_runtime_observe(fixture.runtime, nullptr, &target, &cancelled, 700) == AETHER_ERROR_NULL_ARG,
+        "null: node observe must reject null");
+    require(aether_transition_runtime_observe(fixture.runtime, node, nullptr, &cancelled, 700) == AETHER_ERROR_NULL_ARG,
+        "null: before observe must reject null");
+    require(aether_transition_runtime_observe(fixture.runtime, node, &target, nullptr, 700) == AETHER_ERROR_NULL_ARG,
+        "null: after observe must reject null");
+    check_opacity(fixture.runtime, node, .5f);
+    require(aether_transition_runtime_has_active(fixture.runtime) == AETHER_TRUE,
+        "null: failed observations must preserve prior activity");
+    float sentinel = -9.f;
+    require(aether_transition_runtime_opacity_override(nullptr, node, &sentinel) == AETHER_FALSE && sentinel == -9.f,
+        "null: runtime lookup must preserve output");
+    require(aether_transition_runtime_opacity_override(fixture.runtime, nullptr, &sentinel) == AETHER_FALSE && sentinel == -9.f,
+        "null: node lookup must preserve output");
+    require(aether_transition_runtime_opacity_override(fixture.runtime, node, nullptr) == AETHER_FALSE,
+        "null: output lookup must reject null");
+    check_no_opacity(fixture.runtime, other);
+    check_opacity(fixture.runtime, node, .5f);
+    require(aether_transition_runtime_tick(fixture.runtime, 1000) == AETHER_FALSE,
+        "null: valid state must still finish normally");
+    check_opacity(fixture.runtime, node, 0.f, 0.f);
+}
+
 static void test_shorthand_roundtrip();
 
 int main() {
@@ -319,11 +642,19 @@ int main() {
     test_no_transition(node_a);
     test_delay(node_a);
     test_ease_in(node_a);
+    test_opacity_cancellation_matrix(node_a);
+    test_opacity_cancellation_boundaries(node_a);
+    test_opacity_cancellation_recovery(node_a);
+    test_opacity_cancellation_isolation(node_a, node_b);
+    test_opacity_unchanged_eligible(node_a);
+    test_opacity_interruption(node_a);
+    test_opacity_invalid_arguments(node_a, node_b);
 
     aether_doc_destroy(doc);
 
     test_shorthand_roundtrip();
     test_display_list_transform_override();
+    test_display_list_opacity_cancellation();
 
     return 0;
 }
