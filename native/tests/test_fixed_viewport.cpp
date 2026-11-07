@@ -1,5 +1,6 @@
 #include "animations/transition_runtime.h"
 #include "layout/layout_types.h"
+#include "immutable_style_test_support.h"
 #include <aether/aether.h>
 #include <array>
 #include <cmath>
@@ -26,6 +27,7 @@ struct fixture {
   aether_layout_engine_t engine{};
   aether_layout_result_t result{};
   aether_transition_runtime_t transitions{};
+  std::vector<aether_computed_style_handle_t> independent_styles;
   fixture(const std::string &css = "", const std::string &item = "",
           const std::string &children = "", bool prefix = false) {
     const std::string markup =
@@ -69,6 +71,7 @@ struct fixture {
           "transitions");
   }
   ~fixture() {
+    for (auto* style : independent_styles) aether_computed_style_handle_destroy(style);
     aether_layout_result_destroy(result);
     aether_layout_destroy(engine);
     aether_transition_runtime_destroy(transitions);
@@ -140,10 +143,13 @@ struct fixture {
     }
   }
   aether_computed_style_t style(const char *id) {
-    auto it = styles->styles.find(node(id));
-    check(it != styles->styles.end(), "style");
-    return it
-        ->second; // Borrowed shallow view, never freed or stored by the test.
+    auto* copy = aether_style_map_get(styles, node(id));
+    check(copy != nullptr, "style");
+    try { independent_styles.push_back(copy); }
+    catch (...) { aether_computed_style_handle_destroy(copy); throw; }
+    // This descriptor borrows an independent PUBLIC copy owned by this fixture,
+    // never frozen backing; local scalar/descriptor edits cannot alter the map.
+    return copy->style;
   }
 };
 
@@ -502,12 +508,11 @@ static void remaining_guards() {
   after.transition_duration = .1f;
   aether_transition_runtime_observe(
       inverse.transitions, inverse.node("toggler"), &before, &after, 0);
-  // This is the matching build's owned final map, not an old-DLL struct probe.
-  auto *slot = &inverse.styles->styles.at(inverse.node("toggler"));
-  aether_transform_operation *owned =
-      static_cast<aether_transform_operation *>(std::malloc(sizeof(op)));
-  *owned = op;
-  slot->transforms = {owned, 1};
+  // Publish a new immutable legacy version with the same test-only transform
+  // override; the retained layout continues to own its previous version.
+  auto map_style = before;
+  map_style.transforms = {&op, 1};
+  immutable_style_test::replace_style(inverse.styles, inverse.node("toggler"), map_style);
   inverse.layout();
   inverse.xy("fixed", 150, 150);
   aether_transition_runtime_tick(inverse.transitions, 100);

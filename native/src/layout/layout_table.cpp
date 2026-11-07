@@ -9,7 +9,7 @@ struct table_row_s {
     std::vector<aether_node_s*> cells;
 };
 
-static void collect_table_rows(aether_style_map_s* styles, aether_node_s* container,
+static void collect_table_rows(const StyleLookup* styles, aether_node_s* container,
                                std::vector<table_row_s>& rows)
 {
     for (auto* child : container->children) {
@@ -40,7 +40,7 @@ static void collect_table_rows(aether_style_map_s* styles, aether_node_s* contai
 
 static std::vector<aether_table_column_contribution_s> measure_table_columns(
     const aether_layout_engine_s* engine,
-    aether_style_map_s* styles,
+    const StyleLookup* styles,
     const std::vector<table_row_s>& rows,
     float maximum,
     aether_layout_result_s* result)
@@ -65,7 +65,7 @@ static std::vector<aether_table_column_contribution_s> measure_table_columns(
 
 float measure_intrinsic_table_width(
     const aether_layout_engine_s* engine,
-    aether_style_map_s* styles,
+    const StyleLookup* styles,
     aether_node_s* table,
     float maximum,
     aether_layout_result_s* result,
@@ -84,7 +84,7 @@ float measure_intrinsic_table_width(
 
 float layout_table_children(
     const aether_layout_engine_s* engine,
-    aether_style_map_s* styles,
+    const StyleLookup* styles,
     aether_layout_box_s* parent_box,
     aether_node_s* table,
     aether_rectf content,

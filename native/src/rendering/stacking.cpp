@@ -5,19 +5,19 @@
 namespace aether {
 namespace stacking {
 
-bool creates_stacking_context(const aether_computed_style_t& style) {
+bool creates_stacking_context(const style::StyleScalars& style, bool has_transforms, bool has_backdrop_filters) {
     const bool positioned = style.position == AETHER_POSITION_RELATIVE ||
                             style.position == AETHER_POSITION_ABSOLUTE ||
                             style.position == AETHER_POSITION_FIXED;
     if (positioned && style.z_index_kind == AETHER_Z_INDEX_INTEGER) return true;
     if (style.position == AETHER_POSITION_FIXED) return true;
     if (style.opacity < 1.0f) return true;
-    if (style.transforms.count > 0) return true;
-    if (style.backdrop_filters.count > 0) return true;
+    if (has_transforms) return true;
+    if (has_backdrop_filters) return true;
     return false;
 }
 
-paint_classification_t classify_element_paint(const aether_computed_style_t& style) {
+paint_classification_t classify_element_paint(const style::StyleScalars& style) {
     paint_classification_t result;
     if (style.position == AETHER_POSITION_STATIC) {
         result.cls = paint_class_t::in_flow;
@@ -35,6 +35,14 @@ paint_classification_t classify_element_paint(const aether_computed_style_t& sty
        position, after all in-flow content. */
     result.cls = paint_class_t::auto_;
     return result;
+}
+
+bool creates_stacking_context(const aether_computed_style_t& value) {
+    return creates_stacking_context(style::StyleScalars::copy_from(value),
+        value.transforms.count > 0, value.backdrop_filters.count > 0);
+}
+paint_classification_t classify_element_paint(const aether_computed_style_t& value) {
+    return classify_element_paint(style::StyleScalars::copy_from(value));
 }
 
 bool needs_stacking_order(const std::vector<stack_item_t>& items) {

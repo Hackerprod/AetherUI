@@ -141,3 +141,96 @@ aether_status_t computed_style_deep_copy(const aether_computed_style_t& src,
     *dst = copy;
     return AETHER_OK;
 }
+
+
+#include "frozen_style.h"
+#include <limits>
+#include <stdexcept>
+#include <new>
+namespace {
+template<class T> T* copy_frozen_array(aether::style::ReadOnlyArrayView<T> source) {
+    if (source.size() > static_cast<size_t>(INT32_MAX) || source.size() > SIZE_MAX / sizeof(T)) throw std::length_error("builder count");
+    if (source.empty()) return nullptr;
+    auto* p = static_cast<T*>(std::malloc(source.size() * sizeof(T)));
+    if (!p) throw std::bad_alloc();
+    for (size_t i=0;i<source.size();++i) p[i]=source[i];
+    return p;
+}
+aether_linear_gradient copy_frozen_gradient(aether::style::GradientReadView source) {
+    aether_linear_gradient result{};
+    result.direction_x=source.direction_x; result.direction_y=source.direction_y;
+    result.stops=copy_frozen_array(source.stops); result.stop_count=static_cast<int32_t>(source.stops.size());
+    return result;
+}
+struct builder_copy_guard {
+    aether_computed_style_t value{};
+    ~builder_copy_guard() { aether_computed_style_free(&value); }
+    void release(aether_computed_style_t* out) noexcept { *out=value; value={}; }
+};
+}
+namespace aether::style {
+aether_status_t copy_builder_backgrounds(ComputedStyleReadView source, aether_background_layer_list* out) noexcept {
+    if (!out) return AETHER_ERROR_NULL_ARG;
+    builder_copy_guard g;
+    try {
+        const auto layers=source.background_layers();
+        if (layers.size()>static_cast<size_t>(INT32_MAX) || layers.size()>SIZE_MAX/sizeof(aether_background_layer)) throw std::length_error("builder layers");
+        if (!layers.empty()) {
+            auto* p=static_cast<aether_background_layer*>(std::calloc(layers.size(),sizeof(aether_background_layer)));
+            if (!p) throw std::bad_alloc();
+            g.value.background_layers={p,static_cast<int32_t>(layers.size())};
+            for(size_t i=0;i<layers.size();++i) {
+                const auto view=layers[i].view(); auto& dst=p[i];
+                view.scalars.copy_to(dst); dst.gradient=copy_frozen_gradient(view.gradient);
+                if(view.image_source.present()) {
+                    if(view.image_source.size()==SIZE_MAX) throw std::length_error("builder string");
+                    dst.image_source=static_cast<char*>(std::malloc(view.image_source.size()+1));
+                    if(!dst.image_source) throw std::bad_alloc();
+                    for(size_t j=0;j<view.image_source.size();++j) dst.image_source[j]=view.image_source[j];
+                    dst.image_source[view.image_source.size()]='\0';
+                }
+            }
+        }
+        *out=g.value.background_layers; g.value.background_layers={}; return AETHER_OK;
+    } catch(const std::bad_alloc&) {return AETHER_ERROR_OUT_OF_MEMORY;} catch(...) {return AETHER_ERROR_INVALID_STATE;}
+}
+aether_status_t copy_builder_shadows(ReadOnlyArrayView<aether_shadow> src,aether_shadow_list* out) noexcept {
+    if(!out)return AETHER_ERROR_NULL_ARG;
+    try { auto* p=copy_frozen_array(src); *out={p,static_cast<int32_t>(src.size())}; return AETHER_OK; }
+    catch(const std::bad_alloc&){return AETHER_ERROR_OUT_OF_MEMORY;}catch(...){return AETHER_ERROR_INVALID_STATE;}
+}
+aether_status_t copy_builder_transforms(ReadOnlyArrayView<aether_transform_operation> src,aether_transform_list* out) noexcept {
+    if(!out)return AETHER_ERROR_NULL_ARG;
+    try { auto* p=copy_frozen_array(src); *out={p,static_cast<int32_t>(src.size())}; return AETHER_OK; }
+    catch(const std::bad_alloc&){return AETHER_ERROR_OUT_OF_MEMORY;}catch(...){return AETHER_ERROR_INVALID_STATE;}
+}
+}
+aether_status_t computed_style_deep_copy(aether::style::ComputedStyleReadView src,aether_computed_style_t* out) noexcept {
+    if(!out)return AETHER_ERROR_NULL_ARG;
+    builder_copy_guard g;
+    try {
+        src.scalars().copy_to(g.value);
+        auto status=aether::style::copy_builder_backgrounds(src,&g.value.background_layers);
+        if(status!=AETHER_OK)return status;
+        g.value.backdrop_filters.items=copy_frozen_array(src.backdrop_filters()); g.value.backdrop_filters.count=static_cast<int32_t>(src.backdrop_filters().size());
+        g.value.transforms.items=copy_frozen_array(src.transforms()); g.value.transforms.count=static_cast<int32_t>(src.transforms().size());
+        g.value.text_gradient=copy_frozen_gradient(src.text_gradient());
+        g.value.text_shadows.items=copy_frozen_array(src.text_shadows()); g.value.text_shadows.count=static_cast<int32_t>(src.text_shadows().size());
+        g.value.box_shadows.items=copy_frozen_array(src.box_shadows()); g.value.box_shadows.count=static_cast<int32_t>(src.box_shadows().size());
+        g.release(out); return AETHER_OK;
+    }catch(const std::bad_alloc&){return AETHER_ERROR_OUT_OF_MEMORY;}catch(...){return AETHER_ERROR_INVALID_STATE;}
+}
+aether_status_t computed_style_inherit_checked(const aether::style::ComputedStyleReadView* parent,aether_computed_style_t* out) noexcept {
+    if(!out)return AETHER_ERROR_NULL_ARG;
+    builder_copy_guard g; g.value=aether_computed_style_default();
+    if(parent) {
+        const auto& p=parent->scalars(); auto& s=g.value;
+        s.color=p.color; std::strncpy(s.font_family,p.font_family.data(),sizeof(s.font_family)-1);
+        s.font_size=p.font_size; s.font_weight=p.font_weight; s.line_height=p.line_height;
+        s.text_align=p.text_align; s.text_transform=p.text_transform; s.white_space=p.white_space;
+        s.cursor=p.cursor; s.pointer_events=p.pointer_events; s.visible=p.visible;
+        const auto status=aether::style::copy_builder_shadows(parent->text_shadows(),&s.text_shadows);
+        if(status!=AETHER_OK)return status;
+    }
+    g.release(out); return AETHER_OK;
+}

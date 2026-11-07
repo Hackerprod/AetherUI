@@ -5,6 +5,9 @@
 #include "../layout/scrollbar_geometry.h"
 #include "../layout/form_controls.h"
 #include "../css/style_map_types.h"
+#include "../css/frozen_style.h"
+#include "../css/style_c_export.h"
+#include "../layout/operation_pin.h"
 #include "../dom/dom_types.h"
 #include "../abi/aether_abi.h"
 #include "../dom/dom_types.h"
@@ -20,6 +23,14 @@
 #include <cstring>
 #include <string>
 #include <vector>
+
+using aether::style::ComputedStyleReadView;
+using aether::style::BackgroundLayerReadView;
+using aether::style::GradientReadView;
+using aether::style::ReadOnlyArrayView;
+using aether::rendering::IndexedReadRange;
+using aether::rendering::GradientKernelReadView;
+using aether::layout::BoxStylePolicy;
 
 /* ─────────────────────────── helpers ────────────────────────────── */
 
@@ -65,7 +76,7 @@ static aether_linear_gradient copy_gradient(const aether_linear_gradient& src) {
 }
 
 static bool resolve_gradient_for_paint(const aether_display_list_builder_s* builder,
-                                       const aether_linear_gradient& source,
+                                       GradientReadView source,
                                        aether_rectf gradient_rect, float font_size,
                                        aether_linear_gradient* resolved) {
     aether_linear_gradient_resolution_context_s context{};
@@ -74,7 +85,7 @@ static bool resolve_gradient_for_paint(const aether_display_list_builder_s* buil
     context.root_font_size = builder->root_font_size;
     context.viewport_width = builder->viewport.width;
     context.viewport_height = builder->viewport.height;
-    return aether_linear_gradient_resolve(source, context, resolved);
+    return aether_linear_gradient_resolve(GradientKernelReadView(source), context, resolved);
 }
 
 /* ── command emitters ─────────────────────────────────────────────── */
@@ -103,13 +114,14 @@ static void emit_fill_rounded_rect_gradient(std::vector<aether_paint_command_t>&
 }
 
 static void emit_draw_background_image(std::vector<aether_paint_command_t>& cmds, aether_rectf rect,
-                                       const aether_background_layer& layer, float opacity,
+                                       BackgroundLayerReadView layer_view, float opacity,
                                        aether_rectf source_rect = {}, aether_rectf destination_rect = {},
                                        aether_bool_t has_resolved_geometry = AETHER_FALSE) {
     aether_paint_command_t cmd{};
     paint_command_guard_s guard{cmd};
     cmd.tag = AETHER_PAINT_DRAW_BACKGROUND_IMAGE;
-    cmd.data.draw_background_image.source = checked_strdup(layer.image_source);
+    const auto& layer = layer_view.scalars;
+    cmd.data.draw_background_image.source = checked_strdup(layer_view.image_source.c_str());
     cmd.data.draw_background_image.paint_rect = rect;
     cmd.data.draw_background_image.position_x = layer.position_x;
     cmd.data.draw_background_image.position_y = layer.position_y;
@@ -128,14 +140,18 @@ static void emit_draw_background_image(std::vector<aether_paint_command_t>& cmds
 
 static void emit_apply_backdrop_filter(std::vector<aether_paint_command_t>& cmds,
                                        aether_rectf rect, aether_corner_radii radii,
-                                       const aether_backdrop_filter_list& filters) {
-    if (filters.count <= 0 || !filters.items) return;
+                                       ReadOnlyArrayView<aether_backdrop_filter> filters) {
+    if (filters.empty()) return;
     aether_paint_command_t cmd{};
     paint_command_guard_s guard{cmd};
     cmd.tag = AETHER_PAINT_APPLY_BACKDROP_FILTER;
     cmd.data.apply_backdrop_filter.rect = rect;
     cmd.data.apply_backdrop_filter.radii = radii;
-    if (aether_backdrop_filter_list_copy(&filters, &cmd.data.apply_backdrop_filter.filters) != AETHER_TRUE) throw std::bad_alloc();
+    auto& output = cmd.data.apply_backdrop_filter.filters;
+    output.items = static_cast<aether_backdrop_filter*>(std::malloc(sizeof(aether_backdrop_filter) * filters.size()));
+    if (!output.items) throw std::bad_alloc();
+    output.count = static_cast<int32_t>(filters.size());
+    for (size_t index = 0; index < filters.size(); ++index) output.items[index] = filters[index];
     cmds.push_back(cmd);
     guard.release();
 }
@@ -218,19 +234,20 @@ static void emit_draw_text_shadow(std::vector<aether_paint_command_t>& cmds,
 }
 
 static void emit_text_shadows(std::vector<aether_paint_command_t>& cmds,
-                              const aether_computed_style_t& style,
+                              ComputedStyleReadView view,
                               const char* text, aether_rectf rect,
                               int32_t text_align, bool wrap,
                               float opacity) {
-    const auto& shadows = style.text_shadows;
-    if (shadows.count <= 0 || !shadows.items) return;
+    const auto& style = view.scalars();
+    const auto shadows = view.text_shadows();
+    if (shadows.empty()) return;
 
     // Painter's order is back-to-front. The first CSS shadow is closest to
     // the glyph and therefore has to be emitted last among the shadows.
-    for (int32_t index = shadows.count - 1; index >= 0; --index) {
-        auto shadow = shadows.items[index];
+    for (size_t index = shadows.size(); index-- > 0;) {
+        auto shadow = shadows[index];
         shadow.color = apply_opacity(shadow.color, opacity);
-        emit_draw_text_shadow(cmds, text, rect, style.font_family, style.font_size,
+        emit_draw_text_shadow(cmds, text, rect, style.font_family.data(), style.font_size,
                               style.font_weight, text_align, shadow, wrap);
     }
 }
@@ -278,25 +295,18 @@ static void emit_end_paint_chunk(std::vector<aether_paint_command_t>& cmds, int6
    DisplayListBuilder — walks LayoutBox tree, emits paint commands
    ══════════════════════════════════════════════════════════════════════ */
 
-static const aether_computed_style_t* style_for_node(const aether_style_map_s* styles,
-                                                      const aether_node_s* node) {
-    if (!styles || !node) return nullptr;
-    const auto found = styles->styles.find(const_cast<aether_node_s*>(node));
-    return found == styles->styles.end() ? nullptr : &found->second;
-}
-
-static const aether_computed_style_t& style_for_box(const aether_display_list_builder_s* builder,
-                                                     const aether_layout_box_s* box) {
-    return layout_box_style(box, builder ? builder->current_style_map : nullptr);
+static ComputedStyleReadView style_for_box(const aether_display_list_builder_s* builder,
+                                          const aether_layout_box_s* box) {
+    return builder->style_pin->lookup().lookup_box(*box, BoxStylePolicy::effective_map);
 }
 
 template<class Callback>
 static auto checked_paint_callback(aether_display_list_builder_s* builder, Callback&& callback) {
-    const auto lifetime = builder->current_style_map ? builder->current_style_map->document_lifetime : nullptr;
-    const auto epoch = lifetime ? lifetime->mutation_epoch : 0;
-    const auto style_epoch = lifetime ? lifetime->style_tree_epoch : 0;
+    const aether::layout::CallbackEpochGuard selected(builder->style_pin->selected_version());
+    const aether::layout::CallbackEpochGuard base(builder->style_pin->base_version());
+    const aether::layout::CallbackEpochGuard document(builder->style_pin->document_lifetime());
     auto result = callback();
-    if (lifetime && (!lifetime->alive || lifetime->mutation_epoch != epoch || lifetime->style_tree_epoch != style_epoch))
+    if (!selected.valid() || !base.valid() || !document.valid() || !builder->style_pin->structure_valid())
         throw std::runtime_error("DOM mutated during paint callback");
     return result;
 }
@@ -338,7 +348,7 @@ static void paint_children(aether_display_list_builder_s* builder,
                            const paint_context_s& ctx,
                            std::vector<aether_paint_command_t>& cmds)
 {
-    const auto items = layout_children_paint_order(box, builder->current_style_map);
+    const auto items = layout_children_paint_order(box, builder->style_pin->lookup(), BoxStylePolicy::effective_map);
     if (items.empty()) {
         for (auto* child : box->children) {
             paint_box(builder, child, focused_element, ctx, cmds);
@@ -358,9 +368,10 @@ static void paint_box(aether_display_list_builder_s* builder,
                       const paint_context_s& parent_ctx,
                       std::vector<aether_paint_command_t>& cmds)
 {
-    const auto& style = style_for_box(builder, box);
+    const auto view = style_for_box(builder, box);
+    const auto& style = view.scalars();
     if (style.display == AETHER_DISPLAY_NONE) return;
-    const bool visible = layout_box_presentation_style(box, builder->current_style_map).visible;
+    const bool visible = builder->style_pin->lookup().presentation(*box, BoxStylePolicy::effective_map).visible;
     const bool empty_border_box = rect_is_empty(box->border_box);
     const bool has_paint_chunk = box->kind == LAYOUT_BOX_ELEMENT &&
         box->element && box->element->style_node_id > 0;
@@ -393,7 +404,7 @@ static void paint_box(aether_display_list_builder_s* builder,
     // already brackets them, so emitting another scope here would apply the
     // same transform twice.
     ctx.has_transform = box->kind == LAYOUT_BOX_ELEMENT &&
-        style.transforms.count > 0 && style.transforms.items;
+        !view.transforms().empty();
     if (box->visual_sample_valid) {
         ctx.has_transform = box->kind == LAYOUT_BOX_ELEMENT && box->visual_has_transform;
         ctx.transform_override = box->visual_transform;
@@ -407,7 +418,7 @@ static void paint_box(aether_display_list_builder_s* builder,
         ctx.has_transform = true;
     } else if (ctx.has_transform) {
         ctx.transform_override = aether_transform_matrix_resolve(
-            style.transforms, style.transform_origin, box->border_box,
+            IndexedReadRange<aether_transform_operation>(view.transforms()), style.transform_origin, box->border_box,
             style.font_size, builder->root_font_size, builder->viewport);
     }
 
@@ -416,21 +427,21 @@ static void paint_box(aether_display_list_builder_s* builder,
     // Text box → emit text command and return
     if (box->kind == LAYOUT_BOX_TEXT) {
         if (visible && !empty_border_box && !box->text.empty()) {
-            emit_text_shadows(cmds, style, box->text.c_str(), box->content_box,
+            emit_text_shadows(cmds, view, box->text.c_str(), box->content_box,
                               AETHER_TEXT_ALIGN_START, false, ctx.effective_opacity);
             if (style.has_text_gradient) {
                 aether_linear_gradient gradient{};
                 paint_gradient_guard_s gradient_guard{gradient};
-                if (resolve_gradient_for_paint(builder, style.text_gradient, box->content_box,
+                if (resolve_gradient_for_paint(builder, view.text_gradient(), box->content_box,
                                                style.font_size, &gradient)) {
                     emit_draw_text_gradient(cmds, box->text.c_str(), box->content_box,
-                                            style.font_family, style.font_size, style.font_weight,
+                                            style.font_family.data(), style.font_size, style.font_weight,
                                             AETHER_TEXT_ALIGN_START, gradient, ctx.effective_opacity);
                     /* resolved gradient owned by its scope */
                 }
             } else {
                 emit_draw_text(cmds, box->text.c_str(), box->content_box,
-                               style.font_family, style.font_size, style.font_weight,
+                               style.font_family.data(), style.font_size, style.font_weight,
                                AETHER_TEXT_ALIGN_START,
                                apply_opacity(style.color, ctx.effective_opacity), false);
             }
@@ -498,15 +509,16 @@ static void paint_box_shadows(aether_display_list_builder_s* builder,
                                aether_layout_box_s* box,
                                std::vector<aether_paint_command_t>& cmds)
 {
-    const auto& style = style_for_box(builder, box);
-    const auto& shadows = style.box_shadows;
-    if (shadows.count <= 0 || !shadows.items) return;
+    const auto view = style_for_box(builder, box);
+    const auto& style = view.scalars();
+    const auto shadows = view.box_shadows();
+    if (shadows.empty()) return;
 
     const auto radii = aether_border_radii_resolve(style.border_radii, box->border_box, style.font_size, builder->root_font_size, builder->viewport.width, builder->viewport.height);
     // CSS paints the first declared shadow closest to the element. Commands
     // are painter's order, so emit the declaration list back-to-front.
-    for (int32_t index = shadows.count - 1; index >= 0; --index) {
-        const auto& shadow = shadows.items[index];
+    for (size_t index = shadows.size(); index-- > 0;) {
+        const auto& shadow = shadows[index];
         // Inset shadow needs an interior mask and remains deliberately absent
         // from the outer-shadow paint path until that renderer exists.
         if (shadow.inset == AETHER_TRUE) continue;
@@ -517,24 +529,27 @@ static void paint_box_shadows(aether_display_list_builder_s* builder,
 /* ── paint_background_and_border ──────────────────────────────────── */
 
 static void paint_background_layers(aether_display_list_builder_s* builder,
-                                    const aether_computed_style_t& style,
+                                    ComputedStyleReadView view,
                                     const aether_rectf& paint_rect,
                                     const aether_corner_radii& radii,
                                     const paint_context_s& ctx,
                                     std::vector<aether_paint_command_t>& cmds)
 {
+    const auto& style = view.scalars();
+    const auto layers = view.background_layers();
     const auto bg = apply_opacity(style.background_color, ctx.effective_opacity);
     if (bg.a > 0) {
         emit_fill_rounded_rect(cmds, paint_rect, radii, bg);
     }
     // CSS paints the first declared background layer on top. Emit the list in reverse so the
     // flat display list preserves that order above the already-painted background color.
-    if (style.background_layers.items) {
+    if (!layers.empty()) {
         // Background layers are clipped as a group. Besides obeying border-radius, this keeps
         // repeated procedural tiles from assigning the corner radius to every individual tile.
         emit_push_clip(cmds, paint_rect, radii);
-        for (int32_t index = style.background_layers.count - 1; index >= 0; --index) {
-            const auto& layer = style.background_layers.items[index];
+        for (size_t index = layers.size(); index-- > 0;) {
+            const auto layer_view = layers[index].view();
+            const auto& layer = layer_view.scalars;
             if (layer.kind == AETHER_BACKGROUND_LAYER_LINEAR_GRADIENT) {
                 aether_background_image_geometry_context_s context{};
                 context.paint_rect = paint_rect;
@@ -555,17 +570,19 @@ static void paint_background_layers(aether_display_list_builder_s* builder,
                     for (const auto& tile : tiles) {
                         aether_linear_gradient gradient{};
                 paint_gradient_guard_s gradient_guard{gradient};
-                        if (!resolve_gradient_for_paint(builder, layer.gradient, tile.tile_rect,
+                        if (!resolve_gradient_for_paint(builder, layer_view.gradient, tile.tile_rect,
                                                         style.font_size, &gradient)) continue;
                         emit_fill_rounded_rect_gradient(cmds, tile.destination, {}, gradient,
                                                         ctx.effective_opacity, tile.tile_rect);
                         /* resolved gradient owned by its scope */
                     }
                 }
-            } else if (layer.kind == AETHER_BACKGROUND_LAYER_IMAGE_URL && layer.image_source) {
+            } else if (layer.kind == AETHER_BACKGROUND_LAYER_IMAGE_URL && layer_view.image_source.present()) {
                 aether_sizef image_size{};
-                if (builder->image_dimensions &&
-                    checked_paint_callback(builder, [&] { return builder->image_dimensions(layer.image_source, &image_size, builder->image_dimensions_data); }) == AETHER_TRUE) {
+                const auto dimensions = builder->image_dimensions;
+                void* const dimensions_data = builder->image_dimensions_data;
+                if (dimensions &&
+                    checked_paint_callback(builder, [&] { return dimensions(layer_view.image_source.c_str(), &image_size, dimensions_data); }) == AETHER_TRUE) {
                     aether_background_image_geometry_context_s context{};
                     context.paint_rect = paint_rect;
                     context.image_size = image_size;
@@ -583,7 +600,7 @@ static void paint_background_layers(aether_display_list_builder_s* builder,
                     std::vector<aether_background_image_tile_s> tiles;
                     if (aether_background_image_resolve_geometry(context, tiles)) {
                         for (const auto& tile : tiles) {
-                            emit_draw_background_image(cmds, paint_rect, layer, ctx.effective_opacity,
+                            emit_draw_background_image(cmds, paint_rect, layer_view, ctx.effective_opacity,
                                                        tile.source, tile.destination, AETHER_TRUE);
                         }
                         continue;
@@ -591,7 +608,7 @@ static void paint_background_layers(aether_display_list_builder_s* builder,
                 }
                 // Pending or failed resources retain the declarative command so the binding can
                 // request it; the renderer intentionally paints no unresolved command.
-                emit_draw_background_image(cmds, paint_rect, layer, ctx.effective_opacity);
+                emit_draw_background_image(cmds, paint_rect, layer_view, ctx.effective_opacity);
             }
         }
         emit_pop_clip(cmds);
@@ -602,22 +619,22 @@ static void paint_background_and_border(aether_display_list_builder_s* builder, 
                                          const bool suppress_background, const paint_context_s& ctx,
                                          std::vector<aether_paint_command_t>& cmds)
 {
-    const auto& style = style_for_box(builder, box);
+    const auto view = style_for_box(builder, box);
+    const auto& style = view.scalars();
     const auto radii = aether_border_radii_resolve(style.border_radii, box->border_box, style.font_size, builder->root_font_size, builder->viewport.width, builder->viewport.height);
 
     // Flat Display List v1 semantics: this snapshots exactly the commands already
     // painted before this box, never its own background, border, or descendants.
-    emit_apply_backdrop_filter(cmds, box->border_box, radii, style.backdrop_filters);
+    emit_apply_backdrop_filter(cmds, box->border_box, radii, view.backdrop_filters());
     if (!suppress_background) {
-        paint_background_layers(builder, style, box->border_box, radii, ctx, cmds);
+        paint_background_layers(builder, view, box->border_box, radii, ctx, cmds);
     }
 
     aether_paint_border(style, box->border_box, radii, box->used_border, cmds);
 }
 
-static bool has_canvas_eligible_background(const aether_computed_style_t& style) {
-    return style.background_color.a > 0.f ||
-        (style.background_layers.count > 0 && style.background_layers.items != nullptr);
+static bool has_canvas_eligible_background(ComputedStyleReadView style) {
+    return style.scalars().background_color.a > 0.f || !style.background_layers().empty();
 }
 
 static const aether_node_s* document_element_for(const aether_node_s* body) {
@@ -632,13 +649,14 @@ static void paint_canvas_background(aether_display_list_builder_s* builder,
                                     std::vector<aether_paint_command_t>& cmds) {
     const auto* body = layout->root ? layout->root->element : nullptr;
     const auto* html = document_element_for(body);
-    const auto* html_style = style_for_node(builder->current_style_map, html);
-    const auto* body_style = layout->root ? &style_for_box(builder, layout->root) : nullptr;
+    const auto html_style = builder->style_pin->lookup().lookup_node(html);
+    const auto body_style = layout->root
+        ? std::optional<ComputedStyleReadView>(style_for_box(builder, layout->root)) : std::nullopt;
 
     // CSS 2.1 §14.2: the root background paints the canvas.  When it is fully
     // transparent/no-image, body's background is propagated instead and body
     // becomes transparent for its ordinary box paint.
-    const aether_computed_style_t* source_style = nullptr;
+    std::optional<ComputedStyleReadView> source_style;
     const aether_node_s* source_node = nullptr;
     if (html_style && has_canvas_eligible_background(*html_style)) {
         source_style = html_style;
@@ -654,7 +672,7 @@ static void paint_canvas_background(aether_display_list_builder_s* builder,
     // Canvas background uses the propagated root style's own opacity; it is not
     // an element box, so transition overrides never apply here.
     paint_context_s ctx;
-    ctx.effective_opacity = source_style->opacity;
+    ctx.effective_opacity = source_style->scalars().opacity;
     paint_background_layers(builder, *source_style, canvas, square, ctx, cmds);
     builder->canvas_background_source = source_node == body ? source_node : nullptr;
 }
@@ -678,9 +696,10 @@ static void paint_control(aether_display_list_builder_s* builder,
                            std::vector<aether_paint_command_t>& cmds)
 {
     auto* element = box->element;
-    const auto& style = style_for_box(builder, box);
+    const auto view = style_for_box(builder, box);
+    const auto& style = view.scalars();
 
-    const bool contextual = builder->layout && builder->layout->style_map && builder->layout->style_map->contextual;
+    const bool contextual = builder->style_pin->base_contextual();
     const std::string displayed = contextual ? box->control_display_text : aether_opaque_control_display_text(element, style);
     // Contextual paint never consults live control values. Legacy callers keep
     // the historical live-DOM adapter until they adopt revision snapshots.
@@ -693,24 +712,28 @@ static void paint_control(aether_display_list_builder_s* builder,
         ? style.color
         : aether_color_rgba{0.42f, 0.45f, 0.5f, 1.0f};
 
-    emit_text_shadows(cmds, style, displayed.c_str(), box->content_box, style.text_align, false,
+    emit_text_shadows(cmds, view, displayed.c_str(), box->content_box, style.text_align, false,
                       ctx.effective_opacity);
     emit_draw_text(cmds, displayed.c_str(), box->content_box,
-                   style.font_family, style.font_size, style.font_weight,
+                   style.font_family.data(), style.font_size, style.font_weight,
                    style.text_align,
                    apply_opacity(color, ctx.effective_opacity), false);
 
     // Caret for focused input
     if (element == focused_element && (builder->contextual_text_measurer || builder->text_measurer)) {
-        const measure_state_s* measures = nullptr;
-        if (builder->current_style_map) {
-            const auto it = builder->current_style_map->measures.find(element);
-            if (it != builder->current_style_map->measures.end()) measures = it->second.get();
-        }
-        auto metrics = checked_paint_callback(builder, [&] { return builder->contextual_text_measurer
-            ? builder->contextual_text_measurer(displayed.c_str(), &style,
-                measure_used_line_height(measures, style), box->content_box.width, builder->contextual_text_measurer_data)
-            : builder->text_measurer(displayed.c_str(), &style, box->content_box.width, builder->text_measurer_data); });
+        const auto measures = builder->style_pin->lookup().lookup_measures(element);
+        std::unique_ptr<aether::style::CallbackStyleCopy> callback_style;
+        const auto copy_status = aether::style::CallbackStyleCopy::create(view, callback_style);
+        if (copy_status == AETHER_ERROR_OUT_OF_MEMORY) throw std::bad_alloc();
+        if (copy_status != AETHER_OK) throw std::runtime_error("Cannot copy callback style");
+        const auto contextual_measurer = builder->contextual_text_measurer;
+        const auto measurer = builder->text_measurer;
+        void* const callback_data = contextual_measurer
+            ? builder->contextual_text_measurer_data : builder->text_measurer_data;
+        auto metrics = checked_paint_callback(builder, [&] { return contextual_measurer
+            ? contextual_measurer(displayed.c_str(), callback_style->get(),
+                measure_used_line_height(measures ? &*measures : nullptr, style), box->content_box.width, callback_data)
+            : measurer(displayed.c_str(), callback_style->get(), box->content_box.width, callback_data); });
         float caret_x = std::min(box->content_box.x + box->content_box.width - 1,
                                  box->content_box.x + metrics.width + 1);
         float caret_top = box->content_box.y
@@ -764,7 +787,7 @@ AETHER_API aether_status_t aether_display_list_build(
     aether_node_t focused_element, aether_display_list_t* out_list)
 {
     return aether_display_list_build_with_styles(builder, layout,
-                                                 layout ? layout->style_map : nullptr,
+                                                 nullptr,
                                                  focused_element, out_list);
 }
 
@@ -774,17 +797,22 @@ AETHER_API aether_status_t aether_display_list_build_with_styles(
     aether_display_list_t* out_list)
 {
     if (!builder || !layout || !out_list) return AETHER_ERROR_NULL_ARG;
-    if (!layout->root || !aether_style_map_structure_valid(layout->style_map)) return AETHER_ERROR_INVALID_STATE;
-
-    if (current_styles && layout->style_map && layout->style_map->contextual &&
-        current_styles->revision != layout->style_map->revision) return AETHER_ERROR_INVALID_STATE;
+    if (builder->style_pin) return AETHER_ERROR_INVALID_STATE;
+    aether::layout::LayoutOperationPin geometry_pin(layout);
+    aether::layout::StyleOperationPin style_pin(layout->assets,
+        aether::style::pin_style_map(current_styles), current_styles != nullptr);
+    if (!layout->root || !style_pin.structure_valid() || !style_pin.accepts_override())
+        return AETHER_ERROR_INVALID_STATE;
+    const aether::layout::CallbackEpochGuard base_epoch(style_pin.base_version());
+    const aether::layout::CallbackEpochGuard selected_epoch(style_pin.selected_version());
+    const aether::layout::CallbackEpochGuard document_epoch(style_pin.document_lifetime());
     struct build_scope_s {
         aether_display_list_builder_s* builder;
-        ~build_scope_s() { builder->canvas_background_source = nullptr; builder->current_style_map = nullptr; builder->layout = nullptr; }
+        ~build_scope_s() { builder->canvas_background_source = nullptr; builder->style_pin = nullptr; builder->layout = nullptr; }
     } scope{builder};
     builder->viewport = layout->viewport;
     builder->root_font_size = layout->root_font_size;
-    builder->current_style_map = current_styles ? current_styles : layout->style_map;
+    builder->style_pin = &style_pin;
     builder->layout = layout;
 
     std::unique_ptr<aether_display_list_s> list_owner(new(std::nothrow) aether_display_list_s());
@@ -796,8 +824,10 @@ AETHER_API aether_status_t aether_display_list_build_with_styles(
     paint_canvas_background(builder, layout, list->commands);
     paint_box(builder, layout->root, focused_element, paint_context_s{}, list->commands);
     builder->canvas_background_source = nullptr;
-    builder->current_style_map = nullptr;
+    builder->style_pin = nullptr;
     builder->layout = nullptr;
+    if (!base_epoch.valid() || !selected_epoch.valid() || !document_epoch.valid() || !style_pin.structure_valid())
+        return AETHER_ERROR_INVALID_STATE;
     *out_list = list_owner.release();
     return AETHER_OK;
     } catch (const std::bad_alloc&) { return AETHER_ERROR_OUT_OF_MEMORY; }
@@ -813,24 +843,29 @@ AETHER_API aether_status_t aether_display_list_build_node_with_styles(
     aether_display_list_t* out_list)
 {
     if (!builder || !layout || !element || !out_list) return AETHER_ERROR_NULL_ARG;
-    if (!layout->root || !aether_style_map_structure_valid(layout->style_map)) return AETHER_ERROR_INVALID_STATE;
-
-    if (current_styles && layout->style_map && layout->style_map->contextual &&
-        current_styles->revision != layout->style_map->revision) return AETHER_ERROR_INVALID_STATE;
+    if (builder->style_pin) return AETHER_ERROR_INVALID_STATE;
+    aether::layout::LayoutOperationPin geometry_pin(layout);
+    aether::layout::StyleOperationPin style_pin(layout->assets,
+        aether::style::pin_style_map(current_styles), current_styles != nullptr);
+    if (!layout->root || !style_pin.structure_valid() || !style_pin.accepts_override())
+        return AETHER_ERROR_INVALID_STATE;
+    const aether::layout::CallbackEpochGuard base_epoch(style_pin.base_version());
+    const aether::layout::CallbackEpochGuard selected_epoch(style_pin.selected_version());
+    const aether::layout::CallbackEpochGuard document_epoch(style_pin.document_lifetime());
     struct build_scope_s {
         aether_display_list_builder_s* builder;
-        ~build_scope_s() { builder->canvas_background_source = nullptr; builder->current_style_map = nullptr; builder->layout = nullptr; }
+        ~build_scope_s() { builder->canvas_background_source = nullptr; builder->style_pin = nullptr; builder->layout = nullptr; }
     } scope{builder};
     builder->viewport = layout->viewport;
     builder->root_font_size = layout->root_font_size;
-    builder->current_style_map = current_styles ? current_styles : layout->style_map;
+    builder->style_pin = &style_pin;
     builder->layout = layout;
     builder->canvas_background_source = nullptr;
 
     std::unique_ptr<aether_display_list_s> list_owner(new(std::nothrow) aether_display_list_s());
     auto* list = list_owner.get();
     if (!list) {
-        builder->current_style_map = nullptr;
+        builder->style_pin = nullptr;
         builder->layout = nullptr;
         return AETHER_ERROR_OUT_OF_MEMORY;
     }
@@ -840,8 +875,10 @@ AETHER_API aether_status_t aether_display_list_build_node_with_styles(
         paint_box(builder, box, focused_element, paint_context_s{}, list->commands);
     }
 
-    builder->current_style_map = nullptr;
+    builder->style_pin = nullptr;
     builder->layout = nullptr;
+    if (!base_epoch.valid() || !selected_epoch.valid() || !document_epoch.valid() || !style_pin.structure_valid())
+        return AETHER_ERROR_INVALID_STATE;
     *out_list = list_owner.release();
     return AETHER_OK;
     } catch (const std::bad_alloc&) { return AETHER_ERROR_OUT_OF_MEMORY; }

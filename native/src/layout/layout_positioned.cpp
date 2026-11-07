@@ -40,13 +40,13 @@ struct positioned_margin_axis {
 
 void layout_positioned_children(
     const aether_layout_engine_s* engine,
-    aether_style_map_s* styles,
+    const StyleLookup* styles,
     aether_layout_box_s* parent_box,
     aether_node_s* parent,
     aether_rectf positioning_block,
     aether_layout_result_s* result, aether_node_s* only_node)
 {
-    auto flex_static_position = [&](const aether_computed_style_t& child_style,
+    auto flex_static_position = [&](const BoxStyleSnapshot& child_style,
                                     const aether_rectf& containing,
                                     const aether_rectf& child_margin_box) {
         const auto& flex = parent_box->style;
@@ -202,7 +202,7 @@ void layout_positioned_children(
 }
 
 namespace {
-void finalize_fixed_children(const aether_layout_engine_s* engine, aether_style_map_s* styles,
+void finalize_fixed_children(const aether_layout_engine_s* engine, const StyleLookup* styles,
     aether_layout_result_s* result, aether_layout_box_s* parent) {
     for (size_t index = 0; index < parent->children.size(); ++index) {
         auto* child = parent->children[index];
@@ -233,7 +233,7 @@ void finalize_fixed_children(const aether_layout_engine_s* engine, aether_style_
 }
 }
 void layout_finalize_fixed_containers(const aether_layout_engine_s* engine,
-    aether_style_map_s* styles, aether_layout_result_s* result) {
+    const StyleLookup* styles, aether_layout_result_s* result) {
     if (result->root && result->effective_context_enabled)
         finalize_fixed_children(engine, styles, result, result->root);
 }

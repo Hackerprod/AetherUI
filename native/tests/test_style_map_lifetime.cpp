@@ -12,7 +12,7 @@ static void require(bool condition, const char* message) {
     }
 }
 
-// The resolved style map must own deep copies of every stored style. A state
+// The resolved style map must own immutable storage for every stored style. A state
 // recomputation that destroys the style runtime's owned buffers (historically
 // any subtree re-resolve, reproduced here with a hover that changes the icon's
 // computed style) must not orphan the map's entry for an image background.
@@ -53,12 +53,13 @@ int main() {
     require(icon != nullptr, "icon lookup failed");
 
     auto verify_icon_background = [&](const char* phase) {
-        const auto found = map->styles.find(icon);
-        require(found != map->styles.end(), phase);
-        require(found->second.background_layers.count == 1 &&
-                    found->second.background_layers.items != nullptr &&
-                    found->second.background_layers.items[0].image_source != nullptr &&
-                    std::strcmp(found->second.background_layers.items[0].image_source, "asset://x") == 0,
+        const auto* found = map->current->backing()->find(icon);
+        require(found != nullptr, phase);
+        const auto layers = found->style()->payload_owner()->background_layers();
+        require(layers.size() == 1 &&
+                    !layers.empty() &&
+                    layers[0].view().image_source.c_str() != nullptr &&
+                    std::strcmp(layers[0].view().image_source.c_str(), "asset://x") == 0,
             phase);
     };
     verify_icon_background("map entry missing the image layer before recompute");

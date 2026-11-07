@@ -27,7 +27,7 @@ static bool is_opaque_single_line_control(aether_node_s* element) {
 static opaque_control_size_s measure_opaque_single_line_control(
     const aether_layout_engine_s* engine,
     aether_node_s* element,
-    const aether_computed_style_t& style)
+    const BoxStyleSnapshot& style)
 {
     const float min_height = std::max(style.font_size * 1.1f, layout_used_line_height(engine, element, style));
     const std::string text = aether_opaque_control_display_text(element, style);
@@ -45,7 +45,7 @@ static float resolve_length(aether_css_length l, float reference,
 
 float resolve(const aether_layout_engine_s* e,
               aether_css_length value, float reference,
-              const aether_computed_style_t& style) {
+              const BoxStyleSnapshot& style) {
     const float used = resolve_length(value, reference, style.font_size,
                           e ? e->root_font_size : 16.f,
                           e ? e->viewport_width : 0.f,
@@ -57,7 +57,7 @@ float resolve(const aether_layout_engine_s* e,
 
 aether_thicknessf resolve_padding_edges(const aether_layout_engine_s* e,
                                         aether_css_edges edges, float reference,
-                                        const aether_computed_style_t& style) {
+                                        const BoxStyleSnapshot& style) {
     for (const auto value : {edges.left, edges.top, edges.right, edges.bottom})
         (void)resolve(e, value, reference, style);
     return aether_resolve_box_edges(edges, reference, style.font_size, e ? e->root_font_size : 16.f,
@@ -66,7 +66,7 @@ aether_thicknessf resolve_padding_edges(const aether_layout_engine_s* e,
 
 aether_thicknessf resolve_margin_edges(const aether_layout_engine_s* e,
                                        aether_css_edges edges, float reference,
-                                       const aether_computed_style_t& style) {
+                                       const BoxStyleSnapshot& style) {
     for (const auto value : {edges.left, edges.top, edges.right, edges.bottom})
         (void)resolve(e, value, reference, style);
     return aether_resolve_box_edges(edges, reference, style.font_size, e ? e->root_font_size : 16.f,
@@ -74,7 +74,7 @@ aether_thicknessf resolve_margin_edges(const aether_layout_engine_s* e,
 }
 
 aether_thicknessf resolve_border_edges(const aether_layout_engine_s* e,
-                                       const aether_computed_style_t& style,
+                                       const BoxStyleSnapshot& style,
                                        float reference) {
     for (const auto value : {style.border_width.left, style.border_width.top, style.border_width.right, style.border_width.bottom})
         (void)resolve(e, value, reference, style);
@@ -82,13 +82,12 @@ aether_thicknessf resolve_border_edges(const aether_layout_engine_s* e,
                                        e ? e->viewport_width : 0.f, e ? e->viewport_height : 0.f);
 }
 
-aether_computed_style_t get_style(aether_style_map_s* styles, aether_node_s* el) {
-    if (!styles || !el) return aether_computed_style_default();
-    auto it = styles->styles.find(el);
-    return (it != styles->styles.end()) ? it->second : aether_computed_style_default();
+BoxStyleSnapshot get_style(const StyleLookup* styles, aether_node_s* el) {
+    auto owner = el ? styles->lookup_node_owner(el) : aether::style::FrozenStyleRef{};
+    return BoxStyleSnapshot(owner ? std::move(owner) : styles->default_owner());
 }
 
-bool is_out_of_flow(const aether_computed_style_t& style) {
+bool is_out_of_flow(const BoxStyleSnapshot& style) {
     return style.position == AETHER_POSITION_ABSOLUTE ||
            style.position == AETHER_POSITION_FIXED;
 }
@@ -256,7 +255,7 @@ static void apply_line_alignment(aether_layout_box_s* parent,
 static float layout_atomic_control(
     const aether_layout_engine_s* engine,
     aether_node_s* element,
-    const aether_computed_style_t& style,
+    const BoxStyleSnapshot& style,
     float content_width,
     float explicit_height, bool has_explicit_height,
     aether_thicknessf padding,
@@ -264,26 +263,26 @@ static float layout_atomic_control(
 
 static void collect_inline_element(
     const aether_layout_engine_s* engine,
-    aether_style_map_s* styles,
+    const StyleLookup* styles,
     aether_node_s* element,
-    const aether_computed_style_t& style,
+    const BoxStyleSnapshot& style,
     std::vector<inline_item_s>& output);
 
 enum class inline_node_role_e { ignored, inline_content, block_content };
 
 static inline_node_role_e append_inline_node(
     const aether_layout_engine_s* engine,
-    aether_style_map_s* styles,
+    const StyleLookup* styles,
     aether_node_s* parent,
-    const aether_computed_style_t& parent_style,
+    const BoxStyleSnapshot& parent_style,
     aether_node_s* node,
     std::vector<inline_item_s>& output);
 
 static float measure_intrinsic_flex_width(
     const aether_layout_engine_s* engine,
-    aether_style_map_s* styles,
+    const StyleLookup* styles,
     aether_node_s* element,
-    const aether_computed_style_t& style,
+    const BoxStyleSnapshot& style,
     aether_thicknessf padding, aether_thicknessf border,
     float maximum,
     aether_layout_result_s* result,
@@ -291,7 +290,7 @@ static float measure_intrinsic_flex_width(
 
 static float measure_inline_items_intrinsic_width(
     const aether_layout_engine_s* engine,
-    aether_style_map_s* styles,
+    const StyleLookup* styles,
     const std::vector<inline_item_s>& items,
     float maximum,
     aether_layout_result_s* result,
@@ -299,10 +298,10 @@ static float measure_inline_items_intrinsic_width(
 
 static float measure_inline_items_height(
     const aether_layout_engine_s* engine,
-    aether_style_map_s* styles,
+    const StyleLookup* styles,
     const std::vector<inline_item_s>& items,
     float available_width,
-    const aether_computed_style_t& parent_style,
+    const BoxStyleSnapshot& parent_style,
     aether_layout_result_s* result, aether_node_s* owner);
 
 /* ── Register ──────────────────────────────────────────────────────── */
@@ -332,15 +331,15 @@ bool length_depends_on_percentage(aether_css_length value) {
 static float resolve_semantic_height(const aether_layout_engine_s* engine,
                                      aether_css_length value,
                                      percentage_height_s height,
-                                     const aether_computed_style_t& style, aether_node_s* element = nullptr, const char* property = nullptr) {
-    const auto* measures = layout_measures(engine ? engine->measure_styles : nullptr, element);
-    const bool percentage = measure_has_percentage(measures, property ? property : "", value);
+                                     const BoxStyleSnapshot& style, aether_node_s* element = nullptr, const char* property = nullptr) {
+    const auto measures = layout_measures(engine ? engine->measure_styles : nullptr, element);
+    const bool percentage = layout_measure_has_percentage(measures, property ? property : "", value);
     if (percentage && !height) return NAN;
     return resolve(engine, value, height.value_or(0.f), style);
 }
 
 static float clamp_border_height(const aether_layout_engine_s* engine,
-                                 const aether_computed_style_t& style,
+                                 const BoxStyleSnapshot& style,
                                  float height, float reference, float decorations,
                                  bool semantic_reference, aether_node_s* element) {
     const auto constraint = [&](aether_css_length value, const char* property) {
@@ -359,7 +358,7 @@ static float clamp_border_height(const aether_layout_engine_s* engine,
 
 aether_layout_box_s* layout_element(
     const aether_layout_engine_s* engine,
-    aether_style_map_s* styles,
+    const StyleLookup* styles,
     aether_node_s* element,
     aether_rectf containing_block,
     percentage_height_s containing_height,
@@ -376,6 +375,7 @@ aether_layout_box_s* layout_element(
     box->kind = LAYOUT_BOX_ELEMENT;
     box->element = element;
     box->style = style;
+    box->presentation_owner = element ? element->anonymous_flex_owner : nullptr;
     register_box(result, box);
 
     if (style.display == AETHER_DISPLAY_NONE) {
@@ -673,7 +673,7 @@ aether_layout_box_s* layout_element(
 static float layout_atomic_control(
     const aether_layout_engine_s* engine,
     aether_node_s* element,
-    const aether_computed_style_t& style,
+    const BoxStyleSnapshot& style,
     float content_width,
     float explicit_height, bool has_explicit_height,
     aether_thicknessf padding,
@@ -699,12 +699,12 @@ static float layout_atomic_control(
 
 float layout_flow_children(
     const aether_layout_engine_s* engine,
-    aether_style_map_s* styles,
+    const StyleLookup* styles,
     aether_layout_box_s* parent_box,
     aether_node_s* parent,
     aether_rectf content,
     percentage_height_s containing_height,
-    const aether_computed_style_t& parent_style,
+    const BoxStyleSnapshot& parent_style,
     aether_layout_result_s* result)
 {
     float cursor_y = content.y;
@@ -779,12 +779,12 @@ float layout_flow_children(
 
 float layout_inline_items(
     const aether_layout_engine_s* engine,
-    aether_style_map_s* styles,
+    const StyleLookup* styles,
     aether_layout_box_s* parent_box,
     const std::vector<inline_item_s>& items,
     float start_x, float start_y, float available_width,
     float available_height, percentage_height_s containing_height,
-    const aether_computed_style_t& parent_style,
+    const BoxStyleSnapshot& parent_style,
     aether_layout_result_s* result)
 {
     float cursor_x = start_x;
@@ -875,6 +875,7 @@ float layout_inline_items(
             fragment->kind = LAYOUT_BOX_TEXT;
             fragment->element = item.element;
             fragment->style = item.style;
+            fragment->presentation_owner = item.element ? item.element->anonymous_flex_owner : nullptr;
             fragment->text = token.text;
             fragment->content_box = { cursor_x, cursor_y, metrics.width, metrics.height };
             fragment->padding_box = fragment->content_box;
@@ -900,9 +901,9 @@ float layout_inline_items(
 
 static void collect_inline_element(
     const aether_layout_engine_s* engine,
-    aether_style_map_s* styles,
+    const StyleLookup* styles,
     aether_node_s* element,
-    const aether_computed_style_t& style,
+    const BoxStyleSnapshot& style,
     std::vector<inline_item_s>& output)
 {
     for (auto* node : element->children) {
@@ -924,7 +925,7 @@ static void collect_inline_element(
 /* ── CollectTextItems ──────────────────────────────────────────────── */
 
 void collect_text_items(aether_node_s* owner,
-                        const aether_computed_style_t& style,
+                        const BoxStyleSnapshot& style,
                         const std::string& text,
                         std::vector<inline_item_s>& output)
 {
@@ -943,9 +944,9 @@ void collect_text_items(aether_node_s* owner,
 
 static inline_node_role_e append_inline_node(
     const aether_layout_engine_s* engine,
-    aether_style_map_s* styles,
+    const StyleLookup* styles,
     aether_node_s* parent,
-    const aether_computed_style_t& parent_style,
+    const BoxStyleSnapshot& parent_style,
     aether_node_s* node,
     std::vector<inline_item_s>& output)
 {
@@ -978,7 +979,7 @@ static inline_node_role_e append_inline_node(
 
 static float measure_inline_items_intrinsic_width(
     const aether_layout_engine_s* engine,
-    aether_style_map_s* styles,
+    const StyleLookup* styles,
     const std::vector<inline_item_s>& items,
     float maximum,
     aether_layout_result_s* result,
@@ -1014,9 +1015,9 @@ static float measure_inline_items_intrinsic_width(
 
 float measure_intrinsic_width(
     const aether_layout_engine_s* engine,
-    aether_style_map_s* styles,
+    const StyleLookup* styles,
     aether_node_s* element,
-    const aether_computed_style_t& style,
+    const BoxStyleSnapshot& style,
     aether_thicknessf padding, aether_thicknessf border,
     float maximum,
     aether_layout_result_s* result,
@@ -1059,9 +1060,9 @@ float measure_intrinsic_width(
 
 float measure_intrinsic_height(
     const aether_layout_engine_s* engine,
-    aether_style_map_s* styles,
+    const StyleLookup* styles,
     aether_node_s* element,
-    const aether_computed_style_t& style,
+    const BoxStyleSnapshot& style,
     aether_thicknessf padding, aether_thicknessf border,
     float available_width)
 {
@@ -1096,7 +1097,7 @@ float measure_intrinsic_height(
         const auto child_padding = resolve_padding_edges(engine, child_style.padding, content_width, child_style);
         const auto child_border = resolve_border_edges(engine, child_style, content_width);
         const auto child_margin = resolve_margin_edges(engine, child_style.margin, content_width, child_style);
-        const bool percentage_height = measure_has_percentage(layout_measures(styles, child), "height", child_style.height);
+        const bool percentage_height = layout_measure_has_percentage(layout_measures(styles, child), "height", child_style.height);
         float child_height = percentage_height ? NAN : resolve(engine, child_style.height, 0.f, child_style);
         if (std::isfinite(child_height)) {
             if (child_style.box_sizing == AETHER_BOX_SIZING_CONTENT_BOX) {
@@ -1123,10 +1124,10 @@ float measure_intrinsic_height(
 
 static float measure_inline_items_height(
     const aether_layout_engine_s* engine,
-    aether_style_map_s* styles,
+    const StyleLookup* styles,
     const std::vector<inline_item_s>& items,
     float available_width,
-    const aether_computed_style_t& parent_style,
+    const BoxStyleSnapshot& parent_style,
     aether_layout_result_s* result, aether_node_s* owner)
 {
     const float line_minimum = std::max(1.f, layout_used_line_height(engine, owner, parent_style));
@@ -1181,9 +1182,9 @@ static float measure_inline_items_height(
 
 static float measure_intrinsic_flex_width(
     const aether_layout_engine_s* engine,
-    aether_style_map_s* styles,
+    const StyleLookup* styles,
     aether_node_s* element,
-    const aether_computed_style_t& style,
+    const BoxStyleSnapshot& style,
     aether_thicknessf padding, aether_thicknessf border,
     float maximum,
     aether_layout_result_s* result,
@@ -1212,7 +1213,7 @@ static float measure_intrinsic_flex_width(
 
 float measure_child_natural_width(
     const aether_layout_engine_s* engine,
-    aether_style_map_s* styles,
+    const StyleLookup* styles,
     aether_node_s* child, float maximum,
     aether_layout_result_s* result,
     aether_intrinsic_size_mode_e mode)
@@ -1222,7 +1223,7 @@ float measure_child_natural_width(
     // A percentage width is indefinite while this intrinsic contribution is
     // calculated. CSS Sizing therefore treats it as auto at this stage.
     const bool percentage_dependent_width =
-        measure_has_percentage(layout_measures(styles, child), "width", child_style.width);
+        layout_measure_has_percentage(layout_measures(styles, child), "width", child_style.width);
     const float specified = percentage_dependent_width
         ? NAN
         : resolve(engine, child_style.width, maximum, child_style);
@@ -1267,13 +1268,17 @@ static void validate_used_geometry(const aether_layout_result_s* result) {
 }
 
 static std::unordered_set<aether_node_s*> effective_fixed_containers(
-    const aether_style_map_s* styles, const std::unordered_set<aether_node_s*>& active) {
+    const StyleLookup* styles, const std::unordered_set<aether_node_s*>& active) {
     std::unordered_set<aether_node_s*> effective;
-    if (styles) for (const auto& entry : styles->styles) {
-        auto* node = entry.first;
-        const auto& style = entry.second;
+    const auto version = styles ? styles->selected_version() : aether::style::MapVersionRef{};
+    if (version) for (const auto& entry : version->backing()->entries()) {
+        const auto& record = entry.second;
+        auto* node = record->node();
+        const auto& identity = record->node_lifetime();
+        if (identity && (identity->owner != node || !identity->alive || !identity->attached)) continue;
+        const auto style = record->style_view();
         if (node && node->type == AETHER_NODE_ELEMENT && !node->anonymous_flex_owner &&
-            (style.transforms.count > 0 || style.backdrop_filters.count > 0 || active.count(node)))
+            (!style.transforms().empty() || !style.backdrop_filters().empty() || active.count(node)))
             effective.insert(node);
     }
     return effective;
@@ -1306,7 +1311,8 @@ AETHER_API aether_status_t aether_layout_prepare_transition_context(
     if (!engine || !current_styles || !out_changed) return AETHER_ERROR_NULL_ARG;
     try {
         auto active = aether_active_transform_owners(runtime);
-        const auto effective = effective_fixed_containers(current_styles, active);
+        const StyleLookup lookup(aether::style::pin_style_map(current_styles), nullptr, {});
+        const auto effective = effective_fixed_containers(&lookup, active);
         *out_changed = !previous_layout || !previous_layout->effective_context_enabled ||
             effective != previous_layout->effective_fixed_container_nodes;
         engine->prepared_active_nodes = std::move(active);
@@ -1316,7 +1322,7 @@ AETHER_API aether_status_t aether_layout_prepare_transition_context(
 }
 
 AETHER_API aether_status_t aether_layout_layout(
-    aether_layout_engine_t engine, aether_doc_t doc, aether_style_map_t styles,
+    aether_layout_engine_t engine, aether_doc_t doc, aether_style_map_t source_styles,
     float viewport_width, float viewport_height,
     aether_scroll_offset_fn scroll_fn, void* scroll_data,
     aether_layout_result_t* out_result)
@@ -1329,8 +1335,12 @@ AETHER_API aether_status_t aether_layout_layout(
     auto active = std::move(engine->prepared_active_nodes);
     engine->prepared_active_nodes.clear();
     if (!out_result || !doc) return AETHER_ERROR_NULL_ARG;
-    if (!aether_style_map_structure_valid(styles) || !aether_style_map_inputs_current(styles)) return AETHER_ERROR_INVALID_STATE;
-    if (styles && styles->contextual && (styles->document_lifetime != doc->identity || styles->document_identity != aether_node_identity(doc))) return AETHER_ERROR_INVALID_STATE;
+    const auto version = aether::style::pin_style_map(source_styles);
+    if (!aether::style::structure_valid(version.get()) || !aether::style::inputs_current(version.get())) return AETHER_ERROR_INVALID_STATE;
+    if (version && version->contextual() && (version->document_lifetime() != doc->identity || version->document_identity() != aether_node_identity(doc))) return AETHER_ERROR_INVALID_STATE;
+    const auto document_identity = doc->identity;
+    const auto document_structure_epoch = document_identity->structure_epoch;
+    const CallbackEpochGuard operation_guard(document_identity);
     if (!std::isfinite(viewport_width) || !std::isfinite(viewport_height) || viewport_width <= 0 || viewport_height <= 0) return AETHER_ERROR_INVALID_STATE;
 
     engine->scroll_offset_fn = scroll_fn;
@@ -1341,21 +1351,35 @@ AETHER_API aether_status_t aether_layout_layout(
     auto* result = new(std::nothrow) aether_layout_result_s();
     if (!result) return AETHER_ERROR_OUT_OF_MEMORY;
     result->viewport = {viewport_width, viewport_height};
-    try { result->owned_style_map = aether_style_map_snapshot(styles); }
-    catch (const std::bad_alloc&) { delete result; return AETHER_ERROR_OUT_OF_MEMORY; }
-    result->style_map = result->owned_style_map.get();
-    styles = result->style_map;
+    result->abandoned = true;
+    struct measure_scope_s { aether_layout_engine_s* e; ~measure_scope_s() { e->measure_styles = nullptr; e->measure_document.reset(); } } measure_scope{engine};
+    try {
+    aether::style::FrozenStyleRef defaults;
+    const auto default_flat = aether_computed_style_default();
+    const auto default_status = aether::style::freeze_style(default_flat, defaults);
+    if (default_status == AETHER_ERROR_OUT_OF_MEMORY) throw std::bad_alloc();
+    if (default_status != AETHER_OK) throw std::runtime_error("Invalid default style");
+    result->build_overlay = std::make_unique<aether::layout::MutableLayoutOverlay>();
+    result->assets = std::make_shared<const aether::layout::LayoutAssets>(version, nullptr, defaults, document_identity, document_structure_epoch);
+    const StyleLookup build_lookup(version, result->build_overlay.get(), defaults);
+    const auto* styles = &build_lookup;
     engine->measure_styles = styles;
-    const auto start_mutation = styles->document_lifetime ? styles->document_lifetime->mutation_epoch : 0;
-    struct measure_scope_s { aether_layout_engine_s* e; ~measure_scope_s() { e->measure_styles = nullptr; } } measure_scope{engine};
-    if (styles && styles->contextual && !styles->measures.empty()) {
-        const auto document = styles->measures.begin()->second->document;
-        if (document && (document->viewport_width != viewport_width || document->viewport_height != viewport_height)) {
-            delete result; return AETHER_ERROR_INVALID_STATE;
+    engine->measure_document = document_identity;
+    if (version && version->contextual()) {
+        for (const auto& entry : version->backing()->entries()) {
+            if (!entry.second->measures()) continue;
+            const auto& document = entry.second->measures()->document().values();
+            if (document.viewport_width != viewport_width || document.viewport_height != viewport_height)
+                throw std::runtime_error("Layout viewport differs from style document");
+            break;
         }
     }
-    try {
-    result->effective_context_enabled = prepared || styles->contextual;
+    const auto freeze_assets = [&]() {
+        auto assets = std::make_shared<const aether::layout::LayoutAssets>(version, result->build_overlay->freeze(), defaults, document_identity, document_structure_epoch);
+        result->assets = std::move(assets);
+        result->build_overlay.reset();
+    };
+    result->effective_context_enabled = prepared || (version && version->contextual());
     if (result->effective_context_enabled) {
         try { result->effective_fixed_container_nodes = effective_fixed_containers(styles, active); }
         catch (const std::bad_alloc&) { delete result; return AETHER_ERROR_OUT_OF_MEMORY; }
@@ -1364,7 +1388,7 @@ AETHER_API aether_status_t aether_layout_layout(
     // Find root element (using C API from document_node.cpp)
     aether_node_s* root_el = aether_doc_get_body(doc);
     if (!root_el) root_el = aether_doc_get_document_element(doc);
-    if (!root_el) { *out_result = result; return AETHER_OK; } // empty doc
+    if (!root_el) { freeze_assets(); result->abandoned = false; *out_result = result; return AETHER_OK; } // empty doc
 
     auto root_style = get_style(styles, root_el);
     engine->root_font_size = get_style(styles, aether_doc_get_document_element(doc)).font_size;
@@ -1404,14 +1428,16 @@ AETHER_API aether_status_t aether_layout_layout(
                                     viewport_overflow);
     result->root = root_box;
     layout_finalize_fixed_containers(engine, styles, result);
-    if (!aether_style_map_structure_valid(styles) || (styles->document_lifetime && styles->document_lifetime->mutation_epoch != start_mutation)) {
-        result->abandoned = true; delete result; return AETHER_ERROR_INVALID_STATE;
+    if (!aether::style::structure_valid(version.get()) || !operation_guard.valid()) {
+        delete result; return AETHER_ERROR_INVALID_STATE;
     }
-    if (styles->contextual) {
+    freeze_assets();
+    if (version && version->contextual()) {
         const auto status = aether_contextual_transition_finalize_layout(result, nullptr);
-        if (status != AETHER_OK) { result->abandoned = true; delete result; return status; }
+        if (status != AETHER_OK) { delete result; return status; }
     }
     validate_used_geometry(result);
+    result->abandoned = false;
     *out_result = result;
     return AETHER_OK;
     } catch (const std::bad_alloc&) {
@@ -1450,84 +1476,65 @@ AETHER_API aether_layout_box_t aether_layout_result_find_primary_box(aether_layo
     return result->find_primary_box(element);
 }
 
-// An offset callback is external code. Keep the document token, and reject a
-// mutation immediately on return, before traversal can touch another raw node.
+// The operation owns geometry and immutable versions independently from caller handles.
 struct input_callback_context_s {
-    const aether_style_map_s* map;
+    const StyleLookup& lookup;
     aether_scroll_offset_fn callback;
     void* data;
-    std::shared_ptr<node_identity_s> document;
-    uint64_t structure_epoch, mutation_epoch, style_tree_epoch;
-
-    input_callback_context_s(const aether_layout_result_s* layout,
-        aether_scroll_offset_fn fn, void* user_data)
-        : map(layout->style_map), callback(fn), data(user_data),
-          document(map ? map->document_lifetime : nullptr),
-          structure_epoch(document ? document->structure_epoch : 0),
-          mutation_epoch(document ? document->mutation_epoch : 0),
-          style_tree_epoch(document ? document->style_tree_epoch : 0) {}
+    CallbackEpochGuard epochs;
+    CallbackEpochGuard provenance_epochs;
+    bool valid() const noexcept { return epochs.valid() && provenance_epochs.valid(); }
+    input_callback_context_s(const StyleLookup& styles, aether_scroll_offset_fn fn, void* user_data)
+        : lookup(styles), callback(fn), data(user_data), epochs(styles.document_lifetime()), provenance_epochs(styles.base_version()) {}
 };
-
+static bool input_record_alive(const aether::style::FrozenNodeRecord* record, const aether_node_s* node) {
+    if (!record || !record->node_lifetime()) return true;
+    const auto& identity = record->node_lifetime();
+    return identity->owner == node && identity->alive && identity->attached;
+}
 static aether_scroll_offset_t checked_input_offsets(aether_node_t node, void* data) {
     auto& context = *static_cast<input_callback_context_s*>(data);
-    std::shared_ptr<node_identity_s> identity;
-    if (context.map) {
-        const auto found = context.map->node_lifetimes.find(node);
-        if (found != context.map->node_lifetimes.end()) identity = found->second;
-    }
-    if (identity && (!identity->alive || !identity->attached))
-        throw std::invalid_argument("retired input node");
+    // Historical input guards use base provenance, even for an external paint override.
+    const auto& base = context.lookup.base_version();
+    const auto record = base ? base->backing()->find_owner(node) : aether::style::FrozenNodeRef{};
+    if (!input_record_alive(record.get(), node)) throw std::invalid_argument("retired input node");
     const auto offset = context.callback(node, context.data);
-    if ((context.document && (!context.document->alive ||
-            context.document->structure_epoch != context.structure_epoch ||
-            context.document->mutation_epoch != context.mutation_epoch ||
-            context.document->style_tree_epoch != context.style_tree_epoch)) ||
-        (identity && (!identity->alive || !identity->attached)))
+    if (!context.valid() || !input_record_alive(record.get(), node))
         throw std::invalid_argument("input callback changed document");
     return offset;
 }
-
-static bool live_input_owner(const aether_layout_result_s* layout, aether_node_t node) {
+static bool live_input_owner(const StyleLookup& lookup, aether_node_t node) {
     if (!node) return true;
-    const auto* map = layout->style_map;
-    if (!map || !map->contextual) return true;
-    const auto found = map->node_lifetimes.find(node);
-    return found != map->node_lifetimes.end() && found->second &&
-        found->second->owner == node && found->second->alive && found->second->attached;
+    const auto& base = lookup.base_version();
+    if (!base || !base->contextual()) return true;
+    const auto* record = base->backing()->find(node);
+    return record && record->node_lifetime() && input_record_alive(record, node);
 }
-
-AETHER_API aether_node_t aether_layout_result_hit_test(aether_layout_result_t result, float x, float y) {
+static aether_node_t hit_with_pin(aether_layout_result_t result, aether_style_map_t styles,
+    float x, float y, aether_scroll_offset_fn offsets, void* user_data) {
     if (!result) return nullptr;
-    try {
-        auto* hit = result->hit_test(x, y);
-        return aether_style_map_structure_valid(result->style_map) && live_input_owner(result, hit) ? hit : nullptr;
-    } catch (...) { return nullptr; }
+    LayoutOperationPin geometry(result);
+    StyleOperationPin pin(result->assets, aether::style::pin_style_map(styles), styles != nullptr);
+    if (!pin.structure_valid() || !pin.accepts_override()) return nullptr;
+    const auto policy = styles ? BoxStylePolicy::effective_map : BoxStylePolicy::snapshot;
+    input_callback_context_s context(pin.lookup(), offsets, user_data);
+    auto* hit = geometry.geometry()->hit_test(x, y, pin.lookup(), policy,
+        offsets ? checked_input_offsets : nullptr, offsets ? &context : user_data);
+    return pin.structure_valid() && context.valid() && live_input_owner(pin.lookup(), hit) ? hit : nullptr;
 }
-
+AETHER_API aether_node_t aether_layout_result_hit_test(aether_layout_result_t result, float x, float y) {
+    try { return hit_with_pin(result, nullptr, x, y, nullptr, nullptr); } catch (...) { return nullptr; }
+}
 AETHER_API aether_node_t aether_layout_result_hit_test_with_scroll_offsets(
     aether_layout_result_t result, float x, float y,
     aether_scroll_offset_fn offsets, void* user_data) {
-    if (!result) return nullptr;
-    try {
-        input_callback_context_s context(result, offsets, user_data);
-        auto* hit = result->hit_test(x, y, offsets ? checked_input_offsets : nullptr,
-            offsets ? &context : user_data);
-        return aether_style_map_structure_valid(result->style_map) && live_input_owner(result, hit) ? hit : nullptr;
-    } catch (...) { return nullptr; }
+    try { return hit_with_pin(result, nullptr, x, y, offsets, user_data); } catch (...) { return nullptr; }
 }
-
 AETHER_API aether_node_t aether_layout_result_hit_test_with_styles_and_scroll_offsets(
     aether_layout_result_t result, aether_style_map_t styles, float x, float y,
     aether_scroll_offset_fn offsets, void* user_data) {
-    if (!result) return nullptr;
-    try {
-        input_callback_context_s context(result, offsets, user_data);
-        auto* hit = result->hit_test(x, y, styles, offsets ? checked_input_offsets : nullptr,
-            offsets ? &context : user_data);
-        return aether_style_map_structure_valid(result->style_map) && live_input_owner(result, hit) ? hit : nullptr;
-    } catch (...) { return nullptr; }
+    try { return hit_with_pin(result, styles, x, y, offsets, user_data); } catch (...) { return nullptr; }
 }
-
 AETHER_API aether_status_t aether_layout_result_hit_test_input(
     aether_layout_result_t result, aether_style_map_t current_styles, float x, float y,
     aether_scroll_offset_fn offsets, void* user_data,
@@ -1535,13 +1542,15 @@ AETHER_API aether_status_t aether_layout_result_hit_test_input(
     if (out_part) *out_part = AETHER_INPUT_HIT_NONE;
     if (out_owner) *out_owner = nullptr;
     if (!result || !out_part || !out_owner) return AETHER_ERROR_NULL_ARG;
-    if (!aether_style_map_structure_valid(result->style_map) || !result->accepts_style_map(current_styles))
-        return AETHER_ERROR_INVALID_STATE;
+    LayoutOperationPin geometry(result);
+    StyleOperationPin pin(result->assets, aether::style::pin_style_map(current_styles), current_styles != nullptr);
+    if (!pin.structure_valid() || !pin.accepts_override()) return AETHER_ERROR_INVALID_STATE;
     try {
-        input_callback_context_s context(result, offsets, user_data);
-        const auto hit = layout_hit_test_input(result, result->root, current_styles, x, y,
+        const auto policy = current_styles ? BoxStylePolicy::effective_map : BoxStylePolicy::snapshot;
+        input_callback_context_s context(pin.lookup(), offsets, user_data);
+        const auto hit = layout_hit_test_input(geometry.geometry(), geometry.geometry()->root, pin.lookup(), policy, x, y,
             offsets ? checked_input_offsets : nullptr, offsets ? &context : user_data);
-        if (!aether_style_map_structure_valid(result->style_map) || !live_input_owner(result, hit.owner))
+        if (!pin.structure_valid() || !context.valid() || !live_input_owner(pin.lookup(), hit.owner))
             return AETHER_ERROR_INVALID_STATE;
         *out_part = hit.part;
         *out_owner = hit.owner;

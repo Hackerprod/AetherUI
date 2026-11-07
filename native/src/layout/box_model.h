@@ -1,4 +1,5 @@
 #pragma once
+#include "../css/style_read_view.h"
 
 #include "aether/aether.h"
 
@@ -16,6 +17,9 @@ aether_thicknessf aether_resolve_box_edges(aether_css_edges edges, float referen
                                            float viewport_width, float viewport_height,
                                            bool allow_negative);
 aether_thicknessf aether_resolve_border_edges(const aether_computed_style_t& style,
+                                              float reference, float root_font_size,
+                                              float viewport_width, float viewport_height);
+aether_thicknessf aether_resolve_border_edges(const aether::style::StyleScalars& style,
                                               float reference, float root_font_size,
                                               float viewport_width, float viewport_height);
 

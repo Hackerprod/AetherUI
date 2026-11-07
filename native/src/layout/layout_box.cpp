@@ -12,16 +12,7 @@ aether_layout_result_s::~aether_layout_result_s() {
     }
     delete root;
     assert(live_box_count == 0 && "all layout boxes must be owned by the final tree or released explicitly");
-    if (layout_only_style_map) {
-        for (auto* node : layout_only_style_nodes) {
-            const auto it = layout_only_style_map->styles.find(node);
-            if (it == layout_only_style_map->styles.end()) continue;
-            aether_computed_style_free(&it->second);
-            layout_only_style_map->styles.erase(it);
-        }
-    }
-    for (auto* node : layout_only_nodes) delete node;
-    aether_layout_result_destroy(retained_storage_owner);
+
 }
 
 aether_layout_box_s::~aether_layout_box_s() {
@@ -48,6 +39,7 @@ aether_layout_box_s* clone_box_tree(aether_layout_result_s* destination, const a
     if (!source) return nullptr;
     auto* box = destination->create_box();
     boxes.emplace(source, box);
+    box->presentation_owner = source->presentation_owner;
     box->kind = source->kind; box->element = source->element; box->style = source->style;
     box->text = source->text; box->is_atomic_control = source->is_atomic_control;
     box->control_display_text = source->control_display_text; box->control_shows_placeholder = source->control_shows_placeholder;
@@ -67,13 +59,12 @@ aether_layout_box_s* clone_box_tree(aether_layout_result_s* destination, const a
 }
 AETHER_API aether_status_t aether_layout_clone_snapshot(aether_layout_result_t source, aether_layout_result_t* out) {
     if (!source || !out) return AETHER_ERROR_NULL_ARG;
-    if (!aether_style_map_structure_valid(source->style_map)) return AETHER_ERROR_INVALID_STATE;
+    if ((source->assets && !source->assets->structure_valid())) return AETHER_ERROR_INVALID_STATE;
     std::unique_ptr<aether_layout_result_s> result;
     try {
         result = std::make_unique<aether_layout_result_s>();
         result->abandoned = true;
-        result->owned_style_map = aether_style_map_snapshot(source->style_map);
-        result->style_map = result->owned_style_map.get();
+        result->assets = source->assets;
         result->effective_context_enabled = source->effective_context_enabled;
         result->effective_fixed_container_nodes = source->effective_fixed_container_nodes;
         result->viewport = source->viewport; result->root_font_size = source->root_font_size;
@@ -85,15 +76,33 @@ AETHER_API aether_status_t aether_layout_clone_snapshot(aether_layout_result_t s
         for (const auto* box : source->paint_order) result->paint_order.push_back(boxes.at(box));
         result->primary_boxes.reserve(source->primary_boxes.size());
         for (const auto& entry : source->primary_boxes) result->primary_boxes.emplace(entry.first, boxes.at(entry.second));
-        // Always retain the original storage owner, never the previous frame.
-        // This preserves anonymous DOM aliases and shallow box-style buffers
-        // while bounding retention across arbitrarily many opacity ticks.
-        auto* owner = source->retained_storage_owner ? source->retained_storage_owner : source;
-        ++owner->references;
-        result->retained_storage_owner = owner;
         result->abandoned = false;
         *out = result.release();
         return AETHER_OK;
     } catch (const std::bad_alloc&) { return AETHER_ERROR_OUT_OF_MEMORY; }
     catch (...) { return AETHER_ERROR_INVALID_STATE; }
 }
+
+namespace aether::layout {
+ComputedStyleReadView StyleLookup::lookup_box(const aether_layout_box_s& box, BoxStylePolicy policy) const noexcept {
+    if (policy == BoxStylePolicy::effective_map && box.element) {
+        if (const auto found = lookup_node(box.element)) return *found;
+    }
+    return box.style.view();
+}
+Presentation StyleLookup::presentation(const aether_layout_box_s& box, BoxStylePolicy policy) const noexcept {
+    if (box.presentation_owner) {
+        if (policy == BoxStylePolicy::effective_map) {
+            if (const auto found = lookup_node(box.presentation_owner))
+                return {found->scalars().visible, found->scalars().pointer_events};
+        }
+        return {box.style.visible, box.style.pointer_events};
+    }
+    const auto style = lookup_box(box, policy);
+    return {style.scalars().visible, style.scalars().pointer_events};
+}
+LayoutOperationPin::LayoutOperationPin(aether_layout_result_s* result) noexcept : result_(result) {
+    if (result_) ++result_->references;
+}
+LayoutOperationPin::~LayoutOperationPin() { aether_layout_result_destroy(result_); }
+} // namespace aether::layout

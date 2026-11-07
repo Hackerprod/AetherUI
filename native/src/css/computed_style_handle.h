@@ -1,6 +1,7 @@
 #pragma once
 #include <aether/aether.h>
 #include <memory>
+#include "frozen_node_record.h"
 #include <cstdint>
 struct measure_state_s;
 struct style_revision_s;
@@ -10,7 +11,8 @@ struct node_identity_s;
  * legacy stack adapters may borrow it and must not be freed. Metadata is RAII. */
 struct aether_computed_style_handle_s {
     aether_computed_style_t style{};
-    std::shared_ptr<const measure_state_s> measures;
+    aether::style::FrozenMeasuresRef measures;
+    aether::style::FrozenNodeRef record;
     std::shared_ptr<const style_revision_s> revision;
     std::shared_ptr<node_identity_s> node_lifetime;
     std::shared_ptr<node_identity_s> document_lifetime;

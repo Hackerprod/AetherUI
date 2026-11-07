@@ -1,4 +1,5 @@
 #pragma once
+#include "../css/style_read_view.h"
 
 #include "../css/css_types.h"
 #include "../dom/dom_types.h"
@@ -20,6 +21,9 @@ bool aether_form_control_is_opaque_single_line(const aether_node_s* element);
 std::string aether_opaque_control_display_text(
     const aether_node_s* element,
     const aether_computed_style_t& style);
+std::string aether_opaque_control_display_text(
+    const aether_node_s* element,
+    const aether::style::StyleScalars& style);
 
 /* All form-control sizing/displacement rules live here; layout_engine only consults them. */
 float aether_control_min_content_height(float font_size, float line_height);

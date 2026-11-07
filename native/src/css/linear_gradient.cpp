@@ -198,10 +198,10 @@ bool aether_linear_gradient_try_parse(const char* source, aether_linear_gradient
     return true;
 }
 
-bool aether_linear_gradient_resolve(const aether_linear_gradient& source,
+bool aether_linear_gradient_resolve(aether::rendering::GradientKernelReadView source,
                                     const aether_linear_gradient_resolution_context_s& context,
                                     aether_linear_gradient* out_gradient) {
-    if (!out_gradient || source.stop_count <= 0 || !source.stops ||
+    if (!out_gradient || source.stops.empty() ||
         context.gradient_rect.width < 0.f || context.gradient_rect.height < 0.f) return false;
     *out_gradient = {};
 
@@ -209,7 +209,8 @@ bool aether_linear_gradient_resolve(const aether_linear_gradient& source,
                               std::abs(context.gradient_rect.height * source.direction_y);
     if (!std::isfinite(line_length) || line_length <= 0.f) return false;
 
-    std::vector<aether_gradient_stop> stops(source.stops, source.stops + source.stop_count);
+    std::vector<aether_gradient_stop> stops(source.stops.size());
+    for (size_t index = 0; index < stops.size(); ++index) stops[index] = source.stops[index];
     for (auto& stop : stops) {
         if (!stop.has_position) continue;
         const float length = aether_css_length_resolve(stop.position, line_length,
@@ -224,6 +225,18 @@ bool aether_linear_gradient_resolve(const aether_linear_gradient& source,
     auto* owned_stops = static_cast<aether_gradient_stop*>(std::malloc(bytes));
     if (!owned_stops) throw std::bad_alloc();
     std::memcpy(owned_stops, stops.data(), bytes);
-    *out_gradient = {source.direction_x, source.direction_y, owned_stops, source.stop_count};
+    *out_gradient = {source.direction_x, source.direction_y, owned_stops, static_cast<int32_t>(source.stops.size())};
     return true;
+}
+
+bool aether_linear_gradient_resolve(const aether_linear_gradient& source,
+    const aether_linear_gradient_resolution_context_s& context,
+    aether_linear_gradient* out_gradient) {
+    // Preserve the flat entry point's validation and output-write ordering.
+    if (!out_gradient || source.stop_count <= 0 || !source.stops ||
+        context.gradient_rect.width < 0.f || context.gradient_rect.height < 0.f) return false;
+    return aether_linear_gradient_resolve(aether::rendering::GradientKernelReadView(
+        source.direction_x, source.direction_y,
+        std::span<const aether_gradient_stop>(source.stops, static_cast<size_t>(source.stop_count))),
+        context, out_gradient);
 }

@@ -1,5 +1,7 @@
 #include <aether/aether_contextual_transitions.h>
 #include "../css/computed_style_handle.h"
+#include "../css/style_handle_export.h"
+#include "../layout/operation_pin.h"
 #include "../dom/node_identity.h"
 #include <array>
 #include <vector>
@@ -456,8 +458,10 @@ extern "C" {
     }
     aether_status_t aether_contextual_transition_finalize_layout(aether_layout_result_t layout,
         aether_contextual_transition_batch_t batch) {
-        if (!layout || !layout->style_map) return AETHER_ERROR_NULL_ARG;
-        if (!aether_style_map_structure_valid(layout->style_map)) return AETHER_ERROR_INVALID_STATE;
+        if (!layout) return AETHER_ERROR_NULL_ARG;
+        aether::layout::LayoutOperationPin geometry_pin(layout);
+        aether::layout::StyleOperationPin style_pin(layout->assets, {}, false);
+        if (!style_pin.structure_valid()) return AETHER_ERROR_INVALID_STATE;
         try {
             struct Sample {
                 aether_layout_box_s * box;
@@ -471,11 +475,12 @@ extern "C" {
                     samples.push_back({ box, { { 1, 0, 0, 1, 0, 0 }, 1, AETHER_FALSE, AETHER_FALSE, batch ? batch->clock : 0 } });
                     continue;
                 }
-                auto * h = aether_style_map_get(layout->style_map, box->element);
-                if (!h) {
-                    if (layout->style_map->styles.count(box->element)) return AETHER_ERROR_OUT_OF_MEMORY;
-                    continue;
-                }
+                const auto record = style_pin.lookup().lookup_record_owner(box->element);
+                if (!record) continue;
+                aether_computed_style_handle_t h = nullptr;
+                const auto export_status = aether::style::export_style_handle(
+                    *style_pin.selected_version(), record, &h);
+                if (export_status != AETHER_OK) return export_status;
                 aether_contextual_transition_sample value {};
                 auto status = aether_contextual_transition_sample_box(batch, h, box->border_box, &value);
                 aether_computed_style_handle_destroy(h);

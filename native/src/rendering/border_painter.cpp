@@ -67,7 +67,7 @@ static void emit_side(std::vector<aether_paint_command_t>& out, aether_rectf out
     out.push_back(command);
 }
 
-void aether_paint_border(const aether_computed_style_t& style, aether_rectf box, aether_corner_radii radii,
+void aether_paint_border(const aether::style::StyleScalars& style, aether_rectf box, aether_corner_radii radii,
                          const aether_thicknessf& used_border, std::vector<aether_paint_command_t>& out) {
     const float top = used_border.top, right = used_border.right;
     const float bottom = used_border.bottom, left = used_border.left;
@@ -90,11 +90,21 @@ void aether_paint_border(const aether_computed_style_t& style, aether_rectf box,
     emit_side(out, box, radii, inner, inner_radii, aether_border_side_t::left, style.border_styles.left, lc);
 }
 
-void aether_paint_border(const aether_computed_style_t& style, aether_rectf box, aether_corner_radii radii,
+void aether_paint_border(const aether::style::StyleScalars& style, aether_rectf box, aether_corner_radii radii,
                          std::vector<aether_paint_command_t>& out) {
     const float top = aether_border_style_occupies_space(style.border_styles.top) ? width(style.border_width.top, box.width, style.font_size) : 0;
     const float right = aether_border_style_occupies_space(style.border_styles.right) ? width(style.border_width.right, box.width, style.font_size) : 0;
     const float bottom = aether_border_style_occupies_space(style.border_styles.bottom) ? width(style.border_width.bottom, box.width, style.font_size) : 0;
     const float left = aether_border_style_occupies_space(style.border_styles.left) ? width(style.border_width.left, box.width, style.font_size) : 0;
     aether_paint_border(style, box, radii, aether_thicknessf{left, top, right, bottom}, out);
+}
+
+void aether_paint_border(const aether_computed_style_t& style, aether_rectf box,
+    aether_corner_radii radii, std::vector<aether_paint_command_t>& out) {
+    aether_paint_border(aether::style::StyleScalars::copy_from(style), box, radii, out);
+}
+void aether_paint_border(const aether_computed_style_t& style, aether_rectf box,
+    aether_corner_radii radii, const aether_thicknessf& used_border,
+    std::vector<aether_paint_command_t>& out) {
+    aether_paint_border(aether::style::StyleScalars::copy_from(style), box, radii, used_border, out);
 }

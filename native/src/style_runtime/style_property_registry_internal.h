@@ -2,6 +2,8 @@
 
 #include "style_string_utils_internal.h"
 #include "../css/measure_state.h"
+#include "../css/frozen_measure_read.h"
+#include "frozen_runtime_metadata.h"
 #include <aether/aether.h>
 #include <cstdint>
 #include <functional>
@@ -65,7 +67,7 @@ struct property_apply_context_s {
     aether_computed_style_t* style = nullptr;
     color_resolution_state_s* color_resolution = nullptr;
     measure_apply_state_s* measures = nullptr;
-    const color_resolution_state_s* parent_color_resolution = nullptr;
+    const aether::style::ColorMetadataReadView* parent_color_resolution = nullptr;
 };
 
 using property_apply_context_fn = std::function<void(
@@ -102,7 +104,7 @@ using property_apply_context_checked_fn = std::function<property_apply_result_s(
 enum class property_css_wide_e { none, initial, inherit, unset };
 using property_css_wide_fn = property_css_wide_e (*)(const std::string& source);
 using property_inherit_fn = void (*)(aether_computed_style_t* style,
-                                     const aether_computed_style_t& parent);
+                                     aether::style::ComputedStyleReadView parent);
 
 struct style_property_definition_s {
     int32_t id = -1;
@@ -114,7 +116,7 @@ struct style_property_definition_s {
     property_parse_failure_fn parse_failure;
     property_css_wide_fn css_wide = nullptr;
     property_inherit_fn inherit_explicit = nullptr;
-    std::function<void(property_apply_context_s&, const aether_computed_style_t&, const measure_state_s*)> inherit_context;
+    std::function<void(property_apply_context_s&, aether::style::ComputedStyleReadView, const aether::style::MeasuresReadView*)> inherit_context;
     property_apply_fn apply;
     property_apply_checked_fn apply_checked;
     property_apply_context_fn apply_with_context;

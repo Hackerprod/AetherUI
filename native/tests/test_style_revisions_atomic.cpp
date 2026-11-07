@@ -1,6 +1,7 @@
 #include <aether/aether.h>
 #include <aether/aether_contextual_style.h>
 #include "../src/css/computed_style_handle.h"
+#include "../src/css/measure_state.h"
 #include "../src/css/style_map_types.h"
 #include "../src/dom/dom_types.h"
 #include <cstdio>
@@ -9,7 +10,8 @@
 #include <cmath>
 #include <string>
 static long fail_after = -1;
-void* operator new(std::size_t n) { if (fail_after >= 0 && fail_after-- == 0) throw std::bad_alloc(); if (auto p = std::malloc(n ? n : 1)) return p; throw std::bad_alloc(); }
+static bool fault_delivered = false;
+void* operator new(std::size_t n) { if (fail_after >= 0 && fail_after-- == 0) { fault_delivered = true; throw std::bad_alloc(); } if (auto p = std::malloc(n ? n : 1)) return p; throw std::bad_alloc(); }
 void* operator new[](std::size_t n) { return ::operator new(n); }
 void operator delete(void* p) noexcept { std::free(p); }
 void operator delete[](void* p) noexcept { std::free(p); }
@@ -26,6 +28,7 @@ void operator delete(void* value, const std::nothrow_t&) noexcept { std::free(va
 void operator delete[](void* value, const std::nothrow_t&) noexcept { std::free(value); }
 
 void operator delete[](void* p, std::size_t) noexcept { std::free(p); }
+#include "fault_inject_aligned.h"
 static unsigned checks = 0;
 static void require(bool ok, const char* message) { ++checks; if (!ok) { std::fprintf(stderr,"FAIL %s\n",message); std::exit(1); } }
 static bool near(float a,float b) { return std::fabs(a-b)<.001f; }
@@ -64,7 +67,7 @@ static void revisions_and_stale() {
     auto g1=f.resolve(); auto metadata=lookup(g1,f.node);
     require(aether_style_revision_generation(g1)>aether_style_revision_generation(g0),"generation advanced");
     require(near(old->style.width.value,16)&&near(metadata->style.width.value,16),"equal numeric intermediate");
-    require(metadata->measures->dependencies&MEASURE_ROOT_FONT,"metadata-only dependency published");
+    require(metadata->measures->scalars().dependencies&MEASURE_ROOT_FONT,"metadata-only dependency published");
     require(!oldtoken->attached&&oldtoken->alive,"retired pseudo storage retained");
     require(oldpseudo->children.front()->text=="old","retired pseudo content safe");
     require(aether_element_set_attribute(aether_doc_get_document_element(f.doc),"style","font-size:20px")==AETHER_OK,"root change");
@@ -87,15 +90,16 @@ static void fault_prepare() {
     int failed=0;bool completed=false;
     for(long allocation=0;allocation<20000;++allocation) {
         aether_style_transaction_t tx=reinterpret_cast<aether_style_transaction_t>(1);
-        fail_after=allocation;
+        fail_after=allocation;fault_delivered=false;
         const auto status=aether_style_runtime_prepare_revision(f.runtime,f.doc,&env,&tx);
         fail_after=-1;
         if(status==AETHER_OK) {
+            require(!fault_delivered,"first successful prepare did not swallow injected failure");
             aether_style_revision_t g1{};require(aether_style_runtime_commit_revision(f.runtime,tx,&g1)==AETHER_OK,"retry commit");
             auto newstyle=lookup(g1,f.node);require(near(newstyle->style.width.value,60),"retry requested context");
             aether_computed_style_handle_destroy(newstyle);aether_style_revision_destroy(g1);aether_style_transaction_destroy(tx);completed=true;break;
         }
-        ++failed;require(tx==nullptr,"failed prepare clears out handle");
+        ++failed;require(fault_delivered&&status==AETHER_ERROR_OUT_OF_MEMORY,"prepare reports injected OOM");require(tx==nullptr,"failed prepare clears out handle");
         require(f.node->children.front()==pseudo&&pseudo->identity->attached,"failed prepare preserves pseudo links");
         aether_style_revision_t retained{};require(aether_style_runtime_retain_revision(f.runtime,&retained)==AETHER_OK,"retain after fault");
         require(aether_style_revision_generation(retained)==baseline,"failed prepare preserves revision");
@@ -109,10 +113,10 @@ static void fault_map() {
     aether_element_set_attribute(f.node,"style","width:72px");auto g1=f.resolve();
     aether_node_t nodes[]={aether_doc_get_document_element(f.doc),f.node};bool completed=false;unsigned failed=0;
     for(long allocation=0;allocation<2000;++allocation) {
-        fail_after=allocation;auto status=aether_style_runtime_update_resolved_style_map(f.runtime,map,nodes,2);fail_after=-1;
+        fail_after=allocation;fault_delivered=false;auto status=aether_style_runtime_update_resolved_style_map(f.runtime,map,nodes,2);fail_after=-1;
         auto h=aether_style_map_get(map,f.node);require(h!=nullptr,"map readable");
-        if(status==AETHER_OK){require(near(h->style.width.value,72),"whole map update");completed=true;aether_computed_style_handle_destroy(h);break;}
-        ++failed;require(near(h->style.width.value,16),"failed map update whole backing unchanged");aether_computed_style_handle_destroy(h);
+        if(status==AETHER_OK){require(!fault_delivered,"first successful map update did not swallow injected failure");require(near(h->style.width.value,72),"whole map update");completed=true;aether_computed_style_handle_destroy(h);break;}
+        ++failed;require(fault_delivered&&status==AETHER_ERROR_OUT_OF_MEMORY,"map update reports injected OOM");require(near(h->style.width.value,16),"failed map update whole backing unchanged");aether_computed_style_handle_destroy(h);
     }require(completed&&failed>5,"map fault coverage");aether_style_map_destroy(map);aether_style_revision_destroy(g0);aether_style_revision_destroy(g1);
 }
 struct Reentrant { Fixture* fixture; bool enabled=false,called=false; aether_style_revision_t inner{}; };
@@ -155,4 +159,6 @@ static void legacy_scope_is_not_contextual() {
     aether_computed_style_handle_destroy(current);aether_computed_style_handle_destroy(isolated);aether_computed_style_handle_destroy(old);
     aether_style_map_destroy(legacy);aether_style_revision_destroy(original);aether_style_revision_destroy(restored);
 }
-int main(){legacy_scope_is_not_contextual();revisions_and_stale();fault_prepare();fault_map();reentrant_diagnostics();std::printf("style revision atomic: %u checks passed\n",checks);}
+int main(){legacy_scope_is_not_contextual();revisions_and_stale();fault_prepare();fault_map();reentrant_diagnostics();
+    require(aligned_test_calls>0&&aligned_test_failures>0,"prepare sweep reaches and fails aligned PMR family");
+    std::printf("style revision atomic: %u checks passed, %zu aligned failures\n",checks,aligned_test_failures);}

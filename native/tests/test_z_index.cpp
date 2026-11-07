@@ -1,5 +1,6 @@
 #include <aether/aether.h>
 #include "stacking.h"
+#include "immutable_style_test_support.h"
 
 #include <cstdio>
 #include <cstdlib>
@@ -347,10 +348,9 @@ static void run() {
         f.resolve(f.node("a"));
         require(f.hit(2) == f.node(initially_high ? "b" : "a"), "current value differs before missing-entry fallback");
         // A current map lacking an entry falls back to the captured box style.
-        auto entry = f.styles->styles.find(f.node("a"));
-        require(entry != f.styles->styles.end(), "entry exists before missing-entry probe");
-        aether_computed_style_free(&entry->second);
-        f.styles->styles.erase(entry);
+        require(f.styles->current->backing()->find(f.node("a")) != nullptr,
+            "entry exists before missing-entry probe");
+        immutable_style_test::erase(f.styles, f.node("a"));
         require(f.hit(2) == f.node(initially_high ? "a" : "b"), "missing current entry uses layout snapshot");
     }
     {
@@ -371,7 +371,9 @@ static void run() {
             if (box->element && box->element->anonymous_flex_owner) anonymous = box;
         }
         require(anonymous != nullptr, "fixture contains real anonymous flex box");
-        const auto& classification = aether::stacking::classify_element_paint(layout_box_style(anonymous, f.styles));
+        const aether::layout::StyleLookup current(f.layout->assets, f.styles->current, true);
+        const auto& classification = aether::stacking::classify_element_paint(
+            layout_box_style(anonymous, current, aether::layout::BoxStylePolicy::effective_map).scalars());
         require(!classification.has_explicit_z_index, "anonymous does not borrow owner's z-index");
         for (int api = 0; api < 3; ++api) require(f.hit(api, 0.5f, 0.5f) == f.node("parent"), "anonymous text hits DOM owner above negative sibling");
     }
@@ -387,14 +389,20 @@ static void run() {
         const auto a_kind = a->kind;
         a->kind = LAYOUT_BOX_TEXT; b->is_atomic_control = true;
         for (auto* box : {a,b,c}) {
-            auto& style = f.styles->styles.at(box->element);
-            style.z_index_kind = AETHER_Z_INDEX_INTEGER; style.z_index = 99;
+            immutable_style_test::edit_scalars(f.styles, box->element, [](auto& style) {
+                style.z_index_kind = AETHER_Z_INDEX_INTEGER; style.z_index = 99;
+            });
         }
-        f.styles->styles.at(c->element).position = AETHER_POSITION_STATIC;
-        require(layout_children_paint_order(parent, f.styles).empty(), "text/atomic explicit z and static integer do not activate ordering");
-        auto& c_style = f.styles->styles.at(c->element);
-        c_style.position = AETHER_POSITION_ABSOLUTE; c_style.z_index = -1;
-        const auto ordered = layout_children_paint_order(parent, f.styles);
+        immutable_style_test::edit_scalars(f.styles, c->element, [](auto& style) {
+            style.position = AETHER_POSITION_STATIC;
+        });
+        const aether::layout::StyleLookup before_order(f.layout->assets, f.styles->current, true);
+        require(layout_children_paint_order(parent, before_order, aether::layout::BoxStylePolicy::effective_map).empty(), "text/atomic explicit z and static integer do not activate ordering");
+        immutable_style_test::edit_scalars(f.styles, c->element, [](auto& style) {
+            style.position = AETHER_POSITION_ABSOLUTE; style.z_index = -1;
+        });
+        const aether::layout::StyleLookup after_order(f.layout->assets, f.styles->current, true);
+        const auto ordered = layout_children_paint_order(parent, after_order, aether::layout::BoxStylePolicy::effective_map);
         require(ordered.size() == 3 && ordered[0].dom_index == 2 && ordered[1].dom_index == 0 && ordered[2].dom_index == 1,
             "classified gate orders negative before text and atomic in-flow");
         for (size_t i : {size_t(1),size_t(2)}) require(ordered[i].is_inline_content && ordered[i].cls == aether::stacking::paint_class_t::in_flow && !ordered[i].has_explicit_z_index,

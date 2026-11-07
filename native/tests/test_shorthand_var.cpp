@@ -51,15 +51,15 @@ int main() {
     aether_style_map_t map = nullptr;
     require(aether_style_runtime_create_resolved_style_map(runtime, document, &map) == AETHER_OK,
             "resolved style map failed");
-    const auto found = map->styles.find(body);
-    require(found != map->styles.end(), "body has no resolved style");
-    const auto& style = found->second;
+    const auto* found = map->current->backing()->find(body);
+    require(found != nullptr, "body has no resolved style");
+    const auto layers = found->style()->payload_owner()->background_layers();
 
-    require(style.background_layers.count == 1, "background: var(--bg) must produce one background layer");
-    require(style.background_layers.items != nullptr, "background layer list must be non-null");
-    require(style.background_layers.items[0].kind == AETHER_BACKGROUND_LAYER_LINEAR_GRADIENT,
+    require(layers.size() == 1, "background: var(--bg) must produce one background layer");
+    require(!layers.empty(), "background layer list must be non-empty");
+    require(layers[0].view().scalars.kind == AETHER_BACKGROUND_LAYER_LINEAR_GRADIENT,
             "resolved layer must be a linear gradient");
-    require(style.background_layers.items[0].gradient.stop_count == 2,
+    require(layers[0].view().gradient.stops.size() == 2,
             "gradient must keep the author's two stops");
 
     aether_style_map_destroy(map);

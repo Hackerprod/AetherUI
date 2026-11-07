@@ -4,6 +4,8 @@
 #include "../layout/layout_types.h"
 #include <vector>
 
+namespace aether::layout { class StyleOperationPin; }
+
 /* One per-element paint context flowing through the builder. The struct is the
    single source of truth for "what opacity does this box paint at", including
    live transition overrides and the accumulated ancestor opacity. */
@@ -24,7 +26,7 @@ struct aether_display_list_builder_s {
     void*                   image_dimensions_data = nullptr;
     aether_sizef            viewport{};
     float                   root_font_size = 16.f;
-    const aether_style_map_s* current_style_map = nullptr;
+    const aether::layout::StyleOperationPin* style_pin = nullptr;
     // When body supplies the CSS canvas background, its ordinary box must not
     // paint that same background a second time.
     const aether_node_s*    canvas_background_source = nullptr;

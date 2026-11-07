@@ -28,6 +28,7 @@ add_library(aether_core SHARED
     src/css/frozen_node_record.cpp
     src/css/immutable_style_backing.cpp
     src/css/style_map_version.cpp
+    src/css/style_revision.cpp
     src/css/frozen_measure_read.cpp
     src/css/border_radii.cpp
     src/css/background_layers.cpp
@@ -451,6 +452,25 @@ if(AETHERUI_BUILD_TESTS)
         target_link_options(aether_frozen_backing_oom_test PRIVATE "-Wl,--wrap=malloc" "-Wl,--wrap=free")
         add_test(NAME aether.frozen-backing-oom COMMAND aether_frozen_backing_oom_test)
 
+        add_executable(aether_immutable_style_revision_test tests/test_immutable_style_revision.cpp
+            src/css/style_revision.cpp src/css/style_map_version.cpp
+            src/css/immutable_style_backing.cpp src/css/frozen_node_record.cpp
+            src/css/frozen_c_string.cpp src/style_runtime/frozen_runtime_metadata.cpp)
+        target_include_directories(aether_immutable_style_revision_test PRIVATE include src)
+        target_link_options(aether_immutable_style_revision_test PRIVATE "-Wl,--wrap=malloc" "-Wl,--wrap=free")
+        add_test(NAME aether.immutable-style-revision COMMAND aether_immutable_style_revision_test)
+
+        add_executable(aether_immutable_style_handle_test tests/test_immutable_style_handle.cpp
+            src/abi/aether_abi.cpp src/css/style_resolver.cpp src/css/style_map_version.cpp
+            src/css/style_revision.cpp src/css/immutable_style_backing.cpp src/css/frozen_node_record.cpp
+            src/css/frozen_c_string.cpp src/css/frozen_style.cpp src/css/style_freeze.cpp
+            src/css/style_c_export.cpp src/css/computed_style.cpp src/css/css_length.cpp
+            src/css/background_layers.cpp src/css/linear_gradient.cpp src/css/backdrop_filters.cpp)
+        target_include_directories(aether_immutable_style_handle_test PRIVATE include src)
+        target_compile_options(aether_immutable_style_handle_test PRIVATE -ffunction-sections -fdata-sections -ffp-contract=off)
+        target_link_options(aether_immutable_style_handle_test PRIVATE "-Wl,--gc-sections" "-Wl,--wrap=malloc" "-Wl,--wrap=free")
+        add_test(NAME aether.immutable-style-handle COMMAND aether_immutable_style_handle_test)
+
         add_executable(aether_frozen_runtime_metadata_test tests/test_frozen_runtime_metadata.cpp
             src/style_runtime/frozen_runtime_metadata.cpp src/css/frozen_measure_read.cpp
             src/css/frozen_c_string.cpp src/css/style_freeze.cpp src/css/css_length.cpp)
@@ -470,7 +490,9 @@ if(AETHERUI_BUILD_TESTS)
     target_link_libraries(aether_background_value_consistency_test PRIVATE AetherUI::Core)
     add_test(NAME aether.background-value-consistency COMMAND aether_background_value_consistency_test)
 
-    add_executable(aether_z_index_test tests/test_z_index.cpp src/rendering/stacking.cpp)
+    add_executable(aether_z_index_test tests/test_z_index.cpp src/rendering/stacking.cpp src/layout/layout_box.cpp
+        src/css/style_freeze.cpp src/css/frozen_c_string.cpp src/css/frozen_node_record.cpp
+        src/css/immutable_style_backing.cpp src/css/style_map_version.cpp)
     target_include_directories(aether_z_index_test PRIVATE src/rendering)
     target_link_libraries(aether_z_index_test PRIVATE AetherUI::Core)
     add_test(NAME aether.z-index COMMAND aether_z_index_test)
@@ -878,7 +900,8 @@ if(AETHERUI_BUILD_TESTS)
     target_link_libraries(aether_render_plan_test PRIVATE AetherUI::Core)
     add_test(NAME aether.render-plan COMMAND aether_render_plan_test)
 
-    add_executable(aether_layout_ownership_test tests/test_layout_ownership.cpp src/layout/layout_box.cpp src/css/computed_style.cpp)
+    add_executable(aether_layout_ownership_test tests/test_layout_ownership.cpp src/layout/layout_box.cpp src/css/computed_style.cpp
+        src/css/frozen_style.cpp src/css/frozen_c_string.cpp src/css/style_map_version.cpp)
     target_include_directories(aether_layout_ownership_test PRIVATE src/layout include)
     target_link_libraries(aether_layout_ownership_test PRIVATE AetherUI::Core)
     add_test(NAME aether.layout-ownership COMMAND aether_layout_ownership_test)
@@ -946,7 +969,9 @@ if(AETHERUI_BUILD_TESTS)
     target_link_libraries(aether_relative_percentages_test PRIVATE AetherUI::Core)
     add_test(NAME aether.relative-percentages COMMAND aether_relative_percentages_test)
 
-    add_executable(aether_fixed_viewport_test tests/test_fixed_viewport.cpp)
+    add_executable(aether_fixed_viewport_test tests/test_fixed_viewport.cpp
+        src/css/style_freeze.cpp src/css/frozen_c_string.cpp src/css/frozen_node_record.cpp
+        src/css/immutable_style_backing.cpp src/css/style_map_version.cpp)
     target_include_directories(aether_fixed_viewport_test PRIVATE src)
     target_link_libraries(aether_fixed_viewport_test PRIVATE AetherUI::Core)
     add_test(NAME aether.fixed-viewport COMMAND aether_fixed_viewport_test)
@@ -1107,7 +1132,9 @@ if(AETHERUI_BUILD_TESTS)
     target_include_directories(aether_contextual_paint_geometry_test PRIVATE src)
     target_link_libraries(aether_contextual_paint_geometry_test PRIVATE AetherUI::Core)
     add_test(NAME aether.contextual-paint-geometry COMMAND aether_contextual_paint_geometry_test)
-    add_executable(aether_contextual_transitions_test tests/test_contextual_transitions.cpp src/layout/layout_scroll.cpp src/rendering/transform_matrix.cpp)
+    add_executable(aether_contextual_transitions_test tests/test_contextual_transitions.cpp src/layout/layout_scroll.cpp src/rendering/transform_matrix.cpp
+        src/layout/layout_box.cpp src/css/style_resolver.cpp src/css/style_map_version.cpp
+        src/css/computed_style.cpp src/css/style_c_export.cpp src/css/frozen_style.cpp src/css/frozen_c_string.cpp)
     target_include_directories(aether_contextual_transitions_test PRIVATE src)
     target_link_libraries(aether_contextual_transitions_test PRIVATE AetherUI::Core)
     add_test(NAME aether.contextual-transitions COMMAND aether_contextual_transitions_test)
@@ -1128,4 +1155,51 @@ if(AETHERUI_BUILD_TESTS AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
     target_compile_options(aether_contextual_geometry_malloc_test PRIVATE -ffp-contract=off)
     target_link_options(aether_contextual_geometry_malloc_test PRIVATE -Wl,--wrap=malloc)
     add_test(NAME aether.contextual-geometry-malloc COMMAND aether_contextual_geometry_malloc_test)
+endif()
+
+if(AETHERUI_BUILD_TESTS)
+    # These white-box dispatcher tests compile their real registry locally.
+    # Its immutable parent readers stay private rather than expanding the ABI.
+    foreach(reader_test aether_gradient_boundary_dispatch_test aether_transform_origin_dispatch_test
+            aether_transform_dispatch_test aether_measure_property_scratch_test)
+        target_sources(${reader_test} PRIVATE src/css/computed_style.cpp src/css/frozen_style.cpp src/css/frozen_c_string.cpp
+            src/css/frozen_measure_read.cpp src/css/style_freeze.cpp
+            src/style_runtime/frozen_runtime_metadata.cpp)
+    endforeach()
+    foreach(string_reader_test aether_shorthand_var_test aether_style_map_lifetime_test aether_measure_computed_test)
+        target_sources(${string_reader_test} PRIVATE src/css/frozen_c_string.cpp)
+    endforeach()
+    add_executable(aether_frozen_paint_kernel_readers_test tests/test_frozen_paint_kernel_readers.cpp
+        src/rendering/transform_matrix.cpp src/rendering/stacking.cpp src/rendering/border_painter.cpp
+        src/css/linear_gradient.cpp src/css/border_radii.cpp src/style_runtime/css_variable_tokens.cpp)
+    target_include_directories(aether_frozen_paint_kernel_readers_test PRIVATE include src)
+    target_link_libraries(aether_frozen_paint_kernel_readers_test PRIVATE AetherUI::Core)
+    add_test(NAME aether.frozen-paint-kernel-readers COMMAND aether_frozen_paint_kernel_readers_test)
+    add_executable(aether_frozen_paint_callback_pins_test tests/test_frozen_paint_callback_pins.cpp)
+    target_link_libraries(aether_frozen_paint_callback_pins_test PRIVATE AetherUI::Core)
+    add_test(NAME aether.frozen-paint-callback-pins COMMAND aether_frozen_paint_callback_pins_test)
+    get_target_property(immutable_layout_core_sources aether_core SOURCES)
+    add_executable(aether_layout_immutable_consumers_test tests/test_layout_immutable_consumers.cpp
+        ${immutable_layout_core_sources})
+    target_include_directories(aether_layout_immutable_consumers_test PRIVATE include src)
+    target_compile_definitions(aether_layout_immutable_consumers_test PRIVATE AETHER_EXPORTS)
+    if(NOT MSVC)
+        target_compile_options(aether_layout_immutable_consumers_test PRIVATE -ffp-contract=off)
+    endif()
+    add_test(NAME aether.layout-immutable-consumers COMMAND aether_layout_immutable_consumers_test)
+
+    # Standalone resolver tests also compile both authentic scope readers.
+    # Satisfy their private implementation dependencies without exporting them.
+    get_property(reader_targets DIRECTORY PROPERTY BUILDSYSTEM_TARGETS)
+    foreach(reader_target IN LISTS reader_targets)
+        get_target_property(reader_sources ${reader_target} SOURCES)
+        if("src/style_runtime/variable_resolver.cpp" IN_LIST reader_sources OR
+           "src/style_runtime/custom_property_scope.cpp" IN_LIST reader_sources)
+            foreach(reader_source src/style_runtime/frozen_runtime_metadata.cpp src/css/frozen_c_string.cpp)
+                if(NOT reader_source IN_LIST reader_sources)
+                    target_sources(${reader_target} PRIVATE ${reader_source})
+                endif()
+            endforeach()
+        endif()
+    endforeach()
 endif()

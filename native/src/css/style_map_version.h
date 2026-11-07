@@ -3,7 +3,7 @@
 struct style_revision_s;
 namespace aether::style {
 enum class MapMode { legacy_partial, legacy_complete, contextual };
-// Revision coherence is a producer precondition until the opaque revision is migrated.
+// Complete versions validate exact backing/provenance against the final revision owner.
 // Tokens must be authentic DOM controls. A dead token cannot dereference its owner.
 // Partial legacy may retain heterogeneous records and previous document epochs.
 struct MapVersionInput {
@@ -46,5 +46,8 @@ public:
 };
 bool structure_valid(const MapVersion*) noexcept;
 bool inputs_current(const MapVersion*) noexcept;
+// This low-level helper treats null as ABSENT, not an explicitly empty wrapper.
+// Callers must preserve override_supplied and reject empty explicit overrides
+// when the base is contextual.
 bool accepts_override(const MapVersion* base, const MapVersion* override_version) noexcept;
 }

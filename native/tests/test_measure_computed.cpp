@@ -2,6 +2,7 @@
 #include <aether/aether_contextual_style.h>
 #include "../src/css/computed_style_handle.h"
 #include "../src/css/measure_state.h"
+#include "frozen_measure_test_support.h"
 #include <cstdio>
 #include <cstdlib>
 #include <map>
@@ -49,12 +50,12 @@ int main() {
         Fixture f("html{font-size:32px}body{font-size:20px}#p{font-size:40px}#c{gap:1em 2em;font-size:2em;width:1rem;height:2vw}");
         auto h=f.at("c"); require(near(h->style.font_size,80),"font em parent");
         require(near(h->style.width.value,32),"rem html not body"); require(near(h->style.height.value,16),"viewport");
-        require(h->measures && near(h->measures->row_gap.value,80) && near(h->measures->column_gap.value,160),"two gap axes own font");
+        require(h->measures && near(h->measures->scalars().row_gap.value,80) && near(h->measures->scalars().column_gap.value,160),"two gap axes own font");
     }
     for (const auto* line : {"2", "calc(2)", "2em", "200%"}) {
         Fixture f((std::string("#p{font-size:20px;width:2em;line-height:")+line+"}#c{font-size:10px;width:inherit}").c_str());
         auto h=f.at("c"); require(near(h->style.width.value,40),"inherit computed length");
-        require(near(measure_used_line_height(h->measures.get(),h->style),(std::string(line)=="2" || std::string(line)=="calc(2)")?20:40),"typed inherited line height");
+        require(near(frozen_measure_test::used_line_height(h),(std::string(line)=="2" || std::string(line)=="calc(2)")?20:40),"typed inherited line height");
     }
     {
         Fixture f("#p{width:50%;font-size:40px}#c{width:inherit;font-size:50%}");
@@ -83,7 +84,7 @@ int main() {
     for (const char* expression : {"0%", "calc(0% + 30px)", "calc(50% - 50% + 30px)"}) {
         Fixture f((std::string("#p{height:") + expression + "}#c{height:inherit}").c_str());
         auto h = f.at("c");
-        const bool percent = measure_has_percentage(h->measures.get(), "height", h->style.height);
+        const bool percent = frozen_measure_test::has_percentage(h->measures.get(), "height", h->style.height);
         require(percent, "zero percentage category inherited");
         require(measure_resolve_used_length(h->style.height, 0, false, percent).kind == measure_used_kind_e::deferred_percentage, "zero percentage indefinite deferred");
         require(measure_resolve_used_length(h->style.height, 0, true, percent).kind == measure_used_kind_e::resolved, "defined zero is definite");
@@ -93,12 +94,12 @@ int main() {
         require(aether_element_set_attribute(aether_doc_get_element_by_id(f.doc,"c"),"style","width:1rem")==AETHER_OK,"metadata edit");
         f.resolve();
         auto retained=f.contextual("c");
-        require((retained->measures->property_dependencies.at("width") & MEASURE_ROOT_FONT) != 0,"metadata-only dependency published");
+        require((retained->measures->dependency("width") & MEASURE_ROOT_FONT) != 0,"metadata-only dependency published");
         require(near(retained->style.width.value,16),"metadata-only same value");
         require(aether_element_set_attribute(aether_doc_get_document_element(f.doc),"style","font-size:20px")==AETHER_OK,"root edit");
         f.resolve(); auto current=f.contextual("c");
         require(near(current->style.width.value,20),"metadata root invalidates");
-        require(near(retained->style.width.value,16) && near(retained->measures->document->root_font_size,16),"old context remains immutable");
+        require(near(retained->style.width.value,16) && near(retained->measures->document().values().root_font_size,16),"old context remains immutable");
         aether_computed_style_handle_destroy(current); aether_computed_style_handle_destroy(retained);
     }
     {
@@ -113,7 +114,7 @@ int main() {
         aether_style_transaction_destroy(transaction); aether_style_revision_destroy(revision);
         auto after=f.contextual("c");
         require(near(after->style.width.value,100)&&near(after->style.height.value,0),"resize1000 rootfont0");
-        require(near(first->style.width.value,80)&&near(first->measures->document->viewport_width,800),"resize retains old context");
+        require(near(first->style.width.value,80)&&near(first->measures->document().values().viewport_width,800),"resize retains old context");
         require(aether_element_set_attribute(aether_doc_get_document_element(f.doc),"style","font-size:100px")==AETHER_OK,"root font100");
         f.resolve(); auto large=f.contextual("c");
         require(near(large->style.padding.left.value,7)&&near(large->style.height.value,100),"MQ threshold unaffected by root CSS");
@@ -144,7 +145,7 @@ int main() {
     {
         Fixture f("#p{background-position:30px 31px;background-size:40px 41px}#c{background-position:inherit;background-size:inherit}");
         auto empty=f.contextual("c"); require(empty->style.background_layers.count==0,"longhands do not create painted images");
-        require(near(empty->measures->background_positions[0].x.value,30),"position retained with no painted layer");
+        require(near(empty->measures->background_positions()[0].x.value,30),"position retained with no painted layer");
         require(aether_element_set_attribute(aether_doc_get_element_by_id(f.doc,"c"),"style","background-image:url(later)")==AETHER_OK,"add later image");
         f.resolve(); auto current=f.contextual("c");
         require(current->style.background_layers.count==1&&near(current->style.background_layers.items[0].position_x.value,30)&&near(current->style.background_layers.items[0].size_x.value,40),"inherited lists applied when image appears later");
@@ -165,7 +166,7 @@ int main() {
         aether_style_revision_t current{};require(aether_style_runtime_retain_revision(f.runtime,&current)==AETHER_OK,"retain after numeric overflow");
         require(aether_style_revision_generation(current)==generation,"numeric overflow preserves generation");
         auto after=f.contextual("c");
-        require(near(after->style.font_size,20)&&near(measure_used_line_height(after->measures.get(),after->style),40),"numeric overflow cannot fall back or replace previous style");
+        require(near(after->style.font_size,20)&&near(frozen_measure_test::used_line_height(after),40),"numeric overflow cannot fall back or replace previous style");
         require(near(before->style.font_size,20),"old numeric snapshot intact");
         aether_computed_style_handle_destroy(before);aether_computed_style_handle_destroy(after);
         aether_style_revision_destroy(retained);aether_style_revision_destroy(current);

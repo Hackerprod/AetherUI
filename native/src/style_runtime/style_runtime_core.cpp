@@ -15,6 +15,11 @@
 #include "style_source_limits.h"
 #include "css_variable_tokens.h"
 #include "custom_property_scope_internal.h"
+#include "frozen_runtime_metadata.h"
+#include "../css/style_revision.h"
+#include "../css/frozen_measure_read.h"
+#include "../css/style_map_version.h"
+using namespace aether::style;
 
 #include <algorithm>
 #include <cctype>
@@ -26,21 +31,52 @@
 #include <vector>
 
 
-struct runtime_node_state_s {
-    aether_computed_style_handle_s style{};
-    computed_custom_property_scope_ptr custom_properties;
-    color_resolution_state_s color_references{};
-    uint32_t declared_impact = STYLE_IMPACT_NONE;
-    uint32_t declared_inherited_impact = STYLE_IMPACT_NONE;
-    uint32_t inherited_change_impact = STYLE_IMPACT_NONE;
-    ~runtime_node_state_s() { aether_computed_style_free(&style.style); }
+// Private preparation data, never a public handle or final record.
+struct PreparedNodeResult {
+    FrozenStyleRef style;
+    std::shared_ptr<measure_state_s> measures;
+    FrozenScopeRef custom_properties;
+    FrozenColorRef color_references;
+    uint32_t declared_impact=0, declared_inherited_impact=0, inherited_change_impact=0, impact=0;
 };
-
+struct MutableStyleBuilder {
+    aether_computed_style_t value{};
+    MutableStyleBuilder() = default;
+    MutableStyleBuilder(const MutableStyleBuilder&)=delete;
+    MutableStyleBuilder& operator=(const MutableStyleBuilder&)=delete;
+    MutableStyleBuilder(MutableStyleBuilder&& other) noexcept : value(other.value) { other.value={}; }
+    MutableStyleBuilder& operator=(MutableStyleBuilder&& other) noexcept {
+        if(this!=&other){aether_computed_style_free(&value);value=other.value;other.value={};}
+        return *this;
+    }
+    ~MutableStyleBuilder(){aether_computed_style_free(&value);}
+};
+static void require_style_status(aether_status_t status) {
+    if(status==AETHER_ERROR_OUT_OF_MEMORY)throw std::bad_alloc();
+    if(status!=AETHER_OK)throw std::invalid_argument("invalid frozen style preparation");
+}
+static color_resolution_state_s copy_color_state(const FrozenColorMetadata& source) {
+    color_resolution_state_s result;
+    for(size_t i=0;i<4;++i)result.border_uses_current_color[i]=source.border(i);
+    for(size_t i=0;i<source.text_shadow_count();++i)result.text_shadow_uses_current_color.push_back(source.text_shadow_at(i));
+    for(size_t i=0;i<source.box_shadow_count();++i)result.box_shadow_uses_current_color.push_back(source.box_shadow_at(i));
+    return result;
+}
+static std::vector<bool> copy_text_color_flags(const FrozenColorMetadata& source) {
+    std::vector<bool> out; out.reserve(source.text_shadow_count());
+    for(size_t i=0;i<source.text_shadow_count();++i)out.push_back(source.text_shadow_at(i));
+    return out;
+}
+static bool text_color_flags_equal(const FrozenColorMetadata& source,const std::vector<bool>& flags) {
+    if(source.text_shadow_count()!=flags.size())return false;
+    for(size_t i=0;i<flags.size();++i)if(source.text_shadow_at(i)!=flags[i])return false;
+    return true;
+}
 struct aether_style_update_s {
     aether_node_s* node = nullptr;
     // An update crosses the runtime/binding boundary after the style tree may
     // have been rebuilt.  It therefore owns a deep snapshot rather than
-    // borrowing storage from runtime_node_state_s.
+    // borrowing storage from PreparedNodeResult.
     aether_computed_style_handle_s current{};
     uint32_t impact = STYLE_IMPACT_NONE;
     ~aether_style_update_s() { aether_computed_style_free(&current.style); }
@@ -54,7 +90,8 @@ struct aether_style_runtime_s {
     int64_t next_sheet_handle = 1;
     int32_t next_rule_id = 1;
     std::unordered_map<int64_t, std::unique_ptr<compiled_style_sheet_s>> sheets;
-    std::unordered_map<aether_node_s*, std::shared_ptr<runtime_node_state_s>> states;
+    std::unordered_map<aether_node_s*, FrozenNodeRef> states;
+    std::unordered_map<aether_node_s*, std::unique_ptr<PreparedNodeResult>> prepared;
     std::shared_ptr<document_measure_context_s> document_measures;
     std::shared_ptr<const struct style_revision_s> revision;
     uint64_t generation = 0;
@@ -65,23 +102,6 @@ struct aether_style_runtime_s {
     rule_index_s index;
 };
 
-// States are immutable once referenced from a revision. The working runtime
-// used by preparation clones them before compute_node can mutate a no-op.
-struct style_revision_entry_s {
-    aether_node_s* node = nullptr;
-    std::shared_ptr<const runtime_node_state_s> state;
-    uint32_t impact = STYLE_IMPACT_NONE;
-};
-struct style_revision_s {
-    bool contextual = true;
-    uint64_t generation = 0, document_identity = 0, input_epoch = 0, structure_epoch = 0, style_tree_epoch = 0;
-    aether_style_environment_t environment{};
-    std::shared_ptr<const document_measure_context_s> document;
-    std::shared_ptr<node_identity_s> document_lifetime;
-    std::vector<style_revision_entry_s> entries;
-    std::vector<style_revision_entry_s> changes;
-    std::vector<std::shared_ptr<aether_node_s>> generated;
-};
 struct aether_style_revision_handle_s { std::shared_ptr<const style_revision_s> value; };
 
 // An add must finish its transaction before invoking consumer code. Each call
@@ -119,26 +139,6 @@ struct stylesheet_diagnostics_s {
         }
     }
 };
-
-static aether_style_update_s* make_style_update(aether_node_s* node,
-                                                 aether_computed_style_handle_s& current,
-                                                 uint32_t impact) {
-    auto* update = new (std::nothrow) aether_style_update_s();
-    if (!update) return nullptr;
-    update->node = node;
-    update->impact = impact;
-    update->current.measures = current.measures;
-    update->current.revision = current.revision;
-    update->current.document_identity = current.document_identity;
-    update->current.node_identity = current.node_identity;
-    update->current.node_lifetime = current.node_lifetime;
-    update->current.document_lifetime = current.document_lifetime;
-    if (aether_computed_style_copy(&current, &update->current.style) != AETHER_OK) {
-        delete update;
-        return nullptr;
-    }
-    return update;
-}
 
 static constexpr uint32_t STYLE_IMPACT_ALL_BITS =
     static_cast<uint32_t>(STYLE_IMPACT_LAYOUT) |
@@ -239,19 +239,38 @@ static bool gradient_stop_equal(const aether_gradient_stop& a, const aether_grad
            a.has_position == b.has_position;
 }
 
-static bool gradient_equal(const aether_linear_gradient& a, const aether_linear_gradient& b) {
-    if (a.direction_x != b.direction_x ||
-        a.direction_y != b.direction_y ||
-        a.stop_count != b.stop_count)
-        return false;
-    if (a.stop_count == 0) return true;
-    if (!a.stops || !b.stops) return false;
-    for (int32_t index = 0; index < a.stop_count; ++index)
-        if (!gradient_stop_equal(a.stops[index], b.stops[index])) return false;
+template<class T> static bool frozen_array_equal(ReadOnlyArrayView<T> a,const T* b,int32_t n) {
+    if(n<0||a.size()!=static_cast<size_t>(n)||(n&&!b))return false;
+    for(size_t i=0;i<a.size();++i)if(std::memcmp(&a[i],&b[i],sizeof(T))!=0)return false;
     return true;
 }
-
-static bool style_equal(const aether_computed_style_t& a, const aether_computed_style_t& b) {
+static bool frozen_gradient_equal(GradientReadView a,const aether_linear_gradient& b,bool bytes) {
+    if(a.direction_x!=b.direction_x||a.direction_y!=b.direction_y||b.stop_count<0||a.stops.size()!=static_cast<size_t>(b.stop_count)||(b.stop_count&&!b.stops))return false;
+    for(size_t i=0;i<a.stops.size();++i)if(bytes ? std::memcmp(&a.stops[i],&b.stops[i],sizeof(aether_gradient_stop))!=0 : !gradient_stop_equal(a.stops[i],b.stops[i]))return false;
+    return true;
+}
+static bool backgrounds_equal(ReadOnlyArrayView<FrozenBackgroundLayer> a,const aether_background_layer_list& b) {
+    if(b.count<0||a.size()!=static_cast<size_t>(b.count)||(b.count&&!b.items))return false;
+    for(size_t i=0;i<a.size();++i) {
+        const auto v=a[i].view(); const auto& x=v.scalars; const auto& y=b.items[i];
+        if(x.kind!=y.kind||std::memcmp(&x.position_x,&y.position_x,sizeof(aether_css_length))||std::memcmp(&x.position_y,&y.position_y,sizeof(aether_css_length))||x.size_kind!=y.size_kind||std::memcmp(&x.size_x,&y.size_x,sizeof(aether_css_length))||std::memcmp(&x.size_y,&y.size_y,sizeof(aether_css_length))||x.repeat_x!=y.repeat_x||x.repeat_y!=y.repeat_y)return false;
+        if(x.kind==AETHER_BACKGROUND_LAYER_LINEAR_GRADIENT){if(!frozen_gradient_equal(v.gradient,y.gradient,true))return false;}
+        else if(x.kind==AETHER_BACKGROUND_LAYER_IMAGE_URL){if(!v.image_source.present()||!y.image_source||std::strcmp(v.image_source.c_str(),y.image_source))return false;}
+        else return false;
+    }
+    return true;
+}
+static bool complete_background_payload_equal(ComputedStyleReadView a,const aether_computed_style_t& b) {
+    const auto layers=a.background_layers();
+    for(size_t i=0;i<layers.size();++i){auto x=layers[i].view();const auto& y=b.background_layers.items[i];
+        if(!frozen_gradient_equal(x.gradient,y.gradient,true))return false;
+        if(x.image_source.present()!=(y.image_source!=nullptr))return false;
+        if(y.image_source&&!x.image_source.equals(y.image_source))return false;
+    }
+    return true;
+}
+static bool style_equal(ComputedStyleReadView av, const aether_computed_style_t& b) {
+    const auto& a=av.scalars();
     return a.display == b.display &&
            a.flex_direction == b.flex_direction &&
            a.justify_content == b.justify_content &&
@@ -276,20 +295,20 @@ static bool style_equal(const aether_computed_style_t& a, const aether_computed_
            a.box_sizing == b.box_sizing &&
            color_equal(a.color, b.color) &&
            color_equal(a.background_color, b.background_color) &&
-           aether_background_layer_list_equal(&a.background_layers, &b.background_layers) == AETHER_TRUE &&
-           aether_backdrop_filter_list_equal(&a.backdrop_filters, &b.backdrop_filters) == AETHER_TRUE &&
+           backgrounds_equal(av.background_layers(),b.background_layers) &&
+           frozen_array_equal(av.backdrop_filters(),b.backdrop_filters.items,b.backdrop_filters.count) &&
            color_equal(a.border_color, b.border_color) &&
            color_edges_equal(a.border_colors, b.border_colors) &&
            border_style_edges_equal(a.border_styles, b.border_styles) &&
            a.has_text_gradient == b.has_text_gradient &&
-           gradient_equal(a.text_gradient, b.text_gradient) &&
-           aether_transform_list_equal(&a.transforms, &b.transforms) == AETHER_TRUE &&
+           frozen_gradient_equal(av.text_gradient(), b.text_gradient, false) &&
+           frozen_array_equal(av.transforms(),b.transforms.items,b.transforms.count) &&
            transform_origin_equal(a.transform_origin, b.transform_origin) &&
-           aether_shadow_list_equal(&a.text_shadows, &b.text_shadows) == AETHER_TRUE &&
-           aether_shadow_list_equal(&a.box_shadows, &b.box_shadows) == AETHER_TRUE &&
+           frozen_array_equal(av.text_shadows(),b.text_shadows.items,b.text_shadows.count) &&
+           frozen_array_equal(av.box_shadows(),b.box_shadows.items,b.box_shadows.count) &&
            border_radii_equal(a.border_radii, b.border_radii) &&
            a.opacity == b.opacity &&
-           std::strncmp(a.font_family, b.font_family, sizeof(a.font_family)) == 0 &&
+           std::strncmp(a.font_family.data(), b.font_family, sizeof(a.font_family)) == 0 &&
            a.font_size == b.font_size &&
            a.font_weight == b.font_weight &&
            a.line_height == b.line_height &&
@@ -415,29 +434,27 @@ static bool try_parse_generated_content(const std::string& source, std::string& 
     return found_string;
 }
 
-static runtime_node_state_s* compute_node(aether_style_runtime_s* runtime, aether_node_s* node,
-                                          runtime_node_state_s* parent, uint32_t inherited_parent_impact,
+static PreparedNodeResult* compute_node(aether_style_runtime_s* runtime, aether_node_s* node,
+                                          PreparedNodeResult* parent, uint32_t inherited_parent_impact,
                                           uint32_t& impact, uint32_t& inherited_change_impact,
                                           std::optional<std::string>* generated_content = nullptr) {
     // The legacy subtree entry point starts an isolated inheritance scope.
     // Contextual preparation never installs this compatibility boundary.
     if (node == runtime->legacy_inheritance_root) { parent = nullptr; inherited_parent_impact = 0; }
     auto* registry = style_property_registry_get_global();
-    aether_computed_style_t next{};
-    if (computed_style_inherit_checked(parent ? &parent->style.style : nullptr, &next) != AETHER_OK)
+    const auto parent_view=parent ? std::optional<ComputedStyleReadView>(parent->style->view()) : std::nullopt;
+    MutableStyleBuilder next_builder;
+    auto& next=next_builder.value;
+    if (computed_style_inherit_checked(parent_view ? &*parent_view : nullptr, &next) != AETHER_OK)
         throw std::bad_alloc();
-    struct next_style_guard_s {
-        aether_computed_style_t* value;
-        ~next_style_guard_s() { if (value) aether_computed_style_free(value); }
-    } next_guard{&next};
     auto measures = std::make_shared<measure_state_s>();
     measures->document = runtime->document_measures;
-    measures->parent_font_size = parent ? parent->style.style.font_size : measures->document->initial_font_size;
+    measures->parent_font_size = parent ? parent->style->view().scalars().font_size : measures->document->initial_font_size;
     measures->self_font_size = measures->parent_font_size;
     next.font_size = measures->self_font_size;
     if (parent) measure_set_property_dependencies(*measures, "font-size", MEASURE_PARENT);
-    if (parent && parent->style.measures) {
-        measures->line_height = parent->style.measures->line_height;
+    if (parent && parent->measures) {
+        measures->line_height = parent->measures->line_height;
         measure_set_property_dependencies(*measures, "line-height", MEASURE_PARENT);
     }
     const bool document_element = !node->is_generated && node->type == AETHER_NODE_ELEMENT &&
@@ -513,7 +530,7 @@ static runtime_node_state_s* compute_node(aether_style_runtime_s* runtime, aethe
             str_iequals(value, "initial") || str_iequals(value, "revert")});
     }
 
-    auto scope = compute_custom_property_scope(sources, parent ? parent->custom_properties : nullptr,
+    auto scope = compute_frozen_custom_property_scope(sources, parent ? parent->custom_properties : nullptr,
         runtime->options.max_variable_depth, runtime->options.max_variable_expansion_length);
 
     // Custom properties have no dependency on the final ordinary style in this
@@ -526,7 +543,7 @@ static runtime_node_state_s* compute_node(aether_style_runtime_s* runtime, aethe
         if (!shorthand) return;
         std::string resolved;
         std::vector<compiled_property_declaration_s> staged;
-        const bool substituted = resolve_computed_value(declaration.source.c_str(), scope.get(),
+        const bool substituted = resolve_frozen_computed_value(declaration.source.c_str(), scope.get(),
             runtime->options.max_variable_depth, runtime->options.max_variable_expansion_length, resolved);
         const bool valid = substituted && validate_pending_declaration_value(resolved) &&
             !variable_has_reference(resolved) &&
@@ -565,7 +582,7 @@ static runtime_node_state_s* compute_node(aether_style_runtime_s* runtime, aethe
         if (content_winner.is_set) {
             std::string content_source = content_winner.source;
             if (variable_has_reference(content_source) &&
-                !resolve_computed_value(content_source.c_str(), scope.get(),
+                !resolve_frozen_computed_value(content_source.c_str(), scope.get(),
                                   runtime->options.max_variable_depth,
                                   runtime->options.max_variable_expansion_length, content_source)) {
                 report(runtime, "AETHER-CSS-VAR", "content", content_winner.source.c_str(),
@@ -580,8 +597,7 @@ static runtime_node_state_s* compute_node(aether_style_runtime_s* runtime, aethe
     }
 
     auto found = runtime->states.find(node);
-    const aether_computed_style_t* previous_style =
-        found == runtime->states.end() ? nullptr : &found->second->style.style;
+    const auto previous_style = found==runtime->states.end() ? std::optional<ComputedStyleReadView>{} : std::optional<ComputedStyleReadView>{found->second->style_view()};
 
     auto apply_property_value = [&](const style_property_definition_s& definition,
                                     aether_computed_style_t& style,
@@ -620,7 +636,7 @@ static runtime_node_state_s* compute_node(aether_style_runtime_s* runtime, aethe
         // Borders and box-shadow are not inherited, so their symbolic state
         // starts from the CSS initial values for this node.
         color_references.text_shadow_uses_current_color =
-            parent->color_references.text_shadow_uses_current_color;
+            copy_text_color_flags(*parent->color_references);
     }
     uint32_t declared_impact = STYLE_IMPACT_NONE;
     uint32_t declared_inherited_impact = STYLE_IMPACT_NONE;
@@ -649,7 +665,7 @@ static runtime_node_state_s* compute_node(aether_style_runtime_s* runtime, aethe
             value = initial_value;
             break;
         case compiled_value_mode::deferred: {
-            if (!resolve_computed_value(compiled.deferred_source.c_str(), scope.get(),
+            if (!resolve_frozen_computed_value(compiled.deferred_source.c_str(), scope.get(),
                                   runtime->options.max_variable_depth,
                                   runtime->options.max_variable_expansion_length, value)) {
                 report(runtime, "AETHER-CSS-VAR", definition.name.c_str(),
@@ -689,23 +705,23 @@ static runtime_node_state_s* compute_node(aether_style_runtime_s* runtime, aethe
                                   measure_apply_state_s& destination) {
             if (explicit_inherit) {
                 if (definition.inherit_context) {
-                    property_apply_context_s context{&style, &references, &destination, &parent->color_references};
-                    definition.inherit_context(context, parent->style.style, parent->style.measures.get());
-                } else definition.inherit_explicit(&style, parent->style.style);
+                    const ColorMetadataReadView colors(*parent->color_references);
+                    const MeasuresReadView parent_measures(*parent->measures);
+                    property_apply_context_s context{&style, &references, &destination, &colors};
+                    definition.inherit_context(context, parent->style->view(), &parent_measures);
+                } else definition.inherit_explicit(&style, parent->style->view());
                 return true;
             }
             return apply_property_value(definition, style, references, value, emit_diagnostics, destination);
         };
         measure_apply_state_s selected_measures(*measures, definition.name);
         if (!apply_selected(next, color_references, true, selected_measures)) return false;
-        bool property_changed = previous_style == nullptr;
+        bool property_changed = !previous_style;
         if (previous_style) {
-            aether_computed_style_handle_s previous_handle{};
-            previous_handle.style = *previous_style;
-            aether_computed_style_t probe{};
-            next_style_guard_s probe_guard{&probe};
-            if (aether_computed_style_copy(&previous_handle, &probe) == AETHER_OK) {
-                color_resolution_state_s probe_references = found->second->color_references;
+            MutableStyleBuilder probe_builder;
+            auto& probe=probe_builder.value;
+            if (computed_style_deep_copy(*previous_style, &probe) == AETHER_OK) {
+                color_resolution_state_s probe_references = copy_color_state(*found->second->color_references());
                 // Read the candidate AFTER the winning declaration, while the
                 // flat and symbolic color references deliberately start at OLD.
                 measure_property_delta_s delta;
@@ -717,12 +733,11 @@ static runtime_node_state_s* compute_node(aether_style_runtime_s* runtime, aethe
                 } else {
                     property_changed = true;
                 }
-                aether_computed_style_free(&probe);
-                probe_guard.value = nullptr;
+
             } else {
                 throw std::bad_alloc();
             }
-            previous_handle.style = {};
+
         }
         if (property_changed) {
             declared_impact |= definition.impact;
@@ -768,69 +783,54 @@ static runtime_node_state_s* compute_node(aether_style_runtime_s* runtime, aethe
 
     measure_recompute_dependencies(*measures);
     const bool is_new_node = found == runtime->states.end();
-    const auto* old_measures = is_new_node ? nullptr : found->second->style.measures.get();
+    const auto* old_measures = is_new_node ? nullptr : found->second->measures().get();
     const bool contextual_geometry_changed = old_measures &&
-        (std::memcmp(&old_measures->row_gap, &measures->row_gap, sizeof(aether_css_length)) != 0 ||
-         std::memcmp(&old_measures->column_gap, &measures->column_gap, sizeof(aether_css_length)) != 0 ||
-         old_measures->line_height.kind != measures->line_height.kind ||
-         old_measures->line_height.value != measures->line_height.value);
+        (std::memcmp(&old_measures->scalars().row_gap, &measures->row_gap, sizeof(aether_css_length)) != 0 ||
+         std::memcmp(&old_measures->scalars().column_gap, &measures->column_gap, sizeof(aether_css_length)) != 0 ||
+         static_cast<int>(old_measures->scalars().line_height_kind) != static_cast<int>(measures->line_height.kind) ||
+         old_measures->scalars().line_height_value != measures->line_height.value);
     if (contextual_geometry_changed) declared_impact |= STYLE_IMPACT_LAYOUT | STYLE_IMPACT_TEXT_LAYOUT;
 
     const uint32_t inherited_symbolic_impact = !is_new_node &&
-        found->second->color_references.text_shadow_uses_current_color !=
-            color_references.text_shadow_uses_current_color
+        !text_color_flags_equal(*found->second->color_references(), color_references.text_shadow_uses_current_color)
         ? STYLE_IMPACT_PAINT | STYLE_IMPACT_INHERITED : STYLE_IMPACT_NONE;
-    const bool changed = is_new_node || contextual_geometry_changed || !style_equal(found->second->style.style, next);
+    const bool changed = is_new_node || contextual_geometry_changed || !style_equal(found->second->style_view(), next);
     if (!changed) {
         impact = STYLE_IMPACT_NONE;
         inherited_change_impact = inherited_symbolic_impact;
-        if (!is_new_node) {
-            // Retain style buffers, but always publish the new computed snapshot.
-            // A concrete no-op can still change custom values or replace the
-            // parent generation. Children own their previous snapshots safely.
-            // Descendants are visited even when this node emits no update.
-            aether_computed_style_free(&next);
-            next_guard.value = nullptr;
-            found->second->style.measures = measures;
-            found->second->custom_properties = std::move(scope);
-            // Equal concrete colors can still change inherited currentColor.
-            // Keep storage stable, but publish metadata through intermediaries.
-            found->second->color_references = std::move(color_references);
-            found->second->inherited_change_impact = inherited_change_impact;
-            return found->second.get();
-        }
+        declared_impact=found->second->declared_impact();
+        declared_inherited_impact=found->second->declared_inherited_impact();
     } else if (is_new_node) {
         impact = STYLE_IMPACT_ALL_BITS;
         inherited_change_impact = declared_inherited_impact | inherited_parent_impact;
-    } else if (!transform_origin_equal(found->second->style.style.transform_origin, next.transform_origin) &&
+    } else if (!transform_origin_equal(found->second->style_view().scalars().transform_origin, next.transform_origin) &&
                [&] {
                    // Removal or computed-invalid origin can occur after any
                    // number of no-op resolves. Compare the final scalar delta,
                    // not historical declaration impacts. This copy only borrows.
-                   auto comparison = found->second->style.style;
+                   auto comparison = found->second->style_view().scalars();
                    comparison.transform_origin = next.transform_origin;
-                   return style_equal(comparison, next);
+                   return style_equal(found->second->style_view().with_scalars(comparison), next);
                }()) {
         const auto* origin = registry->try_get("transform-origin");
         impact = origin ? origin->impact : STYLE_IMPACT_ALL_BITS;
         inherited_change_impact = STYLE_IMPACT_NONE;
-    } else if (found->second->style.style.visible != next.visible) {
+    } else if (found->second->style_view().scalars().visible != next.visible) {
         // Compare the final computed delta, not the declarations still present.
         // Removing visibility can otherwise reuse historical geometric impacts;
         // removing width alongside visibility can miss those same impacts.
-        // This shallow copy only compares borrowed buffers. Never free it or
-        // store it as an owning style, and only change its local scalar.
-        auto comparison = found->second->style.style;
+        // Copy only scalar values. Payload stays readonly under the old record pin.
+        auto comparison = found->second->style_view().scalars();
         comparison.visible = next.visible;
         const auto* visibility = registry->try_get("visibility");
-        impact = visibility && style_equal(comparison, next)
+        impact = visibility && style_equal(found->second->style_view().with_scalars(comparison), next)
             ? visibility->impact
             : STYLE_IMPACT_ALL_BITS;
         inherited_change_impact = impact;
     } else {
         impact = declared_impact | inherited_parent_impact;
         if (impact == STYLE_IMPACT_NONE) {
-            impact = found->second->declared_impact;
+            impact = found->second->declared_impact();
         }
         if (impact == STYLE_IMPACT_NONE) {
             // Safety net for computed-style changes produced outside a concrete
@@ -840,26 +840,27 @@ static runtime_node_state_s* compute_node(aether_style_runtime_s* runtime, aethe
         }
         inherited_change_impact = declared_inherited_impact | inherited_parent_impact;
         if (inherited_change_impact == STYLE_IMPACT_NONE)
-            inherited_change_impact = found->second->declared_inherited_impact;
+            inherited_change_impact = found->second->declared_inherited_impact();
     }
     inherited_change_impact |= inherited_symbolic_impact;
     if (!is_new_node) {
-        const auto& previous = found->second->style.style;
-        const bool before_context = previous.transforms.count > 0 || previous.backdrop_filters.count > 0;
+        const auto previous = found->second->style_view();
+        const bool before_context = !previous.transforms().empty() || !previous.backdrop_filters().empty();
         const bool after_context = next.transforms.count > 0 || next.backdrop_filters.count > 0;
         if (before_context != after_context) impact |= STYLE_IMPACT_LAYOUT;
     }
-    auto state = std::make_unique<runtime_node_state_s>();
-    state->style.style = next;
-    next_guard.value = nullptr;
-    state->style.measures = measures;
+    auto state = std::make_unique<PreparedNodeResult>();
+    if(!changed && complete_background_payload_equal(found->second->style_view(),next)) state->style=found->second->style();
+    else require_style_status(freeze_style(next,state->style));
+    state->measures = measures;
     state->custom_properties = std::move(scope);
-    state->color_references = std::move(color_references);
+    require_style_status(freeze_color_metadata(color_references,state->color_references));
     state->declared_impact = declared_impact;
     state->declared_inherited_impact = declared_inherited_impact;
     state->inherited_change_impact = inherited_change_impact;
     auto* result = state.get();
-    runtime->states[node] = std::move(state);
+    state->impact=impact;
+    runtime->prepared[node] = std::move(state);
     return result;
 }
 
@@ -876,8 +877,8 @@ static std::shared_ptr<aether_node_s> create_generated_node() {
     });
 }
 static std::shared_ptr<aether_node_s> prepare_generated_pseudo(
-    aether_style_runtime_s* staged, aether_node_s* host, runtime_node_state_s* host_state,
-    aether_pseudo_element_t pseudo, std::vector<std::unique_ptr<aether_style_update_s>>& updates) {
+    aether_style_runtime_s* staged, aether_node_s* host, PreparedNodeResult* host_state,
+    aether_pseudo_element_t pseudo) {
     auto generated = create_generated_node();
     generated->type = AETHER_NODE_ELEMENT; generated->parent = host;
     generated->tag_name = host->tag_name; generated->attributes = host->attributes;
@@ -886,24 +887,18 @@ static std::shared_ptr<aether_node_s> prepare_generated_pseudo(
     generated->pseudo_element = pseudo; generated->style_origin = host;
     uint32_t impact = 0, inherited = 0;
     std::optional<std::string> content;
-    auto* state = compute_node(staged, generated.get(), host_state,
+    compute_node(staged, generated.get(), host_state,
         host_state ? host_state->inherited_change_impact : 0, impact, inherited, &content);
-    if (!content) { staged->states.erase(generated.get()); return {}; }
+    if (!content) { staged->prepared.erase(generated.get()); return {}; }
     if (!content->empty()) {
         auto text = std::make_unique<aether_node_s>(); text->type = AETHER_NODE_TEXT;
         text->parent = generated.get(); text->text = std::move(*content);
         generated->children.push_back(text.get()); text.release();
     }
-    if (impact) {
-        std::unique_ptr<aether_style_update_s> update(make_style_update(generated.get(), state->style, impact));
-        if (!update) throw std::bad_alloc();
-        updates.push_back(std::move(update));
-    }
     return generated;
 }
 static void prepare_tree(aether_style_runtime_s* staged, aether_node_s* node,
-    runtime_node_state_s* parent, uint32_t inherited_parent,
-    std::vector<std::unique_ptr<aether_style_update_s>>& updates,
+    PreparedNodeResult* parent, uint32_t inherited_parent,
     std::vector<prepared_children_s>& links, std::vector<aether_node_s*>& order) {
     if (!node || node->is_generated) return;
     auto* next_parent = parent;
@@ -912,22 +907,17 @@ static void prepare_tree(aether_style_runtime_s* staged, aether_node_s* node,
         uint32_t impact = 0;
         next_parent = compute_node(staged, node, parent, inherited_parent, impact, next_inherited);
         order.push_back(node);
-        if (impact) {
-            std::unique_ptr<aether_style_update_s> update(make_style_update(node, next_parent->style, impact));
-            if (!update) throw std::bad_alloc();
-            updates.push_back(std::move(update));
-        }
         prepared_children_s link; link.host = node;
         link.children.reserve(node->children.size() + 2); link.storage.reserve(2);
-        auto before = prepare_generated_pseudo(staged, node, next_parent, aether_pseudo_element_t::before, updates);
-        auto after = prepare_generated_pseudo(staged, node, next_parent, aether_pseudo_element_t::after, updates);
+        auto before = prepare_generated_pseudo(staged, node, next_parent, aether_pseudo_element_t::before);
+        auto after = prepare_generated_pseudo(staged, node, next_parent, aether_pseudo_element_t::after);
         if (before) { link.children.push_back(before.get()); order.push_back(before.get()); link.storage.push_back(std::move(before)); }
         for (auto* child : node->children) if (!child->is_generated) link.children.push_back(child);
         if (after) { link.children.push_back(after.get()); order.push_back(after.get()); link.storage.push_back(std::move(after)); }
         links.push_back(std::move(link));
     }
     for (auto* child : node->children)
-        if (!child->is_generated) prepare_tree(staged, child, next_parent, next_inherited, updates, links, order);
+        if (!child->is_generated) prepare_tree(staged, child, next_parent, next_inherited, links, order);
 }
 
 AETHER_API aether_status_t aether_style_runtime_create(
@@ -1053,6 +1043,7 @@ AETHER_API aether_status_t aether_style_runtime_get_update(
             delete copy;
             return AETHER_ERROR_OUT_OF_MEMORY;
         }
+        copy->record=update->current.record;
         copy->measures = update->current.measures; copy->revision = update->current.revision;
         copy->document_identity = update->current.document_identity; copy->node_identity = update->current.node_identity;
         copy->node_lifetime = update->current.node_lifetime; copy->document_lifetime = update->current.document_lifetime;
@@ -1084,7 +1075,7 @@ struct aether_style_transaction_s {
     std::vector<std::unique_ptr<aether_style_update_s>> updates;
     std::unique_ptr<aether_style_update_t[]> legacy_array;
     std::vector<prepared_children_s> links;
-    std::shared_ptr<style_revision_s> revision;
+    StyleRevisionRef revision;
     std::unique_ptr<aether_style_revision_handle_s> output;
     std::unique_ptr<stylesheet_diagnostics_s> diagnostics;
     bool committed = false;
@@ -1095,21 +1086,6 @@ static bool valid_measure_environment(const aether_style_environment_t& env) noe
         std::isfinite(env.viewport_height) && env.viewport_height > 0 &&
         std::isfinite(env.root_font_size) && env.root_font_size >= 0 &&
         std::isfinite(env.dpi_scale) && env.dpi_scale > 0;
-}
-static std::shared_ptr<runtime_node_state_s> clone_runtime_state(const runtime_node_state_s& source) {
-    auto target = std::make_shared<runtime_node_state_s>();
-    if (computed_style_deep_copy(source.style.style, &target->style.style) != AETHER_OK) throw std::bad_alloc();
-    target->style.measures = source.style.measures;
-    target->style.document_identity = source.style.document_identity;
-    target->style.node_identity = source.style.node_identity;
-    target->style.node_lifetime = source.style.node_lifetime;
-    target->style.document_lifetime = source.style.document_lifetime;
-    target->custom_properties = source.custom_properties;
-    target->color_references = source.color_references;
-    target->declared_impact = source.declared_impact;
-    target->declared_inherited_impact = source.declared_inherited_impact;
-    target->inherited_change_impact = source.inherited_change_impact;
-    return target;
 }
 AETHER_API uint32_t aether_contextual_style_version(void) { return 1; }
 static aether_status_t prepare_revision_impl(
@@ -1147,55 +1123,58 @@ static aether_status_t prepare_revision_impl(
         // Retain comparable states only while their tokens are still live. Never
         // dereference a pointer from a retired document generation.
         for (const auto& entry : runtime->states) {
-            const auto& token = entry.second->style.node_lifetime;
+            const auto& token = entry.second->node_lifetime();
             if (!token || (token->alive && token->attached))
-                staged.states.emplace(entry.first, clone_runtime_state(*entry.second));
+                staged.states.emplace(entry.first, entry.second);
         }
         std::vector<aether_node_s*> order;
-        prepare_tree(&staged, document, nullptr, 0, transaction->updates, transaction->links, order);
+        prepare_tree(&staged, document, nullptr, 0, transaction->links, order);
         std::unordered_set<aether_node_s*> current_nodes(order.begin(), order.end());
-        for (auto it = staged.states.begin(); it != staged.states.end();) {
-            if (!current_nodes.count(it->first)) it = staged.states.erase(it); else ++it;
+        // Freeze document once, only after root-font bootstrap and complete traversal.
+        StyleRevisionInput revision_input;
+        revision_input.contextual=staged.legacy_inheritance_root==nullptr;
+        const auto& d=*staged.document_measures;
+        require_style_status(freeze_document({d.viewport_width,d.viewport_height,d.initial_font_size,d.root_font_size,d.generation,d.identity},revision_input.document));
+        revision_input.generation=d.generation; revision_input.document_identity=d.identity;
+        revision_input.input_epoch=transaction->input_epoch;
+        revision_input.structure_epoch=document->identity->structure_epoch;
+        revision_input.style_tree_epoch=document->identity->style_tree_epoch+1;
+        revision_input.document_lifetime=document->identity; revision_input.environment=requested_environment;
+        std::unordered_map<aether_node_s*,std::shared_ptr<aether_node_s>> leaves;
+        for(const auto& link:transaction->links)for(const auto& leaf:link.storage)leaves.emplace(leaf.get(),leaf);
+        BackingBuildInput backing;
+        std::unordered_map<aether_node_s*,FrozenNodeRef> next_states;
+        revision_input.entries.reserve(order.size());
+        for(auto* node:order) {
+            const auto& prepared=*staged.prepared.at(node);
+            NodeRecordInput input;
+            input.origin=RecordOrigin::runtime; input.node=node; input.style=prepared.style;
+            require_style_status(freeze_runtime_measures(*prepared.measures,revision_input.document,input.measures));
+            input.custom_properties=prepared.custom_properties;input.color_references=prepared.color_references;
+            input.declared_impact=prepared.declared_impact;input.declared_inherited_impact=prepared.declared_inherited_impact;
+            input.inherited_change_impact=prepared.inherited_change_impact;
+            input.document_identity=d.identity;input.node_identity=aether_node_identity(node);
+            input.node_lifetime=node->identity;input.document_lifetime=document->identity;
+            if(auto it=leaves.find(node);it!=leaves.end())input.generated_leaf=it->second;
+            FrozenNodeRef record;require_style_status(freeze_node_record(input,record));
+            next_states.emplace(node,record);backing.entries.emplace(node,record);
+            revision_input.entries.push_back({node,record,prepared.impact});
         }
-        auto revision = std::make_shared<style_revision_s>();
-        revision->contextual = staged.legacy_inheritance_root == nullptr;
-        revision->generation = staged.document_measures->generation;
-        revision->document_identity = staged.document_measures->identity;
-        revision->input_epoch = transaction->input_epoch;
-        revision->structure_epoch = document->identity->structure_epoch;
-        revision->style_tree_epoch = document->identity->style_tree_epoch + 1;
-        revision->document_lifetime = document->identity;
-        revision->environment = requested_environment;
-        revision->document = staged.document_measures;
-        revision->entries.reserve(order.size());
-        std::unordered_map<aether_node_s*, uint32_t> impacts;
-        for (const auto& update : transaction->updates) impacts[update->node] |= update->impact;
-        for (auto* node : order) {
-            auto state = staged.states.at(node);
-            state->style.document_identity = revision->document_identity;
-            state->style.node_identity = aether_node_identity(node);
-            state->style.node_lifetime = node->identity;
-            state->style.document_lifetime = revision->document_lifetime;
-            revision->entries.push_back({node, std::move(state), impacts[node]});
+        require_style_status(freeze_backing(backing,revision_input.backing));
+        if(runtime->revision)for(const auto& old:runtime->revision->entries())
+            if(!current_nodes.count(old.node()))revision_input.retired.push_back({old.record(),STYLE_IMPACT_ALL_BITS});
+        StyleRevisionRef revision;require_style_status(freeze_style_revision(revision_input,revision));
+        for(const auto& entry:revision_input.entries)if(entry.impact) {
+            auto update=std::make_unique<aether_style_update_s>();update->node=entry.node;update->impact=entry.impact;
+            const auto& record=entry.record;
+            require_style_status(computed_style_deep_copy(record->style_view(),&update->current.style));
+            update->current.record=record;update->current.measures=record->measures();update->current.revision=revision;
+            update->current.document_identity=record->document_identity();update->current.node_identity=record->node_identity();
+            update->current.node_lifetime=record->node_lifetime();update->current.document_lifetime=record->document_lifetime();
+            transaction->updates.push_back(std::move(update));
         }
-        // The manifest is complete and conservative, including NONE entries.
-        // It is deliberately independent of the legacy visual update list.
-        revision->changes = revision->entries;
-        if (runtime->revision) for (const auto& old : runtime->revision->entries)
-            if (!current_nodes.count(old.node)) revision->changes.push_back({old.node, {}, STYLE_IMPACT_ALL_BITS});
-        for (const auto& link : transaction->links)
-            for (const auto& pseudo : link.storage) revision->generated.push_back(pseudo);
-        for (auto& update : transaction->updates) {
-            const auto& state = staged.states.at(update->node)->style;
-            update->current.revision = revision;
-            update->current.measures = state.measures;
-            update->current.document_identity = state.document_identity;
-            update->current.node_identity = state.node_identity;
-            update->current.node_lifetime = state.node_lifetime;
-            update->current.document_lifetime = state.document_lifetime;
-        }
-        if (transaction->updates.size() > static_cast<size_t>(INT32_MAX) || order.size() > static_cast<size_t>(INT32_MAX) ||
-            revision->changes.size() > static_cast<size_t>(INT32_MAX)) return AETHER_ERROR_INVALID_STATE;
+        staged.states.swap(next_states);staged.prepared.clear();
+        if(transaction->updates.size()>static_cast<size_t>(INT32_MAX))return AETHER_ERROR_INVALID_STATE;
         // Reserve the last outward allocation before publishing any state.
         if (!transaction->updates.empty()) {
             transaction->legacy_array = std::make_unique<aether_style_update_t[]>(transaction->updates.size());
@@ -1233,11 +1212,11 @@ AETHER_API aether_status_t aether_style_runtime_commit_revision(
         link.host->children.swap(link.children); link.host->generated_storage.swap(link.storage);
         for (auto& current : link.host->generated_storage) aether_node_mark_attached(current.get(), true);
     }
-    transaction->document_lifetime->style_tree_epoch = transaction->revision->style_tree_epoch;
+    transaction->document_lifetime->style_tree_epoch = transaction->revision->style_tree_epoch();
     runtime->states.swap(transaction->candidate->states);
     runtime->document_measures.swap(transaction->candidate->document_measures);
-    runtime->environment = transaction->revision->environment;
-    runtime->generation = transaction->revision->generation;
+    runtime->environment = transaction->revision->environment();
+    runtime->generation = transaction->revision->generation();
     runtime->revision = transaction->revision;
     transaction->committed = true;
     *out_revision = transaction->output.release();
@@ -1265,7 +1244,7 @@ static int32_t resolve_legacy_atomic(aether_style_runtime_t runtime, aether_node
 AETHER_API aether_status_t aether_style_runtime_retain_revision(aether_style_runtime_t runtime, aether_style_revision_t* out) {
     if (out) *out = nullptr;
     if (!runtime || !out) return AETHER_ERROR_NULL_ARG;
-    if (!runtime->revision || !runtime->revision->contextual) return AETHER_ERROR_INVALID_STATE;
+    if (!runtime->revision || !runtime->revision->contextual()) return AETHER_ERROR_INVALID_STATE;
     try { auto handle = std::make_unique<aether_style_revision_handle_s>(); handle->value = runtime->revision; *out = handle.release(); return AETHER_OK; }
     catch (...) { return AETHER_ERROR_OUT_OF_MEMORY; }
 }
@@ -1276,93 +1255,85 @@ AETHER_API aether_status_t aether_style_revision_clone(aether_style_revision_t r
     catch (...) { return AETHER_ERROR_OUT_OF_MEMORY; }
 }
 AETHER_API void aether_style_revision_destroy(aether_style_revision_t revision) { delete revision; }
-AETHER_API uint64_t aether_style_revision_generation(aether_style_revision_t revision) { return revision ? revision->value->generation : 0; }
-AETHER_API uint64_t aether_style_revision_document_identity(aether_style_revision_t revision) { return revision ? revision->value->document_identity : 0; }
-AETHER_API int32_t aether_style_revision_style_count(aether_style_revision_t revision) { return revision ? static_cast<int32_t>(revision->value->entries.size()) : 0; }
-AETHER_API int32_t aether_style_revision_change_count(aether_style_revision_t revision) { return revision ? static_cast<int32_t>(revision->value->changes.size()) : 0; }
-static aether_status_t revision_get_entry(aether_style_revision_t revision, const std::vector<style_revision_entry_s>* entries,
-    int32_t index, aether_node_t* out_node, aether_computed_style_handle_t* out_style, uint32_t* out_impact) {
-    if (out_node) *out_node = nullptr; if (out_style) *out_style = nullptr; if (out_impact) *out_impact = 0;
-    if (!revision || !entries) return AETHER_ERROR_NULL_ARG;
-    if (index < 0 || static_cast<size_t>(index) >= entries->size()) return AETHER_ERROR_INVALID_STATE;
-    const auto& entry = (*entries)[static_cast<size_t>(index)];
-    if (out_style && entry.state) {
-        auto status = aether_computed_style_handle_clone(const_cast<aether_computed_style_handle_s*>(&entry.state->style), out_style);
-        if (status != AETHER_OK) return status;
-        (*out_style)->revision = revision->value;
+AETHER_API uint64_t aether_style_revision_generation(aether_style_revision_t revision) { return revision ? revision->value->generation() : 0; }
+AETHER_API uint64_t aether_style_revision_document_identity(aether_style_revision_t revision) { return revision ? revision->value->document_identity() : 0; }
+AETHER_API int32_t aether_style_revision_style_count(aether_style_revision_t revision) { return revision ? static_cast<int32_t>(revision->value->entries().size()) : 0; }
+AETHER_API int32_t aether_style_revision_change_count(aether_style_revision_t revision) { return revision ? static_cast<int32_t>(revision->value->changes().size()) : 0; }
+static aether_status_t revision_get_entry(aether_style_revision_t revision, ReadOnlyArrayView<FrozenRevisionEntry> entries,
+    int32_t index,aether_node_t* out_node,aether_computed_style_handle_t* out_style,uint32_t* out_impact) {
+    if(out_node)*out_node=nullptr;
+    if(out_style)*out_style=nullptr;
+    if(out_impact)*out_impact=0;
+    if(!revision)return AETHER_ERROR_NULL_ARG;
+    if(index<0||static_cast<size_t>(index)>=entries.size())return AETHER_ERROR_INVALID_STATE;
+    const auto& entry=entries[static_cast<size_t>(index)];
+    if(out_style&&entry.record()) {
+        auto handle=std::unique_ptr<aether_computed_style_handle_s>(new(std::nothrow)aether_computed_style_handle_s());
+        if(!handle)return AETHER_ERROR_OUT_OF_MEMORY;
+        const auto& record=entry.record();
+        auto status=computed_style_deep_copy(record->style_view(),&handle->style);if(status!=AETHER_OK)return status;
+        handle->record=record;handle->measures=record->measures();handle->revision=revision->value;
+        handle->document_identity=record->document_identity();handle->node_identity=record->node_identity();
+        handle->document_lifetime=record->document_lifetime();handle->node_lifetime=record->node_lifetime();
+        *out_style=handle.release();
     }
-    if (out_node) *out_node = entry.node;
-    if (out_impact) *out_impact = entry.impact;
+    if(out_node)*out_node=entry.node();
+    if(out_impact)*out_impact=entry.impact();
     return AETHER_OK;
 }
 AETHER_API aether_status_t aether_style_revision_get_style(aether_style_revision_t revision, int32_t index,
     aether_node_t* node, aether_computed_style_handle_t* style, uint32_t* impact) {
-    return revision_get_entry(revision, revision ? &revision->value->entries : nullptr, index, node, style, impact);
+    return revision_get_entry(revision, revision ? revision->value->entries() : ReadOnlyArrayView<FrozenRevisionEntry>{}, index, node, style, impact);
 }
 AETHER_API aether_status_t aether_style_revision_get_change(aether_style_revision_t revision, int32_t index,
     aether_node_t* node, aether_computed_style_handle_t* style, uint32_t* impact) {
-    return revision_get_entry(revision, revision ? &revision->value->changes : nullptr, index, node, style, impact);
+    return revision_get_entry(revision, revision ? revision->value->changes() : ReadOnlyArrayView<FrozenRevisionEntry>{}, index, node, style, impact);
 }
-static aether_status_t create_revision_map(aether_style_revision_t revision, aether_style_map_t* out_map) {
-    if (out_map) *out_map = nullptr;
-    if (!revision || !out_map) return AETHER_ERROR_NULL_ARG;
+static aether_status_t create_revision_map(aether_style_revision_t revision,aether_style_map_t* out_map,bool legacy=false) {
+    if(out_map)*out_map=nullptr;
+    if(!revision||!out_map)return AETHER_ERROR_NULL_ARG;
     try {
-        auto map = std::make_unique<aether_style_map_s>();
-        map->styles.reserve(revision->value->entries.size()); map->measures.reserve(revision->value->entries.size());
-        for (const auto& entry : revision->value->entries) {
-            auto& copy = map->styles.emplace(entry.node, aether_computed_style_t{}).first->second;
-            if (computed_style_deep_copy(entry.state->style.style, &copy) != AETHER_OK) return AETHER_ERROR_OUT_OF_MEMORY;
-            map->measures.emplace(entry.node, entry.state->style.measures);
-            map->node_lifetimes.emplace(entry.node, entry.state->style.node_lifetime);
-        }
-        map->revision = revision->value; map->contextual = revision->value->contextual;
-        map->document_identity = revision->value->document_identity; map->generation = revision->value->generation;
-        map->document_lifetime = revision->value->document_lifetime; map->structure_epoch = revision->value->structure_epoch;
-        map->input_epoch = revision->value->input_epoch; map->style_tree_epoch = revision->value->style_tree_epoch;
-        *out_map = map.release(); return AETHER_OK;
-    } catch (...) { return AETHER_ERROR_OUT_OF_MEMORY; }
+        auto map=std::make_unique<aether_style_map_s>();const auto& r=*revision->value;
+        MapVersionInput input;input.backing=r.backing();input.revision=revision->value;
+        input.mode=legacy||!r.contextual()?MapMode::legacy_complete:MapMode::contextual;
+        input.document_identity=r.document_identity();input.generation=r.generation();input.document_lifetime=r.document_lifetime();
+        input.structure_epoch=r.structure_epoch();input.input_epoch=r.input_epoch();input.style_tree_epoch=r.style_tree_epoch();
+        auto status=make_map_version(input,map->current);if(status!=AETHER_OK)return status;
+        *out_map=map.release();return AETHER_OK;
+    }catch(const std::bad_alloc&){return AETHER_ERROR_OUT_OF_MEMORY;}catch(...){return AETHER_ERROR_INVALID_STATE;}
 }
 AETHER_API aether_status_t aether_style_revision_create_map(aether_style_revision_t revision, aether_style_map_t* out_map) {
     if (out_map) *out_map = nullptr;
     if (!revision || !out_map) return AETHER_ERROR_NULL_ARG;
-    if (!revision->value->contextual) return AETHER_ERROR_INVALID_STATE;
+    if (!revision->value->contextual()) return AETHER_ERROR_INVALID_STATE;
     return create_revision_map(revision, out_map);
 }
 AETHER_API aether_status_t aether_style_runtime_create_resolved_style_map(aether_style_runtime_t runtime, aether_doc_t doc, aether_style_map_t* out_map) {
     if (out_map) *out_map = nullptr;
     if (!runtime || !doc || !out_map) return AETHER_ERROR_NULL_ARG;
-    if (!runtime->revision || runtime->revision->document_identity != aether_node_identity(doc)) return AETHER_ERROR_INVALID_STATE;
+    if (!runtime->revision || runtime->revision->document_identity() != aether_node_identity(doc)) return AETHER_ERROR_INVALID_STATE;
     aether_style_revision_handle_s handle{runtime->revision};
-    const auto status = create_revision_map(&handle, out_map);
-    if (status == AETHER_OK) (*out_map)->contextual = false; // Historical API: explicit legacy adapter.
+    const auto status = create_revision_map(&handle, out_map, true);
     return status;
 }
 AETHER_API aether_status_t aether_style_runtime_update_resolved_style_map(aether_style_runtime_t runtime,
-    aether_style_map_t map, const aether_node_t* nodes, int32_t node_count) {
-    if (!runtime || !map || (!nodes && node_count > 0)) return AETHER_ERROR_NULL_ARG;
-    if (node_count < 0 || map->contextual) return AETHER_ERROR_INVALID_STATE;
+    aether_style_map_t map,const aether_node_t* nodes,int32_t node_count) {
+    if(!runtime||!map||(!nodes&&node_count>0))return AETHER_ERROR_NULL_ARG;
+    const auto previous=pin_style_map(map);
+    if(node_count<0||(previous&&previous->contextual()))return AETHER_ERROR_INVALID_STATE;
     try {
-        auto staged = aether_style_map_snapshot(map);
-        for (int32_t index = 0; index < node_count; ++index) {
-            auto* node = nodes[index]; if (!node) continue;
-            const auto state = runtime->states.find(node);
-            if (state == runtime->states.end()) {
-                auto existing = staged->styles.find(node);
-                if (existing != staged->styles.end()) { aether_computed_style_free(&existing->second); staged->styles.erase(existing); }
-                staged->measures.erase(node); staged->node_lifetimes.erase(node); continue;
-            }
-            // Use an owning temporary so a failed insertion cannot leak buffers.
-            auto holder = std::make_unique<runtime_node_state_s>();
-            if (computed_style_deep_copy(state->second->style.style, &holder->style.style) != AETHER_OK) return AETHER_ERROR_OUT_OF_MEMORY;
-            auto& destination = staged->styles.try_emplace(node, aether_computed_style_t{}).first->second;
-            aether_computed_style_free(&destination); destination = holder->style.style; holder->style.style = {};
-            staged->measures[node] = state->second->style.measures;
-            staged->node_lifetimes[node] = state->second->style.node_lifetime;
+        BackingBuildInput backing;if(previous)backing.entries=previous->backing()->entries();
+        for(int32_t i=0;i<node_count;++i){auto* node=nodes[i];if(!node)continue;
+            const auto it=runtime->states.find(node);
+            if(it==runtime->states.end())backing.entries.erase(node);
+            else backing.entries.insert_or_assign(node,it->second);
         }
-        // Partial projection never adopts a global revision identity. Layout
-        // already retained the previous complete backing independently.
-        staged->revision.reset(); staged->generation = 0; staged->contextual = false;
-        map->swap(*staged); return AETHER_OK;
-    } catch (...) { return AETHER_ERROR_OUT_OF_MEMORY; }
+        MapVersionInput input;input.mode=MapMode::legacy_partial;
+        if(previous){input.document_lifetime=previous->document_lifetime();input.document_identity=previous->document_identity();
+            input.input_epoch=previous->input_epoch();input.structure_epoch=previous->structure_epoch();input.style_tree_epoch=previous->style_tree_epoch();}
+        auto status=freeze_backing(backing,input.backing);if(status!=AETHER_OK)return status;
+        MapVersionRef next;status=make_map_version(input,next);if(status!=AETHER_OK)return status;
+        map->current.swap(next);return AETHER_OK;
+    }catch(const std::bad_alloc&){return AETHER_ERROR_OUT_OF_MEMORY;}catch(...){return AETHER_ERROR_INVALID_STATE;}
 }
 AETHER_API void aether_style_runtime_clear_cache(aether_style_runtime_t runtime) { if (runtime) { runtime->states.clear(); ++runtime->sheet_epoch; } }

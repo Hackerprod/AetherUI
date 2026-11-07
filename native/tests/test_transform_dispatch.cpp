@@ -1,4 +1,5 @@
 #include "../src/style_runtime/style_property_registry_internal.h"
+#include "../src/css/style_freeze.h"
 #include <cstdio>
 #include <cstring>
 void builtin_properties_register(style_property_registry_s*);
@@ -23,7 +24,11 @@ int main() {
         pm.property_dependencies["transform"]=MEASURE_SELF_FONT|MEASURE_PERCENTAGE;
         measure_apply_state_s measures(cm, transform->name);
         property_apply_context_s context{&child,nullptr,&measures};
-        transform->inherit_context(context,parent,&pm);
+        aether::style::FrozenStyleRef frozen_parent;
+        check(aether::style::freeze_style(parent, frozen_parent) == AETHER_OK, "freeze independent inheritance source");
+        if (!frozen_parent) return 1;
+        const aether::style::MeasuresReadView parent_measures(pm);
+        transform->inherit_context(context, frozen_parent->view(), &parent_measures);
         check(child.transforms.count==1 && child.transforms.items!=parent.transforms.items,"inherit has independent owned transform list");
         check(child.transforms.items[0].x.unit==AETHER_CSS_UNIT_PX && child.transforms.items[0].x.value==40,"inherit retains computed length despite child font");
         check(child.transforms.items[0].y.unit==AETHER_CSS_UNIT_PERCENT && child.transforms.items[0].y.value==50,"inherit retains percentage");

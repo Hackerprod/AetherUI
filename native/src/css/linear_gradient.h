@@ -1,6 +1,7 @@
 #pragma once
 
 #include <aether/aether.h>
+#include "../rendering/style_kernel_readers.h"
 
 struct aether_linear_gradient_parse_info_s {
     // The ABI stores only a fixed direction vector. Keyword corner directions
@@ -27,3 +28,7 @@ bool aether_linear_gradient_try_parse(const char* source, aether_linear_gradient
 bool aether_linear_gradient_resolve(const aether_linear_gradient& source,
                                     const aether_linear_gradient_resolution_context_s& context,
                                     aether_linear_gradient* out_gradient);
+
+bool aether_linear_gradient_resolve(aether::rendering::GradientKernelReadView source,
+    const aether_linear_gradient_resolution_context_s& context,
+    aether_linear_gradient* out_gradient);

@@ -1,5 +1,6 @@
 #pragma once
 #include <aether/aether.h>
+#include "../css/style_read_view.h"
 
 #include <cstdint>
 #include <vector>
@@ -45,10 +46,12 @@ struct stack_item_t {
    opacity < 1, a non-empty transform list, or a non-empty backdrop-filter
    list. v1 covers the common set. */
 bool creates_stacking_context(const aether_computed_style_t& style);
+bool creates_stacking_context(const style::StyleScalars& style, bool has_transforms, bool has_backdrop_filters);
 
 /* Classifies an element box's paint phase within its parent. Text boxes and
    atomic inline items are inline content and always classify as IN_FLOW. */
 paint_classification_t classify_element_paint(const aether_computed_style_t& style);
+paint_classification_t classify_element_paint(const style::StyleScalars& style);
 
 /* True when any element child carries an explicit (non-auto) z-index, so the
    container must be emitted in stacking order instead of exact DOM order. */

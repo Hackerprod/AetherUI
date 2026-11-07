@@ -1,4 +1,5 @@
 #include "style_map_version.h"
+#include "style_revision.h"
 #include "../dom/dom_types.h"
 namespace aether::style {
 MapVersion::MapVersion(const MapVersionInput& in) :
@@ -17,6 +18,14 @@ aether_status_t make_map_version(const MapVersionInput& in, MapVersionRef& out) 
         if (in.revision || in.generation) return AETHER_ERROR_INVALID_STATE;
     } else if (in.mode==MapMode::contextual || in.mode==MapMode::legacy_complete) {
         if (!in.revision || !in.document_lifetime || !in.generation) return AETHER_ERROR_INVALID_STATE;
+        const auto& r = *in.revision;
+        if (in.backing != r.backing() || in.backing.owner_before(r.backing()) || r.backing().owner_before(in.backing) ||
+            in.document_lifetime != r.document_lifetime() ||
+            in.document_lifetime.owner_before(r.document_lifetime()) || r.document_lifetime().owner_before(in.document_lifetime) ||
+            in.document_identity != r.document_identity() || in.generation != r.generation() ||
+            in.input_epoch != r.input_epoch() || in.structure_epoch != r.structure_epoch() ||
+            in.style_tree_epoch != r.style_tree_epoch() || (in.mode == MapMode::contextual && !r.contextual()))
+            return AETHER_ERROR_INVALID_STATE;
     } else return AETHER_ERROR_INVALID_STATE;
     if (in.document_lifetime) {
         if (!in.document_lifetime->owner ||

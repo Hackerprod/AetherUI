@@ -53,7 +53,7 @@ bool length_depends_on_percentage(aether_css_length value);
 
 aether_layout_box_s* layout_element(
     const aether_layout_engine_s* engine,
-    aether_style_map_s* styles,
+    const StyleLookup* styles,
     aether_node_s* element,
     aether_rectf containing_block,
     percentage_height_s containing_height,
@@ -72,38 +72,38 @@ aether_layout_box_s* layout_element(
 
 float layout_flow_children(
     const aether_layout_engine_s* engine,
-    aether_style_map_s* styles,
+    const StyleLookup* styles,
     aether_layout_box_s* parent_box,
     aether_node_s* parent,
     aether_rectf content,
     percentage_height_s containing_height,
-    const aether_computed_style_t& parent_style,
+    const BoxStyleSnapshot& parent_style,
     aether_layout_result_s* result);
 
 float layout_inline_items(
     const aether_layout_engine_s* engine,
-    aether_style_map_s* styles,
+    const StyleLookup* styles,
     aether_layout_box_s* parent_box,
     const std::vector<inline_item_s>& items,
     float start_x, float start_y, float available_width,
     float available_height, percentage_height_s containing_height,
-    const aether_computed_style_t& parent_style,
+    const BoxStyleSnapshot& parent_style,
     aether_layout_result_s* result);
 
 float layout_flex_children(
     const aether_layout_engine_s* engine,
-    aether_style_map_s* styles,
+    const StyleLookup* styles,
     aether_layout_box_s* parent_box,
     aether_node_s* parent,
     aether_rectf content,
     percentage_height_s containing_height,
-    const aether_computed_style_t& style,
+    const BoxStyleSnapshot& style,
     bool has_definite_height,
     aether_layout_result_s* result);
 
 float layout_table_children(
     const aether_layout_engine_s* engine,
-    aether_style_map_s* styles,
+    const StyleLookup* styles,
     aether_layout_box_s* parent_box,
     aether_node_s* table,
     aether_rectf content,
@@ -112,19 +112,19 @@ float layout_table_children(
 
 void layout_positioned_children(
     const aether_layout_engine_s* engine,
-    aether_style_map_s* styles,
+    const StyleLookup* styles,
     aether_layout_box_s* parent_box,
     aether_node_s* parent,
     aether_rectf positioning_block,
     aether_layout_result_s* result, aether_node_s* only_node = nullptr);
 void layout_finalize_fixed_containers(const aether_layout_engine_s* engine,
-    aether_style_map_s* styles, aether_layout_result_s* result);
+    const StyleLookup* styles, aether_layout_result_s* result);
 
 float measure_intrinsic_width(
     const aether_layout_engine_s* engine,
-    aether_style_map_s* styles,
+    const StyleLookup* styles,
     aether_node_s* element,
-    const aether_computed_style_t& style,
+    const BoxStyleSnapshot& style,
     aether_thicknessf padding, aether_thicknessf border,
     float maximum,
     aether_layout_result_s* result,
@@ -132,43 +132,43 @@ float measure_intrinsic_width(
 
 float measure_intrinsic_height(
     const aether_layout_engine_s* engine,
-    aether_style_map_s* styles,
+    const StyleLookup* styles,
     aether_node_s* element,
-    const aether_computed_style_t& style,
+    const BoxStyleSnapshot& style,
     aether_thicknessf padding, aether_thicknessf border,
     float available_width);
 
 float measure_child_natural_width(
     const aether_layout_engine_s* engine,
-    aether_style_map_s* styles,
+    const StyleLookup* styles,
     aether_node_s* child, float maximum,
     aether_layout_result_s* result,
     aether_intrinsic_size_mode_e mode);
 
 float measure_intrinsic_table_width(
     const aether_layout_engine_s* engine,
-    aether_style_map_s* styles,
+    const StyleLookup* styles,
     aether_node_s* table,
     float maximum,
     aether_layout_result_s* result,
     aether_intrinsic_size_mode_e mode);
 
-aether_computed_style_t get_style(aether_style_map_s* styles, aether_node_s* el);
+BoxStyleSnapshot get_style(const StyleLookup* styles, aether_node_s* el);
 
 float resolve(const aether_layout_engine_s* e,
               aether_css_length value, float reference,
-              const aether_computed_style_t& style);
+              const BoxStyleSnapshot& style);
 
 aether_thicknessf resolve_padding_edges(const aether_layout_engine_s* e,
                                         aether_css_edges edges, float reference,
-                                        const aether_computed_style_t& style);
+                                        const BoxStyleSnapshot& style);
 
 aether_thicknessf resolve_margin_edges(const aether_layout_engine_s* e,
                                        aether_css_edges edges, float reference,
-                                       const aether_computed_style_t& style);
+                                       const BoxStyleSnapshot& style);
 
 aether_thicknessf resolve_border_edges(const aether_layout_engine_s* e,
-                                       const aether_computed_style_t& style,
+                                       const BoxStyleSnapshot& style,
                                        float reference);
 
 // Copies in the current parent coordinate space, excluding only the box's own inset.
@@ -183,7 +183,7 @@ void offset_box(aether_layout_box_s* box, float dx, float dy);
 
 bool is_auto_margin(aether_css_length value);
 
-bool is_out_of_flow(const aether_computed_style_t& style);
+bool is_out_of_flow(const BoxStyleSnapshot& style);
 
 bool aether_overflow_is_scroll_container(int32_t overflow);
 bool aether_overflow_allows_user_scroll(int32_t overflow);
@@ -196,41 +196,42 @@ void accumulate_scrollable_descendant_extent(const aether_layout_box_s* parent,
                                              float& bottom);
 
 const std::vector<aether_node_s*>& collect_flex_items(
-    aether_style_map_s* styles,
+    const StyleLookup* styles,
     aether_layout_result_s* result,
     aether_node_s* parent,
-    const aether_computed_style_t& parent_style);
+    const BoxStyleSnapshot& parent_style);
 
 void collect_text_items(aether_node_s* owner,
-                        const aether_computed_style_t& style,
+                        const BoxStyleSnapshot& style,
                         const std::string& text,
                         std::vector<inline_item_s>& output);
 
 void register_box(aether_layout_result_s* result, aether_layout_box_s* box);
 
-int32_t flex_cross_alignment(const aether_computed_style_t& container,
-                             const aether_computed_style_t& item);
+int32_t flex_cross_alignment(const BoxStyleSnapshot& container,
+                             const BoxStyleSnapshot& item);
 
-inline const measure_state_s* layout_measures(const aether_style_map_s* styles, aether_node_s* element) {
-    if (!styles || !element) return nullptr;
-    const auto it = styles->measures.find(element);
-    return it == styles->measures.end() ? nullptr : it->second.get();
+inline std::optional<aether::style::MeasuresReadView> layout_measures(const StyleLookup* styles, aether_node_s* element) {
+    return styles ? styles->lookup_measures(element) : std::nullopt;
+}
+inline bool layout_measure_has_percentage(const std::optional<aether::style::MeasuresReadView>& measures,
+    const std::string& property, aether_css_length value) {
+    return aether::style::measure_has_percentage(measures ? &*measures : nullptr, property, value);
 }
 inline float layout_used_line_height(const aether_layout_engine_s* engine, aether_node_s* element,
-                                    const aether_computed_style_t& style) {
-    const float used = measure_used_line_height(layout_measures(engine ? engine->measure_styles : nullptr, element), style);
+                                    const BoxStyleSnapshot& style) {
+    const auto measures = layout_measures(engine ? engine->measure_styles : nullptr, element);
+    const float used = aether::style::measure_used_line_height(measures ? &*measures : nullptr, style.scalars());
     if (!std::isfinite(used)) throw std::overflow_error("Non-finite used line height");
     return used;
 }
-inline float layout_used_gap(const aether_style_map_s* styles, aether_node_s* element,
-    const aether_computed_style_t& style, bool row, float basis, bool definite) {
-    const auto* measures = layout_measures(styles, element);
+inline float layout_used_gap(const StyleLookup* styles, aether_node_s* element,
+    const BoxStyleSnapshot& style, bool row, float basis, bool definite) {
+    const auto measures = layout_measures(styles, element);
     if (!measures) return std::max(0.f, style.gap);
-    const auto value = row ? measures->row_gap : measures->column_gap;
+    const auto value = row ? measures->row_gap() : measures->column_gap();
     auto result = measure_resolve_used_length(value, basis, definite,
-        measure_has_percentage(measures, row ? "row-gap" : "column-gap", value));
-    // Flex cyclic percentages use a zero percentage basis, retaining any
-    // absolute component of calc(). Height sizing has a different auto policy.
+        layout_measure_has_percentage(measures, row ? "row-gap" : "column-gap", value));
     if (result.kind == measure_used_kind_e::deferred_percentage)
         result = measure_resolve_used_length(value, 0.f, true);
     if (result.kind == measure_used_kind_e::invalid) throw std::overflow_error("Invalid used gap");

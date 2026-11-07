@@ -1,3 +1,5 @@
+#include "frozen_runtime_metadata.h"
+#include <optional>
 #include "style_runtime_types.h"
 #include "css_variable_tokens.h"
 #include "variable_resolver_internal.h"
@@ -169,10 +171,14 @@ struct environment {
     const custom_property_scope_s* raw = nullptr;
     const custom_property_sources_s* sources = nullptr;
     const computed_custom_property_scope_s* computed = nullptr;
+    const aether::style::FrozenCustomPropertyScope* frozen = nullptr;
 };
 struct acquired {
     enum class kind { invalid, source, terminal, exhausted } type = kind::invalid;
-    const std::string* value = nullptr;
+    std::optional<std::string_view> value;
+    acquired() = default;
+    acquired(kind k, const std::string* s): type(k) { if(s)value=*s; }
+    acquired(kind k, std::string_view s): type(k), value(s) {}
 };
 acquired lookup(const environment& env, const std::string& name, css_variable_budget& budget) {
     if (env.sources) {
@@ -191,6 +197,14 @@ acquired lookup(const environment& env, const std::string& name, css_variable_bu
                 ? acquired{acquired::kind::terminal, &it->second.value} : acquired{};
         }
         if (!budget.take(1)) return {};
+    }
+    for(auto current=env.frozen;current;current=current->parent()) {
+        if(!budget.take(1)||!budget.take(name.size()))return {};
+        if(const auto* value=current->find_local(name)) {
+            if(value->status()==custom_property_status::work_exhausted)return {acquired::kind::exhausted,nullptr};
+            return value->status()==custom_property_status::valid ? acquired{acquired::kind::terminal,value->value()}:acquired{};
+        }
+        if(!budget.take(1))return {};
     }
     // Compatibility adapter only. Runtime never supplies env.raw.
     for (auto current = env.raw; current; current = current->parent) {
@@ -465,4 +479,40 @@ bool variable_resolve(const char* source, const custom_property_scope_s* scope,
                       int32_t max_depth, int32_t max_expansion_length, std::string& out_value) {
     css_variable_budget budget;
     return variable_resolve_with_budget(source, scope, max_depth, max_expansion_length, budget, out_value);
+}
+
+bool aether::style::resolve_frozen_computed_value(const char* source,const FrozenCustomPropertyScope* scope,
+    int32_t depth,int32_t length,std::string& out) {
+    css_variable_budget budget;
+    return resolve_value_with_budget(source,{nullptr,nullptr,nullptr,scope},depth,length,budget,out);
+}
+computed_custom_property_s aether::style::resolve_frozen_custom_property_root_with_budget(
+    const std::string& name, const custom_property_sources_s& sources,
+    const aether::style::FrozenCustomPropertyScope* parent, int32_t max_depth,
+    int32_t max_expansion_length, css_variable_budget& budget) {
+    computed_custom_property_s result;
+    const environment env{nullptr, &sources, nullptr, parent};
+    const auto input = lookup(env, name, budget);
+    bool ok = false;
+    if (input.value && max_expansion_length >= 0) {
+        // Length acquisition and publication are charged just as for consumers.
+        if (budget.take(input.value->size()) && budget.take(1))
+            ok = resolve({input.value->data(), input.value->size()}, env, max_depth,
+                static_cast<size_t>(max_expansion_length), budget, result.value, &name);
+        // Returning the aggregate and moving it into the snapshot can each
+        // copy SSO bytes. Charge both reads/writes, plus logical capacity.
+        if (ok && (!budget.take(1) || !budget.take(result.value.size()) ||
+                   !budget.take(1) || !budget.take(result.value.size()) ||
+                   !budget.take(result.value.size()) || !budget.take(result.value.size()) ||
+                   !budget.take(result.value.size()))) ok = false;
+    }
+    // Account for storing the owned canonical key and publishing the map entry,
+    // including string terminator and possible SSO copies. No global quota.
+    if (!budget.take(1) || !budget.take(name.size()) || !budget.take(1) ||
+        !budget.take(name.size()) || !budget.take(name.size())) ok = false;
+    if (budget.exhausted || input.type == acquired::kind::exhausted)
+        result.status = custom_property_status::work_exhausted;
+    else if (ok) result.status = custom_property_status::valid;
+    if (result.status != custom_property_status::valid) result.value.clear();
+    return result;
 }

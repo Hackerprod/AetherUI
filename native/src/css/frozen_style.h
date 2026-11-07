@@ -113,6 +113,7 @@ public:
     }
     const MeasureScalarValues& scalars() const noexcept { return scalars_; }
     const FrozenDocumentMeasureContext& document() const noexcept { return *document_; }
+    const std::shared_ptr<const FrozenDocumentMeasureContext>& document_owner() const noexcept { return document_; }
     auto background_positions() const noexcept { return positions_.view(); }
     auto background_sizes() const noexcept { return sizes_.view(); }
     auto property_dependencies() const noexcept { return dependencies_.view(); }

@@ -1,5 +1,7 @@
 #include <aether/aether.h>
 #include "snapshot_test_support.h"
+#include "frozen_measure_test_support.h"
+#include "../src/css/style_freeze.h"
 #include <aether/aether_contextual_style.h>
 #include "../src/css/computed_style_handle.h"
 #include "../src/style_runtime/style_property_registry_internal.h"
@@ -32,6 +34,8 @@ void operator delete(void* p, std::size_t) noexcept { std::free(p); }
 void operator delete[](void* p, std::size_t) noexcept { std::free(p); }
 void operator delete(void* p, const std::nothrow_t&) noexcept { std::free(p); }
 void operator delete[](void* p, const std::nothrow_t&) noexcept { std::free(p); }
+#define AETHER_TEST_ALIGNED_NOTE() do { if (count_allocations) ++allocations; } while (false)
+#include "fault_inject_aligned.h"
 
 namespace {
 void need(bool condition, const char* message) {
@@ -178,9 +182,13 @@ void inheritance(style_property_registry_s& registry) {
         color_resolution_state_s pc, cc, sc;
         measure_apply_state_s complete(full_copy, definition.name);
         measure_property_delta_s delta; measure_apply_state_s scratch(base, delta, definition.name);
-        property_apply_context_s a{&control.value, &cc, &complete, &pc}, b{&scratch_flat.value, &sc, &scratch, &pc};
-        definition.inherit_context(a, parent_flat.value, &parent);
-        definition.inherit_context(b, parent_flat.value, &parent);
+        const aether::style::ColorMetadataReadView parent_color(pc);
+        const aether::style::MeasuresReadView parent_measures(parent);
+        aether::style::FrozenStyleRef parent_style;
+        ok(aether::style::freeze_style(parent_flat.value, parent_style), "freeze independent inheritance parent");
+        property_apply_context_s a{&control.value, &cc, &complete, &parent_color}, b{&scratch_flat.value, &sc, &scratch, &parent_color};
+        definition.inherit_context(a, parent_style->view(), &parent_measures);
+        definition.inherit_context(b, parent_style->view(), &parent_measures);
         equal_flat(control.value, scratch_flat.value);
         equal_measures(complete.read(), scratch.read(), base, definition.name);
         equal_state(saved, base);
@@ -321,7 +329,7 @@ struct Runtime {
 };
 void runtime_faults_and_metadata() {
     Runtime f; auto g0 = f.resolve(); auto old = f.lookup(g0);
-    const auto old_measures = snapshot_measures(*old->measures);
+    const auto old_measures = frozen_measure_test::snapshot(*old->measures);
     Flat old_flat(old->style);
     const char* changed = "font-size:3em;width:32px;line-height:150%;background-position:2em 3rem,4vw 5vh;background-size:5em 6rem,50% auto;box-shadow:1em 1rem currentColor";
     ok(aether_element_set_attribute(f.child,"style",changed), "change scratch-rich inputs");
@@ -342,15 +350,17 @@ void runtime_faults_and_metadata() {
             aether_style_transaction_destroy(tx);
             auto current = f.lookup(g1);
             equal_flat(clean_style->style, current->style);
-            equal_measures(measure_read_view_s(*clean_style->measures), measure_read_view_s(*current->measures), *clean_style->measures, std::string("width"));
-            need(clean_style->measures->property_dependencies == current->measures->property_dependencies &&
-                clean_style->measures->dependencies == current->measures->dependencies, "retry metadata equals independent clean computation");
-            need(current->style.font_size == 60 && measure_used_line_height(current->measures.get(), current->style) == 90, "retry retains self font and typed line height");
+            const auto clean_measures = frozen_measure_test::snapshot(*clean_style->measures);
+            const auto current_measures = frozen_measure_test::snapshot(*current->measures);
+            equal_measures(measure_read_view_s(clean_measures), measure_read_view_s(current_measures), clean_measures, std::string("width"));
+            need(clean_measures.property_dependencies == current_measures.property_dependencies &&
+                clean_measures.dependencies == current_measures.dependencies, "retry metadata equals independent clean computation");
+            need(current->style.font_size == 60 && frozen_measure_test::used_line_height(current) == 90, "retry retains self font and typed line height");
             need(current->style.background_layers.items[0].position_x.value == 120 && current->style.background_layers.items[1].position_x.value == 32, "probe background reads NEXT self and viewport");
             need(current->style.background_layers.items[0].size_x.value == 300, "probe independent size survives");
-            need(measure_property_dependencies(*current->measures,"width") == 0, "numeric no-op rem to px clears dependency");
-            for (const auto& entry : current->measures->property_dependencies) need(entry.second != 0, "published dependency map canonical sparse");
-            need(measure_has_percentage(current->measures.get(),"height",current->style.height), "unmodified cancelled percentage persists");
+            need(current->measures->dependency("width") == 0, "numeric no-op rem to px clears dependency");
+            for (const auto& entry : current->measures->property_dependencies()) need(entry.flags() != 0, "published dependency map canonical sparse");
+            need(frozen_measure_test::has_percentage(current->measures.get(),"height",current->style.height), "unmodified cancelled percentage persists");
             aether_computed_style_handle_destroy(current); aether_style_revision_destroy(g1); succeeded = true; break;
         }
         ++failures;
@@ -360,12 +370,12 @@ void runtime_faults_and_metadata() {
         auto style = f.lookup(current);
         equal_flat(old_flat.value, old->style);
         equal_flat(old_flat.value, style->style);
-        equal_state(old_measures, *old->measures);
-        equal_state(old_measures, *style->measures);
+        equal_state(old_measures, frozen_measure_test::snapshot(*old->measures));
+        equal_state(old_measures, frozen_measure_test::snapshot(*style->measures));
         aether_computed_style_handle_destroy(style); aether_style_revision_destroy(current);
     }
     need(succeeded && failures > 0, "runtime sweep completed");
-    equal_state(old_measures, *old->measures);
+    equal_state(old_measures, frozen_measure_test::snapshot(*old->measures));
     equal_flat(old_flat.value, old->style);
     need(old->style.font_size == 40 && old->style.background_layers.items[0].position_x.value == 20, "retained OLD remains intact after retry");
     std::printf("scratch-rich runtime new sweep: %u failures then successful retry\n", failures);
@@ -377,5 +387,6 @@ int main() {
     style_property_registry_s registry; builtin_properties_register(&registry); registry.seal();
     zero_allocation_scratch(); owned_delta_aliases(); sparse_dependencies(); equivalent_applicators(registry); inheritance(registry);
     local_faults(registry); runtime_faults_and_metadata();
-    std::printf("measure property scratch: %u checks passed\n", checks);
+    need(aligned_test_calls > 0 && aligned_test_failures > 0, "runtime sweep reaches and fails aligned PMR family");
+    std::printf("measure property scratch: %u checks passed, %zu aligned failures\n", checks, aligned_test_failures);
 }

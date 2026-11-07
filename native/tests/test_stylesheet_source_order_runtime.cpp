@@ -50,18 +50,18 @@ struct fixture {
             "add valid sheet");
         return handle;
     }
-    const aether_computed_style_t& resolve() {
+    const aether::style::StyleScalars& resolve() {
         aether_style_update_t* updates = nullptr;
         const auto count = aether_style_runtime_resolve_subtree(runtime, aether_doc_get_body(doc), &updates);
         aether_style_updates_free(updates, count);
         check(runtime->states.count(node) == 1, "current resolved state");
-        return runtime->states.at(node)->style.style;
+        return runtime->states.at(node)->style_view().scalars();
     }
     aether_style_map_t map() {
         aether_style_map_t result = nullptr;
         check(aether_style_runtime_create_resolved_style_map(runtime, doc, &result) == AETHER_OK,
             "resolved map");
-        check(result && result->styles.count(node) == 1, "map contains current node");
+        check(result && result->current && result->current->backing()->find(node) != nullptr, "map contains current node");
         return result;
     }
     void reject(const char* source) {
@@ -91,15 +91,15 @@ void counter_transaction() {
     auto* old_map = f.map();
     f.runtime->next_rule_id = INT32_MAX - 1;
     f.reject(".a{opacity:.8}@media(min-width:0px){.a{opacity:.9}}");
-    near(old_map->styles.at(f.node).opacity, .4f, "snapshot survives rejection");
+    near(old_map->current->backing()->find(f.node)->style_view().scalars().opacity, .4f, "snapshot survives rejection");
     const auto last = f.add(".a{opacity:.8}");
     check(f.runtime->next_rule_id == INT32_MAX, "last ID reaches exhausted sentinel");
     check(f.runtime->sheets.at(last)->rules[0].rule_id == INT32_MAX - 1 &&
         f.runtime->sheets.at(last)->rules[0].source_order == INT32_MAX - 1, "last ID and position");
     near(f.resolve().opacity, .8f, "valid call after failed call wins");
     auto* new_map = f.map();
-    near(old_map->styles.at(f.node).opacity, .4f, "old snapshot remains old");
-    near(new_map->styles.at(f.node).opacity, .8f, "new map has new global winner");
+    near(old_map->current->backing()->find(f.node)->style_view().scalars().opacity, .4f, "old snapshot remains old");
+    near(new_map->current->backing()->find(f.node)->style_view().scalars().opacity, .8f, "new map has new global winner");
     f.reject("@media print{.a{opacity:.9}}");
     const auto empty = f.add("/* empty */");
     check(f.runtime->next_rule_id == INT32_MAX && f.runtime->sheets.at(empty)->rules.empty(),
@@ -111,7 +111,7 @@ void counter_transaction() {
     f.reject(".a{opacity:.9}");
     check(aether_style_runtime_update_resolved_style_map(f.runtime, new_map, &f.node, 1) == AETHER_OK,
         "refresh map from current winner");
-    near(new_map->styles.at(f.node).opacity, .4f, "refreshed map restored value");
+    near(new_map->current->backing()->find(f.node)->style_view().scalars().opacity, .4f, "refreshed map restored value");
     aether_style_map_destroy(old_map); aether_style_map_destroy(new_map);
 }
 void handle_transaction() {
@@ -166,7 +166,7 @@ struct committed_callback_context {
     int32_t* outer_count;
     int calls = 0;
     int64_t nested = -1;
-    runtime_node_state_s* final_state = nullptr;
+    const aether::style::FrozenNodeRecord* final_state = nullptr;
     aether_style_map_t outer_map = nullptr;
     aether_style_map_t final_map = nullptr;
 };
@@ -215,9 +215,9 @@ void reentrant_metadata_and_cache() {
           "R3 external return retains published outputs");
     check(f.runtime->states.at(f.node).get() == c.final_state,
           "R3 outer does not invalidate state resolved by callback");
-    near(f.runtime->states.at(f.node)->style.style.opacity, .8f, "R3 cached callback winner survives return");
-    near(c.outer_map->styles.at(f.node).opacity, .4f, "R3 callback outer map remains snapshot");
-    near(c.final_map->styles.at(f.node).opacity, .8f, "R3 callback nested map survives return");
+    near(f.runtime->states.at(f.node)->style_view().scalars().opacity, .8f, "R3 cached callback winner survives return");
+    near(c.outer_map->current->backing()->find(f.node)->style_view().scalars().opacity, .4f, "R3 callback outer map remains snapshot");
+    near(c.final_map->current->backing()->find(f.node)->style_view().scalars().opacity, .8f, "R3 callback nested map survives return");
     std::set<media_condition_s*> removed_nodes;
     for (const auto& rule : f.runtime->sheets.at(outer)->rules) gather_media(rule.condition, removed_nodes);
     check(aether_style_runtime_remove_stylesheet(f.runtime, outer), "R2 remove outer independently");
@@ -233,8 +233,8 @@ struct failed_callback_context {
     bool calc_first;
     int calls = 0;
     int64_t nested = -1;
-    runtime_node_state_s* original_state;
-    runtime_node_state_s* final_state = nullptr;
+    const aether::style::FrozenNodeRecord* original_state;
+    const aether::style::FrozenNodeRecord* final_state = nullptr;
 };
 void failed_callback(const char* code, const char*, const char*, const char*, void* data) {
     auto& c = *static_cast<failed_callback_context*>(data);
@@ -281,7 +281,7 @@ void reentrant_capacity_abort(bool calc_first) {
           f.runtime->next_sheet_handle == 3 && f.runtime->next_rule_id == INT32_MAX,
           "R7 failed return never rewinds nested changes");
     check(f.runtime->states.at(f.node).get() == c.final_state, "R7 callback-resolved cache retained after error");
-    near(f.runtime->states.at(f.node)->style.style.opacity, .8f, "R7 nested remains cached winner");
+    near(f.runtime->states.at(f.node)->style_view().scalars().opacity, .8f, "R7 nested remains cached winner");
 }
 
 struct last_id_context {
@@ -292,7 +292,7 @@ struct last_id_context {
     int outer_calls = 0;
     int nested_calls = 0;
     int64_t empty = -1;
-    runtime_node_state_s* final_state = nullptr;
+    const aether::style::FrozenNodeRecord* final_state = nullptr;
 };
 void last_id_callback(const char* code, const char*, const char*, const char*, void* data) {
     auto& c = *static_cast<last_id_context*>(data);
@@ -341,7 +341,7 @@ struct handle_failure_context {
     int64_t* output;
     int32_t* count;
     int calls = 0;
-    runtime_node_state_s* final_state = nullptr;
+    const aether::style::FrozenNodeRecord* final_state = nullptr;
 };
 void handle_failure_callback(const char* code, const char*, const char*, const char*, void* data) {
     auto& c = *static_cast<handle_failure_context*>(data);
@@ -378,7 +378,7 @@ struct source_failure_context {
     int32_t* count;
     int calls = 0;
     int64_t nested = -1;
-    runtime_node_state_s* final_state = nullptr;
+    const aether::style::FrozenNodeRecord* final_state = nullptr;
 };
 void source_failure_callback(const char* code, const char*, const char*, const char*, void* data) {
     auto& c = *static_cast<source_failure_context*>(data);

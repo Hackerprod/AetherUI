@@ -34,7 +34,7 @@ aether_thicknessf aether_resolve_box_edges(aether_css_edges edges, float referen
             resolve_edge(edges.bottom, reference, font_size, root_font_size, viewport_width, viewport_height, allow_negative)};
 }
 
-aether_thicknessf aether_resolve_border_edges(const aether_computed_style_t& style,
+aether_thicknessf aether_resolve_border_edges(const aether::style::StyleScalars& style,
                                               float reference, float root_font_size,
                                               float viewport_width, float viewport_height) {
     auto edges = aether_resolve_box_edges(style.border_width, reference, style.font_size,
@@ -67,4 +67,8 @@ aether_auto_margin_pair aether_resolve_auto_margin_pair(
     if (before_is_auto) before = share;
     if (after_is_auto) after = share;
     return {before, after};
+}
+
+aether_thicknessf aether_resolve_border_edges(const aether_computed_style_t& style, float reference, float root_font_size, float viewport_width, float viewport_height) {
+    return aether_resolve_border_edges(aether::style::StyleScalars::copy_from(style), reference, root_font_size, viewport_width, viewport_height);
 }

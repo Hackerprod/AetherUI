@@ -11,6 +11,14 @@
 #include <unordered_map>
 #include <unordered_set>
 #include "../css/style_map_types.h"
+#include "operation_pin.h"
+#include "../css/style_c_export.h"
+using aether::layout::BoxStyleSnapshot;
+using aether::layout::StyleLookup;
+using aether::layout::BoxStylePolicy;
+using aether::layout::StyleOperationPin;
+using aether::layout::LayoutOperationPin;
+using aether::layout::CallbackEpochGuard;
 #include "../css/measure_state.h"
 #include "../dom/dom_types.h"
 #include "../rendering/stacking.h"
@@ -30,7 +38,8 @@ struct aether_layout_box_s {
     aether_layout_result_s* owner = nullptr;
     layout_box_kind_t kind = LAYOUT_BOX_ELEMENT;
     aether_node_s*    element = nullptr;
-    aether_computed_style_t style{};
+    BoxStyleSnapshot style{};
+    aether_node_s* presentation_owner = nullptr;
     std::vector<aether_layout_box_s*> children;
     std::string text;
     bool  is_atomic_control = false;
@@ -71,27 +80,21 @@ struct aether_layout_box_s {
     }
 };
 
-// Normal boxes, including pseudo-elements, use their own current computed
-// style and fall back to the layout snapshot when the map has no entry.
-inline const aether_computed_style_t& layout_box_style(
-    const aether_layout_box_s* box, const aether_style_map_s* styles)
+inline aether::style::ComputedStyleReadView layout_box_style(
+    const aether_layout_box_s* box, const StyleLookup& styles, BoxStylePolicy policy)
 {
-    if (styles && box->element) {
-        const auto found = styles->styles.find(box->element);
-        if (found != styles->styles.end()) return found->second;
-    }
-    return box->style;
+    return styles.lookup_box(*box, policy);
 }
 
 // Empty means exact DOM order. Classification is shared by paint and hit testing,
 // including children later omitted for visibility, display or pointer events.
 inline std::vector<aether::stacking::stack_item_t> layout_children_paint_order(
-    const aether_layout_box_s* box, const aether_style_map_s* styles)
+    const aether_layout_box_s* box, const StyleLookup& styles, BoxStylePolicy policy)
 {
     using namespace aether::stacking;
-    const auto classify = [styles](const aether_layout_box_s* child) {
+    const auto classify = [&styles, policy](const aether_layout_box_s* child) {
         return child->kind == LAYOUT_BOX_TEXT || child->is_atomic_control
-            ? paint_classification_t{} : classify_element_paint(layout_box_style(child, styles));
+            ? paint_classification_t{} : classify_element_paint(layout_box_style(child, styles, policy).scalars());
     };
     bool needs_order = false;
     for (auto* child : box->children) {
@@ -115,25 +118,13 @@ inline std::vector<aether::stacking::stack_item_t> layout_children_paint_order(
     return items;
 }
 
-// Only visibility and pointer-events use this selection. Anonymous wrappers
-// must not borrow their owner's decorations, transforms, opacity or flex style.
-inline const aether_computed_style_t& layout_box_presentation_style(
-    const aether_layout_box_s* box, const aether_style_map_s* styles)
+inline aether::layout::Presentation layout_box_presentation_style(
+    const aether_layout_box_s* box, const StyleLookup& styles, BoxStylePolicy policy)
 {
-    if (box->element && box->element->anonymous_flex_owner) {
-        if (styles) {
-            const auto found = styles->styles.find(box->element->anonymous_flex_owner);
-            if (found != styles->styles.end()) return found->second;
-        }
-        return box->style;
-    }
-    return layout_box_style(box, styles);
+    return styles.presentation(*box, policy);
 }
-
-inline aether_node_s* layout_box_hit_owner(const aether_layout_box_s* box)
-{
-    return box->element && box->element->anonymous_flex_owner
-        ? box->element->anonymous_flex_owner : box->element;
+inline aether_node_s* layout_box_hit_owner(const aether_layout_box_s* box) {
+    return box->presentation_owner ? box->presentation_owner : box->element;
 }
 
 // Every input path reverses the exact immutable sample consumed by paint.
@@ -162,12 +153,13 @@ inline bool layout_box_contains_own_content(const aether_layout_box_s* box, floa
 
 struct inline_item_s {
     aether_node_s*        element = nullptr;
-    aether_computed_style_t style{};
+    BoxStyleSnapshot style{};
+    aether_node_s* presentation_owner = nullptr;
     std::string           text;
     bool is_atomic = false;
     bool is_line_break = false;
 
-    static inline_item_s text_item(aether_node_s* el, const aether_computed_style_t& s,
+    static inline_item_s text_item(aether_node_s* el, const BoxStyleSnapshot& s,
                                    const std::string& t) {
         inline_item_s i;
         i.element = el;
@@ -175,14 +167,14 @@ struct inline_item_s {
         i.text = t;
         return i;
     }
-    static inline_item_s atomic(aether_node_s* el, const aether_computed_style_t& s) {
+    static inline_item_s atomic(aether_node_s* el, const BoxStyleSnapshot& s) {
         inline_item_s i;
         i.element = el;
         i.style = s;
         i.is_atomic = true;
         return i;
     }
-    static inline_item_s line_break(aether_node_s* el, const aether_computed_style_t& s) {
+    static inline_item_s line_break(aether_node_s* el, const BoxStyleSnapshot& s) {
         inline_item_s i;
         i.element = el;
         i.style = s;
@@ -193,23 +185,14 @@ struct inline_item_s {
 
 struct aether_layout_result_s {
     size_t references = 1;
-    aether_layout_result_s* retained_storage_owner = nullptr;
     aether_layout_box_s* root = nullptr;
     // Immutable effective context for this result, installed before all passes.
     bool effective_context_enabled = false;
     std::unordered_set<aether_node_s*> effective_fixed_container_nodes;
-    // Independently owned immutable revision backing. Anonymous layout-only
-    // styles are added before publication; caller map updates never affect it.
-    // The document element remains available for canvas-background propagation.
-    std::unique_ptr<aether_style_map_s> owned_style_map;
-    aether_style_map_s* style_map = nullptr;
+    aether::layout::LayoutAssetsRef assets;
+    std::unique_ptr<aether::layout::MutableLayoutOverlay> build_overlay;
     std::unordered_map<aether_node_s*, aether_layout_box_s*> primary_boxes;
     std::vector<aether_layout_box_s*> paint_order;
-    // Anonymous flex items are layout-only nodes.  They must outlive their
-    // boxes and display-list construction, but never become DOM-observable.
-    aether_style_map_s* layout_only_style_map = nullptr;
-    std::vector<aether_node_s*> layout_only_nodes;
-    std::vector<aether_node_s*> layout_only_style_nodes;
     // One anonymous-item sequence per flex container.  Intrinsic measurement
     // and final layout reuse these exact nodes, avoiding duplicate synthetic
     // DOM ownership during provisional passes.
@@ -252,37 +235,24 @@ struct aether_layout_result_s {
     }
 
     bool accepts_style_map(const aether_style_map_s* override_styles) const noexcept {
-        if (!override_styles || !style_map || !style_map->contextual) return true;
-        return override_styles->contextual &&
-            override_styles->revision == style_map->revision &&
-            override_styles->document_identity == style_map->document_identity &&
-            override_styles->generation == style_map->generation;
+        StyleOperationPin pin(assets, aether::style::pin_style_map(override_styles), override_styles != nullptr);
+        return pin.accepts_override();
     }
-
-    aether_node_s* hit_test(float x, float y) const {
-        if (!root || !aether_style_map_structure_valid(style_map)) return nullptr;
-        return hit_test_recursive(root, x, y, nullptr, nullptr, nullptr);
-    }
-
-    aether_node_s* hit_test(float x, float y, aether_scroll_offset_fn offsets, void* data) const {
-        if (!root || !aether_style_map_structure_valid(style_map)) return nullptr;
-        return hit_test_recursive(root, x, y, nullptr, offsets, data);
-    }
-
-    aether_node_s* hit_test(float x, float y, const aether_style_map_s* styles,
-                            aether_scroll_offset_fn offsets, void* data) const {
-        if (!root || !aether_style_map_structure_valid(style_map) || !accepts_style_map(styles)) return nullptr;
-        return hit_test_recursive(root, x, y, styles, offsets, data);
+    aether_node_s* hit_test(float x, float y, const StyleLookup& styles, BoxStylePolicy policy,
+        aether_scroll_offset_fn offsets = nullptr, void* data = nullptr) const {
+        if (!root || (assets && !assets->structure_valid())) return nullptr;
+        return hit_test_recursive(root, x, y, styles, policy, offsets, data);
     }
 
 private:
     static aether_node_s* hit_test_recursive(aether_layout_box_s* box, float x, float y,
-                                              const aether_style_map_s* styles,
+                                              const StyleLookup& styles, BoxStylePolicy policy,
                                               aether_scroll_offset_fn offsets, void* data) {
         if (!layout_box_input_alive(box) || !layout_box_unmap_visual(box, x, y)) return nullptr;
-        const auto& style = layout_box_style(box, styles);
+        const auto style_view = layout_box_style(box, styles, policy);
+        const auto& style = style_view.scalars();
         if (style.display == AETHER_DISPLAY_NONE) return nullptr;
-        const auto& presentation = layout_box_presentation_style(box, styles);
+        const auto& presentation = layout_box_presentation_style(box, styles, policy);
         // A scroll offset moves only descendants; the scroll container's own
         // border/padding box remains in viewport coordinates.
         float child_x = x;
@@ -298,14 +268,14 @@ private:
             style.overflow_x != AETHER_OVERFLOW_VISIBLE ||
             style.overflow_y != AETHER_OVERFLOW_VISIBLE;
         if (!clips_children || ((style.overflow_x == AETHER_OVERFLOW_VISIBLE || (x >= box->padding_box.x && x <= box->padding_box.x + box->padding_box.width)) && (style.overflow_y == AETHER_OVERFLOW_VISIBLE || (y >= box->padding_box.y && y <= box->padding_box.y + box->padding_box.height)))) {
-            const auto order = layout_children_paint_order(box, styles);
+            const auto order = layout_children_paint_order(box, styles, policy);
             if (order.empty()) {
                 for (auto it = box->children.rbegin(); it != box->children.rend(); ++it) {
-                    if (auto* found = hit_test_recursive(*it, child_x, child_y, styles, offsets, data)) return found;
+                    if (auto* found = hit_test_recursive(*it, child_x, child_y, styles, policy, offsets, data)) return found;
                 }
             } else {
                 for (auto it = order.rbegin(); it != order.rend(); ++it) {
-                    if (auto* found = hit_test_recursive(box->children[it->dom_index], child_x, child_y, styles, offsets, data)) return found;
+                    if (auto* found = hit_test_recursive(box->children[it->dom_index], child_x, child_y, styles, policy, offsets, data)) return found;
                 }
             }
         }
@@ -319,7 +289,8 @@ private:
 
 struct aether_layout_engine_s {
     bool layout_in_progress = false;
-    const aether_style_map_s* measure_styles = nullptr;
+    const StyleLookup* measure_styles = nullptr;
+    std::shared_ptr<node_identity_s> measure_document;
     // One-shot owned scratch. No runtime/map pointer survives prepare.
     bool transition_context_prepared = false;
     std::unordered_set<aether_node_s*> prepared_active_nodes;
@@ -338,7 +309,7 @@ bool aether_overflow_is_scroll_container(int32_t overflow);
 
 // Shared paint/input scope policy. Geometry and dynamic-scroll eligibility use
 // the layout snapshot, including propagated viewport overflow.
-inline bool layout_box_clips(const aether_computed_style_t& style) {
+inline bool layout_box_clips(const aether::style::StyleScalars& style) {
     return style.overflow_x != AETHER_OVERFLOW_VISIBLE || style.overflow_y != AETHER_OVERFLOW_VISIBLE;
 }
 inline int32_t layout_scroll_overflow_axis(const aether_layout_result_s* layout,
@@ -356,34 +327,37 @@ inline bool layout_box_has_dynamic_scroll(const aether_layout_result_s* layout,
           box->scroll.scrollable_overflow_y > 0.f));
 }
 
-/* Internal text measurement wrapper */
+/* Complete independent C callback copies; pinned immutable input is never exposed. */
 inline aether_text_metrics_t engine_measure_text(
-    const aether_layout_engine_s* e,
-    const char* text,
-    const aether_computed_style_t* style,
-    float max_width, aether_node_s* node = nullptr)
+    const aether_layout_engine_s* e, const char* text,
+    const BoxStyleSnapshot* style, float max_width, aether_node_s* node = nullptr)
 {
-    const auto lifetime = e && e->measure_styles ? e->measure_styles->document_lifetime : nullptr;
-    const auto epoch = lifetime ? lifetime->mutation_epoch : 0;
-    const auto style_epoch = lifetime ? lifetime->style_tree_epoch : 0;
-    const auto checked = [&](aether_text_metrics_t metrics) {
-        if (!std::isfinite(metrics.width) || !std::isfinite(metrics.height) || !std::isfinite(metrics.baseline) || metrics.width < 0.f || metrics.height < 0.f)
-            throw std::overflow_error("Invalid text metrics");
-        if (lifetime && (!lifetime->alive || lifetime->mutation_epoch != epoch || lifetime->style_tree_epoch != style_epoch))
-            throw std::runtime_error("DOM mutated during text measurement");
-        return metrics;
-    };
-    if (e && e->contextual_text_measurer) {
-        const measure_state_s* measures = nullptr;
-        if (node && e->measure_styles) {
-            const auto it = e->measure_styles->measures.find(node);
-            if (it != e->measure_styles->measures.end()) measures = it->second.get();
-        }
-        const float used_line_height = measure_used_line_height(measures, *style);
-        if (!std::isfinite(used_line_height)) throw std::overflow_error("Non-finite callback line height");
-        return checked(e->contextual_text_measurer(text, style, used_line_height, max_width, e->contextual_text_measurer_data));
+    if (!e || (!e->contextual_text_measurer && !e->text_measurer)) return {0.f, 0.f, 0.f};
+    const auto lifetime = e->measure_document;
+    const CallbackEpochGuard guard(lifetime);
+    std::shared_ptr<node_identity_s> identity;
+    if (node && e->measure_styles) {
+        if (const auto* record = e->measure_styles->lookup_record(node)) identity = record->node_lifetime();
     }
-    if (e && e->text_measurer)
-        return checked(e->text_measurer(text, style, max_width, e->text_measurer_data));
-    return {0.f, 0.f, 0.f};
+    const auto valid_node = [&]() { return !identity || (identity->owner == node && identity->alive && identity->attached); };
+    if (!valid_node()) throw std::runtime_error("Retired text measurement node");
+    std::unique_ptr<aether::style::CallbackStyleCopy> copy;
+    const auto status = aether::style::CallbackStyleCopy::create(style->view(), copy);
+    if (status == AETHER_ERROR_OUT_OF_MEMORY) throw std::bad_alloc();
+    if (status != AETHER_OK) throw std::runtime_error("Invalid callback style");
+    aether_text_metrics_t metrics{};
+    if (e->contextual_text_measurer) {
+        const auto measures = e->measure_styles ? e->measure_styles->lookup_measures(node) : std::nullopt;
+        const float used = aether::style::measure_used_line_height(measures ? &*measures : nullptr, style->scalars());
+        if (!std::isfinite(used)) throw std::overflow_error("Non-finite callback line height");
+        const auto callback = e->contextual_text_measurer; void* data = e->contextual_text_measurer_data;
+        metrics = callback(text, copy->get(), used, max_width, data);
+    } else {
+        const auto callback = e->text_measurer; void* data = e->text_measurer_data;
+        metrics = callback(text, copy->get(), max_width, data);
+    }
+    if (!guard.valid() || !valid_node()) throw std::runtime_error("DOM mutated during text measurement");
+    if (!std::isfinite(metrics.width) || !std::isfinite(metrics.height) || !std::isfinite(metrics.baseline) || metrics.width < 0.f || metrics.height < 0.f)
+        throw std::overflow_error("Invalid text metrics");
+    return metrics;
 }

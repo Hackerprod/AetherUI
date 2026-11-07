@@ -1,3 +1,5 @@
+#include "../css/computed_style_internal.h"
+using namespace aether::style;
 #include "style_property_registry_internal.h"
 #include "style_runtime_types.h"
 #include "builtin_property_parse_utils.h"
@@ -475,7 +477,8 @@ static aether_css_length bi_origin_freeze_em(aether_css_length length, float fon
 }
 
 static void bi_inherit_transform_origin(aether_computed_style_t* style,
-                                        const aether_computed_style_t& parent) {
+                                        ComputedStyleReadView parent_view) {
+    const auto& parent=parent_view.scalars();
     style->transform_origin = {bi_origin_freeze_em(parent.transform_origin.x, parent.font_size),
                                bi_origin_freeze_em(parent.transform_origin.y, parent.font_size)};
 }
@@ -1600,22 +1603,23 @@ void builtin_properties_register(style_property_registry_s* reg) {
             name != "background-image" && name != "background-position" && name != "background-size" &&
             name != "text-shadow" && name != "box-shadow") continue;
         definition.css_wide = bi_origin_css_wide;
-        definition.inherit_context = [name](property_apply_context_s& c, const aether_computed_style_t& p, const measure_state_s* pm) {
+        definition.inherit_context = [name](property_apply_context_s& c, ComputedStyleReadView pv, const MeasuresReadView* pm) {
+            const auto& p=pv.scalars();
             auto& s = *c.style;
             if (name == "text-shadow" || name == "box-shadow") {
                 const bool box = name == "box-shadow";
-                const auto& inherited = box ? p.box_shadows : p.text_shadows;
+                const auto inherited = box ? pv.box_shadows() : pv.text_shadows();
                 auto& destination = box ? s.box_shadows : s.text_shadows;
                 auto& references = box ? c.color_resolution->box_shadow_uses_current_color : c.color_resolution->text_shadow_uses_current_color;
                 std::vector<bool> copied_references;
-                if (c.parent_color_resolution) copied_references = box ? c.parent_color_resolution->box_shadow_uses_current_color : c.parent_color_resolution->text_shadow_uses_current_color;
+                if (c.parent_color_resolution) { const auto& r=*c.parent_color_resolution; const size_t n=box?r.box_shadow_count():r.text_shadow_count(); copied_references.reserve(n); for(size_t i=0;i<n;++i)copied_references.push_back(box?r.box_shadow_at(i):r.text_shadow_at(i)); }
                 aether_shadow_list copied{};
-                if (!aether_shadow_list_copy(&inherited, &copied)) throw std::bad_alloc();
+                if (copy_builder_shadows(inherited, &copied)!=AETHER_OK) throw std::bad_alloc();
                 aether_shadow_list_free(&destination); destination = copied;
                 references = std::move(copied_references);
             } else if (name == "transform") {
                 aether_transform_list copied{};
-                if (!aether_transform_list_copy(&p.transforms, &copied)) throw std::bad_alloc();
+                if (copy_builder_transforms(pv.transforms(), &copied)!=AETHER_OK) throw std::bad_alloc();
                 aether_transform_list_free(&s.transforms); s.transforms = copied;
             } else if (name == "transform-origin") s.transform_origin = p.transform_origin;
             else if (name == "border-radius") s.border_radii = p.border_radii;
@@ -1625,7 +1629,7 @@ void builtin_properties_register(style_property_registry_s* reg) {
             else if (name == "border-bottom-right-radius") s.border_radii.bottom_right = p.border_radii.bottom_right;
             else if (name == "background-image") {
                 aether_background_layer_list copied{};
-                if (!aether_background_layer_list_copy(&p.background_layers, &copied)) throw std::bad_alloc();
+                if (copy_builder_backgrounds(pv, &copied)!=AETHER_OK) throw std::bad_alloc();
                 // Only the image payload inherits. Position, size and repeat
                 // are independent longhands with the child's own initial/cascade.
                 for (int32_t i = 0; i < copied.count; ++i) {
@@ -1635,16 +1639,18 @@ void builtin_properties_register(style_property_registry_s* reg) {
                 aether_background_layer_list_free(&s.background_layers); s.background_layers = copied;
                 measure_apply_background_longhands(s, c.measures->read());
             } else if (name == "background-position") {
-                c.measures->set_background_positions(pm ? pm->background_positions :
-                    std::vector<measure_background_position_s>{measure_background_position_s{}});
+                std::vector<measure_background_position_s> positions;
+                if(pm){positions.reserve(pm->position_count());for(size_t i=0;i<pm->position_count();++i){auto v=pm->position_at(i);positions.push_back({v.x,v.y});}}else positions.emplace_back();
+                c.measures->set_background_positions(std::move(positions));
                 measure_apply_background_longhands(s, c.measures->read());
             } else if (name == "background-size") {
-                c.measures->set_background_sizes(pm ? pm->background_sizes :
-                    std::vector<measure_background_size_s>{measure_background_size_s{}});
+                std::vector<measure_background_size_s> sizes;
+                if(pm){sizes.reserve(pm->size_count());for(size_t i=0;i<pm->size_count();++i){auto v=pm->size_at(i);sizes.push_back({v.kind,v.x,v.y});}}else sizes.emplace_back();
+                c.measures->set_background_sizes(std::move(sizes));
                 measure_apply_background_longhands(s, c.measures->read());
             }
             uint32_t dep = MEASURE_PARENT;
-            if (pm) dep |= measure_property_dependencies(*pm, name) & MEASURE_PERCENTAGE;
+            if (pm) dep |= pm->dependency(name) & MEASURE_PERCENTAGE;
             c.measures->set_property_dependencies(dep);
         };
     }
@@ -1683,7 +1689,7 @@ void builtin_properties_register(style_property_registry_s* reg) {
     // Private contextual route: legacy applicators remain available to flat callers.
     for (auto& definition : reg->definitions) {
         const auto name = definition.name;
-        const auto field = [name](aether_computed_style_t& st) -> aether_css_length* {
+        const auto field = [name](auto& st) -> aether_css_length* {
             if (name == "width") return &st.width;
             if (name == "height") return &st.height;
             if (name == "min-width") return &st.min_width;
@@ -1778,18 +1784,19 @@ void builtin_properties_register(style_property_registry_s* reg) {
             if (legacy) legacy(c.style, value);
             if (auto* length = field(*c.style)) *length = measure_compute_length(*length, m.read().inputs());
         };
-        definition.inherit_context = [name, field](property_apply_context_s& c, const aether_computed_style_t& parent, const measure_state_s* pm) {
+        definition.inherit_context = [name, field](property_apply_context_s& c, ComputedStyleReadView parent_view, const MeasuresReadView* pm) {
+            const auto& parent=parent_view.scalars();
             if (auto* dst = field(*c.style)) {
                 auto copy = parent;
                 *dst = *field(copy);
                 if (name == "flex-basis") c.style->flex_basis.kind = parent.flex_basis.kind;
             } else if (name == "font-size") { c.style->font_size = parent.font_size; c.measures->set_self_font_size(parent.font_size); }
-            else if (name == "line-height") { c.style->line_height = parent.line_height; if (pm) c.measures->set_line_height(pm->line_height); }
-            else if (pm && name == "row-gap") c.measures->set_row_gap(pm->row_gap);
-            else if (pm && name == "column-gap") c.measures->set_column_gap(pm->column_gap);
+            else if (name == "line-height") { c.style->line_height = parent.line_height; if (pm) c.measures->set_line_height(pm->line_height()); }
+            else if (pm && name == "row-gap") c.measures->set_row_gap(pm->row_gap());
+            else if (pm && name == "column-gap") c.measures->set_column_gap(pm->column_gap());
             uint32_t inherited_dependencies = MEASURE_PARENT;
             if (pm) {
-                inherited_dependencies |= measure_property_dependencies(*pm, name) & MEASURE_PERCENTAGE;
+                inherited_dependencies |= pm->dependency(name) & MEASURE_PERCENTAGE;
             }
             c.measures->set_property_dependencies(inherited_dependencies);
         };

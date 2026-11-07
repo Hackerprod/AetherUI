@@ -39,6 +39,7 @@ public:
     const FrozenCustomProperty* find_local(std::string_view name) const noexcept;
     const FrozenCustomPropertyScope* parent() const noexcept { return parent_.get(); }
     size_t local_count() const noexcept { return local_.size(); }
+    ReadOnlyArrayView<FrozenCustomProperty> local_entries() const noexcept { return local_.view(); }
 };
 aether_status_t freeze_custom_scope(const CustomPropertyInput&, FrozenScopeRef parent, FrozenScopeRef& output) noexcept;
 class FrozenColorMetadata {
@@ -67,4 +68,10 @@ public:
     size_t box_shadow_count() const noexcept;
     bool box_shadow_at(size_t i) const;
 };
+}
+
+namespace aether::style {
+FrozenScopeRef compute_frozen_custom_property_scope(const custom_property_sources_s&, FrozenScopeRef, int32_t, int32_t);
+bool resolve_frozen_computed_value(const char*, const FrozenCustomPropertyScope*, int32_t, int32_t, std::string&);
+computed_custom_property_s resolve_frozen_custom_property_root_with_budget(const std::string&, const custom_property_sources_s&, const FrozenCustomPropertyScope*, int32_t, int32_t, css_variable_budget&);
 }

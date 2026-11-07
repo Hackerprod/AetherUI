@@ -32,7 +32,7 @@ bool aether_form_control_is_opaque_single_line(const aether_node_s* element) {
 
 std::string aether_opaque_control_display_text(
     const aether_node_s* element,
-    const aether_computed_style_t& style) {
+    const aether::style::StyleScalars& style) {
     if (!aether_form_control_is_opaque_single_line(element)) return {};
     const auto value = element->attributes.find("value");
     if (value != element->attributes.end() && !value->second.empty()) {
@@ -91,4 +91,8 @@ float aether_control_opaque_content_height_used(
         natural_height = std::max(measured_height, std::max(line_height, font_size * 1.1f));
     }
     return std::max(natural_height, font_size * 1.1f);
+}
+
+std::string aether_opaque_control_display_text(const aether_node_s* element, const aether_computed_style_t& style) {
+    return aether_opaque_control_display_text(element, aether::style::StyleScalars::copy_from(style));
 }

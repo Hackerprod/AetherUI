@@ -8,12 +8,13 @@ struct layout_input_hit_t {
 
 // Reverse the painter's local scopes: own chrome, children, own content.
 inline layout_input_hit_t layout_hit_test_input(const aether_layout_result_s* layout,
-    const aether_layout_box_s* box, const aether_style_map_s* styles, float x, float y,
+    const aether_layout_box_s* box, const StyleLookup& styles, BoxStylePolicy policy, float x, float y,
     aether_scroll_offset_fn offsets, void* data) {
-    if (!box || (layout && (!aether_style_map_structure_valid(layout->style_map) || !layout->accepts_style_map(styles))) || !layout_box_input_alive(box) || !layout_box_unmap_visual(box, x, y)) return {};
-    const auto& style = layout_box_style(box, styles);
+    if (!box || (layout && layout->assets && !layout->assets->structure_valid()) || !layout_box_input_alive(box) || !layout_box_unmap_visual(box, x, y)) return {};
+    const auto style_view = layout_box_style(box, styles, policy);
+    const auto& style = style_view.scalars();
     if (style.display == AETHER_DISPLAY_NONE) return {};
-    const auto& presentation = layout_box_presentation_style(box, styles);
+    const auto& presentation = layout_box_presentation_style(box, styles, policy);
     auto* owner = layout_box_hit_owner(box);
     const bool eligible = owner && presentation.visible &&
         presentation.pointer_events != AETHER_POINTER_EVENTS_NONE;
@@ -40,9 +41,9 @@ inline layout_input_hit_t layout_hit_test_input(const aether_layout_result_s* la
             const float child_x = x + (dynamic ? offset.x : 0.f);
             const float child_y = y + (dynamic ? offset.y : 0.f);
             const auto visit = [&](const aether_layout_box_s* child) {
-                return layout_hit_test_input(layout, child, styles, child_x, child_y, offsets, data);
+                return layout_hit_test_input(layout, child, styles, policy, child_x, child_y, offsets, data);
             };
-            const auto order = layout_children_paint_order(box, styles);
+            const auto order = layout_children_paint_order(box, styles, policy);
             if (order.empty()) {
                 for (auto it = box->children.rbegin(); it != box->children.rend(); ++it) {
                     const auto hit = visit(*it); if (hit.part != AETHER_INPUT_HIT_NONE) return hit;
