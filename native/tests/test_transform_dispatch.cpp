@@ -13,7 +13,24 @@ int main() {
     check(transform && transform->parse && transform->apply_checked && transform->parse_failure, "transform callbacks registered");
     if (!transform || !transform->parse || !transform->apply_checked || !transform->parse_failure) return 1;
     check(!transform->inherited && transform->impact == (STYLE_IMPACT_COMPOSITE | STYLE_IMPACT_HITTEST), "transform metadata unchanged");
-    check(!transform->css_wide && !transform->inherit_explicit, "no new CSS-wide or inheritance hooks");
+    check(transform->css_wide && transform->inherit_context && !transform->inherit_explicit,
+          "contextual inheritance opts in without adding a legacy flat hook");
+    if (transform->inherit_context) {
+        aether_computed_style_t parent{}, child{};
+        parent.font_size=20; child.font_size=10;
+        check(transform->apply_checked(&parent,"translate(40px,50%)").success,"seed computed parent transform");
+        measure_state_s pm, cm; pm.self_font_size=20; cm.self_font_size=10;
+        pm.property_dependencies["transform"]=MEASURE_SELF_FONT|MEASURE_PERCENTAGE;
+        property_apply_context_s context{&child,nullptr,&cm};
+        transform->inherit_context(context,parent,&pm);
+        check(child.transforms.count==1 && child.transforms.items!=parent.transforms.items,"inherit has independent owned transform list");
+        check(child.transforms.items[0].x.unit==AETHER_CSS_UNIT_PX && child.transforms.items[0].x.value==40,"inherit retains computed length despite child font");
+        check(child.transforms.items[0].y.unit==AETHER_CSS_UNIT_PERCENT && child.transforms.items[0].y.value==50,"inherit retains percentage");
+        check(cm.property_dependencies["transform"]==(MEASURE_PARENT|MEASURE_PERCENTAGE),"inherit depends on computed parent not child font");
+        parent.transforms.items[0].x.value=99;
+        check(child.transforms.items[0].x.value==40,"parent mutation cannot change inherited snapshot");
+        aether_computed_style_free(&parent); aether_computed_style_free(&child);
+    }
     for (const char* source : {"none", "/**/n\\6f ne/**/", "r\\6f tate(20deg)", "scale(2,3)", "translateX(c\\61 lc(1px))", "rotate(90d\\65 g)", "translateX(10p\\78)", "translate(calc(20% + 3px),-2em) rotate(0.0)"}) {
         for (int padding : {0, 1, 128, 4096}) {
             std::string value = std::string(padding, ' ') + source + std::string(padding, '\t');

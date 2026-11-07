@@ -513,11 +513,8 @@ AETHER_API aether_status_t aether_doc_parse_html(aether_doc_t doc, const char* h
     // path for the native style bridge during component rebuilds, so retaining the
     // previous children here would leak an entire DOM snapshot and make selectors
     // operate over stale nodes.
-    std::function<void(aether_node_s*)> destroy_subtree = [&](aether_node_s* node) {
-        for (auto* child : node->children) destroy_subtree(child);
-        delete node;
-    };
-    for (auto* child : doc->children) destroy_subtree(child);
+    aether_node_touch(doc, true);
+    for (auto* child : doc->children) aether_destroy_dom_subtree(child);
     doc->children.clear();
     doc->id_index.clear();
     doc->next_style_node_id = 1;

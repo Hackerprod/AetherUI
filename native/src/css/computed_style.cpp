@@ -52,7 +52,9 @@ AETHER_API aether_computed_style_t aether_computed_style_default(void) {
     return s;
 }
 
-AETHER_API aether_computed_style_t aether_computed_style_inherit_from(const aether_computed_style_t* parent) {
+aether_status_t computed_style_inherit_checked(const aether_computed_style_t* parent,
+                                                aether_computed_style_t* out) {
+    if (!out) return AETHER_ERROR_NULL_ARG;
     aether_computed_style_t s = aether_computed_style_default();
     if (parent) {
         s.color = parent->color;
@@ -68,9 +70,21 @@ AETHER_API aether_computed_style_t aether_computed_style_inherit_from(const aeth
         s.visible = parent->visible;
         // text-shadow is inherited. Keep an owned copy so parent and child
         // style handles never alias list storage.
-        (void)aether_shadow_list_copy(&parent->text_shadows, &s.text_shadows);
+        if (!aether_shadow_list_copy(&parent->text_shadows, &s.text_shadows)) {
+            aether_computed_style_free(&s);
+            *out = {};
+            return AETHER_ERROR_OUT_OF_MEMORY;
+        }
     }
-    return s;
+    *out = s;
+    return AETHER_OK;
+}
+
+AETHER_API aether_computed_style_t aether_computed_style_inherit_from(const aether_computed_style_t* parent) {
+    aether_computed_style_t result{};
+    if (computed_style_inherit_checked(parent, &result) != AETHER_OK)
+        return aether_computed_style_default(); // Legacy ABI has no status channel.
+    return result;
 }
 
 AETHER_API void aether_computed_style_free(aether_computed_style_t* s) {

@@ -1,3 +1,4 @@
+#include <new>
 #include "../style_runtime/css_component_values.h"
 #include "backdrop_filters.h"
 
@@ -58,7 +59,7 @@ bool aether_backdrop_filter_list_try_parse(const std::string& source,
     aether_backdrop_filter_list list{};
     if (!replacement.empty()) {
         list.items = static_cast<aether_backdrop_filter*>(std::malloc(sizeof(aether_backdrop_filter) * replacement.size()));
-        if (!list.items) return false;
+        if (!list.items) throw std::bad_alloc();
         std::memcpy(list.items, replacement.data(), sizeof(aether_backdrop_filter) * replacement.size());
         list.count = static_cast<int32_t>(replacement.size());
     }

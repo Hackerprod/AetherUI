@@ -55,12 +55,16 @@ AETHER_API aether_status_t aether_node_append_child(aether_node_t parent, aether
     for (auto* ancestor = parent; ancestor; ancestor = ancestor->parent) {
         if (ancestor == child) return AETHER_ERROR_INVALID_STATE;
     }
+    parent->children.reserve(parent->children.size() + 1);
+    aether_node_touch(parent, true);
     if (child->parent) {
+        aether_node_touch(child->parent, true);
         auto& siblings = child->parent->children;
         siblings.erase(std::remove(siblings.begin(), siblings.end(), child), siblings.end());
     }
     child->parent = parent;
     parent->children.push_back(child);
+    aether_node_mark_attached(child, true);
     return AETHER_OK;
 }
 
@@ -71,7 +75,9 @@ AETHER_API aether_status_t aether_node_remove_child(aether_node_t parent, aether
     auto& vec = parent->children;
     auto it = std::find(vec.begin(), vec.end(), child);
     if (it == vec.end() || child->parent != parent) return AETHER_ERROR_INVALID_STATE;
+    aether_node_touch(parent, true);
     vec.erase(it);
+    aether_node_mark_attached(child, false);
     child->parent = nullptr;
     return AETHER_OK;
 }

@@ -1,4 +1,6 @@
 #include "shadow_values.h"
+#include "../css/measure_state.h"
+#include "../css/css_length_internal.h"
 #include "css_component_values.h"
 #include "style_string_utils_internal.h"
 #include <cmath>
@@ -9,7 +11,7 @@ namespace {
 static shadow_value_error parse_component(const std::string& source,
                                                       bool allow_inset, bool allow_spread,
                                                       aether_shadow& shadow,
-                                                      bool& uses_current_color) {
+                                                      bool& uses_current_color, const measure_state_s* measures) {
     std::vector<std::string> tokens;
     bool valid = false;
     tokens = css_split_components(source, &valid);
@@ -47,8 +49,16 @@ static shadow_value_error parse_component(const std::string& source,
             length.unit == AETHER_CSS_UNIT_AUTO || length.unit == AETHER_CSS_UNIT_PERCENT ||
             length_count == 4) return shadow_value_error::invalid;
         if (!allow_spread && length_count == 3) return shadow_value_error::spread_not_allowed;
-        const float pixels = aether_css_length_resolve(length, 0, 16, 16, 1920, 1080);
-        if (!std::isfinite(pixels) || (length_count == 2 && pixels < 0)) return shadow_value_error::invalid;
+        // A contextual runtime never borrows parser compatibility defaults.
+        float pixels = 0;
+        if (measures) {
+            const auto used = measure_resolve_used_length(measure_compute_length(length, *measures), 0, false);
+            if (used.kind != measure_used_kind_e::resolved) return shadow_value_error::invalid;
+            pixels = used.px;
+        } else pixels = aether_css_length_resolve(length, 0, 16, 16, 1920, 1080);
+        const bool calc = token.size() >= 5 && str_iequals(token.substr(0,5), "calc(");
+        if (!std::isfinite(pixels) || (length_count == 2 && pixels < 0 && !calc)) return shadow_value_error::invalid;
+        if (length_count == 2) pixels = std::max(0.f, pixels);
         if (length_count == 0) shadow.offset_x = pixels;
         else if (length_count == 1) shadow.offset_y = pixels;
         else if (length_count == 2) shadow.blur_radius = pixels;
@@ -61,7 +71,7 @@ static shadow_value_error parse_component(const std::string& source,
 }
 
 shadow_value_error shadow_list_parse(const std::string& source, bool box,
-    parsed_shadow_list& output, const shadow_storage_policy& storage) {
+    parsed_shadow_list& output, const shadow_storage_policy& storage, const measure_state_s* measures) {
     parsed_shadow_list parsed;
     const auto value = str_trim(source);
     if (str_iequals(value, "none")) {
@@ -83,7 +93,7 @@ shadow_value_error shadow_list_parse(const std::string& source, bool box,
     for (const auto& component : components) {
         aether_shadow shadow{};
         bool current_color = false;
-        const auto error = parse_component(component, box, box, shadow, current_color);
+        const auto error = parse_component(component, box, box, shadow, current_color, measures);
         if (error != shadow_value_error::none) return error;
         parsed.items.push_back(shadow);
         parsed.uses_current_color.push_back(current_color);
@@ -94,9 +104,9 @@ shadow_value_error shadow_list_parse(const std::string& source, bool box,
 
 shadow_value_error shadow_list_apply(const std::string& source, bool box,
     aether_shadow_list& destination, std::vector<bool>& references,
-    const shadow_storage_policy& storage) {
+    const shadow_storage_policy& storage, const measure_state_s* measures) {
     parsed_shadow_list parsed;
-    const auto error = shadow_list_parse(source, box, parsed, storage);
+    const auto error = shadow_list_parse(source, box, parsed, storage, measures);
     if (error != shadow_value_error::none) return error;
     aether_shadow* replacement = nullptr;
     if (!parsed.items.empty()) {

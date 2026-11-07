@@ -33,3 +33,12 @@ float aether_control_opaque_content_height(
     float padding_v,
     float border_v);
 float aether_control_flow_centering_offset(float definite_content_height, float used_content_height);
+float aether_control_opaque_content_height_used(
+    float measured_height,
+    float font_size,
+    float used_line_height,
+    bool has_explicit_height,
+    float explicit_height,
+    int32_t box_sizing,
+    float padding_v,
+    float border_v);

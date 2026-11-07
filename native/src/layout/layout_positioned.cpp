@@ -44,7 +44,7 @@ void layout_positioned_children(
     aether_layout_box_s* parent_box,
     aether_node_s* parent,
     aether_rectf positioning_block,
-    aether_layout_result_s* result)
+    aether_layout_result_s* result, aether_node_s* only_node)
 {
     auto flex_static_position = [&](const aether_computed_style_t& child_style,
                                     const aether_rectf& containing,
@@ -121,15 +121,24 @@ void layout_positioned_children(
     };
 
     for (auto* node : parent->children) {
+        if (only_node && only_node != node) continue;
         if (node->type != AETHER_NODE_ELEMENT) continue;
         const auto style = get_style(styles, node);
         if (!is_out_of_flow(style) || style.display == AETHER_DISPLAY_NONE) continue;
 
         // Fixed-position descendants use the viewport; absolute descendants use the nearest
         // positioned ancestor supplied by their parent layout call.
-        const aether_rectf containing = style.position == AETHER_POSITION_FIXED
+        aether_rectf containing = style.position == AETHER_POSITION_FIXED
             ? aether_rectf{0.f, 0.f, result->viewport.width, result->viewport.height}
             : positioning_block;
+        if (style.position == AETHER_POSITION_FIXED && result->effective_context_enabled) {
+            for (auto* ancestor = parent; ancestor; ancestor = ancestor->parent) {
+                if (!result->effective_fixed_container_nodes.count(ancestor)) continue;
+                if (ancestor == parent) containing = positioning_block;
+                else if (const auto* owner = result->find_primary_box(ancestor)) containing = owner->padding_box;
+                break;
+            }
+        }
         const auto margin = resolve_margin_edges(engine, style.margin, containing.width, style);
         const float left = resolve(engine, style.inset.left, containing.width, style);
         const float right = resolve(engine, style.inset.right, containing.width, style);
@@ -190,4 +199,41 @@ void layout_positioned_children(
         offset_box(child_box, x - flow_margin.x, y - flow_margin.y);
         parent_box->add_child(child_box);
     }
+}
+
+namespace {
+void finalize_fixed_children(const aether_layout_engine_s* engine, aether_style_map_s* styles,
+    aether_layout_result_s* result, aether_layout_box_s* parent) {
+    for (size_t index = 0; index < parent->children.size(); ++index) {
+        auto* child = parent->children[index];
+        bool has_container = false;
+        if (child->kind == LAYOUT_BOX_ELEMENT && child->style.position == AETHER_POSITION_FIXED) {
+            for (auto* ancestor = child->element->parent; ancestor; ancestor = ancestor->parent) {
+                if (result->effective_fixed_container_nodes.count(ancestor)) { has_container = true; break; }
+            }
+        }
+        if (has_container) {
+            auto* node = child->element;
+            // Only after the complete flow pass are ancestor auto block sizes
+            // known. Re-run positioned sizing, not just a visual translation:
+            // percentages and opposing insets must see the final padding box.
+            parent->children.erase(parent->children.begin() + index);
+            delete child;
+            const auto previous_count = parent->children.size();
+            layout_positioned_children(engine, styles, parent, node->parent,
+                parent->padding_box, result, node);
+            if (parent->children.size() != previous_count + 1)
+                throw std::runtime_error("Fixed child preparation did not produce a box");
+            child = parent->children.back();
+            parent->children.pop_back();
+            parent->children.insert(parent->children.begin() + index, child);
+        }
+        finalize_fixed_children(engine, styles, result, child);
+    }
+}
+}
+void layout_finalize_fixed_containers(const aether_layout_engine_s* engine,
+    aether_style_map_s* styles, aether_layout_result_s* result) {
+    if (result->root && result->effective_context_enabled)
+        finalize_fixed_children(engine, styles, result, result->root);
 }

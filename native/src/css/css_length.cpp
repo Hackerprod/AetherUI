@@ -310,23 +310,30 @@ AETHER_API aether_bool_t aether_css_length_is_auto(aether_css_length l) {
 
 AETHER_API float aether_css_length_resolve(aether_css_length l, float reference,
     float font_size, float root_font_size, float viewport_width, float viewport_height) {
+    // Compute in double so multiplication before percentage division, or
+    // cancellation in an affine value, cannot overflow a finite float result.
+    // The legacy ABI keeps AUTO as NaN and out-of-range results as infinity;
+    // contextual used-value consumers reject non-finite results transactionally.
+    double value = l.value;
     switch (l.unit) {
-        case AETHER_CSS_UNIT_AUTO:    return NAN;
-        case AETHER_CSS_UNIT_PX:      return l.value;
-        case AETHER_CSS_UNIT_PERCENT: return reference * l.value / 100.0f;
-        case AETHER_CSS_UNIT_EM:      return font_size * l.value;
-        case AETHER_CSS_UNIT_REM:     return root_font_size * l.value;
-        case AETHER_CSS_UNIT_VW:      return viewport_width * l.value / 100.0f;
-        case AETHER_CSS_UNIT_VH:      return viewport_height * l.value / 100.0f;
+        case AETHER_CSS_UNIT_AUTO: return NAN;
+        case AETHER_CSS_UNIT_PX: break;
+        case AETHER_CSS_UNIT_PERCENT: value = double(reference) * l.value / 100.; break;
+        case AETHER_CSS_UNIT_EM: value = double(font_size) * l.value; break;
+        case AETHER_CSS_UNIT_REM: value = double(root_font_size) * l.value; break;
+        case AETHER_CSS_UNIT_VW: value = double(viewport_width) * l.value / 100.; break;
+        case AETHER_CSS_UNIT_VH: value = double(viewport_height) * l.value / 100.; break;
         case AETHER_CSS_UNIT_LINEAR:
-            return l.value
-                + (reference * l.linear_percent / 100.0f)
-                + (font_size * l.linear_em)
-                + (root_font_size * l.linear_rem)
-                + (viewport_width * l.linear_vw / 100.0f)
-                + (viewport_height * l.linear_vh / 100.0f);
+            value += double(reference) * l.linear_percent / 100.
+                + double(font_size) * l.linear_em
+                + double(root_font_size) * l.linear_rem
+                + double(viewport_width) * l.linear_vw / 100.
+                + double(viewport_height) * l.linear_vh / 100.;
+            break;
     }
-    return l.value;
+    if (std::abs(value) > std::numeric_limits<float>::max())
+        return std::copysign(std::numeric_limits<float>::infinity(), value);
+    return static_cast<float>(value);
 }
 
 AETHER_API aether_bool_t aether_css_length_try_parse(const char* input, aether_css_length* out) {

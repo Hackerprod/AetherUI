@@ -35,11 +35,7 @@ AETHER_API aether_status_t aether_doc_create(aether_doc_t* out_doc) {
 
 AETHER_API void aether_doc_destroy(aether_doc_t doc) {
     if (!doc) return;
-    std::function<void(aether_node_s*)> destroy = [&](aether_node_s* node) {
-        for (auto* child : node->children) destroy(child);
-        delete node;
-    };
-    destroy(doc);
+    aether_destroy_dom_subtree(doc);
 }
 
 AETHER_API int64_t aether_doc_get_version(aether_doc_t doc) {

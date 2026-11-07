@@ -68,11 +68,9 @@ static void emit_side(std::vector<aether_paint_command_t>& out, aether_rectf out
 }
 
 void aether_paint_border(const aether_computed_style_t& style, aether_rectf box, aether_corner_radii radii,
-                         std::vector<aether_paint_command_t>& out) {
-    const float top = aether_border_style_occupies_space(style.border_styles.top) ? width(style.border_width.top, box.width, style.font_size) : 0;
-    const float right = aether_border_style_occupies_space(style.border_styles.right) ? width(style.border_width.right, box.width, style.font_size) : 0;
-    const float bottom = aether_border_style_occupies_space(style.border_styles.bottom) ? width(style.border_width.bottom, box.width, style.font_size) : 0;
-    const float left = aether_border_style_occupies_space(style.border_styles.left) ? width(style.border_width.left, box.width, style.font_size) : 0;
+                         const aether_thicknessf& used_border, std::vector<aether_paint_command_t>& out) {
+    const float top = used_border.top, right = used_border.right;
+    const float bottom = used_border.bottom, left = used_border.left;
     const auto opacity = [&](aether_color_rgba c) { c.a *= style.opacity; return c; };
     const auto tc=opacity(style.border_colors.top), rc=opacity(style.border_colors.right), bc=opacity(style.border_colors.bottom), lc=opacity(style.border_colors.left);
     if ((top<=0 && right<=0 && bottom<=0 && left<=0) || (tc.a<=0 && rc.a<=0 && bc.a<=0 && lc.a<=0)) return;
@@ -90,4 +88,13 @@ void aether_paint_border(const aether_computed_style_t& style, aether_rectf box,
     emit_side(out, box, radii, inner, inner_radii, aether_border_side_t::right, style.border_styles.right, rc);
     emit_side(out, box, radii, inner, inner_radii, aether_border_side_t::bottom, style.border_styles.bottom, bc);
     emit_side(out, box, radii, inner, inner_radii, aether_border_side_t::left, style.border_styles.left, lc);
+}
+
+void aether_paint_border(const aether_computed_style_t& style, aether_rectf box, aether_corner_radii radii,
+                         std::vector<aether_paint_command_t>& out) {
+    const float top = aether_border_style_occupies_space(style.border_styles.top) ? width(style.border_width.top, box.width, style.font_size) : 0;
+    const float right = aether_border_style_occupies_space(style.border_styles.right) ? width(style.border_width.right, box.width, style.font_size) : 0;
+    const float bottom = aether_border_style_occupies_space(style.border_styles.bottom) ? width(style.border_width.bottom, box.width, style.font_size) : 0;
+    const float left = aether_border_style_occupies_space(style.border_styles.left) ? width(style.border_width.left, box.width, style.font_size) : 0;
+    aether_paint_border(style, box, radii, aether_thicknessf{left, top, right, bottom}, out);
 }

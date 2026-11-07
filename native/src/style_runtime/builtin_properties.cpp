@@ -29,12 +29,28 @@ static bool bi_try_keyword(const char* src, const char* const* keywords, int cou
     return false;
 }
 
+// Standards CSS validation is intentionally separate from the public legacy parser.
+static bool bi_css_length(const std::string& text, aether_css_length& length,
+                          bool nonnegative = false, bool percentage = true) {
+    aether::css::calc_value_s result;
+    const bool calc = (text.size() >= 5 && str_iequals(text.substr(0, 5), "calc("));
+    if (!(calc ? aether::css::try_parse_calc(text, result) :
+                 aether::css::try_parse_numeric_literal(text, result))) return false;
+    if (result.kind == aether::css::calc_value_kind_e::number) {
+        if (result.number != 0 || calc) return false;
+        length = aether_css_length_zero(); return true;
+    }
+    length = result.length;
+    if (!percentage && (measure_source_dependencies(text) & MEASURE_PERCENTAGE)) return false;
+    return !nonnegative || calc || length.value >= 0;
+}
+
 static bool bi_try_length_or_auto(const char* src, std::string& out) {
     if (!src || !*src) return false;
     std::string t = str_trim(src);
     if (str_iequals(t, "auto")) { out = "auto"; return true; }
     aether_css_length l;
-    if (aether_css_length_try_parse(t.c_str(), &l) && l.unit != AETHER_CSS_UNIT_AUTO) {
+    if (bi_css_length(t, l, false)) {
         out = t; return true;
     }
     return false;
@@ -44,7 +60,7 @@ static bool bi_try_non_negative_length(const char* src, std::string& out) {
     if (!src || !*src) return false;
     std::string t = str_trim(src);
     aether_css_length l;
-    if (aether_css_length_try_parse(t.c_str(), &l) && l.unit != AETHER_CSS_UNIT_AUTO) {
+    if (bi_css_length(t, l, true)) {
         out = t; return true;
     }
     return false;
@@ -55,7 +71,7 @@ static bool bi_try_size(const char* src, std::string& out) {
     std::string t = str_trim(src);
     if (str_iequals(t, "auto")) { out = "auto"; return true; }
     aether_css_length l;
-    if (aether_css_length_try_parse(t.c_str(), &l) && l.unit != AETHER_CSS_UNIT_AUTO) {
+    if (bi_css_length(t, l, true)) {
         out = t; return true;
     }
     return false;
@@ -72,7 +88,7 @@ static bool bi_try_max_size(const char* src, std::string& out) {
     std::string t = str_trim(src);
     if (str_iequals(t, "auto") || str_iequals(t, "none")) { out = t; return true; }
     aether_css_length l;
-    if (aether_css_length_try_parse(t.c_str(), &l) && l.unit != AETHER_CSS_UNIT_AUTO) {
+    if (bi_css_length(t, l, true)) {
         out = t; return true;
     }
     return false;
@@ -82,7 +98,7 @@ static bool bi_try_length(const char* src, std::string& out) {
     if (!src || !*src) return false;
     std::string t = str_trim(src);
     aether_css_length l;
-    if (aether_css_length_try_parse(t.c_str(), &l) && l.unit != AETHER_CSS_UNIT_AUTO) {
+    if (bi_css_length(t, l, false)) {
         out = t; return true;
     }
     return false;
@@ -162,9 +178,9 @@ static bool bi_try_font_size(const char* src, std::string& out) {
     static const char* sizes[] = {
         "xx-small","x-small","small","medium","large","x-large","xx-large","smaller","larger"
     };
-    for (auto& s : sizes) { if (str_iequals(t, s)) { out = t; return true; } }
+    for (auto& s : sizes) { if (str_iequals(t, s)) { out = s; return true; } }
     aether_css_length l;
-    if (aether_css_length_try_parse(t.c_str(), &l) && l.unit != AETHER_CSS_UNIT_AUTO) {
+    if (bi_css_length(t, l, true)) {
         out = t; return true;
     }
     return false;
@@ -198,15 +214,12 @@ static bool bi_try_font_family(const char* src, std::string& out) {
 // Line-height preserves the existing zero-valued NUMBER calc compatibility.
 // Both validation and application use the same typed evaluation policy.
 static bool bi_read_line_height(const std::string& source, aether::css::calc_value_s& result) {
-    using aether::css::calc_value_kind_e;
-    if (aether::css::try_parse_calc(source, result))
-        return result.kind == calc_value_kind_e::length || result.number == 0.f;
-
-    aether_css_length length;
-    if (!aether_css_length_try_parse(source.c_str(), &length) || length.unit == AETHER_CSS_UNIT_AUTO)
-        return false;
-    result = {calc_value_kind_e::length, 0.f, length};
-    return true;
+    const bool calc = (source.size() >= 5 && str_iequals(source.substr(0, 5), "calc("));
+    if (!(calc ? aether::css::try_parse_calc(source, result) :
+                 aether::css::try_parse_numeric_literal(source, result))) return false;
+    if (result.kind == aether::css::calc_value_kind_e::number &&
+        (!std::isfinite(result.number) || std::abs(result.number) > std::numeric_limits<float>::max())) return false;
+    return calc || (result.kind == aether::css::calc_value_kind_e::number ? result.number >= 0 : result.length.value >= 0);
 }
 
 static bool bi_try_line_height(const char* src, std::string& out) {
@@ -223,7 +236,9 @@ static bool bi_try_border_width(const char* src, std::string& out) {
     std::string t = str_trim(src);
     static const char* kw[] = { "thin", "medium", "thick" };
     for (auto& k : kw) { if (str_iequals(t, k)) { out = t; return true; } }
-    return bi_try_non_negative_length(src, out);
+    aether_css_length length;
+    if (!bi_css_length(t, length, true, false)) return false;
+    out = t; return true;
 }
 
 static bool bi_parse_border_width(const std::string& value, aether_css_length& out) {
@@ -246,6 +261,12 @@ static bool bi_try_border_radii(const char* src, std::string& out) {
     if (!src) return false;
     aether_border_radii radii;
     if (!aether_border_radii_try_parse(src, &radii)) return false;
+    for (const auto& axis : css_split_component_delimited(src, '/')) {
+        for (const auto& component : css_split_components(axis)) {
+            aether_css_length length;
+            if (!bi_css_length(component, length, true)) return false;
+        }
+    }
     out = str_trim(src);
     return true;
 }
@@ -323,7 +344,7 @@ static property_apply_result_s bi_apply_gradient(aether_computed_style_t* st, co
     replacement.items = static_cast<aether_background_layer*>(std::calloc(1, sizeof(aether_background_layer)));
     if (!replacement.items) {
         aether_linear_gradient_free(&gradient);
-        return property_apply_result_s::failure("AETHER-CSS-GRADIENT", "Out of memory while creating the background layer.");
+        throw std::bad_alloc();
     }
     replacement.count = 1;
     auto& layer = replacement.items[0];
@@ -347,6 +368,7 @@ static property_apply_result_s bi_apply_gradient(aether_computed_style_t* st, co
 }
 
 static property_apply_result_s bi_shadow_result(shadow_value_error error, bool box) {
+    if (error == shadow_value_error::allocation) throw std::bad_alloc();
     if (error == shadow_value_error::none) return {};
     return property_apply_result_s::failure(shadow_value_diagnostic_code(box), shadow_value_error_message(error, box));
 }
@@ -354,13 +376,13 @@ static property_apply_result_s bi_shadow_result(shadow_value_error error, bool b
 static property_apply_result_s bi_apply_box_shadow(property_apply_context_s& context,
                                                    const std::string& value) {
     return bi_shadow_result(shadow_list_apply(value, true, context.style->box_shadows,
-        context.color_resolution->box_shadow_uses_current_color), true);
+        context.color_resolution->box_shadow_uses_current_color, {}, context.measures), true);
 }
 
 static property_apply_result_s bi_apply_text_shadow(property_apply_context_s& context,
                                                     const std::string& value) {
     return bi_shadow_result(shadow_list_apply(value, false, context.style->text_shadows,
-        context.color_resolution->text_shadow_uses_current_color), false);
+        context.color_resolution->text_shadow_uses_current_color, {}, context.measures), false);
 }
 
 static bool bi_try_shadow(const char* source, std::string& output, bool box) {
@@ -368,6 +390,16 @@ static bool bi_try_shadow(const char* source, std::string& output, bool box) {
     const std::string value = str_trim(source ? source : "");
     parsed_shadow_list parsed;
     if (shadow_list_parse(value, box, parsed) != shadow_value_error::none) return false;
+    if (!str_iequals(value, "none")) for (const auto& item : css_split_component_delimited(value, ',')) {
+        unsigned index = 0;
+        for (const auto& token : css_split_components(item)) {
+            aether_color_rgba color;
+            if (str_iequals(token,"inset") || str_iequals(token,"currentColor") || aether_color_rgba_try_parse(token.c_str(), &color)) continue;
+            aether_css_length length;
+            if (!bi_css_length(token, length, index == 2, false)) return false;
+            ++index;
+        }
+    }
     output = value;
     return true;
 }
@@ -925,11 +957,11 @@ void builtin_properties_register(style_property_registry_s* reg) {
     // line-height
     reg->register_property("line-height", true,
         STYLE_IMPACT_TEXT_LAYOUT | STYLE_IMPACT_LAYOUT,
-        "1.2em", bi_try_line_height,
+        "normal", bi_try_line_height,
         [](aether_computed_style_t* st, const std::string& v) {
             aether::css::calc_value_s result;
             if (bi_read_line_height(v, result))
-                st->line_height = result.kind == aether::css::calc_value_kind_e::number ? 0.f :
+                st->line_height = result.kind == aether::css::calc_value_kind_e::number ? static_cast<float>(result.number) :
                     aether_css_length_resolve(result.length, 0.0f, st->font_size, 16.0f, 1920.0f, 1080.0f);
         });
 
@@ -1555,6 +1587,209 @@ void builtin_properties_register(style_property_registry_s* reg) {
             writer.set("flex-basis", basis.c_str());
             return true;
         }, {"flex-grow", "flex-shrink", "flex-basis"});
+
+    // Aggregate inheritance copies computed payloads, never reparses the parent
+    // declaration against this child's font. Public list helpers stage ownership.
+    for (auto& definition : reg->definitions) {
+        const auto name = definition.name;
+        if (name != "transform" && name != "transform-origin" && name != "border-radius" &&
+            name != "border-top-left-radius" && name != "border-top-right-radius" &&
+            name != "border-bottom-left-radius" && name != "border-bottom-right-radius" &&
+            name != "background-image" && name != "background-position" && name != "background-size" &&
+            name != "text-shadow" && name != "box-shadow") continue;
+        definition.css_wide = bi_origin_css_wide;
+        definition.inherit_context = [name](property_apply_context_s& c, const aether_computed_style_t& p, const measure_state_s* pm) {
+            auto& s = *c.style;
+            if (name == "text-shadow" || name == "box-shadow") {
+                const bool box = name == "box-shadow";
+                const auto& inherited = box ? p.box_shadows : p.text_shadows;
+                auto& destination = box ? s.box_shadows : s.text_shadows;
+                auto& references = box ? c.color_resolution->box_shadow_uses_current_color : c.color_resolution->text_shadow_uses_current_color;
+                std::vector<bool> copied_references;
+                if (c.parent_color_resolution) copied_references = box ? c.parent_color_resolution->box_shadow_uses_current_color : c.parent_color_resolution->text_shadow_uses_current_color;
+                aether_shadow_list copied{};
+                if (!aether_shadow_list_copy(&inherited, &copied)) throw std::bad_alloc();
+                aether_shadow_list_free(&destination); destination = copied;
+                references = std::move(copied_references);
+            } else if (name == "transform") {
+                aether_transform_list copied{};
+                if (!aether_transform_list_copy(&p.transforms, &copied)) throw std::bad_alloc();
+                aether_transform_list_free(&s.transforms); s.transforms = copied;
+            } else if (name == "transform-origin") s.transform_origin = p.transform_origin;
+            else if (name == "border-radius") s.border_radii = p.border_radii;
+            else if (name == "border-top-left-radius") s.border_radii.top_left = p.border_radii.top_left;
+            else if (name == "border-top-right-radius") s.border_radii.top_right = p.border_radii.top_right;
+            else if (name == "border-bottom-left-radius") s.border_radii.bottom_left = p.border_radii.bottom_left;
+            else if (name == "border-bottom-right-radius") s.border_radii.bottom_right = p.border_radii.bottom_right;
+            else if (name == "background-image") {
+                aether_background_layer_list copied{};
+                if (!aether_background_layer_list_copy(&p.background_layers, &copied)) throw std::bad_alloc();
+                // Only the image payload inherits. Position, size and repeat
+                // are independent longhands with the child's own initial/cascade.
+                for (int32_t i = 0; i < copied.count; ++i) {
+                    copied.items[i].repeat_x = AETHER_BACKGROUND_REPEAT;
+                    copied.items[i].repeat_y = AETHER_BACKGROUND_REPEAT;
+                }
+                aether_background_layer_list_free(&s.background_layers); s.background_layers = copied;
+                measure_apply_background_longhands(s, *c.measures);
+            } else if (name == "background-position") {
+                c.measures->background_positions = pm ? pm->background_positions :
+                    std::vector<measure_background_position_s>{measure_background_position_s{}};
+                measure_apply_background_longhands(s, *c.measures);
+            } else if (name == "background-size") {
+                c.measures->background_sizes = pm ? pm->background_sizes :
+                    std::vector<measure_background_size_s>{measure_background_size_s{}};
+                measure_apply_background_longhands(s, *c.measures);
+            }
+            uint32_t dep = MEASURE_PARENT;
+            if (pm) { const auto it = pm->property_dependencies.find(name); if (it != pm->property_dependencies.end()) dep |= it->second & MEASURE_PERCENTAGE; }
+            c.measures->property_dependencies[name] = dep;
+        };
+    }
+
+    // A CSS longhand list is computed even when there is no image to paint.
+    // Keeping it separately prevents background-image:inherit from inheriting
+    // unrelated position/size values or discarding the parent's unpainted list.
+    for (auto& definition : reg->definitions) {
+        const auto name = definition.name;
+        if (name != "background-position" && name != "background-size") continue;
+        const auto legacy = definition.apply_checked;
+        definition.apply_with_context_checked = [name, legacy](property_apply_context_s& c, const std::string& value) -> property_apply_result_s {
+            if (!c.measures) return legacy(c.style, value);
+            if (name == "background-position") {
+                std::vector<aether_background_position_s> parsed;
+                if (!aether_background_position_list_try_parse(value, parsed))
+                    return property_apply_result_s::failure("AETHER-CSS-BACKGROUND-POSITION", "Invalid background-position list.");
+                std::vector<measure_background_position_s> computed;
+                computed.reserve(parsed.size());
+                for (const auto& item : parsed) computed.push_back({measure_compute_length(item.x,*c.measures),measure_compute_length(item.y,*c.measures)});
+                c.measures->background_positions = std::move(computed);
+            } else {
+                std::vector<aether_background_size_s> parsed;
+                if (!aether_background_size_list_try_parse(value, parsed))
+                    return property_apply_result_s::failure("AETHER-CSS-BACKGROUND-SIZE", "Invalid background-size list.");
+                std::vector<measure_background_size_s> computed;
+                computed.reserve(parsed.size());
+                for (const auto& item : parsed) computed.push_back({item.kind,measure_compute_length(item.x,*c.measures),measure_compute_length(item.y,*c.measures)});
+                c.measures->background_sizes = std::move(computed);
+            }
+            measure_apply_background_longhands(*c.style, *c.measures);
+            return {};
+        };
+    }
+
+    // Private contextual route: legacy applicators remain available to flat callers.
+    for (auto& definition : reg->definitions) {
+        const auto name = definition.name;
+        const auto field = [name](aether_computed_style_t& st) -> aether_css_length* {
+            if (name == "width") return &st.width;
+            if (name == "height") return &st.height;
+            if (name == "min-width") return &st.min_width;
+            if (name == "min-height") return &st.min_height;
+            if (name == "max-width") return &st.max_width;
+            if (name == "max-height") return &st.max_height;
+            if (name == "flex-basis") return &st.flex_basis.length;
+            if (name == "top") return &st.inset.top;
+            if (name == "right") return &st.inset.right;
+            if (name == "bottom") return &st.inset.bottom;
+            if (name == "left") return &st.inset.left;
+            if (name == "margin-top") return &st.margin.top;
+            if (name == "margin-right") return &st.margin.right;
+            if (name == "margin-bottom") return &st.margin.bottom;
+            if (name == "margin-left") return &st.margin.left;
+            if (name == "padding-top") return &st.padding.top;
+            if (name == "padding-right") return &st.padding.right;
+            if (name == "padding-bottom") return &st.padding.bottom;
+            if (name == "padding-left") return &st.padding.left;
+            if (name == "border-top-width") return &st.border_width.top;
+            if (name == "border-right-width") return &st.border_width.right;
+            if (name == "border-bottom-width") return &st.border_width.bottom;
+            if (name == "border-left-width") return &st.border_width.left;
+            return nullptr;
+        };
+        aether_computed_style_t dummy{};
+        if (!field(dummy) && name != "font-size" && name != "line-height" &&
+            name != "row-gap" && name != "column-gap") continue;
+        const auto legacy = definition.apply;
+        definition.css_wide = bi_origin_css_wide;
+        definition.apply_with_context = [name, field, legacy](property_apply_context_s& c, const std::string& value) {
+            if (!c.measures) { if (legacy) legacy(c.style, value); return; }
+            auto& m = *c.measures;
+            m.property_dependencies[name] = measure_source_dependencies(value);
+            if (name == "font-size") {
+                auto units = m; units.self_font_size = m.parent_font_size;
+                aether_css_length parsed;
+                float font = m.document->initial_font_size;
+                if (aether_css_length_try_parse(value.c_str(), &parsed)) {
+                    const auto computed = measure_compute_length(parsed, units);
+                    const auto used = measure_resolve_used_length(computed, m.parent_font_size, true);
+                    if (used.kind != measure_used_kind_e::resolved)
+                        throw std::overflow_error("Invalid computed font-size percentage");
+                    font = used.px;
+                } else if (value == "smaller") font = m.parent_font_size / 1.2f;
+                else if (value == "larger") font = m.parent_font_size * 1.2f;
+                else {
+                    static const char* names[] = {"xx-small","x-small","small","medium","large","x-large","xx-large"};
+                    static const float factors[] = {.6f,.75f,.89f,1.f,1.2f,1.5f,2.f};
+                    for (int i = 0; i < 7; ++i) if (value == names[i]) font *= factors[i];
+                }
+                if (!std::isfinite(font)) throw std::overflow_error("Non-finite computed font-size");
+                c.style->font_size = m.self_font_size = std::max(0.f, font);
+                auto& dep = m.property_dependencies[name];
+                if (dep & (MEASURE_SELF_FONT | MEASURE_PERCENTAGE)) dep = (dep & ~MEASURE_SELF_FONT) | MEASURE_PARENT;
+                return;
+            }
+            if (name == "line-height") {
+                if (value == "normal") m.line_height = {};
+                else {
+                    aether::css::calc_value_s parsed;
+                    if (bi_read_line_height(value, parsed)) {
+                        if (parsed.kind == aether::css::calc_value_kind_e::number)
+                            m.line_height = {measure_line_height_kind_e::number, std::max(0.f, static_cast<float>(parsed.number))};
+                        else {
+                            const auto used = measure_resolve_used_length(measure_compute_length(parsed.length, m), m.self_font_size, true);
+                            if (used.kind != measure_used_kind_e::resolved)
+                                throw std::overflow_error("Invalid computed line-height percentage");
+                            m.line_height = {measure_line_height_kind_e::absolute_css_px, std::max(0.f, used.px)};
+                        }
+                    }
+                }
+                const double used_height = m.line_height.kind == measure_line_height_kind_e::absolute_css_px ? m.line_height.value :
+                    double(m.self_font_size) * (m.line_height.kind == measure_line_height_kind_e::normal ? 1.2 : m.line_height.value);
+                if (!std::isfinite(used_height) || used_height > std::numeric_limits<float>::max())
+                    throw std::overflow_error("Non-finite computed line-height");
+                if (legacy) legacy(c.style, value); // Explicit legacy projection, never consumed by contextual layout.
+                return;
+            }
+            if (name == "row-gap" || name == "column-gap") {
+                aether_css_length parsed;
+                if (aether_css_length_try_parse(value.c_str(), &parsed)) {
+                    const auto computed = measure_compute_length(parsed, m);
+                    (name == "row-gap" ? m.row_gap : m.column_gap) = computed;
+                }
+                if (legacy) legacy(c.style, value);
+                return;
+            }
+            if (legacy) legacy(c.style, value);
+            if (auto* length = field(*c.style)) *length = measure_compute_length(*length, m);
+        };
+        definition.inherit_context = [name, field](property_apply_context_s& c, const aether_computed_style_t& parent, const measure_state_s* pm) {
+            if (auto* dst = field(*c.style)) {
+                auto copy = parent;
+                *dst = *field(copy);
+                if (name == "flex-basis") c.style->flex_basis.kind = parent.flex_basis.kind;
+            } else if (name == "font-size") c.style->font_size = c.measures->self_font_size = parent.font_size;
+            else if (name == "line-height") { c.style->line_height = parent.line_height; if (pm) c.measures->line_height = pm->line_height; }
+            else if (pm && name == "row-gap") c.measures->row_gap = pm->row_gap;
+            else if (pm && name == "column-gap") c.measures->column_gap = pm->column_gap;
+            uint32_t inherited_dependencies = MEASURE_PARENT;
+            if (pm) {
+                auto inherited = pm->property_dependencies.find(name);
+                if (inherited != pm->property_dependencies.end()) inherited_dependencies |= inherited->second & MEASURE_PERCENTAGE;
+            }
+            c.measures->property_dependencies[name] = inherited_dependencies;
+        };
+    }
 
     transition_properties_register_shorthands(reg);
 }

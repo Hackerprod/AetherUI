@@ -104,7 +104,10 @@ static void check_dimensional_contract() {
         "a zero-valued LENGTH keeps its type");
     check_dimensional_fixture("width:calc(10px - 10px);", 0.f, 7.f);
     check_dimensional_fixture("line-height:calc(10px + 0);", 73.f, 7.f);
-    check_dimensional_fixture("line-height:calc(2);", 73.f, 7.f);
+    // CSS line-height accepts a computed <number>; calc(2) is Number(2),
+    // not an invalid length. Its descendant-relative use is covered in
+    // test_measure_computed alongside literal Number(2).
+    check_dimensional_fixture("line-height:calc(2);", 73.f, 2.f);
     check_dimensional_fixture("--lh:calc(1 - 1);line-height:var(--lh);", 73.f, 0.f);
 }
 

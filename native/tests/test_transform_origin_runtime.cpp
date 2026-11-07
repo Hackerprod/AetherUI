@@ -1,5 +1,6 @@
 // Public ABI regression suite. All checks execute in Release/NDEBUG builds.
 #include <aether/aether.h>
+#include <aether/aether_contextual_style.h>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -187,26 +188,40 @@ void inheritance() {
     context="origin is not implicitly inherited"; Fixture f; f.add("#p{transform-origin:right bottom}"); f.resolve(); expect(f,"c",100,50);
 }
 void finite_inheritance() {
-    // Inputs are finite floats; freezing their em contribution in the parent
-    // can exceed float storage. The narrow inheritance hook saturates in double.
+    // The contextual contract rejects arithmetic overflow before publishing a
+    // revision. It deliberately replaces the old inherited-only saturation,
+    // which could leave parent and child describing different coordinates.
     for(const char* value:{"3e37em -3e37em","calc(3e37em + 1px) calc(-3e37em - 1px)"}) {
-        context=std::string("finite inherited em/")+value; Fixture f;
-        f.add("#p{font-size:20px;transform-origin:"+std::string(value)+"}#c{font-size:10px;transform-origin:inherit}#g{font-size:5px;transform-origin:var(--missing,inherit)}");
+        context=std::string("transactional origin overflow/")+value; Fixture f;
+        f.add("#p{font-size:20px;transform-origin:10px 10px}#c{font-size:10px;transform-origin:inherit}#g{font-size:5px;transform-origin:var(--missing,inherit)}");
+        f.resolve();
+        aether_style_revision_t before{};
+        need(aether_style_runtime_retain_revision(f.runtime,&before)==AETHER_OK,"retain valid revision");
+        const auto generation=aether_style_revision_generation(before);
+        Style saved; f.copy("c",saved);
+        f.set("p", "font-size:20px;transform-origin:"+std::string(value));
         for(int round=0;round<3;++round) {
-            f.resolve();
-            for(const char* id:{"c","g"}) {
-                Style current; f.copy(id,current);
-                const auto& x=current.s.transform_origin.x; const auto& y=current.s.transform_origin.y;
-                check(std::isfinite(x.value)&&std::isfinite(y.value),"frozen em stays finite");
-                check(x.value==std::numeric_limits<float>::max(),"positive em overflow saturates");
-                check(y.value==-std::numeric_limits<float>::max(),"negative em overflow saturates");
-                check(x.unit!=AETHER_CSS_UNIT_EM&&y.unit!=AETHER_CSS_UNIT_EM,"em is frozen once");
-                check(x.linear_em==0&&y.linear_em==0,"linear em contribution cleared");
-            }
+            aether_style_transaction_t transaction{};
+            const auto status=aether_style_runtime_prepare_revision(f.runtime,aether_doc_get_document_element(f.doc),nullptr,&transaction);
+            check(status==AETHER_ERROR_INVALID_STATE,"computed overflow has explicit contextual status");
+            check(transaction==nullptr,"rejected prepare publishes no transaction");
+            aether_style_revision_t current{};
+            need(aether_style_runtime_retain_revision(f.runtime,&current)==AETHER_OK,"retain after rejection");
+            check(aether_style_revision_generation(current)==generation,"rejected overflow preserves revision");
+            aether_style_revision_destroy(current);
+            for(const char* id:{"c","g"}) expect(f,id,10,10);
+            origin(saved,10,10);
+            // Legacy zero cannot distinguish rejection from an unchanged tree;
+            // callers that need failure status must use prepare_revision.
+            aether_style_update_t* updates{};
+            const int count=aether_style_runtime_resolve_subtree(f.runtime,aether_doc_get_document_element(f.doc),&updates);
+            check(count==0 && updates==nullptr,"legacy overflow reports zero without partial updates");
         }
+        aether_style_revision_destroy(before);
         diagnostics(f.diagnostics,"",0);
     }
 }
+
 aether_text_metrics_t measure(const char*,const aether_computed_style_t*,float,void*) { return {0,1,.8f}; }
 void geometry() {
     for(const auto& c:std::vector<Case>{{"center left",0,50},{"left center",0,50},{"center right",200,50}}) {

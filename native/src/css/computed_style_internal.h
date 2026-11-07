@@ -8,3 +8,8 @@
    empty style (safe to free). */
 aether_status_t computed_style_deep_copy(const aether_computed_style_t& src,
                                          aether_computed_style_t* dst);
+
+/* Fallible inheritance for transactional style/layout callers. Unlike the legacy
+ * struct-returning adapter it cannot turn allocation failure into lost values. */
+aether_status_t computed_style_inherit_checked(const aether_computed_style_t* parent,
+                                                aether_computed_style_t* out);

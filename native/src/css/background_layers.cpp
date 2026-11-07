@@ -1,3 +1,4 @@
+#include <new>
 #include "../style_runtime/css_component_values.h"
 #include "background_layers.h"
 
@@ -44,14 +45,16 @@ bool parse_image(const std::string& source, aether_background_layer& out) {
     if (!parse_url(text, url)) return false;
     out.kind = AETHER_BACKGROUND_LAYER_IMAGE_URL;
     out.image_source = static_cast<char*>(std::malloc(url.size() + 1));
-    if (!out.image_source) return false;
+    if (!out.image_source) throw std::bad_alloc();
     std::memcpy(out.image_source, url.c_str(), url.size() + 1);
     return true;
 }
 
-void free_layers(aether_background_layer_list& layers) {
-    aether_background_layer_list_free(&layers);
-}
+struct background_list_guard_s {
+    aether_background_layer_list value{};
+    ~background_list_guard_s() { aether_background_layer_list_free(&value); }
+    aether_background_layer_list release() noexcept { auto result = value; value = {}; return result; }
+};
 
 bool parse_length(const std::string& source, aether_css_length& out, bool allow_auto) {
     if (!aether_css_length_try_parse(source.c_str(), &out)) return false;
@@ -138,16 +141,17 @@ bool is_repeat_word(const std::string& word) {
 
 bool aether_background_image_list_try_parse(const std::string& source, aether_background_layer_list* out_layers) {
     if (!out_layers) return false;
-    aether_background_layer_list replacement{};
+    background_list_guard_s guard;
+    auto& replacement = guard.value;
     const auto entries = split_trimmed(source, ',');
     if (entries.empty()) return false;
     if (entries.size() == 1 && str_iequals(entries[0], "none")) { aether_background_layer_list_free(out_layers); return true; }
     replacement.items = static_cast<aether_background_layer*>(std::calloc(entries.size(), sizeof(aether_background_layer)));
-    if (!replacement.items) return false;
+    if (!replacement.items) throw std::bad_alloc();
     replacement.count = static_cast<int32_t>(entries.size());
     for (size_t i = 0; i < entries.size(); ++i) {
         if (str_iequals(entries[i], "none") || !parse_image(entries[i], replacement.items[i])) {
-            free_layers(replacement); return false;
+            return false;
         }
         auto& layer = replacement.items[i];
         layer.position_x = aether_css_length_zero(); layer.position_y = aether_css_length_zero();
@@ -156,7 +160,7 @@ bool aether_background_image_list_try_parse(const std::string& source, aether_ba
         layer.repeat_x = AETHER_BACKGROUND_REPEAT; layer.repeat_y = AETHER_BACKGROUND_REPEAT;
     }
     aether_background_layer_list_free(out_layers);
-    *out_layers = replacement;
+    *out_layers = guard.release();
     return true;
 }
 

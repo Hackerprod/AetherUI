@@ -72,3 +72,23 @@ float aether_control_opaque_content_height(
 float aether_control_flow_centering_offset(float definite_content_height, float used_content_height) {
     return (definite_content_height - used_content_height) * 0.5f;
 }
+float aether_control_opaque_content_height_used(
+    float measured_height,
+    float font_size,
+    float line_height,
+    bool has_explicit_height,
+    float explicit_height,
+    int32_t box_sizing,
+    float padding_v,
+    float border_v)
+{
+    float natural_height;
+    if (has_explicit_height) {
+        natural_height = (box_sizing == AETHER_BOX_SIZING_CONTENT_BOX)
+            ? explicit_height
+            : std::max(0.f, explicit_height - padding_v - border_v);
+    } else {
+        natural_height = std::max(measured_height, std::max(line_height, font_size * 1.1f));
+    }
+    return std::max(natural_height, font_size * 1.1f);
+}

@@ -5,6 +5,7 @@
 #include <map>
 #include <unordered_map>
 #include "style_map_types.h"
+#include "computed_style_handle.h"
 
 /* ── Internal CSS data structures ─────────────────────────────────── */
 
@@ -49,9 +50,6 @@ struct aether_stylesheet_s {
     std::vector<css_rule_s> rules;
 };
 
-struct aether_computed_style_handle_s {
-    aether_computed_style_t style;
-};
 
 /* Selector matching (implemented in selector.cpp) */
 bool css_selector_matches(const css_selector_s& sel, aether_node_s* element);

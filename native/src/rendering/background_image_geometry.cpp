@@ -12,25 +12,14 @@ struct axis_tile_s { float start; float length; };
 float resolve_length(aether_css_length value, float reference,
                      float font_size, float root_font_size,
                      float viewport_width, float viewport_height) {
-    switch (value.unit) {
-        case AETHER_CSS_UNIT_PX: return value.value;
-        case AETHER_CSS_UNIT_PERCENT: return reference * value.value / 100.f;
-        case AETHER_CSS_UNIT_EM: return font_size * value.value;
-        case AETHER_CSS_UNIT_REM: return root_font_size * value.value;
-        case AETHER_CSS_UNIT_VW: return viewport_width * value.value / 100.f;
-        case AETHER_CSS_UNIT_VH: return viewport_height * value.value / 100.f;
-        case AETHER_CSS_UNIT_LINEAR:
-            return value.value + reference * value.linear_percent / 100.f + font_size * value.linear_em +
-                root_font_size * value.linear_rem + viewport_width * value.linear_vw / 100.f +
-                viewport_height * value.linear_vh / 100.f;
-        default: return std::numeric_limits<float>::quiet_NaN();
-    }
+    return aether_css_length_resolve(value, reference, font_size, root_font_size,
+                                    viewport_width, viewport_height);
 }
 
 float position_offset(aether_css_length value, float free_space,
                       float area_size, const aether_background_image_geometry_context_s& context) {
-    if (value.unit == AETHER_CSS_UNIT_PERCENT) return free_space * value.value / 100.f;
-    return resolve_length(value, area_size, context.font_size, context.root_font_size,
+    (void)area_size;
+    return resolve_length(value, free_space, context.font_size, context.root_font_size,
                           context.viewport_width, context.viewport_height);
 }
 

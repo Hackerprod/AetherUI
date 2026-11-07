@@ -1,3 +1,4 @@
+#include <new>
 #include "../style_runtime/css_component_values.h"
 #include "linear_gradient.h"
 
@@ -190,7 +191,7 @@ bool aether_linear_gradient_try_parse(const char* source, aether_linear_gradient
     }
 
     auto* owned_stops = static_cast<aether_gradient_stop*>(std::malloc(sizeof(aether_gradient_stop) * stops.size()));
-    if (!owned_stops) return false;
+    if (!owned_stops) throw std::bad_alloc();
     std::memcpy(owned_stops, stops.data(), sizeof(aether_gradient_stop) * stops.size());
     *out_gradient = {x, y, owned_stops, static_cast<int32_t>(stops.size())};
     if (out_info) out_info->uses_fixed_corner_direction = uses_fixed_corner_direction;
@@ -221,7 +222,7 @@ bool aether_linear_gradient_resolve(const aether_linear_gradient& source,
 
     const size_t bytes = sizeof(aether_gradient_stop) * stops.size();
     auto* owned_stops = static_cast<aether_gradient_stop*>(std::malloc(bytes));
-    if (!owned_stops) return false;
+    if (!owned_stops) throw std::bad_alloc();
     std::memcpy(owned_stops, stops.data(), bytes);
     *out_gradient = {source.direction_x, source.direction_y, owned_stops, source.stop_count};
     return true;

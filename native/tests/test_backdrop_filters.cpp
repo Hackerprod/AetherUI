@@ -4,6 +4,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <string>
 
 static void require(bool value, const char* message) {
     if (!value) { std::fprintf(stderr, "FAIL: %s\n", message); std::exit(1); }
@@ -13,10 +14,11 @@ static aether_text_metrics_t measure(const char* text, const aether_computed_sty
     return {text ? static_cast<float>(std::strlen(text)) : 0.f, 1.f, .8f};
 }
 
-struct diagnostic_capture_s { int count = 0; const char* code = nullptr; const char* property = nullptr; };
+// Diagnostic strings are callback-scoped; retain their values, never borrowed pointers.
+struct diagnostic_capture_s { int count = 0; std::string code, property; };
 static void diagnostic(const char* code, const char* property, const char*, const char*, void* data) {
     auto* capture = static_cast<diagnostic_capture_s*>(data);
-    ++capture->count; capture->code = code; capture->property = property;
+    ++capture->count; capture->code = code ? code : ""; capture->property = property ? property : "";
 }
 
 int main() {
@@ -91,8 +93,8 @@ int main() {
     require(webkit_style.backdrop_filters.count == 1 && std::fabs(webkit_style.backdrop_filters.items[0].length_amount.value - 3.f) < .001f,
         "-webkit-backdrop-filter alias was not cascaded");
     aether_computed_style_free(&webkit_style);
-    require(capture.count == 1 && std::strcmp(capture.code, "AETHER-CSS-BACKDROP-FILTER") == 0 &&
-            std::strcmp(capture.property, "backdrop-filter") == 0,
+    require(capture.count == 1 && capture.code == "AETHER-CSS-BACKDROP-FILTER" &&
+            capture.property == "backdrop-filter",
         "unsupported backdrop operation must report a dedicated diagnostic");
 
     require(aether_style_runtime_create_resolved_style_map(runtime, doc, &styles) == AETHER_OK, "style map creation failed");

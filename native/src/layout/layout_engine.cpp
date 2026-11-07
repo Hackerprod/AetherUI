@@ -1,5 +1,6 @@
 /* ── Layout Engine — core box layout, flow, inline, and intrinsic sizing ─ */
 #include "layout_internal.h"
+#include <aether/aether_contextual_transitions.h>
 #include "input_hit_test.h"
 #include "../animations/transition_runtime.h"
 #include <utility>
@@ -28,10 +29,10 @@ static opaque_control_size_s measure_opaque_single_line_control(
     aether_node_s* element,
     const aether_computed_style_t& style)
 {
-    const float min_height = aether_control_min_content_height(style.font_size, style.line_height);
+    const float min_height = std::max(style.font_size * 1.1f, layout_used_line_height(engine, element, style));
     const std::string text = aether_opaque_control_display_text(element, style);
     if (text.empty()) return {0.f, min_height};
-    const auto metrics = engine_measure_text(engine, text.c_str(), &style, 0.f);
+    const auto metrics = engine_measure_text(engine, text.c_str(), &style, 0.f, element);
     return {metrics.width, std::max(metrics.height, min_height)};
 }
 
@@ -45,15 +46,20 @@ static float resolve_length(aether_css_length l, float reference,
 float resolve(const aether_layout_engine_s* e,
               aether_css_length value, float reference,
               const aether_computed_style_t& style) {
-    return resolve_length(value, reference, style.font_size,
+    const float used = resolve_length(value, reference, style.font_size,
                           e ? e->root_font_size : 16.f,
                           e ? e->viewport_width : 0.f,
                           e ? e->viewport_height : 0.f);
+    if (value.unit != AETHER_CSS_UNIT_AUTO && !std::isfinite(used))
+        throw std::overflow_error("Non-finite used CSS length");
+    return used;
 }
 
 aether_thicknessf resolve_padding_edges(const aether_layout_engine_s* e,
                                         aether_css_edges edges, float reference,
                                         const aether_computed_style_t& style) {
+    for (const auto value : {edges.left, edges.top, edges.right, edges.bottom})
+        (void)resolve(e, value, reference, style);
     return aether_resolve_box_edges(edges, reference, style.font_size, e ? e->root_font_size : 16.f,
                                     e ? e->viewport_width : 0.f, e ? e->viewport_height : 0.f, false);
 }
@@ -61,6 +67,8 @@ aether_thicknessf resolve_padding_edges(const aether_layout_engine_s* e,
 aether_thicknessf resolve_margin_edges(const aether_layout_engine_s* e,
                                        aether_css_edges edges, float reference,
                                        const aether_computed_style_t& style) {
+    for (const auto value : {edges.left, edges.top, edges.right, edges.bottom})
+        (void)resolve(e, value, reference, style);
     return aether_resolve_box_edges(edges, reference, style.font_size, e ? e->root_font_size : 16.f,
                                     e ? e->viewport_width : 0.f, e ? e->viewport_height : 0.f, true);
 }
@@ -68,6 +76,8 @@ aether_thicknessf resolve_margin_edges(const aether_layout_engine_s* e,
 aether_thicknessf resolve_border_edges(const aether_layout_engine_s* e,
                                        const aether_computed_style_t& style,
                                        float reference) {
+    for (const auto value : {style.border_width.left, style.border_width.top, style.border_width.right, style.border_width.bottom})
+        (void)resolve(e, value, reference, style);
     return aether_resolve_border_edges(style, reference, e ? e->root_font_size : 16.f,
                                        e ? e->viewport_width : 0.f, e ? e->viewport_height : 0.f);
 }
@@ -293,7 +303,7 @@ static float measure_inline_items_height(
     const std::vector<inline_item_s>& items,
     float available_width,
     const aether_computed_style_t& parent_style,
-    aether_layout_result_s* result);
+    aether_layout_result_s* result, aether_node_s* owner);
 
 /* ── Register ──────────────────────────────────────────────────────── */
 
@@ -322,26 +332,28 @@ bool length_depends_on_percentage(aether_css_length value) {
 static float resolve_semantic_height(const aether_layout_engine_s* engine,
                                      aether_css_length value,
                                      percentage_height_s height,
-                                     const aether_computed_style_t& style) {
-    if (length_depends_on_percentage(value) && !height) return NAN;
+                                     const aether_computed_style_t& style, aether_node_s* element = nullptr, const char* property = nullptr) {
+    const auto* measures = layout_measures(engine ? engine->measure_styles : nullptr, element);
+    const bool percentage = measure_has_percentage(measures, property ? property : "", value);
+    if (percentage && !height) return NAN;
     return resolve(engine, value, height.value_or(0.f), style);
 }
 
 static float clamp_border_height(const aether_layout_engine_s* engine,
                                  const aether_computed_style_t& style,
                                  float height, float reference, float decorations,
-                                 bool semantic_reference) {
-    const auto constraint = [&](aether_css_length value) {
+                                 bool semantic_reference, aether_node_s* element) {
+    const auto constraint = [&](aether_css_length value, const char* property) {
         if (semantic_reference && length_depends_on_percentage(value) && !std::isfinite(reference))
             return NAN;
-        return resolve(engine, value, std::isfinite(reference) ? reference : 0.f, style);
+        return resolve_semantic_height(engine, value, std::isfinite(reference) ? percentage_height_s(reference) : std::nullopt, style, element, property);
     };
-    const float minimum = constraint(style.min_height);
-    if (std::isfinite(minimum)) height = std::max(height,
-        minimum + (style.box_sizing == AETHER_BOX_SIZING_CONTENT_BOX ? decorations : 0.f));
-    const float maximum = constraint(style.max_height);
+    const float maximum = constraint(style.max_height, "max-height");
     if (std::isfinite(maximum)) height = std::min(height,
         maximum + (style.box_sizing == AETHER_BOX_SIZING_CONTENT_BOX ? decorations : 0.f));
+    const float minimum = constraint(style.min_height, "min-height");
+    if (std::isfinite(minimum)) height = std::max(height,
+        minimum + (style.box_sizing == AETHER_BOX_SIZING_CONTENT_BOX ? decorations : 0.f));
     return std::max(decorations, height);
 }
 
@@ -373,6 +385,7 @@ aether_layout_box_s* layout_element(
     auto margin     = resolve_margin_edges(engine, style.margin, containing_block.width, style);
     auto padding    = resolve_padding_edges(engine, style.padding, containing_block.width, style);
     auto border     = resolve_border_edges(engine, style, containing_block.width);
+    box->used_border = border;
     box->collapsed_margin_before = margin.top;
     box->collapsed_margin_after = margin.bottom;
 
@@ -391,20 +404,20 @@ aether_layout_box_s* layout_element(
         border_width += aether_thicknessf_horizontal(padding) + aether_thicknessf_horizontal(border);
     }
 
-    float min_width = resolve(engine, style.min_width, containing_block.width, style);
-    if (std::isfinite(min_width)) {
-        float min_border = (style.box_sizing == AETHER_BOX_SIZING_CONTENT_BOX)
-            ? min_width + aether_thicknessf_horizontal(padding) + aether_thicknessf_horizontal(border)
-            : min_width;
-        border_width = std::max(border_width, min_border);
-    }
-
     float max_width = resolve(engine, style.max_width, containing_block.width, style);
     if (std::isfinite(max_width)) {
         float max_border = (style.box_sizing == AETHER_BOX_SIZING_CONTENT_BOX)
             ? max_width + aether_thicknessf_horizontal(padding) + aether_thicknessf_horizontal(border)
             : max_width;
         border_width = std::min(border_width, max_border);
+    }
+
+    float min_width = resolve(engine, style.min_width, containing_block.width, style);
+    if (std::isfinite(min_width)) {
+        float min_border = (style.box_sizing == AETHER_BOX_SIZING_CONTENT_BOX)
+            ? min_width + aether_thicknessf_horizontal(padding) + aether_thicknessf_horizontal(border)
+            : min_width;
+        border_width = std::max(border_width, min_border);
     }
 
     // A definite CSS width is not limited by the containing block.  It may
@@ -439,12 +452,17 @@ aether_layout_box_s* layout_element(
             : forced_border_height;
         has_explicit_height = true;
     } else {
-        explicit_height = resolve(engine, style.height, containing_block.height, style);
+        explicit_height = resolve_semantic_height(engine, style.height, containing_height, style, element, "height");
         has_explicit_height = std::isfinite(explicit_height);
     }
 
     bool intrinsic_control = is_opaque_single_line_control(element);
     box->is_atomic_control = intrinsic_control;
+    if (intrinsic_control) {
+        box->control_display_text = aether_opaque_control_display_text(element, style);
+        const auto value = element->attributes.find("value");
+        box->control_shows_placeholder = value == element->attributes.end() || value->second.empty();
+    }
 
     float definite_content_height;
     if (has_explicit_height) {
@@ -466,13 +484,13 @@ aether_layout_box_s* layout_element(
     if (forced_height_kind == forced_height_kind_e::definite) {
         semantic_border_height = forced_border_height;
     } else if (forced_height_kind == forced_height_kind_e::none) {
-        const float specified = resolve_semantic_height(engine, style.height, containing_height, style);
+        const float specified = resolve_semantic_height(engine, style.height, containing_height, style, element, "height");
         if (std::isfinite(specified)) semantic_border_height = specified +
             (style.box_sizing == AETHER_BOX_SIZING_CONTENT_BOX ? height_decorations : 0.f);
     }
     if (std::isfinite(semantic_border_height)) {
         semantic_border_height = clamp_border_height(engine, style, semantic_border_height,
-            containing_height.value_or(NAN), height_decorations, true);
+            containing_height.value_or(NAN), height_decorations, true, element);
         child_percentage_height = std::max(0.f, semantic_border_height - height_decorations);
     }
     if (child_percentage_height) child_containing_height = *child_percentage_height;
@@ -529,7 +547,7 @@ aether_layout_box_s* layout_element(
             (first->style.display == AETHER_DISPLAY_BLOCK || first->style.display == AETHER_DISPLAY_FLEX);
         const bool last_is_block = last && last->kind == LAYOUT_BOX_ELEMENT && last->element &&
             (last->style.display == AETHER_DISPLAY_BLOCK || last->style.display == AETHER_DISPLAY_FLEX);
-        const float specified_min_height = resolve(engine, style.min_height, containing_block.height, style);
+        const float specified_min_height = resolve_semantic_height(engine, style.min_height, containing_height, style, element, "min-height");
 
         aether_margin_adjacency_facts start_facts{};
         start_facts.has_border_or_padding_before = aether_box_has_before_decoration(padding, border);
@@ -563,7 +581,7 @@ aether_layout_box_s* layout_element(
         : content_height + aether_thicknessf_vertical(padding) + aether_thicknessf_vertical(border);
 
     border_height = clamp_border_height(engine, style, border_height,
-        containing_block.height, height_decorations, false);
+        containing_height.value_or(NAN), height_decorations, true, element);
 
     // A horizontal flex container whose final height (explicit or min/max-clamped) exceeds its
     // used content centers its cross axis (align-items center/end) like Chrome, instead of
@@ -666,10 +684,10 @@ static float layout_atomic_control(
     if (!has_explicit_height) {
         measured_height = measure_opaque_single_line_control(engine, element, style).content_height;
     }
-    return aether_control_opaque_content_height(
+    return aether_control_opaque_content_height_used(
         measured_height,
         style.font_size,
-        style.line_height,
+        layout_used_line_height(engine, element, style),
         has_explicit_height,
         explicit_height,
         style.box_sizing,
@@ -739,8 +757,8 @@ float layout_flow_children(
                 const auto child_border = resolve_border_edges(engine, child_style, content.width);
                 empty_facts.has_border_or_padding_before = aether_box_has_before_decoration(child_padding, child_border);
                 empty_facts.has_border_or_padding_after = aether_box_has_after_decoration(child_padding, child_border);
-                empty_facts.has_definite_height = child_style.height.unit != AETHER_CSS_UNIT_AUTO;
-                const float child_min_height = resolve(engine, child_style.min_height, content.height, child_style);
+                empty_facts.has_definite_height = std::isfinite(resolve_semantic_height(engine, child_style.height, containing_height, child_style, child_box->element, "height"));
+                const float child_min_height = resolve_semantic_height(engine, child_style.min_height, containing_height, child_style, child_box->element, "min-height");
                 empty_facts.has_positive_min_height = std::isfinite(child_min_height) && child_min_height > 0;
                 if (child_box->border_box.height <= .001f && aether_empty_block_margins_adjoin(empty_facts)) {
                     pending_margin = aether_collapse_adjoining_margins(collapsed_before, child_box->collapsed_margin_after);
@@ -771,7 +789,7 @@ float layout_inline_items(
 {
     float cursor_x = start_x;
     float cursor_y = start_y;
-    const float minimum_line_height = std::max(parent_style.font_size * parent_style.line_height, 1.f);
+    const float minimum_line_height = std::max(layout_used_line_height(engine, parent_box->element, parent_style), 1.f);
     float line_height = minimum_line_height;
     int line_start_index = static_cast<int>(parent_box->children.size());
     std::vector<line_range> line_widths;
@@ -787,7 +805,7 @@ float layout_inline_items(
             for (int index = line_start_index; index < end; ++index) {
                 auto* child = parent_box->children[index];
                 if (child->kind != LAYOUT_BOX_TEXT) continue;
-                const auto metrics = engine_measure_text(engine, child->text.c_str(), &child->style, 0.f);
+                const auto metrics = engine_measure_text(engine, child->text.c_str(), &child->style, 0.f, child->element);
                 ascent = std::max(ascent, metrics.baseline);
                 descent = std::max(descent, std::max(0.f, metrics.height - metrics.baseline));
             }
@@ -796,7 +814,7 @@ float layout_inline_items(
                 for (int index = line_start_index; index < end; ++index) {
                     auto* child = parent_box->children[index];
                     if (child->kind != LAYOUT_BOX_TEXT) continue;
-                    const auto metrics = engine_measure_text(engine, child->text.c_str(), &child->style, 0.f);
+                    const auto metrics = engine_measure_text(engine, child->text.c_str(), &child->style, 0.f, child->element);
                     offset_box(child, 0.f, std::max(0.f, ascent - metrics.baseline));
                 }
             }
@@ -847,7 +865,7 @@ float layout_inline_items(
             const bool whitespace = collapsible || token.kind == aether_inline_text_token_kind_e::preserved_space;
             if (collapsible && (cursor_x <= start_x || previous_collapsible_space)) continue;
             const bool allow_wrap = aether_white_space_allows_soft_wrap(item.style.white_space);
-            const auto metrics = engine_measure_text(engine, token.text.c_str(), &item.style, 0.f);
+            const auto metrics = engine_measure_text(engine, token.text.c_str(), &item.style, 0.f, item.element);
             if (allow_wrap && cursor_x > start_x && cursor_x + metrics.width > start_x + available_width &&
                 (!whitespace || token.kind == aether_inline_text_token_kind_e::preserved_space)) {
                 finish_line(false);
@@ -985,7 +1003,7 @@ static float measure_inline_items_intrinsic_width(
             const bool whitespace = token.kind != aether_inline_text_token_kind_e::word;
             fragments.push_back({
                 whitespace ? aether_inline_fragment_kind_e::whitespace : aether_inline_fragment_kind_e::word,
-                engine_measure_text(engine, token.text.c_str(), &item.style, 0.f).width});
+                engine_measure_text(engine, token.text.c_str(), &item.style, 0.f, item.element).width});
         }
     }
     const auto sizes = aether_measure_inline_intrinsic_sizes(fragments);
@@ -1060,7 +1078,7 @@ float measure_intrinsic_height(
     auto flush_inline = [&]() {
         if (inline_items.empty()) return;
         const float inline_height = measure_inline_items_height(
-            engine, styles, inline_items, content_width, style, nullptr);
+            engine, styles, inline_items, content_width, style, nullptr, element);
         if (style.display == AETHER_DISPLAY_FLEX && style.flex_direction == AETHER_FLEX_DIRECTION_ROW) {
             content_height = std::max(content_height, inline_height);
         } else {
@@ -1078,9 +1096,7 @@ float measure_intrinsic_height(
         const auto child_padding = resolve_padding_edges(engine, child_style.padding, content_width, child_style);
         const auto child_border = resolve_border_edges(engine, child_style, content_width);
         const auto child_margin = resolve_margin_edges(engine, child_style.margin, content_width, child_style);
-        const bool percentage_height = child_style.height.unit == AETHER_CSS_UNIT_PERCENT ||
-            (child_style.height.unit == AETHER_CSS_UNIT_LINEAR &&
-             std::fabs(child_style.height.linear_percent) > .0001f);
+        const bool percentage_height = measure_has_percentage(layout_measures(styles, child), "height", child_style.height);
         float child_height = percentage_height ? NAN : resolve(engine, child_style.height, 0.f, child_style);
         if (std::isfinite(child_height)) {
             if (child_style.box_sizing == AETHER_BOX_SIZING_CONTENT_BOX) {
@@ -1100,7 +1116,7 @@ float measure_intrinsic_height(
     flush_inline();
     if (style.display == AETHER_DISPLAY_FLEX &&
         style.flex_direction == AETHER_FLEX_DIRECTION_COLUMN) {
-        content_height += std::max(0, block_child_count - 1) * std::max(0.f, style.gap);
+        content_height += std::max(0, block_child_count - 1) * layout_used_gap(styles, element, style, true, 0.f, false);
     }
     return content_height + aether_thicknessf_vertical(padding) + aether_thicknessf_vertical(border);
 }
@@ -1111,9 +1127,9 @@ static float measure_inline_items_height(
     const std::vector<inline_item_s>& items,
     float available_width,
     const aether_computed_style_t& parent_style,
-    aether_layout_result_s* result)
+    aether_layout_result_s* result, aether_node_s* owner)
 {
-    const float line_minimum = std::max(1.f, parent_style.font_size * parent_style.line_height);
+    const float line_minimum = std::max(1.f, layout_used_line_height(engine, owner, parent_style));
     float line_height = line_minimum;
     float cursor_x = 0.f;
     float total_height = 0.f;
@@ -1155,7 +1171,7 @@ static float measure_inline_items_height(
                 continue;
             }
             const bool whitespace = token.kind != aether_inline_text_token_kind_e::word;
-            const auto metrics = engine_measure_text(engine, token.text.c_str(), &item.style, 0.f);
+            const auto metrics = engine_measure_text(engine, token.text.c_str(), &item.style, 0.f, item.element);
             append_fragment(metrics.width, metrics.height, whitespace);
         }
     }
@@ -1190,7 +1206,7 @@ static float measure_intrinsic_flex_width(
     }
     const float content = aether_intrinsic_flex_main_contribution(
         child_widths, style.flex_direction == AETHER_FLEX_DIRECTION_COLUMN,
-        style.flex_wrap, style.gap, mode);
+        style.flex_wrap, layout_used_gap(styles, element, style, false, 0.f, false), mode);
     return content + aether_thicknessf_horizontal(padding) + aether_thicknessf_horizontal(border);
 }
 
@@ -1206,9 +1222,7 @@ float measure_child_natural_width(
     // A percentage width is indefinite while this intrinsic contribution is
     // calculated. CSS Sizing therefore treats it as auto at this stage.
     const bool percentage_dependent_width =
-        child_style.width.unit == AETHER_CSS_UNIT_PERCENT ||
-        (child_style.width.unit == AETHER_CSS_UNIT_LINEAR &&
-         std::fabs(child_style.width.linear_percent) > .0001f);
+        measure_has_percentage(layout_measures(styles, child), "width", child_style.width);
     const float specified = percentage_dependent_width
         ? NAN
         : resolve(engine, child_style.width, maximum, child_style);
@@ -1230,6 +1244,27 @@ float measure_child_natural_width(
 /* ══════════════════════════════════════════════════════════════════════
    C ABI implementation
    ══════════════════════════════════════════════════════════════════════ */
+
+static void validate_used_geometry(const aether_layout_result_s* result) {
+    const auto rect_valid = [](aether_rectf r, bool sized) {
+        return std::isfinite(r.x) && std::isfinite(r.y) && std::isfinite(r.width) && std::isfinite(r.height) &&
+            (!sized || (r.width >= 0.f && r.height >= 0.f));
+    };
+    for (const auto* box : result->allocated_boxes) {
+        if (!rect_valid(box->border_box, true) || !rect_valid(box->padding_box, true) ||
+            !rect_valid(box->content_box, true) || !rect_valid(box->margin_box, false))
+            throw std::overflow_error("Invalid used box geometry");
+        for (const auto value : {box->scroll.scrollable_overflow_x, box->scroll.scrollable_overflow_y,
+             box->scroll.scroll_offset_x, box->scroll.scroll_offset_y, box->visual_opacity,
+             box->used_border.left, box->used_border.top, box->used_border.right, box->used_border.bottom})
+            if (!std::isfinite(value)) throw std::overflow_error("Non-finite used visual geometry");
+        if (box->visual_sample_valid) {
+            const auto& m = box->visual_transform;
+            for (const auto value : {m.m11,m.m12,m.m21,m.m22,m.dx,m.dy})
+                if (!std::isfinite(value)) throw std::overflow_error("Non-finite visual transform");
+        }
+    }
+}
 
 static std::unordered_set<aether_node_s*> effective_fixed_containers(
     const aether_style_map_s* styles, const std::unordered_set<aether_node_s*>& active) {
@@ -1287,11 +1322,16 @@ AETHER_API aether_status_t aether_layout_layout(
     aether_layout_result_t* out_result)
 {
     if (!engine) return AETHER_ERROR_NULL_ARG;
+    if (engine->layout_in_progress) return AETHER_ERROR_INVALID_STATE;
+    engine->layout_in_progress = true;
+    struct layout_scope_s { aether_layout_engine_s* e; ~layout_scope_s() { e->layout_in_progress = false; } } layout_scope{engine};
     const bool prepared = std::exchange(engine->transition_context_prepared, false);
     auto active = std::move(engine->prepared_active_nodes);
     engine->prepared_active_nodes.clear();
     if (!out_result || !doc) return AETHER_ERROR_NULL_ARG;
-    if (viewport_width <= 0 || viewport_height <= 0) return AETHER_ERROR_INVALID_STATE;
+    if (!aether_style_map_structure_valid(styles) || !aether_style_map_inputs_current(styles)) return AETHER_ERROR_INVALID_STATE;
+    if (styles && styles->contextual && (styles->document_lifetime != doc->identity || styles->document_identity != aether_node_identity(doc))) return AETHER_ERROR_INVALID_STATE;
+    if (!std::isfinite(viewport_width) || !std::isfinite(viewport_height) || viewport_width <= 0 || viewport_height <= 0) return AETHER_ERROR_INVALID_STATE;
 
     engine->scroll_offset_fn = scroll_fn;
     engine->scroll_offset_data = scroll_data;
@@ -1301,9 +1341,22 @@ AETHER_API aether_status_t aether_layout_layout(
     auto* result = new(std::nothrow) aether_layout_result_s();
     if (!result) return AETHER_ERROR_OUT_OF_MEMORY;
     result->viewport = {viewport_width, viewport_height};
-    result->style_map = styles;
-    result->effective_context_enabled = prepared;
-    if (prepared) {
+    try { result->owned_style_map = aether_style_map_snapshot(styles); }
+    catch (const std::bad_alloc&) { delete result; return AETHER_ERROR_OUT_OF_MEMORY; }
+    result->style_map = result->owned_style_map.get();
+    styles = result->style_map;
+    engine->measure_styles = styles;
+    const auto start_mutation = styles->document_lifetime ? styles->document_lifetime->mutation_epoch : 0;
+    struct measure_scope_s { aether_layout_engine_s* e; ~measure_scope_s() { e->measure_styles = nullptr; } } measure_scope{engine};
+    if (styles && styles->contextual && !styles->measures.empty()) {
+        const auto document = styles->measures.begin()->second->document;
+        if (document && (document->viewport_width != viewport_width || document->viewport_height != viewport_height)) {
+            delete result; return AETHER_ERROR_INVALID_STATE;
+        }
+    }
+    try {
+    result->effective_context_enabled = prepared || styles->contextual;
+    if (result->effective_context_enabled) {
         try { result->effective_fixed_container_nodes = effective_fixed_containers(styles, active); }
         catch (const std::bad_alloc&) { delete result; return AETHER_ERROR_OUT_OF_MEMORY; }
     }
@@ -1314,7 +1367,8 @@ AETHER_API aether_status_t aether_layout_layout(
     if (!root_el) { *out_result = result; return AETHER_OK; } // empty doc
 
     auto root_style = get_style(styles, root_el);
-    engine->root_font_size = root_style.font_size;
+    engine->root_font_size = get_style(styles, aether_doc_get_document_element(doc)).font_size;
+    result->root_font_size = engine->root_font_size;
 
     // CSS Overflow 3.3 viewport propagation. The root (html) overflow applies
     // to the viewport; when html is visible in both axes and a body child is
@@ -1349,12 +1403,33 @@ AETHER_API aether_status_t aether_layout_layout(
                                     0, false, 0, forced_height_kind_e::none, false, result,
                                     viewport_overflow);
     result->root = root_box;
+    layout_finalize_fixed_containers(engine, styles, result);
+    if (!aether_style_map_structure_valid(styles) || (styles->document_lifetime && styles->document_lifetime->mutation_epoch != start_mutation)) {
+        result->abandoned = true; delete result; return AETHER_ERROR_INVALID_STATE;
+    }
+    if (styles->contextual) {
+        const auto status = aether_contextual_transition_finalize_layout(result, nullptr);
+        if (status != AETHER_OK) { result->abandoned = true; delete result; return status; }
+    }
+    validate_used_geometry(result);
     *out_result = result;
     return AETHER_OK;
+    } catch (const std::bad_alloc&) {
+        result->abandoned = true; delete result; return AETHER_ERROR_OUT_OF_MEMORY;
+    } catch (...) {
+        result->abandoned = true; delete result; return AETHER_ERROR_INVALID_STATE;
+    }
+}
+
+AETHER_API void aether_layout_set_contextual_text_measurer(aether_layout_engine_t engine,
+    aether_text_measurer_contextual_fn callback, void* data) {
+    if (!engine) return;
+    engine->contextual_text_measurer = callback;
+    engine->contextual_text_measurer_data = data;
 }
 
 AETHER_API void aether_layout_result_destroy(aether_layout_result_t result) {
-    delete result;
+    if (result && --result->references == 0) delete result;
 }
 
 AETHER_API aether_layout_box_t aether_layout_result_get_root(aether_layout_result_t result) {
@@ -1375,23 +1450,82 @@ AETHER_API aether_layout_box_t aether_layout_result_find_primary_box(aether_layo
     return result->find_primary_box(element);
 }
 
+// An offset callback is external code. Keep the document token, and reject a
+// mutation immediately on return, before traversal can touch another raw node.
+struct input_callback_context_s {
+    const aether_style_map_s* map;
+    aether_scroll_offset_fn callback;
+    void* data;
+    std::shared_ptr<node_identity_s> document;
+    uint64_t structure_epoch, mutation_epoch, style_tree_epoch;
+
+    input_callback_context_s(const aether_layout_result_s* layout,
+        aether_scroll_offset_fn fn, void* user_data)
+        : map(layout->style_map), callback(fn), data(user_data),
+          document(map ? map->document_lifetime : nullptr),
+          structure_epoch(document ? document->structure_epoch : 0),
+          mutation_epoch(document ? document->mutation_epoch : 0),
+          style_tree_epoch(document ? document->style_tree_epoch : 0) {}
+};
+
+static aether_scroll_offset_t checked_input_offsets(aether_node_t node, void* data) {
+    auto& context = *static_cast<input_callback_context_s*>(data);
+    std::shared_ptr<node_identity_s> identity;
+    if (context.map) {
+        const auto found = context.map->node_lifetimes.find(node);
+        if (found != context.map->node_lifetimes.end()) identity = found->second;
+    }
+    if (identity && (!identity->alive || !identity->attached))
+        throw std::invalid_argument("retired input node");
+    const auto offset = context.callback(node, context.data);
+    if ((context.document && (!context.document->alive ||
+            context.document->structure_epoch != context.structure_epoch ||
+            context.document->mutation_epoch != context.mutation_epoch ||
+            context.document->style_tree_epoch != context.style_tree_epoch)) ||
+        (identity && (!identity->alive || !identity->attached)))
+        throw std::invalid_argument("input callback changed document");
+    return offset;
+}
+
+static bool live_input_owner(const aether_layout_result_s* layout, aether_node_t node) {
+    if (!node) return true;
+    const auto* map = layout->style_map;
+    if (!map || !map->contextual) return true;
+    const auto found = map->node_lifetimes.find(node);
+    return found != map->node_lifetimes.end() && found->second &&
+        found->second->owner == node && found->second->alive && found->second->attached;
+}
+
 AETHER_API aether_node_t aether_layout_result_hit_test(aether_layout_result_t result, float x, float y) {
     if (!result) return nullptr;
-    return result->hit_test(x, y);
+    try {
+        auto* hit = result->hit_test(x, y);
+        return aether_style_map_structure_valid(result->style_map) && live_input_owner(result, hit) ? hit : nullptr;
+    } catch (...) { return nullptr; }
 }
 
 AETHER_API aether_node_t aether_layout_result_hit_test_with_scroll_offsets(
     aether_layout_result_t result, float x, float y,
     aether_scroll_offset_fn offsets, void* user_data) {
     if (!result) return nullptr;
-    return result->hit_test(x, y, offsets, user_data);
+    try {
+        input_callback_context_s context(result, offsets, user_data);
+        auto* hit = result->hit_test(x, y, offsets ? checked_input_offsets : nullptr,
+            offsets ? &context : user_data);
+        return aether_style_map_structure_valid(result->style_map) && live_input_owner(result, hit) ? hit : nullptr;
+    } catch (...) { return nullptr; }
 }
 
 AETHER_API aether_node_t aether_layout_result_hit_test_with_styles_and_scroll_offsets(
     aether_layout_result_t result, aether_style_map_t styles, float x, float y,
     aether_scroll_offset_fn offsets, void* user_data) {
     if (!result) return nullptr;
-    return result->hit_test(x, y, styles, offsets, user_data);
+    try {
+        input_callback_context_s context(result, offsets, user_data);
+        auto* hit = result->hit_test(x, y, styles, offsets ? checked_input_offsets : nullptr,
+            offsets ? &context : user_data);
+        return aether_style_map_structure_valid(result->style_map) && live_input_owner(result, hit) ? hit : nullptr;
+    } catch (...) { return nullptr; }
 }
 
 AETHER_API aether_status_t aether_layout_result_hit_test_input(
@@ -1401,10 +1535,19 @@ AETHER_API aether_status_t aether_layout_result_hit_test_input(
     if (out_part) *out_part = AETHER_INPUT_HIT_NONE;
     if (out_owner) *out_owner = nullptr;
     if (!result || !out_part || !out_owner) return AETHER_ERROR_NULL_ARG;
-    const auto hit = layout_hit_test_input(result, result->root, current_styles, x, y, offsets, user_data);
-    *out_part = hit.part;
-    *out_owner = hit.owner;
-    return AETHER_OK;
+    if (!aether_style_map_structure_valid(result->style_map) || !result->accepts_style_map(current_styles))
+        return AETHER_ERROR_INVALID_STATE;
+    try {
+        input_callback_context_s context(result, offsets, user_data);
+        const auto hit = layout_hit_test_input(result, result->root, current_styles, x, y,
+            offsets ? checked_input_offsets : nullptr, offsets ? &context : user_data);
+        if (!aether_style_map_structure_valid(result->style_map) || !live_input_owner(result, hit.owner))
+            return AETHER_ERROR_INVALID_STATE;
+        *out_part = hit.part;
+        *out_owner = hit.owner;
+        return AETHER_OK;
+    } catch (const std::bad_alloc&) { return AETHER_ERROR_OUT_OF_MEMORY; }
+    catch (...) { return AETHER_ERROR_INVALID_STATE; }
 }
 
 AETHER_API int32_t aether_layout_result_get_paint_order_count(aether_layout_result_t result) {

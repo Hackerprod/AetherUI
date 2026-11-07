@@ -116,7 +116,9 @@ void layout_positioned_children(
     aether_layout_box_s* parent_box,
     aether_node_s* parent,
     aether_rectf positioning_block,
-    aether_layout_result_s* result);
+    aether_layout_result_s* result, aether_node_s* only_node = nullptr);
+void layout_finalize_fixed_containers(const aether_layout_engine_s* engine,
+    aether_style_map_s* styles, aether_layout_result_s* result);
 
 float measure_intrinsic_width(
     const aether_layout_engine_s* engine,
@@ -208,3 +210,29 @@ void register_box(aether_layout_result_s* result, aether_layout_box_s* box);
 
 int32_t flex_cross_alignment(const aether_computed_style_t& container,
                              const aether_computed_style_t& item);
+
+inline const measure_state_s* layout_measures(const aether_style_map_s* styles, aether_node_s* element) {
+    if (!styles || !element) return nullptr;
+    const auto it = styles->measures.find(element);
+    return it == styles->measures.end() ? nullptr : it->second.get();
+}
+inline float layout_used_line_height(const aether_layout_engine_s* engine, aether_node_s* element,
+                                    const aether_computed_style_t& style) {
+    const float used = measure_used_line_height(layout_measures(engine ? engine->measure_styles : nullptr, element), style);
+    if (!std::isfinite(used)) throw std::overflow_error("Non-finite used line height");
+    return used;
+}
+inline float layout_used_gap(const aether_style_map_s* styles, aether_node_s* element,
+    const aether_computed_style_t& style, bool row, float basis, bool definite) {
+    const auto* measures = layout_measures(styles, element);
+    if (!measures) return std::max(0.f, style.gap);
+    const auto value = row ? measures->row_gap : measures->column_gap;
+    auto result = measure_resolve_used_length(value, basis, definite,
+        measure_has_percentage(measures, row ? "row-gap" : "column-gap", value));
+    // Flex cyclic percentages use a zero percentage basis, retaining any
+    // absolute component of calc(). Height sizing has a different auto policy.
+    if (result.kind == measure_used_kind_e::deferred_percentage)
+        result = measure_resolve_used_length(value, 0.f, true);
+    if (result.kind == measure_used_kind_e::invalid) throw std::overflow_error("Invalid used gap");
+    return result.kind == measure_used_kind_e::resolved ? std::max(0.f, result.px) : 0.f;
+}

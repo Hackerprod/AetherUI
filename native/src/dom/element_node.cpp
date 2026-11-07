@@ -68,6 +68,7 @@ AETHER_API aether_status_t aether_element_set_attribute(
     }
 
     element->attributes[attribute_name] = value;
+    aether_node_touch(element);
     return AETHER_OK;
 }
 
@@ -105,5 +106,5 @@ AETHER_API int32_t aether_element_get_state(aether_node_t element) {
 }
 
 AETHER_API void aether_element_set_state(aether_node_t element, int32_t state) {
-    if (element) element->state = state;
+    if (element && element->state != state) { element->state = state; aether_node_touch(element); }
 }

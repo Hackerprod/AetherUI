@@ -2,6 +2,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <set>
 void builtin_properties_register(style_property_registry_s*);
 namespace {
 int checks=0, failures=0;
@@ -41,9 +42,25 @@ int main() {
     for(const char* source : {"revert-layer","inherit left","in/**/herit","inherit)","initial initial","inherit /*"})
         check(origin->css_wide(source)==property_css_wide_e::none,"CSS-wide classification never accepts mixed tokens");
     std::string out="sentinel"; check(!origin->parse(nullptr,out)&&out=="sentinel","null callback source");
-    // No other property opts in to these new semantics in this cycle.
-    for(const auto& definition : registry.definitions) if(definition.name!="transform-origin")
-        check(!definition.css_wide&&!definition.inherit_explicit,"other property hooks unchanged");
+    // The contextual measure cycle explicitly opts these properties in. Keep
+    // an exact allowlist so an accidental new hook or a lost hook still fails.
+    const std::set<std::string> contextual = {
+        "width","height","min-width","min-height","max-width","max-height","flex-basis",
+        "top","right","bottom","left","margin-top","margin-right","margin-bottom","margin-left",
+        "padding-top","padding-right","padding-bottom","padding-left",
+        "border-top-width","border-right-width","border-bottom-width","border-left-width",
+        "font-size","line-height","row-gap","column-gap",
+        "transform","transform-origin","border-radius","border-top-left-radius","border-top-right-radius",
+        "border-bottom-left-radius","border-bottom-right-radius","background-image","background-position","background-size",
+        "text-shadow","box-shadow"
+    };
+    for (const auto& name : contextual) check(registry.try_get(name.c_str())!=nullptr,"contextual allowlist property registered");
+    for(const auto& definition : registry.definitions) {
+        const bool expected = contextual.count(definition.name) != 0;
+        check(static_cast<bool>(definition.css_wide)==expected,"exact CSS-wide hook coverage");
+        check(static_cast<bool>(definition.inherit_context)==expected,"exact contextual inheritance coverage");
+        check(static_cast<bool>(definition.inherit_explicit)==(definition.name=="transform-origin"),"legacy inheritance hook remains origin-only");
+    }
     std::printf("transform-origin dispatch: %d checks, %d failures\n",checks,failures);
     return failures?1:0;
 }

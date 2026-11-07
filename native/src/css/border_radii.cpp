@@ -43,18 +43,18 @@ bool aether_border_radii_try_parse(const std::string& source, aether_border_radi
     return true;
 }
 
-static float resolve(aether_css_length value, float reference, float font_size) {
-    const float result = aether_css_length_resolve(value, reference, font_size, font_size, 0, 0);
+static float resolve(aether_css_length value, float reference, float font_size, float root_font_size, float vw, float vh) {
+    const float result = aether_css_length_resolve(value, reference, font_size, root_font_size, vw, vh);
     return std::isfinite(result) ? std::max(0.f, result) : 0.f;
 }
 
 aether_corner_radii aether_border_radii_resolve(const aether_border_radii& value,
-                                                aether_rectf box, float font_size) {
+                                                aether_rectf box, float font_size, float root_font_size, float vw, float vh) {
     aether_corner_radii result{
-        resolve(value.top_left.horizontal, box.width, font_size), resolve(value.top_left.vertical, box.height, font_size),
-        resolve(value.top_right.horizontal, box.width, font_size), resolve(value.top_right.vertical, box.height, font_size),
-        resolve(value.bottom_right.horizontal, box.width, font_size), resolve(value.bottom_right.vertical, box.height, font_size),
-        resolve(value.bottom_left.horizontal, box.width, font_size), resolve(value.bottom_left.vertical, box.height, font_size)};
+        resolve(value.top_left.horizontal, box.width, font_size, root_font_size, vw, vh), resolve(value.top_left.vertical, box.height, font_size, root_font_size, vw, vh),
+        resolve(value.top_right.horizontal, box.width, font_size, root_font_size, vw, vh), resolve(value.top_right.vertical, box.height, font_size, root_font_size, vw, vh),
+        resolve(value.bottom_right.horizontal, box.width, font_size, root_font_size, vw, vh), resolve(value.bottom_right.vertical, box.height, font_size, root_font_size, vw, vh),
+        resolve(value.bottom_left.horizontal, box.width, font_size, root_font_size, vw, vh), resolve(value.bottom_left.vertical, box.height, font_size, root_font_size, vw, vh)};
     const float factor = std::min({1.f,
         box.width / std::max(.0001f, result.top_left_x + result.top_right_x),
         box.width / std::max(.0001f, result.bottom_left_x + result.bottom_right_x),
@@ -78,4 +78,8 @@ aether_corner_radii aether_corner_radii_inset(aether_corner_radii r, float left,
 bool aether_corner_radii_is_zero(aether_corner_radii r) {
     return r.top_left_x <= .5f && r.top_left_y <= .5f && r.top_right_x <= .5f && r.top_right_y <= .5f &&
            r.bottom_right_x <= .5f && r.bottom_right_y <= .5f && r.bottom_left_x <= .5f && r.bottom_left_y <= .5f;
+}
+
+aether_corner_radii aether_border_radii_resolve(const aether_border_radii& value, aether_rectf box, float font_size) {
+    return aether_border_radii_resolve(value, box, font_size, font_size, 0.f, 0.f);
 }

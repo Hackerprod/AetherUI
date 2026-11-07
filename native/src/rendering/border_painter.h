@@ -9,3 +9,7 @@
 void aether_paint_border(const aether_computed_style_t& style, aether_rectf border_box,
                          aether_corner_radii outer_radii,
                          std::vector<aether_paint_command_t>& commands);
+
+void aether_paint_border(const aether_computed_style_t& style, aether_rectf box,
+    aether_corner_radii radii, const aether_thicknessf& used_border,
+    std::vector<aether_paint_command_t>& out);

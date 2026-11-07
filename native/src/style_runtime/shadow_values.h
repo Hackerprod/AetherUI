@@ -11,6 +11,7 @@
 // Private shared grammar for registry validation and checked application.
 // Parsing never modifies an existing style, reports diagnostics, or resolves
 // currentColor. Output is published only after the complete list is valid.
+struct measure_state_s;
 enum class shadow_value_error { none, invalid, inset_not_allowed, spread_not_allowed, too_many, allocation };
 struct parsed_shadow_list {
     std::vector<aether_shadow> items;
@@ -23,9 +24,9 @@ struct shadow_storage_policy {
     void (*release)(void*) = std::free;
 };
 shadow_value_error shadow_list_parse(const std::string& source, bool box,
-    parsed_shadow_list& output, const shadow_storage_policy& storage = {});
+    parsed_shadow_list& output, const shadow_storage_policy& storage = {}, const measure_state_s* measures = nullptr);
 shadow_value_error shadow_list_apply(const std::string& source, bool box,
     aether_shadow_list& destination, std::vector<bool>& references,
-    const shadow_storage_policy& storage = {});
+    const shadow_storage_policy& storage = {}, const measure_state_s* measures = nullptr);
 const char* shadow_value_diagnostic_code(bool box);
 const char* shadow_value_error_message(shadow_value_error error, bool box);

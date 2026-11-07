@@ -1,3 +1,4 @@
+#include <new>
 #include "../style_runtime/css_component_values.h"
 #include "transforms.h"
 #include "css_length_internal.h"
@@ -267,7 +268,7 @@ bool aether_transform_list_try_parse(const char* source, aether_transform_list* 
     if (parsed.empty()) return true;
     const size_t bytes = sizeof(aether_transform_operation) * parsed.size();
     auto* items = static_cast<aether_transform_operation*>(std::malloc(bytes));
-    if (!items) return false;
+    if (!items) throw std::bad_alloc();
     std::memcpy(items, parsed.data(), bytes);
     *out = {items, static_cast<int32_t>(parsed.size())};
     return true;

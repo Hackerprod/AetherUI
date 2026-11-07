@@ -1,6 +1,8 @@
 #pragma once
 #include <aether/aether.h>
+#include <aether/aether_contextual_layout.h>
 #include <cassert>
+#include <cmath>
 #include <cstddef>
 #include <algorithm>
 #include <memory>
@@ -9,6 +11,7 @@
 #include <unordered_map>
 #include <unordered_set>
 #include "../css/style_map_types.h"
+#include "../css/measure_state.h"
 #include "../dom/dom_types.h"
 #include "../rendering/stacking.h"
 
@@ -31,7 +34,16 @@ struct aether_layout_box_s {
     std::vector<aether_layout_box_s*> children;
     std::string text;
     bool  is_atomic_control = false;
+    std::string control_display_text;
+    bool control_shows_placeholder = false;
     aether_scroll_metrics_t scroll{};
+    bool visual_sample_valid = false;
+    bool visual_has_transform = false;
+    aether_transform_matrix visual_transform{1,0,0,1,0,0};
+    float visual_opacity = 1.f;
+    int64_t visual_timestamp = 0;
+    std::weak_ptr<node_identity_s> visual_identity;
+
     // Used vertical margins visible to the enclosing block formatting context.
     // They begin as the specified margins and may be collapsed through children.
     float collapsed_margin_before = 0.f;
@@ -41,6 +53,7 @@ struct aether_layout_box_s {
     float own_relative_dx = 0.f;
     float own_relative_dy = 0.f;
 
+    aether_thicknessf used_border{};
     aether_rectf margin_box{};
     aether_rectf border_box{};
     aether_rectf padding_box{};
@@ -123,6 +136,23 @@ inline aether_node_s* layout_box_hit_owner(const aether_layout_box_s* box)
         ? box->element->anonymous_flex_owner : box->element;
 }
 
+// Every input path reverses the exact immutable sample consumed by paint.
+inline bool layout_box_unmap_visual(const aether_layout_box_s* box, float& x, float& y) {
+    if (!box->visual_sample_valid || !box->visual_has_transform) return true;
+    const auto& m = box->visual_transform;
+    const double determinant = double(m.m11)*m.m22-double(m.m12)*m.m21;
+    if (!std::isfinite(determinant) || determinant == 0) return false;
+    const double px=double(x)-m.dx, py=double(y)-m.dy;
+    const double nx=(px*m.m22-py*m.m21)/determinant;
+    const double ny=(py*m.m11-px*m.m12)/determinant;
+    if (!std::isfinite(nx)||!std::isfinite(ny)) return false;
+    x=float(nx);y=float(ny);return std::isfinite(x)&&std::isfinite(y);
+}
+inline bool layout_box_input_alive(const aether_layout_box_s* box) {
+    if (!box->visual_sample_valid || !box->element) return true;
+    auto identity=box->visual_identity.lock();
+    return identity && identity->alive && identity->attached;
+}
 // Own ordinary input area. Keep the existing inclusive/degenerate rect semantics.
 // This predicate is deliberately independent of traversal, clipping and eligibility.
 inline bool layout_box_contains_own_content(const aether_layout_box_s* box, float x, float y)
@@ -162,13 +192,16 @@ struct inline_item_s {
 };
 
 struct aether_layout_result_s {
+    size_t references = 1;
+    aether_layout_result_s* retained_storage_owner = nullptr;
     aether_layout_box_s* root = nullptr;
     // Immutable effective context for this result, installed before all passes.
     bool effective_context_enabled = false;
     std::unordered_set<aether_node_s*> effective_fixed_container_nodes;
-    // Borrowed for the lifetime of a layout result.  Rendering needs the
-    // document element's style to apply CSS canvas-background propagation even
-    // though layout intentionally starts at <body>.
+    // Independently owned immutable revision backing. Anonymous layout-only
+    // styles are added before publication; caller map updates never affect it.
+    // The document element remains available for canvas-background propagation.
+    std::unique_ptr<aether_style_map_s> owned_style_map;
     aether_style_map_s* style_map = nullptr;
     std::unordered_map<aether_node_s*, aether_layout_box_s*> primary_boxes;
     std::vector<aether_layout_box_s*> paint_order;
@@ -181,6 +214,7 @@ struct aether_layout_result_s {
     // and final layout reuse these exact nodes, avoiding duplicate synthetic
     // DOM ownership during provisional passes.
     std::unordered_map<aether_node_s*, std::vector<aether_node_s*>> anonymous_flex_items;
+    float root_font_size = 16.f;
     aether_sizef viewport{};
     // CSS Overflow 3.3: the viewport's used overflow, propagated from the root
     // (or its first body child). The root box's scroll metrics use these while
@@ -191,6 +225,8 @@ struct aether_layout_result_s {
     // published through the query and paint indexes.
     bool records_boxes = true;
     size_t live_box_count = 0;
+    bool abandoned = false;
+    std::unordered_set<aether_layout_box_s*> allocated_boxes;
 
     ~aether_layout_result_s();
 
@@ -215,19 +251,27 @@ struct aether_layout_result_s {
         return it != primary_boxes.end() ? it->second : nullptr;
     }
 
+    bool accepts_style_map(const aether_style_map_s* override_styles) const noexcept {
+        if (!override_styles || !style_map || !style_map->contextual) return true;
+        return override_styles->contextual &&
+            override_styles->revision == style_map->revision &&
+            override_styles->document_identity == style_map->document_identity &&
+            override_styles->generation == style_map->generation;
+    }
+
     aether_node_s* hit_test(float x, float y) const {
-        if (!root) return nullptr;
+        if (!root || !aether_style_map_structure_valid(style_map)) return nullptr;
         return hit_test_recursive(root, x, y, nullptr, nullptr, nullptr);
     }
 
     aether_node_s* hit_test(float x, float y, aether_scroll_offset_fn offsets, void* data) const {
-        if (!root) return nullptr;
+        if (!root || !aether_style_map_structure_valid(style_map)) return nullptr;
         return hit_test_recursive(root, x, y, nullptr, offsets, data);
     }
 
     aether_node_s* hit_test(float x, float y, const aether_style_map_s* styles,
                             aether_scroll_offset_fn offsets, void* data) const {
-        if (!root) return nullptr;
+        if (!root || !aether_style_map_structure_valid(style_map) || !accepts_style_map(styles)) return nullptr;
         return hit_test_recursive(root, x, y, styles, offsets, data);
     }
 
@@ -235,6 +279,7 @@ private:
     static aether_node_s* hit_test_recursive(aether_layout_box_s* box, float x, float y,
                                               const aether_style_map_s* styles,
                                               aether_scroll_offset_fn offsets, void* data) {
+        if (!layout_box_input_alive(box) || !layout_box_unmap_visual(box, x, y)) return nullptr;
         const auto& style = layout_box_style(box, styles);
         if (style.display == AETHER_DISPLAY_NONE) return nullptr;
         const auto& presentation = layout_box_presentation_style(box, styles);
@@ -252,7 +297,7 @@ private:
         const bool clips_children =
             style.overflow_x != AETHER_OVERFLOW_VISIBLE ||
             style.overflow_y != AETHER_OVERFLOW_VISIBLE;
-        if (!clips_children || aether_rectf_contains(box->padding_box, {x, y})) {
+        if (!clips_children || ((style.overflow_x == AETHER_OVERFLOW_VISIBLE || (x >= box->padding_box.x && x <= box->padding_box.x + box->padding_box.width)) && (style.overflow_y == AETHER_OVERFLOW_VISIBLE || (y >= box->padding_box.y && y <= box->padding_box.y + box->padding_box.height)))) {
             const auto order = layout_children_paint_order(box, styles);
             if (order.empty()) {
                 for (auto it = box->children.rbegin(); it != box->children.rend(); ++it) {
@@ -273,9 +318,13 @@ private:
 /* ── Layout engine (stateless; mutable per-layout scratch) ──────── */
 
 struct aether_layout_engine_s {
+    bool layout_in_progress = false;
+    const aether_style_map_s* measure_styles = nullptr;
     // One-shot owned scratch. No runtime/map pointer survives prepare.
     bool transition_context_prepared = false;
     std::unordered_set<aether_node_s*> prepared_active_nodes;
+    aether_text_measurer_contextual_fn contextual_text_measurer = nullptr;
+    void* contextual_text_measurer_data = nullptr;
     aether_text_measurer_fn text_measurer = nullptr;
     void*                   text_measurer_data = nullptr;
     aether_scroll_offset_fn scroll_offset_fn = nullptr;
@@ -312,9 +361,29 @@ inline aether_text_metrics_t engine_measure_text(
     const aether_layout_engine_s* e,
     const char* text,
     const aether_computed_style_t* style,
-    float max_width)
+    float max_width, aether_node_s* node = nullptr)
 {
+    const auto lifetime = e && e->measure_styles ? e->measure_styles->document_lifetime : nullptr;
+    const auto epoch = lifetime ? lifetime->mutation_epoch : 0;
+    const auto style_epoch = lifetime ? lifetime->style_tree_epoch : 0;
+    const auto checked = [&](aether_text_metrics_t metrics) {
+        if (!std::isfinite(metrics.width) || !std::isfinite(metrics.height) || !std::isfinite(metrics.baseline) || metrics.width < 0.f || metrics.height < 0.f)
+            throw std::overflow_error("Invalid text metrics");
+        if (lifetime && (!lifetime->alive || lifetime->mutation_epoch != epoch || lifetime->style_tree_epoch != style_epoch))
+            throw std::runtime_error("DOM mutated during text measurement");
+        return metrics;
+    };
+    if (e && e->contextual_text_measurer) {
+        const measure_state_s* measures = nullptr;
+        if (node && e->measure_styles) {
+            const auto it = e->measure_styles->measures.find(node);
+            if (it != e->measure_styles->measures.end()) measures = it->second.get();
+        }
+        const float used_line_height = measure_used_line_height(measures, *style);
+        if (!std::isfinite(used_line_height)) throw std::overflow_error("Non-finite callback line height");
+        return checked(e->contextual_text_measurer(text, style, used_line_height, max_width, e->contextual_text_measurer_data));
+    }
     if (e && e->text_measurer)
-        return e->text_measurer(text, style, max_width, e->text_measurer_data);
+        return checked(e->text_measurer(text, style, max_width, e->text_measurer_data));
     return {0.f, 0.f, 0.f};
 }

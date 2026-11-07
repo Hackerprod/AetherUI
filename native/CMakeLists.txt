@@ -54,6 +54,7 @@ add_library(aether_core SHARED
     src/rendering/render_plan.cpp
     src/rendering/stacking.cpp
     src/animations/transition_runtime.cpp
+    src/animations/contextual_transitions.cpp
     src/style_runtime/style_values.cpp
     src/style_runtime/style_computed.cpp
     src/style_runtime/style_property_registry.cpp
@@ -820,7 +821,7 @@ if(AETHERUI_BUILD_TESTS)
     target_link_libraries(aether_render_plan_test PRIVATE AetherUI::Core)
     add_test(NAME aether.render-plan COMMAND aether_render_plan_test)
 
-    add_executable(aether_layout_ownership_test tests/test_layout_ownership.cpp src/layout/layout_box.cpp)
+    add_executable(aether_layout_ownership_test tests/test_layout_ownership.cpp src/layout/layout_box.cpp src/css/computed_style.cpp)
     target_include_directories(aether_layout_ownership_test PRIVATE src/layout include)
     target_link_libraries(aether_layout_ownership_test PRIVATE AetherUI::Core)
     add_test(NAME aether.layout-ownership COMMAND aether_layout_ownership_test)
@@ -1031,3 +1032,43 @@ install(
     FILES "${CMAKE_CURRENT_BINARY_DIR}/aetherui-core.pc"
     DESTINATION "${CMAKE_INSTALL_LIBDIR}/pkgconfig"
 )
+
+if(AETHERUI_BUILD_TESTS)
+    add_executable(aether_contextual_abi_test tests/test_contextual_abi.c)
+    set_target_properties(aether_contextual_abi_test PROPERTIES C_STANDARD 11 C_STANDARD_REQUIRED YES)
+    target_link_libraries(aether_contextual_abi_test PRIVATE AetherUI::Core)
+    add_test(NAME aether.contextual-abi COMMAND aether_contextual_abi_test)
+    foreach(measure_test measure_computed contextual_used_geometry style_revisions_atomic contextual_transition_frame contextual_rotated_clip)
+        add_executable(aether_${measure_test}_test tests/test_${measure_test}.cpp)
+        target_include_directories(aether_${measure_test}_test PRIVATE src)
+        target_link_libraries(aether_${measure_test}_test PRIVATE AetherUI::Core)
+        add_test(NAME aether.${measure_test} COMMAND aether_${measure_test}_test)
+    endforeach()
+    add_executable(aether_contextual_paint_geometry_test tests/test_contextual_paint_geometry.cpp
+        src/rendering/background_image_geometry.cpp src/rendering/border_painter.cpp
+        src/css/border_radii.cpp src/style_runtime/css_variable_tokens.cpp)
+    target_include_directories(aether_contextual_paint_geometry_test PRIVATE src)
+    target_link_libraries(aether_contextual_paint_geometry_test PRIVATE AetherUI::Core)
+    add_test(NAME aether.contextual-paint-geometry COMMAND aether_contextual_paint_geometry_test)
+    add_executable(aether_contextual_transitions_test tests/test_contextual_transitions.cpp src/layout/layout_scroll.cpp src/rendering/transform_matrix.cpp)
+    target_include_directories(aether_contextual_transitions_test PRIVATE src)
+    target_link_libraries(aether_contextual_transitions_test PRIVATE AetherUI::Core)
+    add_test(NAME aether.contextual-transitions COMMAND aether_contextual_transitions_test)
+endif()
+
+if(AETHERUI_BUILD_TESTS AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    add_executable(aether_style_malloc_atomic_test tests/test_style_malloc_atomic.cpp)
+    target_link_libraries(aether_style_malloc_atomic_test PRIVATE AetherUI::Core)
+    add_test(NAME aether.style-malloc-atomic COMMAND aether_style_malloc_atomic_test)
+    set_tests_properties(aether.style-malloc-atomic PROPERTIES SKIP_RETURN_CODE 77)
+    # malloc-backed list copies are separate failure boundaries from operator new.
+    # Link actual core objects so --wrap reaches internal allocations too.
+    get_target_property(contextual_malloc_core_sources aether_core SOURCES)
+    add_executable(aether_contextual_geometry_malloc_test
+        tests/test_contextual_geometry_malloc.cpp ${contextual_malloc_core_sources})
+    target_include_directories(aether_contextual_geometry_malloc_test PRIVATE include src)
+    target_compile_definitions(aether_contextual_geometry_malloc_test PRIVATE AETHER_EXPORTS)
+    target_compile_options(aether_contextual_geometry_malloc_test PRIVATE -ffp-contract=off)
+    target_link_options(aether_contextual_geometry_malloc_test PRIVATE -Wl,--wrap=malloc)
+    add_test(NAME aether.contextual-geometry-malloc COMMAND aether_contextual_geometry_malloc_test)
+endif()

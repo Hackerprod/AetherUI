@@ -16,6 +16,8 @@ struct paint_context_s {
 };
 
 struct aether_display_list_builder_s {
+    aether_text_measurer_contextual_fn contextual_text_measurer = nullptr;
+    void* contextual_text_measurer_data = nullptr;
     aether_text_measurer_fn text_measurer = nullptr;
     void*                   text_measurer_data = nullptr;
     aether_image_dimensions_fn image_dimensions = nullptr;

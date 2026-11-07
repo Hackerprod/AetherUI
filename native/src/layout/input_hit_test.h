@@ -10,14 +10,14 @@ struct layout_input_hit_t {
 inline layout_input_hit_t layout_hit_test_input(const aether_layout_result_s* layout,
     const aether_layout_box_s* box, const aether_style_map_s* styles, float x, float y,
     aether_scroll_offset_fn offsets, void* data) {
-    if (!box) return {};
+    if (!box || (layout && (!aether_style_map_structure_valid(layout->style_map) || !layout->accepts_style_map(styles))) || !layout_box_input_alive(box) || !layout_box_unmap_visual(box, x, y)) return {};
     const auto& style = layout_box_style(box, styles);
     if (style.display == AETHER_DISPLAY_NONE) return {};
     const auto& presentation = layout_box_presentation_style(box, styles);
     auto* owner = layout_box_hit_owner(box);
     const bool eligible = owner && presentation.visible &&
         presentation.pointer_events != AETHER_POINTER_EVENTS_NONE;
-    const bool inside_clip = !layout_box_clips(style) || aether_rectf_contains(box->padding_box, {x, y});
+    const bool inside_clip = (style.overflow_x == AETHER_OVERFLOW_VISIBLE || (x >= box->padding_box.x && x <= box->padding_box.x + box->padding_box.width)) && (style.overflow_y == AETHER_OVERFLOW_VISIBLE || (y >= box->padding_box.y && y <= box->padding_box.y + box->padding_box.height));
     aether_scroll_offset_t offset{box->scroll.scroll_offset_x, box->scroll.scroll_offset_y};
     if (offsets && box->element) offset = offsets(box->element, data);
     offset.x = std::clamp(offset.x, 0.f, box->scroll.scrollable_overflow_x);
