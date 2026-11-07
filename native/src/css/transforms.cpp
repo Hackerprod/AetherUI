@@ -1,5 +1,7 @@
 #include "../style_runtime/css_component_values.h"
 #include "transforms.h"
+#include "css_length_internal.h"
+#include "../primitives/ascii_text.h"
 
 #include <algorithm>
 #include <cerrno>
@@ -162,14 +164,43 @@ bool parse_transform_list(const std::string& source, std::vector<aether_transfor
     return cursor.valid() && !out->empty();
 }
 
-bool origin_keyword(const std::string& value, bool* horizontal, aether_css_length* length) {
-    if (!horizontal || !length) return false;
-    const std::string keyword = lower(value);
-    if (keyword == "left") { *horizontal = true; *length = percent(0.0f); return true; }
-    if (keyword == "right") { *horizontal = true; *length = percent(100.0f); return true; }
-    if (keyword == "top") { *horizontal = false; *length = percent(0.0f); return true; }
-    if (keyword == "bottom") { *horizontal = false; *length = percent(100.0f); return true; }
-    return false;
+enum class origin_component_kind { horizontal, vertical, center, length };
+struct origin_component {
+    origin_component_kind kind = origin_component_kind::length;
+    aether_css_length length{};
+};
+
+bool parse_origin_component(const std::string& source, const css_component_value& component,
+                            origin_component& out) {
+    const std::string spelling = source.substr(component.begin, component.end - component.begin);
+    if (component.token.kind == css_variable_token_kind::ident) {
+        std::string keyword;
+        css_variable_lexer lexer(spelling.data(), spelling.size());
+        if (!lexer.decode_identifier([](void* data, const char* bytes, size_t size) {
+                static_cast<std::string*>(data)->append(bytes, size); return true;
+            }, &keyword)) return false;
+        if (aether::ascii_iequals(keyword, "left")) out = {origin_component_kind::horizontal, percent(0)};
+        else if (aether::ascii_iequals(keyword, "right")) out = {origin_component_kind::horizontal, percent(100)};
+        else if (aether::ascii_iequals(keyword, "top")) out = {origin_component_kind::vertical, percent(0)};
+        else if (aether::ascii_iequals(keyword, "bottom")) out = {origin_component_kind::vertical, percent(100)};
+        else if (aether::ascii_iequals(keyword, "center")) out = {origin_component_kind::center, percent(50)};
+        else return false;
+        return true;
+    }
+    aether::css::calc_value_s number;
+    if (component.token.kind == css_variable_token_kind::function) {
+        if (!aether::css::try_parse_calc(spelling, number) ||
+            number.kind != aether::css::calc_value_kind_e::length) return false;
+    } else {
+        if (!aether::css::try_parse_numeric_literal(spelling, number)) return false;
+        // Only a literal Number zero may become a length. calc(0) remains Number.
+        if (number.kind == aether::css::calc_value_kind_e::number) {
+            if (number.number != 0.0) return false;
+            number.length = aether_css_length_zero();
+        }
+    }
+    out = {origin_component_kind::length, number.length};
+    return true;
 }
 
 } // namespace
@@ -192,36 +223,29 @@ bool aether_transform_list_try_parse(const char* source, aether_transform_list* 
 
 bool aether_transform_origin_try_parse(const char* source, aether_transform_origin* out) {
     if (!source || !out) return false;
-    std::vector<std::string> parts;
-    if (!split_components(trim(source), false, &parts) || parts.size() > 2) return false;
-    aether_transform_origin result{percent(50.0f), percent(50.0f)};
-    bool has_x = false;
-    bool has_y = false;
-    for (const auto& part : parts) {
-        if (lower(part) == "center") {
-            if (!has_x) { result.x = percent(50.0f); has_x = true; }
-            else if (!has_y) { result.y = percent(50.0f); has_y = true; }
-            else return false;
-            continue;
-        }
-        bool horizontal = false;
-        aether_css_length keyword{};
-        if (origin_keyword(part, &horizontal, &keyword)) {
-            if (horizontal) {
-                if (has_x) return false;
-                result.x = keyword; has_x = true;
-            } else {
-                if (has_y) return false;
-                result.y = keyword; has_y = true;
-            }
-            continue;
-        }
-        aether_css_length length{};
-        if (!parse_length(part, &length)) return false;
-        if (!has_x) { result.x = length; has_x = true; }
-        else if (!has_y) { result.y = length; has_y = true; }
-        else return false;
+    const std::string value(source);
+    css_component_cursor cursor(value);
+    css_component_value component;
+    origin_component parts[2];
+    size_t count = 0;
+    while (cursor.next(component)) {
+        if (count == 2 || !parse_origin_component(value, component, parts[count])) return false;
+        ++count;
     }
+    if (!cursor.valid() || count == 0) return false;
+    aether_transform_origin result{percent(50), percent(50)};
+    using kind = origin_component_kind;
+    if (count == 1) {
+        if (parts[0].kind == kind::vertical) result.y = parts[0].length;
+        else result.x = parts[0].length;
+    } else if (parts[0].kind != kind::vertical && parts[1].kind != kind::horizontal) {
+        // Ordered (H|C|L) (V|C|L).
+        result = {parts[0].length, parts[1].length};
+    } else if ((parts[0].kind == kind::vertical || parts[0].kind == kind::center) &&
+               (parts[1].kind == kind::horizontal || parts[1].kind == kind::center)) {
+        // Only keywords may reverse axes: (V|C) (H|C).
+        result = {parts[1].length, parts[0].length};
+    } else return false;
     *out = result;
     return true;
 }

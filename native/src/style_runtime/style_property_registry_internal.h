@@ -94,6 +94,13 @@ using property_apply_checked_fn = std::function<property_apply_result_s(
 using property_apply_context_checked_fn = std::function<property_apply_result_s(
     property_apply_context_s& context, const std::string& value)>;
 
+// Opt-in hooks for properties whose explicit inheritance is not supplied by
+// the default inherited-style copy. These never copy unrelated style fields.
+enum class property_css_wide_e { none, initial, inherit, unset };
+using property_css_wide_fn = property_css_wide_e (*)(const std::string& source);
+using property_inherit_fn = void (*)(aether_computed_style_t* style,
+                                     const aether_computed_style_t& parent);
+
 struct style_property_definition_s {
     int32_t id = -1;
     std::string name;
@@ -102,6 +109,8 @@ struct style_property_definition_s {
     std::string initial_value;
     property_parse_fn parse;
     property_parse_failure_fn parse_failure;
+    property_css_wide_fn css_wide = nullptr;
+    property_inherit_fn inherit_explicit = nullptr;
     property_apply_fn apply;
     property_apply_checked_fn apply_checked;
     property_apply_context_fn apply_with_context;
@@ -162,7 +171,10 @@ struct style_property_registry_s {
         uint32_t impact,
         const char* initial_value,
         property_parse_fn parse,
-        property_apply_checked_fn apply)
+        property_apply_checked_fn apply,
+        property_parse_failure_fn parse_failure = {},
+        property_inherit_fn inherit_explicit = {},
+        property_css_wide_fn css_wide = {})
     {
         if (sealed) return;
         if (!name || !*name) return;
@@ -178,6 +190,9 @@ struct style_property_registry_s {
         def.initial_value = initial_value ? initial_value : "";
         def.parse = std::move(parse);
         def.apply_checked = std::move(apply);
+        def.parse_failure = std::move(parse_failure);
+        def.inherit_explicit = std::move(inherit_explicit);
+        def.css_wide = std::move(css_wide);
 
         definitions.push_back(std::move(def));
         by_name[normalized] = &definitions.back();

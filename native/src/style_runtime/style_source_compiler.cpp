@@ -157,11 +157,12 @@ static bool try_compile_longhand(
     std::string normalized = str_trim(value);
     compiled_style_value_s compiled;
 
-    if (str_iequals(normalized, "initial") || str_iequals(normalized, "revert")) {
+    const auto css_wide = def->css_wide ? def->css_wide(normalized) : property_css_wide_e::none;
+    if (css_wide == property_css_wide_e::initial || str_iequals(normalized, "initial") || str_iequals(normalized, "revert")) {
         compiled.mode = compiled_value_mode::initial;
-    } else if (str_iequals(normalized, "inherit")) {
+    } else if (css_wide == property_css_wide_e::inherit || str_iequals(normalized, "inherit")) {
         compiled.mode = compiled_value_mode::inherit;
-    } else if (str_iequals(normalized, "unset")) {
+    } else if (css_wide == property_css_wide_e::unset || str_iequals(normalized, "unset")) {
         compiled.mode = compiled_value_mode::unset;
     } else if (contains_variable(normalized)) {
         compiled.mode = compiled_value_mode::deferred;

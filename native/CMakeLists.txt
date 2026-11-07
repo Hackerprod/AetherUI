@@ -315,7 +315,8 @@ if(AETHERUI_BUILD_TESTS)
     add_executable(aether_css_component_consumers_test tests/test_css_component_consumers.cpp
         src/style_runtime/css_variable_tokens.cpp src/css/border_radii.cpp
         src/css/background_layers.cpp src/css/backdrop_filters.cpp
-        src/css/transforms.cpp src/css/linear_gradient.cpp)
+        src/css/transforms.cpp src/css/linear_gradient.cpp src/css/css_length.cpp)
+    target_compile_definitions(aether_css_component_consumers_test PRIVATE AETHER_CSS_NUMERIC_ONLY)
     target_link_libraries(aether_css_component_consumers_test PRIVATE AetherUI::Core)
     add_test(NAME aether.css-component-consumers COMMAND aether_css_component_consumers_test)
 
@@ -380,6 +381,15 @@ if(AETHERUI_BUILD_TESTS)
     target_compile_definitions(aether_gradient_boundary_dispatch_test PRIVATE AETHER_CSS_NUMERIC_ONLY)
     target_link_libraries(aether_gradient_boundary_dispatch_test PRIVATE AetherUI::Core)
     add_test(NAME aether.gradient-boundary-dispatch COMMAND aether_gradient_boundary_dispatch_test)
+
+    add_executable(aether_transform_origin_dispatch_test tests/test_transform_origin_dispatch.cpp
+        src/style_runtime/builtin_properties.cpp src/style_runtime/transition_properties.cpp
+        src/style_runtime/shadow_values.cpp src/style_runtime/css_variable_tokens.cpp
+        src/css/css_length.cpp src/css/background_layers.cpp src/css/linear_gradient.cpp
+        src/css/border_radii.cpp src/css/backdrop_filters.cpp src/css/transforms.cpp)
+    target_compile_definitions(aether_transform_origin_dispatch_test PRIVATE AETHER_CSS_NUMERIC_ONLY)
+    target_link_libraries(aether_transform_origin_dispatch_test PRIVATE AetherUI::Core)
+    add_test(NAME aether.transform-origin-dispatch COMMAND aether_transform_origin_dispatch_test)
 
     add_executable(aether_background_layers_test tests/test_background_layers.cpp src/css/background_layers.cpp src/css/linear_gradient.cpp src/style_runtime/css_variable_tokens.cpp)
     target_link_libraries(aether_background_layers_test PRIVATE AetherUI::Core)
@@ -810,10 +820,24 @@ if(AETHERUI_BUILD_TESTS)
     target_link_libraries(aether_current_color_test PRIVATE AetherUI::Core)
     add_test(NAME aether.current-color COMMAND aether_current_color_test)
 
-    add_executable(aether_transforms_test tests/test_transforms.cpp src/css/transforms.cpp src/rendering/transform_matrix.cpp src/style_runtime/css_variable_tokens.cpp)
+    add_executable(aether_transforms_test tests/test_transforms.cpp src/css/transforms.cpp src/rendering/transform_matrix.cpp src/style_runtime/css_variable_tokens.cpp src/css/css_length.cpp)
+    target_compile_definitions(aether_transforms_test PRIVATE AETHER_CSS_NUMERIC_ONLY)
     target_link_libraries(aether_transforms_test PRIVATE AetherUI::Core)
     target_include_directories(aether_transforms_test PRIVATE src/css src/rendering)
     add_test(NAME aether.transforms COMMAND aether_transforms_test)
+
+    add_executable(aether_transform_origin_parser_test tests/test_transform_origin_parser.cpp
+        src/css/transforms.cpp src/rendering/transform_matrix.cpp
+        src/style_runtime/css_variable_tokens.cpp src/css/css_length.cpp)
+    target_compile_definitions(aether_transform_origin_parser_test PRIVATE AETHER_CSS_NUMERIC_ONLY)
+    target_include_directories(aether_transform_origin_parser_test PRIVATE src/css src/rendering)
+    target_link_libraries(aether_transform_origin_parser_test PRIVATE AetherUI::Core)
+    add_test(NAME aether.transform-origin-parser COMMAND aether_transform_origin_parser_test)
+
+    add_executable(aether_transform_origin_runtime_test tests/test_transform_origin_runtime.cpp)
+    target_link_libraries(aether_transform_origin_runtime_test PRIVATE AetherUI::Core)
+    add_test(NAME aether.transform-origin-runtime COMMAND aether_transform_origin_runtime_test)
+
 
     add_executable(aether_table_layout_test tests/test_table_layout.cpp src/layout/table_layout.cpp)
     target_include_directories(aether_table_layout_test PRIVATE src/layout)

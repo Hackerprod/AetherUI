@@ -570,6 +570,7 @@ static runtime_node_state_s* compute_node(aether_style_runtime_s* runtime, aethe
         const auto& definition = registry->definitions[i];
         const auto& compiled = cascade[i].value;
         std::string value;
+        bool explicit_inherit = false;
         switch (compiled.mode) {
         case compiled_value_mode::value:
             value = compiled.typed_value;
@@ -578,20 +579,32 @@ static runtime_node_state_s* compute_node(aether_style_runtime_s* runtime, aethe
             value = definition.initial_value;
             break;
         case compiled_value_mode::inherit:
-            // The style starts with inherited values. Non-inherited explicit
-            // inherit is uncommon in Aether markup and remains unchanged here.
-            return false;
+            if (!definition.inherit_explicit) return false;
+            explicit_inherit = parent != nullptr;
+            value = definition.initial_value;
+            break;
         case compiled_value_mode::unset:
             if (definition.inherited && parent) return false;
             value = definition.initial_value;
             break;
-        case compiled_value_mode::deferred:
+        case compiled_value_mode::deferred: {
             if (!resolve_computed_value(compiled.deferred_source.c_str(), scope.get(),
                                   runtime->options.max_variable_depth,
                                   runtime->options.max_variable_expansion_length, value)) {
                 report(runtime, "AETHER-CSS-VAR", definition.name.c_str(),
                        compiled.deferred_source.c_str(), "Unable to resolve CSS variable.");
-                return false;
+                if (!definition.css_wide) return false;
+                // This non-inherited opt-in property keeps the invalid winner.
+                // Applying initial also accounts for its delta from old state.
+                value = definition.initial_value;
+                break;
+            }
+            const auto css_wide = definition.css_wide ? definition.css_wide(value) : property_css_wide_e::none;
+            if (css_wide != property_css_wide_e::none) {
+                explicit_inherit = css_wide == property_css_wide_e::inherit &&
+                    parent && definition.inherit_explicit;
+                value = definition.initial_value;
+                break;
             }
             if (!definition.parse(value.c_str(), value)) {
                 const auto failure = definition.parse_failure ? definition.parse_failure(value.c_str()) : property_apply_result_s{};
@@ -603,12 +616,21 @@ static runtime_node_state_s* compute_node(aether_style_runtime_s* runtime, aethe
                            is_calc_expression(value.c_str())
                                ? "The calc() expression is syntactically or dimensionally invalid."
                                : "Resolved CSS value is invalid.");
-                return false;
+                if (!definition.css_wide) return false;
+                value = definition.initial_value;
             }
             break;
         }
-        if (!apply_property_value(definition, next, color_references, value, true))
-            return false;
+        }
+        auto apply_selected = [&](aether_computed_style_t& style,
+                                  color_resolution_state_s& references, bool emit_diagnostics) {
+            if (explicit_inherit) {
+                definition.inherit_explicit(&style, parent->style.style);
+                return true;
+            }
+            return apply_property_value(definition, style, references, value, emit_diagnostics);
+        };
+        if (!apply_selected(next, color_references, true)) return false;
         bool property_changed = previous_style == nullptr;
         if (previous_style) {
             aether_computed_style_handle_s previous_handle{};
@@ -616,7 +638,7 @@ static runtime_node_state_s* compute_node(aether_style_runtime_s* runtime, aethe
             aether_computed_style_t probe{};
             if (aether_computed_style_copy(&previous_handle, &probe) == AETHER_OK) {
                 color_resolution_state_s probe_references = found->second->color_references;
-                if (apply_property_value(definition, probe, probe_references, value, false)) {
+                if (apply_selected(probe, probe_references, false)) {
                     resolve_symbolic_colors(probe, probe_references);
                     normalize_overflow_axes(probe);
                     property_changed = !style_equal(*previous_style, probe);
@@ -686,6 +708,18 @@ static runtime_node_state_s* compute_node(aether_style_runtime_s* runtime, aethe
     } else if (is_new_node) {
         impact = STYLE_IMPACT_ALL_BITS;
         inherited_change_impact = declared_inherited_impact | inherited_parent_impact;
+    } else if (!transform_origin_equal(found->second->style.style.transform_origin, next.transform_origin) &&
+               [&] {
+                   // Removal or computed-invalid origin can occur after any
+                   // number of no-op resolves. Compare the final scalar delta,
+                   // not historical declaration impacts. This copy only borrows.
+                   auto comparison = found->second->style.style;
+                   comparison.transform_origin = next.transform_origin;
+                   return style_equal(comparison, next);
+               }()) {
+        const auto* origin = registry->try_get("transform-origin");
+        impact = origin ? origin->impact : STYLE_IMPACT_ALL_BITS;
+        inherited_change_impact = STYLE_IMPACT_NONE;
     } else if (found->second->style.style.visible != next.visible) {
         // Compare the final computed delta, not the declarations still present.
         // Removing visibility can otherwise reuse historical geometric impacts;

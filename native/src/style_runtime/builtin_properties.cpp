@@ -3,6 +3,10 @@
 #include "builtin_property_parse_utils.h"
 #include "transition_properties_internal.h"
 #include "shadow_values.h"
+#include "css_component_values.h"
+#include "../primitives/ascii_text.h"
+#include <limits>
+#include <algorithm>
 #include "../css/border_utils.h"
 #include "../css/css_length_internal.h"
 #include "../css/border_radii.h"
@@ -383,10 +387,57 @@ static bool bi_try_transform(const char* src, std::string& out) {
 }
 
 static bool bi_try_transform_origin(const char* src, std::string& out) {
-    std::string t = str_trim(src);
-    if (t.empty()) return false;
-    out = t;
+    // Deferred validation may pass out.c_str() as src. Own it before writing out.
+    const std::string value = str_trim(src ? src : "");
+    aether_transform_origin parsed{};
+    if (!aether_transform_origin_try_parse(value.c_str(), &parsed)) return false;
+    out = value;
     return true;
+}
+
+static property_apply_result_s bi_origin_parse_failure(const char*) {
+    return property_apply_result_s::failure("AETHER-CSS-TRANSFORM-ORIGIN",
+        "transform-origin accepts one or two supported 2D position components.");
+}
+
+static property_css_wide_e bi_origin_css_wide(const std::string& source) {
+    css_component_cursor cursor(source);
+    css_component_value component, extra;
+    if (!cursor.next(component) || component.token.kind != css_variable_token_kind::ident ||
+        cursor.next(extra) || !cursor.valid()) return property_css_wide_e::none;
+    const std::string token = source.substr(component.begin, component.end - component.begin);
+    std::string keyword;
+    css_variable_lexer lexer(token.data(), token.size());
+    if (!lexer.decode_identifier([](void* data, const char* bytes, size_t size) {
+            static_cast<std::string*>(data)->append(bytes, size); return true;
+        }, &keyword)) return property_css_wide_e::none;
+    if (aether::ascii_iequals(keyword, "initial") || aether::ascii_iequals(keyword, "revert"))
+        return property_css_wide_e::initial;
+    if (aether::ascii_iequals(keyword, "inherit")) return property_css_wide_e::inherit;
+    if (aether::ascii_iequals(keyword, "unset")) return property_css_wide_e::unset;
+    // revert-layer is deliberately unsupported, not an alias for initial.
+    return property_css_wide_e::none;
+}
+
+static aether_css_length bi_origin_freeze_em(aether_css_length length, float font_size) {
+    const double em = length.unit == AETHER_CSS_UNIT_EM ? length.value :
+        length.unit == AETHER_CSS_UNIT_LINEAR ? length.linear_em : 0.0;
+    if (length.unit != AETHER_CSS_UNIT_EM && length.unit != AETHER_CSS_UNIT_LINEAR) return length;
+    if (em == 0.0 && length.unit == AETHER_CSS_UNIT_LINEAR) return length;
+    const double pixels = (length.unit == AETHER_CSS_UNIT_LINEAR ? length.value : 0.0) + em * font_size;
+    // Compute in double and saturate at the finite storage boundary. Percent,
+    // rem and viewport terms keep their shared context and are never rebased.
+    const double bound = std::numeric_limits<float>::max();
+    length.value = static_cast<float>(std::isnan(pixels) ? 0.0 : std::clamp(pixels, -bound, bound));
+    if (length.unit == AETHER_CSS_UNIT_EM) length.unit = AETHER_CSS_UNIT_PX;
+    else length.linear_em = 0.0f;
+    return length;
+}
+
+static void bi_inherit_transform_origin(aether_computed_style_t* style,
+                                        const aether_computed_style_t& parent) {
+    style->transform_origin = {bi_origin_freeze_em(parent.transform_origin.x, parent.font_size),
+                               bi_origin_freeze_em(parent.transform_origin.y, parent.font_size)};
 }
 
 static property_apply_result_s bi_apply_transform(aether_computed_style_t* style, const std::string& value) {
@@ -1188,7 +1239,7 @@ void builtin_properties_register(style_property_registry_s* reg) {
 
     reg->register_property_checked("transform-origin", false,
         STYLE_IMPACT_COMPOSITE | STYLE_IMPACT_HITTEST, "50% 50%", bi_try_transform_origin,
-        bi_apply_transform_origin);
+        bi_apply_transform_origin, bi_origin_parse_failure, bi_inherit_transform_origin, bi_origin_css_wide);
 
     transition_properties_register_longhands(reg);
 
