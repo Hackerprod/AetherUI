@@ -1134,7 +1134,8 @@ if(AETHERUI_BUILD_TESTS)
     add_test(NAME aether.contextual-paint-geometry COMMAND aether_contextual_paint_geometry_test)
     add_executable(aether_contextual_transitions_test tests/test_contextual_transitions.cpp src/layout/layout_scroll.cpp src/rendering/transform_matrix.cpp
         src/layout/layout_box.cpp src/css/style_resolver.cpp src/css/style_map_version.cpp
-        src/css/computed_style.cpp src/css/style_c_export.cpp src/css/frozen_style.cpp src/css/frozen_c_string.cpp)
+        src/css/computed_style.cpp src/css/style_c_export.cpp src/css/frozen_style.cpp src/css/frozen_c_string.cpp
+        src/css/frozen_node_record.cpp src/css/immutable_style_backing.cpp)
     target_include_directories(aether_contextual_transitions_test PRIVATE src)
     target_link_libraries(aether_contextual_transitions_test PRIVATE AetherUI::Core)
     add_test(NAME aether.contextual-transitions COMMAND aether_contextual_transitions_test)
@@ -1238,6 +1239,26 @@ if(AETHERUI_BUILD_TESTS AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
     target_link_options(aether_layout_checked_edges_atomic_test PRIVATE -fno-lto
         -Wl,--wrap=malloc -Wl,--wrap=calloc -Wl,--wrap=realloc)
     add_test(NAME aether.layout-checked-edges-atomic COMMAND aether_layout_checked_edges_atomic_test)
+endif()
+
+if(AETHERUI_BUILD_TESTS AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    # Interpose real sampler boundaries while preserving the production core target.
+    get_target_property(contextual_sampler_core_sources aether_core SOURCES)
+    add_executable(aether_contextual_sampler_atomic_test tests/test_contextual_sampler_atomic.cpp
+        ${contextual_sampler_core_sources})
+    target_include_directories(aether_contextual_sampler_atomic_test PRIVATE include src)
+    target_compile_definitions(aether_contextual_sampler_atomic_test PRIVATE AETHER_EXPORTS)
+    set_target_properties(aether_contextual_sampler_atomic_test PROPERTIES INTERPROCEDURAL_OPTIMIZATION FALSE)
+    target_compile_options(aether_contextual_sampler_atomic_test PRIVATE
+        -ffp-contract=off -fno-lto -g -fno-omit-frame-pointer -fno-pie)
+    target_link_options(aether_contextual_sampler_atomic_test PRIVATE -fno-lto -no-pie
+        -Wl,--wrap=_ZN6aether5style19export_style_handleERKNS0_10MapVersionERKSt10shared_ptrIKNS0_16FrozenNodeRecordEEPP30aether_computed_style_handle_s
+        -Wl,--wrap=_Z39accumulate_scrollable_descendant_extentPK19aether_layout_box_sbbRfS2_
+        -Wl,--wrap=aether_style_map_get -Wl,--wrap=aether_computed_style_handle_clone
+        -Wl,--wrap=aether_computed_style_handle_destroy
+        -Wl,--wrap=__cxa_throw
+        -Wl,--wrap=malloc -Wl,--wrap=calloc -Wl,--wrap=realloc)
+    add_test(NAME aether.contextual-sampler-atomic COMMAND aether_contextual_sampler_atomic_test)
 endif()
 
 if(AETHERUI_BUILD_TESTS AND NOT MSVC)

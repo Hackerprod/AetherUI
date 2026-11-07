@@ -1,6 +1,5 @@
 #include <aether/aether_contextual_transitions.h>
 #include "../css/computed_style_handle.h"
-#include "../css/style_handle_export.h"
 #include "../layout/operation_pin.h"
 #include "../dom/node_identity.h"
 #include <array>
@@ -91,12 +90,68 @@ namespace {
         ContextualAffine form = identity();
         bool canonical = false;
     };
-    Endpoint copy_endpoint(const aether_computed_style_t& s) {
+    // Two genuine read-only ranges: public C storage is contiguous, frozen
+    // storage is not. No borrowed public flat or pretend contiguous array.
+    class TransformReadInputs {
+        const aether_transform_operation* raw_ = nullptr;
+        int32_t raw_count_ = 0;
+        aether::style::ReadOnlyArrayView<aether_transform_operation> frozen_;
+        bool is_frozen_ = false;
+    public:
+        explicit TransformReadInputs(const aether_transform_list& list) noexcept
+            : raw_(list.items), raw_count_(list.count) {}
+        explicit TransformReadInputs(aether::style::ReadOnlyArrayView<aether_transform_operation> list) noexcept
+            : frozen_(list), is_frozen_(true) {}
+        size_t checked_size() const {
+            if (!is_frozen_) {
+                if (raw_count_ < 0 || (raw_count_ && !raw_)) throw std::invalid_argument("list");
+                return static_cast<size_t>(raw_count_);
+            }
+            // Preserve the representability checks of the former C exporter.
+            if (frozen_.size() > static_cast<size_t>(std::numeric_limits<int32_t>::max()) ||
+                frozen_.size() > std::numeric_limits<size_t>::max() / sizeof(aether_transform_operation))
+                throw std::invalid_argument("list size");
+            return frozen_.size();
+        }
+        const aether_transform_operation& operator[](size_t i) const noexcept {
+            return is_frozen_ ? frozen_[i] : raw_[i];
+        }
+    };
+    struct SampleReadInputs {
+        float opacity;
+        aether_transform_origin origin;
+        TransformReadInputs transforms;
+        uint64_t document_identity, node_identity;
+    };
+    SampleReadInputs sample_inputs(const aether_computed_style_handle_s& handle) noexcept {
+        return {handle.style.opacity, handle.style.transform_origin, TransformReadInputs(handle.style.transforms),
+            handle.document_identity, handle.node_identity};
+    }
+    SampleReadInputs sample_inputs(aether::style::ComputedStyleReadView style,
+        uint64_t document_identity, uint64_t node_identity) noexcept {
+        return {style.scalars().opacity, style.scalars().transform_origin, TransformReadInputs(style.transforms()),
+            document_identity, node_identity};
+    }
+    SampleReadInputs sample_inputs(const aether::style::MapVersion& binding,
+        const aether::style::FrozenNodeRef& record) {
+        if (!record || !binding.backing()) throw std::invalid_argument("sample record");
+        const auto member = binding.backing()->find_owner(record->node());
+        if (member != record || member.owner_before(record) || record.owner_before(member))
+            throw std::invalid_argument("sample record owner");
+        // Global identity comes from the captured binding, not from a record
+        // which might have survived in a partial legacy map with no global ID.
+        return sample_inputs(record->style_view(), binding.document_identity(), record->node_identity());
+    }
+    Endpoint copy_endpoint(const TransformReadInputs& transforms) {
         Endpoint e;
-        if (s.transforms.count < 0 || (s.transforms.count && !s.transforms.items)) throw std::invalid_argument("list");
-        if (s.transforms.count) e.ops.assign(s.transforms.items, s.transforms.items + s.transforms.count);
+        const size_t count = transforms.checked_size();
+        e.ops.reserve(count);
+        for (size_t i = 0; i < count; ++i) e.ops.push_back(transforms[i]);
         for (auto i = e.ops.rbegin(); i != e.ops.rend(); ++i) e.form = compose(e.form, operation_form(* i));
         return e;
+    }
+    Endpoint copy_endpoint(const aether_computed_style_t& s) {
+        return copy_endpoint(TransformReadInputs(s.transforms));
     }
     ContextualAffine blend_coefficients(ContextualAffine a, const ContextualAffine& b, double p) {
         for (size_t i = 0; i < a.size(); ++i) a[i] = a[i] *(1 - p) + b[i] * p;
@@ -222,6 +277,57 @@ struct aether_contextual_transition_batch_s {
     bool committed = false;
     aether_contextual_transition_runtime_t owner = nullptr;
 };
+namespace {
+    // Caller pins all owners for this synchronous borrow. Neither endpoints nor
+    // the result retain a view, handle, map wrapper or operation pin.
+    aether_status_t sample_box_read(aether_contextual_transition_batch_t batch,
+        const SampleReadInputs& current, aether_rectf box, aether_contextual_transition_sample* out) {
+        if (!out) return AETHER_ERROR_NULL_ARG;
+        try {
+            require_finite(box.x);
+            require_finite(box.y);
+            require_finite(box.width);
+            require_finite(box.height);
+            if (box.width < 0 || box.height < 0 || !current.node_identity
+                || !current.document_identity) throw std::invalid_argument("box identity");
+            auto e = copy_endpoint(current.transforms);
+            double opacity = current.opacity;
+            bool active = false, has = !e.ops.empty();
+            if (batch) for (const auto& v : batch->state->entries) if (v.doc == current.document_identity && v.node == current.node_identity) {
+                if (v.transform.active) {
+                    e = interpolate_endpoint(v.transform.from, v.transform.to, eased_progress(v.transform, batch->clock));
+                    has = true;
+                    active = true;
+                }
+                if (v.opacity.active) {
+                    double p = eased_progress(v.opacity, batch->clock);
+                    opacity = v.opacity.opacity_from *(1 - p) + v.opacity.opacity_to * p;
+                    active = true;
+                }
+                break;
+            }
+            auto ox = computed_length_parts(current.origin.x), oy = computed_length_parts(current.origin.y);
+            double x = box.x + ox[0] + ox[1] * box.width, y = box.y + oy[0] + oy[1] * box.height;
+            const auto& f = e.form;
+            double dx = f[4] + f[5] * box.width + f[6] * box.height + x - x * f[0] - y * f[2],
+                dy = f[7] + f[8] * box.width + f[9] * box.height + y - x * f[1] - y * f[3];
+            require_finite(dx);
+            require_finite(dy);
+            require_finite(opacity);
+            aether_contextual_transition_sample s { { float(f[0]), float(f[1]), float(f[2]), float(f[3]), float(dx),
+                float(dy) }, float(opacity), has ? AETHER_TRUE : AETHER_FALSE, active ? AETHER_TRUE : AETHER_FALSE,
+                batch ? batch->clock : 0 };
+            *out = s;
+            return AETHER_OK;
+        }
+        catch (const std::bad_alloc&) {
+            return AETHER_ERROR_OUT_OF_MEMORY;
+        }
+        catch (...) {
+            return AETHER_ERROR_INVALID_STATE;
+        }
+    }
+}
 extern "C" {
 
     uint32_t aether_contextual_transition_capability(void) {
@@ -391,49 +497,7 @@ extern "C" {
     aether_status_t aether_contextual_transition_sample_box(aether_contextual_transition_batch_t batch,
         aether_computed_style_handle_t current, aether_rectf box, aether_contextual_transition_sample *out) {
         if (!current || !out) return AETHER_ERROR_NULL_ARG;
-        try {
-            require_finite(box.x);
-            require_finite(box.y);
-            require_finite(box.width);
-            require_finite(box.height);
-            if (box.width < 0 || box.height < 0 || !current->node_identity
-                || !current->document_identity) throw std::invalid_argument("box identity");
-            auto e = copy_endpoint(current->style);
-            double opacity = current->style.opacity;
-            bool active = false, has = !e.ops.empty();
-            if (batch) for (const auto& v : batch->state->entries) if (v.doc == current->document_identity && v.node == current->node_identity) {
-                if (v.transform.active) {
-                    e = interpolate_endpoint(v.transform.from, v.transform.to, eased_progress(v.transform, batch->clock));
-                    has = true;
-                    active = true;
-                }
-                if (v.opacity.active) {
-                    double p = eased_progress(v.opacity, batch->clock);
-                    opacity = v.opacity.opacity_from *(1 - p) + v.opacity.opacity_to * p;
-                    active = true;
-                }
-                break;
-            }
-            auto ox = computed_length_parts(current->style.transform_origin.x), oy = computed_length_parts(current->style.transform_origin.y);
-            double x = box.x + ox[0] + ox[1] * box.width, y = box.y + oy[0] + oy[1] * box.height;
-            const auto& f = e.form;
-            double dx = f[4] + f[5] * box.width + f[6] * box.height + x - x * f[0] - y * f[2],
-                dy = f[7] + f[8] * box.width + f[9] * box.height + y - x * f[1] - y * f[3];
-            require_finite(dx);
-            require_finite(dy);
-            require_finite(opacity);
-            aether_contextual_transition_sample s { { float(f[0]), float(f[1]), float(f[2]), float(f[3]), float(dx),
-                float(dy) }, float(opacity), has ? AETHER_TRUE : AETHER_FALSE, active ? AETHER_TRUE : AETHER_FALSE,
-                batch ? batch->clock : 0 };
-            *out = s;
-            return AETHER_OK;
-        }
-        catch (const std::bad_alloc&) {
-            return AETHER_ERROR_OUT_OF_MEMORY;
-        }
-        catch (...) {
-            return AETHER_ERROR_INVALID_STATE;
-        }
+        return sample_box_read(batch, sample_inputs(*current), box, out);
     }
 }
 #include "../layout/layout_types.h"
@@ -477,13 +541,11 @@ extern "C" {
                 }
                 const auto record = style_pin.lookup().lookup_record_owner(box->element);
                 if (!record) continue;
-                aether_computed_style_handle_t h = nullptr;
-                const auto export_status = aether::style::export_style_handle(
-                    *style_pin.selected_version(), record, &h);
-                if (export_status != AETHER_OK) return export_status;
+                const auto& binding = style_pin.selected_version();
+                if (!binding) return AETHER_ERROR_INVALID_STATE;
+                const auto inputs = sample_inputs(*binding, record);
                 aether_contextual_transition_sample value {};
-                auto status = aether_contextual_transition_sample_box(batch, h, box->border_box, &value);
-                aether_computed_style_handle_destroy(h);
+                auto status = sample_box_read(batch, inputs, box->border_box, &value);
                 if (status != AETHER_OK) return status;
                 if (box->kind != LAYOUT_BOX_ELEMENT) {
                     value.has_transform = AETHER_FALSE;
