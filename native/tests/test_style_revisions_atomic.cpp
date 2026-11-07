@@ -118,4 +118,30 @@ static void reentrant_diagnostics() {
     require(aether_style_revision_generation(r.inner)>aether_style_revision_generation(outer),"inner is later generation");
     aether_computed_style_handle_destroy(a);aether_computed_style_handle_destroy(b);aether_style_revision_destroy(g0);aether_style_revision_destroy(outer);aether_style_revision_destroy(r.inner);
 }
-int main(){revisions_and_stale();fault_prepare();fault_map();reentrant_diagnostics();std::printf("style revision atomic: %u checks passed\n",checks);}
+static void legacy_scope_is_not_contextual() {
+    Fixture f;
+    require(aether_element_set_attribute(aether_doc_get_body(f.doc),"style","--base:20px")==AETHER_OK,"parent custom scope");
+    require(aether_element_set_attribute(f.node,"style","width:var(--base,7px)")==AETHER_OK,"child custom consumer");
+    auto original=f.resolve(); auto old=lookup(original,f.node);
+    require(near(old->style.width.value,20),"contextual initial inheritance");
+    aether_style_update_t* updates{};
+    const int count=aether_style_runtime_resolve_subtree(f.runtime,f.node,&updates);
+    require(count>0,"isolated legacy update"); aether_style_updates_free(updates,count);
+    aether_style_map_t legacy{};
+    require(aether_style_runtime_create_resolved_style_map(f.runtime,f.doc,&legacy)==AETHER_OK,"legacy projection remains available");
+    auto isolated=aether_style_map_get(legacy,f.node);
+    require(isolated&&near(isolated->style.width.value,7),"legacy subtree preserves null-parent scope");
+    aether_style_revision_t unavailable=reinterpret_cast<aether_style_revision_t>(1);
+    require(aether_style_runtime_retain_revision(f.runtime,&unavailable)==AETHER_ERROR_INVALID_STATE&&unavailable==nullptr,
+        "isolated legacy revision cannot claim contextual completeness");
+    aether_style_transaction_t tx{};
+    require(aether_style_runtime_prepare_revision(f.runtime,f.node,nullptr,&tx)==AETHER_OK,"contextual prepare from child");
+    aether_style_revision_t restored{};
+    require(aether_style_runtime_commit_revision(f.runtime,tx,&restored)==AETHER_OK,"contextual commit restores full scope");
+    aether_style_transaction_destroy(tx); auto current=lookup(restored,f.node);
+    require(near(current->style.width.value,20)&&near(old->style.width.value,20)&&near(isolated->style.width.value,7),
+        "contextual retry and retained legacy snapshots stay independent");
+    aether_computed_style_handle_destroy(current);aether_computed_style_handle_destroy(isolated);aether_computed_style_handle_destroy(old);
+    aether_style_map_destroy(legacy);aether_style_revision_destroy(original);aether_style_revision_destroy(restored);
+}
+int main(){legacy_scope_is_not_contextual();revisions_and_stale();fault_prepare();fault_map();reentrant_diagnostics();std::printf("style revision atomic: %u checks passed\n",checks);}

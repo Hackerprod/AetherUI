@@ -60,6 +60,7 @@ struct aether_style_runtime_s {
     uint64_t generation = 0;
     uint64_t sheet_epoch = 0;
     bool preparing = false;
+    aether_node_s* legacy_inheritance_root = nullptr; // Candidate-only compatibility boundary.
     std::thread::id owner_thread = std::this_thread::get_id();
     rule_index_s index;
 };
@@ -72,6 +73,7 @@ struct style_revision_entry_s {
     uint32_t impact = STYLE_IMPACT_NONE;
 };
 struct style_revision_s {
+    bool contextual = true;
     uint64_t generation = 0, document_identity = 0, input_epoch = 0, structure_epoch = 0, style_tree_epoch = 0;
     aether_style_environment_t environment{};
     std::shared_ptr<const document_measure_context_s> document;
@@ -417,6 +419,9 @@ static runtime_node_state_s* compute_node(aether_style_runtime_s* runtime, aethe
                                           runtime_node_state_s* parent, uint32_t inherited_parent_impact,
                                           uint32_t& impact, uint32_t& inherited_change_impact,
                                           std::optional<std::string>* generated_content = nullptr) {
+    // The legacy subtree entry point starts an isolated inheritance scope.
+    // Contextual preparation never installs this compatibility boundary.
+    if (node == runtime->legacy_inheritance_root) { parent = nullptr; inherited_parent_impact = 0; }
     auto* registry = style_property_registry_get_global();
     aether_computed_style_t next{};
     if (computed_style_inherit_checked(parent ? &parent->style.style : nullptr, &next) != AETHER_OK)
@@ -1014,10 +1019,10 @@ AETHER_API aether_bool_t aether_style_runtime_remove_stylesheet(
 }
 
 static int32_t resolve_legacy_atomic(aether_style_runtime_t runtime, aether_node_t root,
-    const aether_style_environment_t* environment, aether_style_update_t** out_updates);
+    const aether_style_environment_t* environment, aether_style_update_t** out_updates, bool isolate_legacy_root = false);
 AETHER_API int32_t aether_style_runtime_resolve_subtree(
     aether_style_runtime_t runtime, aether_node_t root, aether_style_update_t** out_updates) {
-    return resolve_legacy_atomic(runtime, root, nullptr, out_updates);
+    return resolve_legacy_atomic(runtime, root, nullptr, out_updates, true);
 }
 AETHER_API int32_t aether_style_runtime_resolve_state_changes(
     aether_style_runtime_t runtime, aether_node_t root, const aether_node_t* changed_nodes,
@@ -1102,9 +1107,9 @@ static std::shared_ptr<runtime_node_state_s> clone_runtime_state(const runtime_n
     return target;
 }
 AETHER_API uint32_t aether_contextual_style_version(void) { return 1; }
-AETHER_API aether_status_t aether_style_runtime_prepare_revision(
+static aether_status_t prepare_revision_impl(
     aether_style_runtime_t runtime, aether_node_t root,
-    const aether_style_environment_t* environment, aether_style_transaction_t* out_transaction) {
+    const aether_style_environment_t* environment, aether_style_transaction_t* out_transaction, bool isolate_legacy_root) {
     if (out_transaction) *out_transaction = nullptr;
     if (!runtime || !root || !out_transaction) return AETHER_ERROR_NULL_ARG;
     if (runtime->preparing || runtime->owner_thread != std::this_thread::get_id()) return AETHER_ERROR_INVALID_STATE;
@@ -1122,6 +1127,8 @@ AETHER_API aether_status_t aether_style_runtime_prepare_revision(
         transaction->candidate = std::make_unique<aether_style_runtime_s>();
         auto& staged = *transaction->candidate;
         staged.options = runtime->options; staged.environment = requested_environment;
+        if (isolate_legacy_root && root != document && root->parent && root->parent->type != AETHER_NODE_DOCUMENT)
+            staged.legacy_inheritance_root = root;
         staged.index = runtime->index;
         staged.document_measures = std::make_shared<document_measure_context_s>();
         staged.document_measures->viewport_width = requested_environment.viewport_width;
@@ -1146,6 +1153,7 @@ AETHER_API aether_status_t aether_style_runtime_prepare_revision(
             if (!current_nodes.count(it->first)) it = staged.states.erase(it); else ++it;
         }
         auto revision = std::make_shared<style_revision_s>();
+        revision->contextual = staged.legacy_inheritance_root == nullptr;
         revision->generation = staged.document_measures->generation;
         revision->document_identity = staged.document_measures->identity;
         revision->input_epoch = transaction->input_epoch;
@@ -1199,6 +1207,11 @@ AETHER_API aether_status_t aether_style_runtime_prepare_revision(
     } catch (const std::bad_alloc&) { return AETHER_ERROR_OUT_OF_MEMORY; }
       catch (...) { return AETHER_ERROR_INVALID_STATE; }
 }
+AETHER_API aether_status_t aether_style_runtime_prepare_revision(
+    aether_style_runtime_t runtime, aether_node_t root,
+    const aether_style_environment_t* environment, aether_style_transaction_t* out_transaction) {
+    return prepare_revision_impl(runtime, root, environment, out_transaction, false);
+}
 AETHER_API aether_status_t aether_style_runtime_commit_revision(
     aether_style_runtime_t runtime, aether_style_transaction_t transaction, aether_style_revision_t* out_revision) {
     if (out_revision) *out_revision = nullptr;
@@ -1230,11 +1243,11 @@ AETHER_API aether_status_t aether_style_runtime_commit_revision(
 }
 AETHER_API void aether_style_transaction_destroy(aether_style_transaction_t transaction) { delete transaction; }
 static int32_t resolve_legacy_atomic(aether_style_runtime_t runtime, aether_node_t root,
-    const aether_style_environment_t* environment, aether_style_update_t** out_updates) {
+    const aether_style_environment_t* environment, aether_style_update_t** out_updates, bool isolate_legacy_root) {
     if (out_updates) *out_updates = nullptr;
     if (!runtime || !root || !out_updates) return 0;
     aether_style_transaction_t raw = nullptr;
-    if (aether_style_runtime_prepare_revision(runtime, root, environment, &raw) != AETHER_OK) return 0;
+    if (prepare_revision_impl(runtime, root, environment, &raw, isolate_legacy_root) != AETHER_OK) return 0;
     std::unique_ptr<aether_style_transaction_s> transaction(raw);
     aether_style_revision_t revision = nullptr;
     if (aether_style_runtime_commit_revision(runtime, transaction.get(), &revision) != AETHER_OK) return 0;
@@ -1247,7 +1260,7 @@ static int32_t resolve_legacy_atomic(aether_style_runtime_t runtime, aether_node
 AETHER_API aether_status_t aether_style_runtime_retain_revision(aether_style_runtime_t runtime, aether_style_revision_t* out) {
     if (out) *out = nullptr;
     if (!runtime || !out) return AETHER_ERROR_NULL_ARG;
-    if (!runtime->revision) return AETHER_ERROR_INVALID_STATE;
+    if (!runtime->revision || !runtime->revision->contextual) return AETHER_ERROR_INVALID_STATE;
     try { auto handle = std::make_unique<aether_style_revision_handle_s>(); handle->value = runtime->revision; *out = handle.release(); return AETHER_OK; }
     catch (...) { return AETHER_ERROR_OUT_OF_MEMORY; }
 }
@@ -1285,7 +1298,7 @@ AETHER_API aether_status_t aether_style_revision_get_change(aether_style_revisio
     aether_node_t* node, aether_computed_style_handle_t* style, uint32_t* impact) {
     return revision_get_entry(revision, revision ? &revision->value->changes : nullptr, index, node, style, impact);
 }
-AETHER_API aether_status_t aether_style_revision_create_map(aether_style_revision_t revision, aether_style_map_t* out_map) {
+static aether_status_t create_revision_map(aether_style_revision_t revision, aether_style_map_t* out_map) {
     if (out_map) *out_map = nullptr;
     if (!revision || !out_map) return AETHER_ERROR_NULL_ARG;
     try {
@@ -1297,19 +1310,25 @@ AETHER_API aether_status_t aether_style_revision_create_map(aether_style_revisio
             map->measures.emplace(entry.node, entry.state->style.measures);
             map->node_lifetimes.emplace(entry.node, entry.state->style.node_lifetime);
         }
-        map->revision = revision->value; map->contextual = true;
+        map->revision = revision->value; map->contextual = revision->value->contextual;
         map->document_identity = revision->value->document_identity; map->generation = revision->value->generation;
         map->document_lifetime = revision->value->document_lifetime; map->structure_epoch = revision->value->structure_epoch;
         map->input_epoch = revision->value->input_epoch; map->style_tree_epoch = revision->value->style_tree_epoch;
         *out_map = map.release(); return AETHER_OK;
     } catch (...) { return AETHER_ERROR_OUT_OF_MEMORY; }
 }
+AETHER_API aether_status_t aether_style_revision_create_map(aether_style_revision_t revision, aether_style_map_t* out_map) {
+    if (out_map) *out_map = nullptr;
+    if (!revision || !out_map) return AETHER_ERROR_NULL_ARG;
+    if (!revision->value->contextual) return AETHER_ERROR_INVALID_STATE;
+    return create_revision_map(revision, out_map);
+}
 AETHER_API aether_status_t aether_style_runtime_create_resolved_style_map(aether_style_runtime_t runtime, aether_doc_t doc, aether_style_map_t* out_map) {
     if (out_map) *out_map = nullptr;
     if (!runtime || !doc || !out_map) return AETHER_ERROR_NULL_ARG;
     if (!runtime->revision || runtime->revision->document_identity != aether_node_identity(doc)) return AETHER_ERROR_INVALID_STATE;
     aether_style_revision_handle_s handle{runtime->revision};
-    const auto status = aether_style_revision_create_map(&handle, out_map);
+    const auto status = create_revision_map(&handle, out_map);
     if (status == AETHER_OK) (*out_map)->contextual = false; // Historical API: explicit legacy adapter.
     return status;
 }

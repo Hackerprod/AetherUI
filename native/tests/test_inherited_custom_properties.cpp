@@ -189,7 +189,7 @@ static void scope_and_keyword_cases() {
  }
  {
   Fixture f("--size:2em;--alias:var(--size);font-size:10px","--size:9em;font-size:20px;width:var(--alias)");f.resolve();
-  expect(f.last_child.width.unit==AETHER_CSS_UNIT_EM&&std::fabs(f.last_child.width.value-2)<.001f,"inherited terminal retains relative unit, not parent pixels");
+  check("inherited terminal resolves relative unit against child font, not parent pixels",f.last_child.width,40);
  }
  {
   Tree t("#p{--base:20px;--alias:var(--base)}#c{--base:40px;--local:var(--base);width:var(--alias)}#g{--base:90px;width:var(--alias);height:var(--local)}#s{--base:70px;width:var(--alias)}");
