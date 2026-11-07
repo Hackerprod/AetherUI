@@ -21,6 +21,9 @@ add_library(aether_core SHARED
     src/css/css_length.cpp
     src/css/color_rgba.cpp
     src/css/computed_style.cpp
+    src/css/frozen_style.cpp
+    src/css/style_freeze.cpp
+    src/css/style_c_export.cpp
     src/css/border_radii.cpp
     src/css/background_layers.cpp
     src/css/backdrop_filters.cpp
@@ -409,6 +412,23 @@ if(AETHERUI_BUILD_TESTS)
     target_compile_definitions(aether_measure_property_scratch_test PRIVATE AETHER_CSS_NUMERIC_ONLY)
     target_link_libraries(aether_measure_property_scratch_test PRIVATE AetherUI::Core)
     add_test(NAME aether.measure-property-scratch COMMAND aether_measure_property_scratch_test)
+
+    add_executable(aether_frozen_style_test tests/test_frozen_style.cpp
+        src/css/frozen_style.cpp src/css/style_freeze.cpp src/css/style_c_export.cpp)
+    target_include_directories(aether_frozen_style_test PRIVATE src)
+    target_link_libraries(aether_frozen_style_test PRIVATE AetherUI::Core)
+    add_test(NAME aether.frozen-style COMMAND aether_frozen_style_test)
+
+    if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        # Compile the exporter here so its C allocations, not an already-linked
+        # shared library, are reached by the independent allocator wrappers.
+        add_executable(aether_frozen_style_oom_test tests/test_frozen_style_oom.cpp
+            src/css/frozen_style.cpp src/css/style_freeze.cpp src/css/style_c_export.cpp)
+        target_include_directories(aether_frozen_style_oom_test PRIVATE src)
+        target_link_libraries(aether_frozen_style_oom_test PRIVATE AetherUI::Core)
+        target_link_options(aether_frozen_style_oom_test PRIVATE "-Wl,--wrap=malloc" "-Wl,--wrap=free")
+        add_test(NAME aether.frozen-style-oom COMMAND aether_frozen_style_oom_test)
+    endif()
 
     add_executable(aether_background_layers_test tests/test_background_layers.cpp src/css/background_layers.cpp src/css/linear_gradient.cpp src/style_runtime/css_variable_tokens.cpp)
     target_link_libraries(aether_background_layers_test PRIVATE AetherUI::Core)
