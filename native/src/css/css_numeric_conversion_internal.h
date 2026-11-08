@@ -15,6 +15,7 @@ template<class T> struct numeric_conversion_result {
     T value{};
     bool valid = false;
     bool range_error = false;
+    bool positive_overflow = false;
 };
 
 // One privately owned C numeric locale per parse, acquired only at the first
@@ -77,10 +78,12 @@ private:
 
     template<class T> static numeric_conversion_result<T> validate(
         const std::string& text, const char* end, T value, int conversion_errno) {
-        const bool valid = end != text.c_str() && end == text.c_str() + text.size() &&
-                           std::isfinite(value);
+        const bool complete = end != text.c_str() && end == text.c_str() + text.size();
+        const bool valid = complete && std::isfinite(value);
+        const bool positive_overflow = complete && conversion_errno == ERANGE &&
+                                       std::isinf(value) && value > 0;
         // Keep policy at the caller: RGB allows finite ERANGE, lengths do not.
-        return {valid ? value : T{}, valid, conversion_errno == ERANGE};
+        return {valid ? value : T{}, valid, conversion_errno == ERANGE, positive_overflow};
     }
 
 #if defined(_WIN32)
