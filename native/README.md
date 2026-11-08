@@ -1168,35 +1168,3 @@ contribution constraints. Existing nonnegative-contribution flooring and deferre
 percentage-gap resolution are unchanged. The public `aether.flex-intrinsic-width`
 test covers fixed cards, decorations, signed margins with positive outer widths,
 gaps, exclusions, parent clamps, atomic-inline propagation and result/style reuse.
-
-### Absolute block insertion anchors
-
-Direct absolute children with native BLOCK, FLEX or TABLE display use their
-insertion point in an ordinary flow parent's content, independently on each
-auto-inset axis. Explicit insets and the positioning containing block still
-control sizing and their respective axes. The parent may itself be static;
-deferred table-cell completion reconstructs anchors from the completed content
-rectangle. Flex parents retain their separate static-placement rules.
-
-Flow collection keeps private scalar insertion records. A pending inline run
-receives a zero-consumption marker: it neither flushes the line nor creates a
-box, contributes width/height, changes capitalization, nor adds measurement
-callbacks. Prefix line metrics exclude later content. Parent-start collapse
-moves only records dependent on its moved first block; form-control centering
-applies the existing content translation. An absolute alone never consumes a
-pending block margin. Existing whitespace-only flush and centering/collapse
-limitations are unchanged, as are inline, pseudo-element and fixed paths.
-
-Records are construction-only and are cleared during positioned completion,
-including deferred cells. Snapshot cloning intentionally leaves the new vector
-empty rather than copying its capacity. The private box gains one vector object;
-records contain two node identities and two scalar offsets, with O(A) retained
-capacity for A eligible children. Inline items gain one marker index. Actual
-platform sizes, allocation traces and capacity observations belong to validation
-receipts, not a public ABI promise. No public headers or capability bits change.
-
-`aether.block-static-position` uses public geometry, hit, paint and scroll APIs
-with literal expectations and active Release checks. Its lifetime supplement
-reuses the authentic private core object pool for allocation-failure, publication,
-clone, callback and document-lifetime checks. These tests define a bounded native
-contract, not browser conformance, leak freedom or a performance claim.
