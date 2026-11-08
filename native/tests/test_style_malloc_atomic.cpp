@@ -55,7 +55,7 @@ struct fixture_s {
         multi=aether_doc_get_element_by_id(document,"multi");single=aether_doc_get_element_by_id(document,"single");
         // Inline declarations force compile-time validation and application to
         // run inside the same transactional allocation sweep.
-        if (inline_style) ok(aether_element_set_attribute(parent,"style","text-shadow:1px 2px red;box-shadow:3px 4px blue;transform:translate(10px,20%) scale(2);backdrop-filter:blur(3px)"),"set parent style");
+        if (inline_style) ok(aether_element_set_attribute(parent,"style","text-shadow:1px 2px red;box-shadow:3px 4px blue;transform:translate(10px,20%) scale(2);--radius:calc(1px /*raw*/ + 2px);backdrop-filter:blur(9px);backdrop-filter:blur(var(--radius)) blur(calc(0px - 1em))"),"set parent style");
         if (inline_style) ok(aether_element_set_attribute(multi,"style","background-image:url(a),linear-gradient(red,blue);background-position:5px 6px"),"set multi image");
         if (inline_style) ok(aether_element_set_attribute(single,"style","background-image:linear-gradient(red,blue)"),"set single gradient");
     }
@@ -69,7 +69,7 @@ struct fixture_s {
             if(node==parent) {
                 ++found;
                 need(style.transforms.count==2 && style.transforms.items[0].x.value==10,"valid transform never silently dropped");
-                need(style.backdrop_filters.count==1 && style.backdrop_filters.items[0].length_amount.value==3,"valid backdrop never silently dropped");
+                need(style.backdrop_filters.count==2 && style.backdrop_filters.items[0].length_amount.value==3 && style.backdrop_filters.items[1].length_amount.value==0,"valid backdrop never silently dropped");
                 need(style.text_shadows.count==1 && style.box_shadows.count==1,"valid shadows never silently dropped");
             } else if(node==child) {
                 ++found;need(style.text_shadows.count==1 && style.text_shadows.items[0].offset_x==1,"inherited shadow never silently dropped");
@@ -139,7 +139,7 @@ void sweep(allocator_e allocator,const char* name) {
     std::printf("%s sweep: %ld allocation sites, %u failures, %u successes, zero silent losses\n",name,allocation_count,failed,success);
 }
 void sweep_add(allocator_e allocator,const char* name) {
-    const char* css="#p{text-shadow:1px 2px red;box-shadow:3px 4px blue;transform:translate(10px,20%) scale(2);backdrop-filter:blur(3px)}#multi{background-image:url(a),linear-gradient(red,blue);background-position:5px 6px}#single{background-image:linear-gradient(red,blue)}";
+    const char* css="#p{text-shadow:1px 2px red;box-shadow:3px 4px blue;transform:translate(10px,20%) scale(2);--radius:calc(1px /*raw*/ + 2px);backdrop-filter:blur(9px);backdrop-filter:blur(var(--radius)) blur(calc(0px - 1em))}#multi{background-image:url(a),linear-gradient(red,blue);background-position:5px 6px}#single{background-image:linear-gradient(red,blue)}";
     long allocation_count=0;
     {
         fixture_s warm(false);int64_t sheet{};

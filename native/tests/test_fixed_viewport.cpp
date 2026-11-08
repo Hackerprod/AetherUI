@@ -299,7 +299,8 @@ static void static_matrix() {
   // G: only context inside the moved subtree exempts fixed descendants.
   for (auto context :
        {"", "transform:translateX(10px);", "transform:translate(0);",
-        "backdrop-filter:blur(0);", "opacity:.99;"}) {
+        "backdrop-filter:blur(0);", "backdrop-filter:blur();",
+        "backdrop-filter:blur(calc(0px - 1em));", "opacity:.99;"}) {
     fixture f("", context);
     f.layout();
     const bool local =
@@ -524,6 +525,18 @@ static void remaining_guards() {
             "full-map and inverse");
 }
 
+static void backdrop_value_transitions() {
+  fixture f;
+  f.layout(); f.xy("fixed",20,20);
+  for(const char* value : {"blur()","blur(2px)","blur(calc(0px - 1em))","none","blur()","blur(var(--bad))"}) {
+    const std::string source=std::string("--bad:2;backdrop-filter:")+value;
+    check(aether_element_set_attribute(f.node("toggler"),"style",source.c_str())==AETHER_OK,"change filter source");
+    const auto impact=f.resolve();
+    const bool local=std::strcmp(value,"none")!=0 && std::strstr(value,"var(")==nullptr;
+    f.layout(); f.xy("fixed",local?150:20,local?150:20);
+    if(!local)check((impact&AETHER_STYLE_IMPACT_LAYOUT)!=0,"loss of filter context invalidates layout");
+  }
+}
 static void backdrop_completion_guard() {
   fixture f("#toggler{backdrop-filter:blur(0)}");
   auto before = f.style("toggler"), after = before;
@@ -602,6 +615,7 @@ int main() {
   static_matrix();
   temporal();
   remaining_guards();
+  backdrop_value_transitions();
   backdrop_completion_guard();
   finite_placement_guards();
   std::puts("PASS fixed viewport protocol and finite native guards");

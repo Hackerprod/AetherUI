@@ -51,7 +51,7 @@ int main() {
     int64_t sheet = 0; int32_t rules = 0;
     require(aether_style_runtime_add_stylesheet(runtime,
         "body{display:block;margin:0;background:#123456}"
-        "#panel{display:block;width:100px;height:40px;background:rgba(255,255,255,.5);border-radius:8px;backdrop-filter:blur(2px) blur(4px)}"
+        "#panel{display:block;width:100px;height:40px;background:rgba(255,255,255,.5);border-radius:8px;backdrop-filter:blur(calc(0px - 1em)) blur(4px)}"
         "#webkit{-webkit-backdrop-filter:blur(3px)}"
         "#invalid{backdrop-filter:brightness(1.2)}",
         0, "backdrop.css", &sheet, &rules) == AETHER_OK, "stylesheet creation failed");
@@ -86,7 +86,7 @@ int main() {
     require(panel_style.backdrop_filters.count == 2 && panel_style.backdrop_filters.items,
         "two blur operations must survive cascade in declaration order");
     require(panel_style.backdrop_filters.items[0].kind == AETHER_BACKDROP_FILTER_BLUR &&
-            std::fabs(panel_style.backdrop_filters.items[0].length_amount.value - 2.f) < .001f &&
+            std::fabs(panel_style.backdrop_filters.items[0].length_amount.value - 0.f) < .001f &&
             std::fabs(panel_style.backdrop_filters.items[1].length_amount.value - 4.f) < .001f,
         "backdrop-filter blur amounts were parsed incorrectly");
     aether_computed_style_free(&panel_style);
@@ -109,7 +109,9 @@ int main() {
         if (command.tag == AETHER_PAINT_APPLY_BACKDROP_FILTER) {
             backdrop_index = index;
             require(command.data.apply_backdrop_filter.filters.count == 2 &&
-                    command.data.apply_backdrop_filter.radii.top_left_x > 0,
+                    command.data.apply_backdrop_filter.radii.top_left_x > 0 &&
+                    command.data.apply_backdrop_filter.filters.items[0].length_amount.value == 0 &&
+                    command.data.apply_backdrop_filter.filters.items[1].length_amount.value == 4,
                 "backdrop command must own filters and use the element clip radii");
         }
         aether_paint_command_free(&command);
@@ -121,6 +123,19 @@ int main() {
         "backdrop command must precede the element's own background fill");
     aether_paint_command_free(&next);
 
+    require(aether_element_set_attribute(panel, "style", "backdrop-filter:blur(99px)") == AETHER_OK,"change panel after command snapshot");
+    updates = nullptr;
+    const auto changed = aether_style_runtime_resolve_subtree(runtime, body, &updates);
+    require(changed > 0,"updated panel");aether_style_updates_free(updates,changed);
+    aether_paint_command_t retained{};
+    require(aether_display_list_get_command(list,backdrop_index,&retained)==AETHER_OK,"read old command after update");
+    require(retained.data.apply_backdrop_filter.filters.items[0].length_amount.value==0 &&
+            retained.data.apply_backdrop_filter.filters.items[1].length_amount.value==4,"old command retains computed filters");
+    retained.data.apply_backdrop_filter.filters.items[0].length_amount.value=77;
+    aether_paint_command_free(&retained);
+    require(aether_display_list_get_command(list,backdrop_index,&retained)==AETHER_OK,"copy command again");
+    require(retained.data.apply_backdrop_filter.filters.items[0].length_amount.value==0,"command copies are independent");
+    aether_paint_command_free(&retained);
     aether_display_list_destroy(list); aether_display_list_builder_destroy(builder); aether_layout_result_destroy(layout);
     aether_layout_destroy(engine); aether_style_map_destroy(styles); aether_style_runtime_destroy(runtime); aether_doc_destroy(doc);
     return 0;

@@ -2,6 +2,7 @@
 #include <aether/aether_contextual_style.h>
 #include "../src/css/computed_style_handle.h"
 #include "../src/css/measure_state.h"
+#include "../src/style_runtime/frozen_runtime_metadata.h"
 #include "../src/css/style_map_types.h"
 #include "../src/dom/dom_types.h"
 #include <cstdio>
@@ -89,7 +90,8 @@ static void fault_prepare() {
     const auto pmr_family = pmr_fault_test::qualify(require);
     Fixture f;auto g0=f.resolve();auto old=lookup(g0,f.node);auto* pseudo=f.node->children.front();
     const auto baseline=aether_style_revision_generation(g0);
-    aether_element_set_attribute(f.node,"style","width:3rem;box-shadow:1px 2px red");
+    require(aether_element_set_attribute(aether_doc_get_body(f.doc),"style","--radius:calc(1px /*original*/ + 2px);--terminal:var(--radius)")==AETHER_OK,"blur divergent ancestor scope");
+    require(aether_element_set_attribute(f.node,"style","width:3rem;box-shadow:1px 2px red;backdrop-filter:blur(var(--terminal)) blur(calc(0px - 1em))")==AETHER_OK,"blur candidate");
     aether_style_environment_t env{1000,700,1,20,0,0,0};
     int failed=0;bool completed=false;
     const pmr_fault_test::Counters sweep_start;
@@ -102,13 +104,20 @@ static void fault_prepare() {
             require(!fault_delivered,"first successful prepare did not swallow injected failure");
             aether_style_revision_t g1{};require(aether_style_runtime_commit_revision(f.runtime,tx,&g1)==AETHER_OK,"retry commit");
             auto newstyle=lookup(g1,f.node);require(near(newstyle->style.width.value,60),"retry requested context");
+            require(newstyle->style.backdrop_filters.count==2&&near(newstyle->style.backdrop_filters.items[0].length_amount.value,3)&&near(newstyle->style.backdrop_filters.items[1].length_amount.value,0),"retry keeps focal custom scope and computed clamp");
+            bool legacy_terminal=false;
+            for(auto* scope=newstyle->record->custom_properties().get();scope;scope=scope->parent())
+                for(const auto& entry:scope->local_entries())if(entry.name()=="--terminal") {
+                    require(entry.value()=="calc(1px              + 2px)","published custom scope retains legacy cleaned representation");legacy_terminal=true;
+                }
+            require(legacy_terminal,"published terminal scope inspected");
             aether_computed_style_handle_destroy(newstyle);aether_style_revision_destroy(g1);aether_style_transaction_destroy(tx);completed=true;break;
         }
         ++failed;require(fault_delivered&&status==AETHER_ERROR_OUT_OF_MEMORY,"prepare reports injected OOM");require(tx==nullptr,"failed prepare clears out handle");
         require(f.node->children.front()==pseudo&&pseudo->identity->attached,"failed prepare preserves pseudo links");
         aether_style_revision_t retained{};require(aether_style_runtime_retain_revision(f.runtime,&retained)==AETHER_OK,"retain after fault");
         require(aether_style_revision_generation(retained)==baseline,"failed prepare preserves revision");
-        aether_style_revision_destroy(retained);require(near(old->style.width.value,16),"failed prepare preserves old style");
+        aether_style_revision_destroy(retained);require(near(old->style.width.value,16)&&old->style.backdrop_filters.count==0,"failed prepare preserves old style and filters");
     }
     require(completed&&failed>50,"fault sweep covers preparation allocations");
     pmr_fault_test::require_sweep_coverage(pmr_family, sweep_start, require);
