@@ -117,16 +117,62 @@ static bool bi_try_color(const char* src, std::string& out) {
     return false;
 }
 
-static bool bi_try_non_negative_number(const char* src, std::string& out) {
-    if (!src || !*src) return false;
-    char* end = nullptr;
-    float v = std::strtof(src, &end);
-    if (end == src) return false;
-    while (*end == ' ') ++end;
-    if (*end != '\0') return false;
-    if (v < 0.0f) return false;
-    out = str_trim(src);
+// Flex factors require exactly one nonnegative CSS number before conversion.
+// Keep float conversion native (no double rounding) and saturate only confirmed
+// positive overflow; finite ERANGE, including subnormal underflow, stays valid.
+static bool bi_flex_number_value(const std::string& source, float& result) {
+    css_component_cursor cursor(source);
+    css_component_value component, extra;
+    if (!cursor.next(component) ||
+        component.token.serialization != css_variable_serialization::number) return false;
+    if (cursor.next(extra) || !cursor.valid()) return false;
+    const std::string number = source.substr(component.begin,
+        component.token.numeric_end - component.begin);
+    bool nonzero = false;
+    for (char digit : number) {
+        if (digit == 'e' || digit == 'E') break;
+        if (digit >= '1' && digit <= '9') nonzero = true;
+    }
+    // Exponent digits do not make -0e10 negative. Reject tiny negatives before
+    // conversion can round them to zero, then canonicalize all genuine zeros.
+    if (nonzero && number.front() == '-') return false;
+    if (!nonzero) { result = 0.0f; return true; }
+    aether::css::c_numeric_locale locale;
+    const auto converted = locale.parse_float(number);
+    float value;
+    if (converted.valid) {
+        value = converted.value;
+        if (!std::isfinite(value) || value < 0) return false;
+    } else if (converted.positive_overflow) {
+        value = std::numeric_limits<float>::max();
+    } else return false;
+    if (value == 0) value = 0.0f;
+    result = value;
     return true;
+}
+
+static bool bi_try_non_negative_number(const char* src, std::string& out) {
+    if (!src) return false;
+    const std::string source(src); // Preserve complete/interior aliases of out.
+    float value;
+    if (!bi_flex_number_value(source, value)) return false;
+    char buffer[64];
+    const auto formatted = std::to_chars(buffer, buffer + sizeof(buffer), value,
+        std::chars_format::general, std::numeric_limits<float>::max_digits10);
+    if (formatted.ec != std::errc{}) return false;
+    std::string staged(buffer, formatted.ptr);
+    out = std::move(staged);
+    return true;
+}
+
+static property_apply_result_s bi_apply_flex_number(aether_computed_style_t* style,
+        const std::string& source, float aether_computed_style_t::* member) {
+    float value;
+    if (!bi_flex_number_value(source, value))
+        return property_apply_result_s::failure("AETHER-CSS-FLEX-NUMBER",
+            "Flex factor requires one nonnegative CSS number.");
+    style->*member = value;
+    return {};
 }
 
 static bool bi_try_integer(const char* src, std::string& out) {
@@ -905,14 +951,18 @@ void builtin_properties_register(style_property_registry_s* reg) {
     }
 
     // flex-grow
-    reg->register_property("flex-grow", false, STYLE_IMPACT_LAYOUT, "0",
+    reg->register_property_checked("flex-grow", false, STYLE_IMPACT_LAYOUT, "0",
         bi_try_non_negative_number,
-        [](aether_computed_style_t* st, const std::string& v) { st->flex_grow = std::strtof(v.c_str(), nullptr); });
+        [](aether_computed_style_t* st, const std::string& v) {
+            return bi_apply_flex_number(st, v, &aether_computed_style_t::flex_grow);
+        });
 
     // flex-shrink
-    reg->register_property("flex-shrink", false, STYLE_IMPACT_LAYOUT, "1",
+    reg->register_property_checked("flex-shrink", false, STYLE_IMPACT_LAYOUT, "1",
         bi_try_non_negative_number,
-        [](aether_computed_style_t* st, const std::string& v) { st->flex_shrink = std::strtof(v.c_str(), nullptr); });
+        [](aether_computed_style_t* st, const std::string& v) {
+            return bi_apply_flex_number(st, v, &aether_computed_style_t::flex_shrink);
+        });
 
     // flex-basis
     reg->register_property("flex-basis", false, STYLE_IMPACT_LAYOUT, "auto",
@@ -1714,11 +1764,11 @@ void builtin_properties_register(style_property_registry_s* reg) {
             if (parts.size() < 1 || parts.size() > 3) return false;
             std::string grow_test;
             if (!bi_try_non_negative_number(parts[0].c_str(), grow_test)) return false;
-            std::string grow = parts[0], shrink = "1", basis = "0%";
+            std::string grow = std::move(grow_test), shrink = "1", basis = "0%";
             if (parts.size() >= 2) {
                 std::string shrink_test;
                 if (bi_try_non_negative_number(parts[1].c_str(), shrink_test)) {
-                    shrink = parts[1];
+                    shrink = std::move(shrink_test);
                     if (parts.size() == 3) basis = parts[2];
                 } else {
                     basis = parts[1];

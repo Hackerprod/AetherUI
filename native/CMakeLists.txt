@@ -435,6 +435,26 @@ if(AETHERUI_BUILD_TESTS)
     target_link_libraries(aether_gradient_boundary_dispatch_test PRIVATE AetherUI::Core)
     add_test(NAME aether.gradient-boundary-dispatch COMMAND aether_gradient_boundary_dispatch_test)
 
+    add_executable(aether_flex_number_pipeline_test tests/test_flex_number_pipeline.cpp)
+    target_link_libraries(aether_flex_number_pipeline_test PRIVATE AetherUI::Core ${CMAKE_DL_LIBS})
+    add_test(NAME aether.flex-number-pipeline COMMAND aether_flex_number_pipeline_test)
+
+    # Private registered callbacks and interposed conversions, without exports.
+    add_executable(aether_flex_number_registry_test tests/test_flex_number_registry.cpp
+        tests/test_flex_number_locale.cpp
+        src/style_runtime/builtin_properties.cpp src/style_runtime/transition_properties.cpp
+        src/style_runtime/shadow_values.cpp src/style_runtime/css_variable_tokens.cpp
+        src/css/css_length.cpp src/css/background_layers.cpp src/css/linear_gradient.cpp
+        src/css/border_radii.cpp src/css/backdrop_filters.cpp src/css/transforms.cpp)
+    target_compile_definitions(aether_flex_number_registry_test PRIVATE AETHER_CSS_NUMERIC_ONLY)
+    target_link_libraries(aether_flex_number_registry_test PRIVATE AetherUI::Core)
+    if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        target_compile_definitions(aether_flex_number_registry_test PRIVATE AETHER_FLEX_NUMBER_LOCALE_WRAPPERS)
+        target_link_options(aether_flex_number_registry_test PRIVATE
+            "-Wl,--wrap=newlocale,--wrap=freelocale,--wrap=strtof_l,--wrap=strtod_l,--wrap=strtof,--wrap=strtod")
+    endif()
+    add_test(NAME aether.flex-number-registry COMMAND aether_flex_number_registry_test)
+
     add_executable(aether_opacity_pipeline_test tests/test_opacity_pipeline.cpp)
     target_link_libraries(aether_opacity_pipeline_test PRIVATE AetherUI::Core ${CMAKE_DL_LIBS})
     add_test(NAME aether.opacity-pipeline COMMAND aether_opacity_pipeline_test)
