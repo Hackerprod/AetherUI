@@ -1078,3 +1078,22 @@ and freshly prepared layouts with active checks under `NDEBUG`.
 target and checks replacement reachability, indexes and allocation-failure
 recovery. Registry checks and sanitizer runs with leak detection disabled do not
 establish leak freedom. No installed header, ABI or capability changes are needed.
+
+### Background position grammar
+
+`background-position` and positions inside `background` share the native one- or
+two-component parser. Keyword pairs are normalized by axis (`center left` equals
+`left center`); numeric pairs retain X/Y order. Thus `left 10px` and `10px top`
+are supported, but `top 10px`, `10px left`, `left right`, and `top bottom` are not.
+Three/four-component edge-offset forms are not supported. Native lengths,
+percentages, contextual units and supported linear `calc()` expressions retain
+their coefficients; this is not a claim of full browser CSS numeric conformance.
+
+Invalid literal positions are ignored before cascade comparison, preserving an
+earlier valid declaration. A selected variable-containing declaration that becomes
+invalid after substitution instead uses the existing initial-value behavior; it
+does not restore an earlier declaration or use a defined variable's fallback.
+CSS-wide handling is unchanged, including native `revert` meaning initial.
+Position lists repeat modulo their length over image layers. Contextual positions
+are stored independently of image count and inherit as computed measures.
+Invalid background shorthands publish none of their five target declarations.
