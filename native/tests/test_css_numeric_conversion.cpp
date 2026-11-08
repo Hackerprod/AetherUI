@@ -56,19 +56,27 @@ void conversions() {
         errno = 0;
         const float f = std::strtof(token.c_str(), &end);
         const int f_errno = errno;
-        const bool f_valid = end != token.c_str() && end == token.c_str() + token.size() && std::isfinite(f);
+        const bool f_complete = end != token.c_str() && end == token.c_str() + token.size();
+        const bool f_valid = f_complete && std::isfinite(f);
         errno = ERANGE; // An earlier channel/caller cannot poison this conversion.
         const auto actual_f = owner.parse_float(token);
         check(actual_f.valid == f_valid && actual_f.range_error == (f_errno == ERANGE) &&
               (!f_valid || same(actual_f.value, f)), "float C oracle " + token);
+        check(actual_f.positive_overflow == (f_complete && f_errno == ERANGE && std::isinf(f) && f > 0),
+              "float positive overflow classification " + token);
+        check(f_valid || same(actual_f.value, 0.f), "invalid float keeps legacy zero " + token);
         errno = 0;
         const double d = std::strtod(token.c_str(), &end);
         const int d_errno = errno;
-        const bool d_valid = end != token.c_str() && end == token.c_str() + token.size() && std::isfinite(d);
+        const bool d_complete = end != token.c_str() && end == token.c_str() + token.size();
+        const bool d_valid = d_complete && std::isfinite(d);
         errno = ERANGE;
         const auto actual_d = owner.parse_double(token);
         check(actual_d.valid == d_valid && actual_d.range_error == (d_errno == ERANGE) &&
               (!d_valid || same(actual_d.value, d)), "double C oracle " + token);
+        check(actual_d.positive_overflow == (d_complete && d_errno == ERANGE && std::isinf(d) && d > 0),
+              "double positive overflow classification " + token);
+        check(d_valid || same(actual_d.value, 0.), "invalid double keeps legacy zero " + token);
     }
     const auto f = owner.parse_float("1.0000000596046448");
     const auto d = owner.parse_double("1.0000000596046448");
