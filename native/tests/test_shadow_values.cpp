@@ -1,6 +1,7 @@
 // White-box shadow grammar/transaction checks. Deliberately no assert(): all
 // checks remain active under NDEBUG. This target needs shadow_values.cpp.
 #include "../src/style_runtime/shadow_values.h"
+#include "../src/css/measure_state.h"
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -128,6 +129,13 @@ struct Destination {
 struct InvalidCase { const char* source; shadow_value_error error; };
 void invalid_grammar() {
     const char* cases[] = {
+        "1px red 2px", "1px currentColor 2px", "1px #123456 2px",
+        "1px rgb(255,0,0) 2px", "1px 2px red 3px", "1px 2px currentColor 3px",
+        "1px inset 2px", "1px 2px inset 3px", "1px 2px 3px red 4px",
+        "1px 2px 3px inset 4px", "1px 2px red inset 3px", "inset 1px red 2px",
+        "1px red", "1px currentColor", "1px inset", "1px red red",
+        "1px red 2px, 3px 4px", "3px 4px, 1px red 2px, 5px 6px",
+        "3px 4px, 1px red 2px",
         "", " ", "none, 1px 2px", "1px 2px, none", "none 1px 2px", "1px",
         "red", "1px 2px,", ",1px 2px", "1px 2px,,3px 4px", "1px 2px,   ",
         "1px 2px -3px", "1px 2px red blue", "1px 2px currentColor red",
@@ -202,6 +210,52 @@ void valid_grammar() {
           "box negative spread and mixed keyword/color placement");
     require(box.items.size() == 1, "box inset parsed");
     check(box.items[0].inset && box.items[0].spread_radius == -4 && !box.uses_current_color[0], "box fields");
+}
+
+void ordered_groups() {
+    // Each complete length group remains adjacent in all six box permutations.
+    for (const std::string color : {"red", "currentColor"}) {
+        for (int count : {2, 3, 4}) {
+            const std::string lengths = "-1px 2px" + std::string(count >= 3 ? " 3px" : "") +
+                                        (count == 4 ? " -4px" : "");
+            for (const std::string source : {color + " inset " + lengths, "inset " + color + " " + lengths,
+                 color + " " + lengths + " inset", "inset " + lengths + " " + color,
+                 lengths + " " + color + " inset", lengths + " inset " + color}) {
+                parsed_shadow_list output;
+                require(shadow_list_parse(source, true, output) == shadow_value_error::none, "box permutation parses");
+                require(output.items.size() == 1 && output.uses_current_color.size() == 1, "box permutation size");
+                const auto& v = output.items[0];
+                check(v.offset_x == -1 && v.offset_y == 2 && v.blur_radius == (count >= 3 ? 3 : 0) &&
+                      v.spread_radius == (count == 4 ? -4 : 0) && v.inset, source + " fields");
+                check(output.uses_current_color[0] == (color == "currentColor"), source + " symbol");
+                if (color == "red") check(v.color.r == 1 && v.color.g == 0 && v.color.b == 0 && v.color.a == 1, source + " color");
+            }
+            if (count == 4) continue;
+            for (const std::string source : {color + " " + lengths, lengths + " " + color}) {
+                parsed_shadow_list output;
+                require(shadow_list_parse(source, false, output) == shadow_value_error::none, "text permutation parses");
+                require(output.items.size() == 1 && output.uses_current_color.size() == 1, "text permutation size");
+                const auto& v = output.items[0];
+                check(v.offset_x == -1 && v.offset_y == 2 && v.blur_radius == (count == 3 ? 3 : 0) &&
+                      v.spread_radius == 0 && !v.inset, source + " text fields");
+                check(output.uses_current_color[0] == (color == "currentColor"), source + " text symbol");
+                if (color == "red") check(v.color.r == 1 && v.color.g == 0 && v.color.b == 0 && v.color.a == 1, source + " text color");
+            }
+        }
+    }
+    for (bool box : {false, true}) {
+        parsed_shadow_list output;
+        const measure_inputs_s measures{23, 800, 600, 17, 31};
+        require(shadow_list_parse("1em 2rem calc(2px - 5px) currentColor, rgb(255, 0, 0) calc(1px + 2px) 0",
+                                 box, output, {}, &measures) == shadow_value_error::none, "atomic functions and state reset");
+        require(output.items.size() == 2 && output.uses_current_color.size() == 2, "contextual list size");
+        check(output.items[0].offset_x == 23 && output.items[0].offset_y == 62 && output.items[0].blur_radius == 0,
+              "contextual units and preserved negative calc blur clamp");
+        check(output.items[1].offset_x == 3 && output.items[1].offset_y == 0 && output.items[1].color.r == 1 &&
+              output.items[1].color.g == 0 && output.items[1].color.b == 0 && output.items[1].color.a == 1,
+              "second component independent order and atomic calc/RGB");
+        check(output.uses_current_color == std::vector<bool>({true, false}), "reset preserves distinct symbols");
+    }
 }
 
 void apply_transactions() {
@@ -281,6 +335,7 @@ void count_guards() {
 int main() {
     invalid_grammar();
     valid_grammar();
+    ordered_groups();
     apply_transactions();
     count_guards();
     check(std::strcmp(shadow_value_diagnostic_code(true), "AETHER-CSS-BOX-SHADOW") == 0, "box diagnostic code");

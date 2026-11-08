@@ -22,17 +22,20 @@ static shadow_value_error parse_component(const std::string& source,
     bool has_inset = false;
     bool has_color = false;
     int length_count = 0;
+    bool lengths_closed = false;
     for (const auto& token : tokens) {
         if (str_iequals(token, "inset")) {
             if (!allow_inset) return shadow_value_error::inset_not_allowed;
             if (has_inset) return shadow_value_error::invalid;
             has_inset = true;
+            if (length_count) lengths_closed = true;
             shadow.inset = AETHER_TRUE;
             continue;
         }
         if (str_iequals(token, "currentColor")) {
             if (has_color) return shadow_value_error::invalid;
             has_color = true;
+            if (length_count) lengths_closed = true;
             uses_current_color = true;
             continue;
         }
@@ -40,10 +43,13 @@ static shadow_value_error parse_component(const std::string& source,
         if (aether_color_rgba_try_parse(token.c_str(), &color)) {
             if (has_color) return shadow_value_error::invalid;
             has_color = true;
+            if (length_count) lengths_closed = true;
             uses_current_color = false;
             shadow.color = color;
             continue;
         }
+        // Color and inset may surround, but never split, the length group.
+        if (lengths_closed) return shadow_value_error::invalid;
         aether_css_length length;
         if (!aether_css_length_try_parse(token.c_str(), &length) ||
             length.unit == AETHER_CSS_UNIT_AUTO || length.unit == AETHER_CSS_UNIT_PERCENT ||

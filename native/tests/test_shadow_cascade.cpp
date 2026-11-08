@@ -28,6 +28,7 @@ void diagnostic(const char* c, const char* p, const char* v, const char* m, void
         {c ? c : "", p ? p : "", v ? v : "", m ? m : ""});
 }
 std::vector<float> signature(const aether_shadow_list& list) {
+    need(list.count >= 0 && (list.count == 0 || list.items), "shadow list storage");
     std::vector<float> out{float(list.count)};
     for (int i = 0; i < list.count; ++i) {
         auto s = list.items[i];
@@ -39,7 +40,8 @@ std::vector<float> signature(const aether_shadow_list& list) {
 // Expected values use independently valid declarations, never the rejected input.
 void run(const std::string& prop, const std::string& rules, const std::string& inlined,
          const std::string& expected, const std::string& label, bool dedicated = false,
-         bool root = false) {
+         bool root = false, const std::string& diagnostic_value = "",
+         const std::string& sibling_expected = "") {
     std::vector<Diagnostic> diagnostics;
     aether_doc_t doc{};
     aether_style_runtime_t rt{};
@@ -48,7 +50,8 @@ void run(const std::string& prop, const std::string& rules, const std::string& i
                           ? "<html id='actual' style='" + inlined +
                                 "'><body><div id='expected'></div></body></html>"
                           : "<html><body><div id='parent'><div id='actual' class='target' style='" +
-                                inlined + "'></div><div id='expected'></div></div></body></html>";
+                                inlined + "'></div><div id='expected'></div><div id='sibling'></div>"
+                                "<div id='sibling-expected'></div></div></body></html>";
     need(aether_doc_parse_html(doc, html.c_str()) == AETHER_OK, "parse HTML");
     aether_style_runtime_options_t opts{};
     opts.max_variable_depth = 32;
@@ -58,7 +61,8 @@ void run(const std::string& prop, const std::string& rules, const std::string& i
          "runtime");
     const auto css =
         "#parent{color:#2468ac;text-shadow:7px 8px currentColor}#actual,#expected{color:#2468ac}" +
-        rules + "#expected{" + prop + ":" + expected + "}";
+        rules + "#expected{" + prop + ":" + expected + "}" +
+        (sibling_expected.empty() ? "" : "#sibling-expected{" + prop + ":" + sibling_expected + "}");
     int64_t sheet{};
     need(aether_style_runtime_add_stylesheet(rt, css.c_str(), 2, "shadow-cascade.css", &sheet,
                                              nullptr) == AETHER_OK,
@@ -67,7 +71,10 @@ void run(const std::string& prop, const std::string& rules, const std::string& i
     int n =
         aether_style_runtime_resolve_subtree(rt, aether_doc_get_document_element(doc), &updates);
     need(n > 0 && updates, "resolve");
-    aether_computed_style_t actual{}, want{};
+    aether_computed_style_t actual{}, want{}, sibling{}, sibling_want{};
+    bool found_sibling = false, found_sibling_want = false;
+    need(aether_doc_get_element_by_id(doc, "actual") &&
+             aether_doc_get_element_by_id(doc, "expected"), "target nodes");
     bool found = false, foundwant = false;
     for (int i = 0; i < n; ++i) {
         aether_node_t node{};
@@ -82,15 +89,45 @@ void run(const std::string& prop, const std::string& rules, const std::string& i
             need(aether_computed_style_copy(h, &want) == AETHER_OK, "expected copy");
             foundwant = true;
         }
+        if (!sibling_expected.empty()) {
+            if (node == aether_doc_get_element_by_id(doc, "sibling")) {
+                need(aether_computed_style_copy(h, &sibling) == AETHER_OK, "sibling copy");
+                found_sibling = true;
+            }
+            if (node == aether_doc_get_element_by_id(doc, "sibling-expected")) {
+                need(aether_computed_style_copy(h, &sibling_want) == AETHER_OK,
+                     "sibling expected copy");
+                found_sibling_want = true;
+            }
+        }
         aether_computed_style_handle_destroy(h);
     }
     need(found && foundwant, "target updates");
     auto a = signature(prop == "box-shadow" ? actual.box_shadows : actual.text_shadows);
-    auto b = signature(prop == "box-shadow" ? want.box_shadows : want.text_shadows);
+    const auto& expected_list = prop == "box-shadow" ? want.box_shadows : want.text_shadows;
+    need(expected == "none" ? expected_list.count == 0 : expected_list.count > 0,
+         "independent expected list is not vacuous");
+    auto b = signature(expected_list);
     bool equal = a.size() == b.size();
     for (size_t i = 0; i < a.size() && i < b.size(); ++i)
         equal = equal && std::isfinite(a[i]) && std::fabs(a[i] - b[i]) < .0001f;
     check(equal, prop + " / " + label);
+    if (!sibling_expected.empty()) {
+        need(found_sibling && found_sibling_want, "sibling updates");
+        const auto& expected_sibling_list =
+            prop == "box-shadow" ? sibling_want.box_shadows : sibling_want.text_shadows;
+        need(expected_sibling_list.count > 0, "independent sibling expected list is nonempty");
+        const auto sa =
+            signature(prop == "box-shadow" ? sibling.box_shadows : sibling.text_shadows);
+        const auto sb =
+            signature(prop == "box-shadow" ? sibling_want.box_shadows : sibling_want.text_shadows);
+        bool same = sa.size() == sb.size();
+        for (size_t i = 0; i < sa.size() && i < sb.size(); ++i)
+            same = same && std::isfinite(sa[i]) && std::fabs(sa[i] - sb[i]) < .0001f;
+        check(same, prop + " / sibling retains inherited variable / " + label);
+    }
+    aether_computed_style_free(&sibling);
+    aether_computed_style_free(&sibling_want);
     aether_style_updates_free(updates, n);
     aether_computed_style_free(&actual);
     aether_computed_style_free(&want);
@@ -98,13 +135,18 @@ void run(const std::string& prop, const std::string& rules, const std::string& i
     aether_doc_destroy(doc);
     // All payloads remain owned and usable after compiler, runtime and doc die.
     if (dedicated) {
-        int count = 0;
+        int count = 0, exact = 0;
         for (const auto& d : diagnostics)
             if (d.code ==
                     (prop == "text-shadow" ? "AETHER-CSS-TEXT-SHADOW" : "AETHER-CSS-BOX-SHADOW") &&
-                d.property == prop)
+                d.property == prop) {
                 ++count;
+                if (d.value == diagnostic_value)
+                    ++exact;
+            }
         check(count == 1, prop + " / exactly one dedicated owned diagnostic / " + label);
+        if (!diagnostic_value.empty())
+            check(exact == 1, prop + " / exact owned diagnostic property and value / " + label);
     }
 }
 } // namespace
@@ -121,22 +163,30 @@ int main() {
                                         "1px 2px red,3px",
                                         "1px 2px rgb(10%,20,30%)",
                                         "1px 2px rgba(1,2,3,0x1p0)",
-                                        "1px 2px rgb(1px,2,3)"};
+                                        "1px 2px rgb(1px,2,3)",
+                                        "1px red 2px",
+                                        "1px currentColor 2px",
+                                        "1px 2px red 3px"};
         if (p == "text-shadow") {
             bad.push_back("inset 1px 2px red");
             bad.push_back("1px 2px 3px 4px red");
-        } else
+        } else {
             bad.push_back("inset inset 1px 2px red");
+            bad.push_back("1px inset 2px");
+            bad.push_back("1px 2px inset 3px");
+        }
         for (const auto& v : bad) {
+            // Diagnostics own the declaration value after outer whitespace trimming.
+            const auto diagnostic_value = v == " ,1px 2px red" ? ",1px 2px red" : v;
             const auto lo = p + ":" + lower + ";", hi = p + ":" + v + ";";
-            run(p, "#actual{" + lo + hi + "}", "", lower, "duplicate literal: " + v, true);
+            run(p, "#actual{" + lo + hi + "}", "", lower, "duplicate literal: " + v, true, false, diagnostic_value);
             run(p, "#actual{" + lo + "}#actual{" + hi + "}", "", lower, "later rule literal: " + v,
-                true);
+                true, false, diagnostic_value);
             run(p, ".target{" + lo + "}#actual{" + hi + "}", "", lower, "specificity literal: " + v,
-                true);
+                true, false, diagnostic_value);
             run(p, "#actual{" + lo + p + ":" + v + "!important}", "", lower,
-                "important literal: " + v, true);
-            run(p, "#actual{" + lo + "}", hi, lower, "inline literal: " + v, true);
+                "important literal: " + v, true, false, diagnostic_value);
+            run(p, "#actual{" + lo + "}", hi, lower, "inline literal: " + v, true, false, diagnostic_value);
             const auto deferred = "--bad:" + v + ";" + lo + p + ":var(--bad, 9px 10px #00ff00);";
             const auto unset = p == "text-shadow" ? "7px 8px #2468ac" : "none";
             run(p, "#actual{" + deferred + "}", "", unset, "defined invalid ignores fallback: " + v,
@@ -159,6 +209,24 @@ int main() {
             "1px 2px red", "cycle uses fallback");
         run(p, "#actual{" + p + ":var(--missing,1px 2px rgb(100%,0%,0%),3px 4px blue)}", "",
             "1px 2px red,3px 4px blue", "list fallback");
+        run(p, "#actual{" + p + ":" + lower + ";" + p +
+                   ":var(--missing,1px red 2px)}", "", unset,
+            "missing variable with split fallback computes unset");
+        const auto scoped = "#parent{--lengths:3px 4px 5px}#actual,#sibling{color:#2468ac;" + p +
+                            ":var(--lengths,9px 10px)}";
+        run(p, scoped, "", "3px 4px 5px #2468ac", "inherited complete length group",
+            false, false, "", "3px 4px 5px #2468ac");
+        run(p, scoped + "#actual{--lengths:1px red 2px}", "", unset,
+            "local invalid override ignores var fallback without contaminating sibling",
+            false, false, "", "3px 4px 5px #2468ac");
+        run(p, "#actual{--c:#e13c72;" + p + ":var(--c) 2px 3px 4px}", "", lower,
+            "variable color before length group");
+        run(p, "#actual{--c:#e13c72;" + p + ":2px 3px 4px var(--c)}", "", lower,
+            "variable color after length group");
+        run(p, "#actual{--c:#e13c72;" + p + ":2px var(--c) 3px}", "", unset,
+            "variable color cannot split offsets");
+        run(p, "#actual{--bad:1px red 2px;" + p + ":var(--bad,9px 10px blue)}", "", "none",
+            "root split group computes initial", false, true);
         run(p, "#actual{--r:100%;" + p + ":1px 2px rgb(var(--r),0%,0%)}", "", "1px 2px red",
             "RGB var tokens");
         run(p, "#actual{" + p + ":1px 2px rgba(255,0,0,50%),3px 4px rgb(+0e2,0,255)}", "",
