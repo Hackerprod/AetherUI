@@ -1006,3 +1006,32 @@ Focused regression targets are `aether_inline_capitalization_test`,
 Run `ctest --test-dir <build> --output-on-failure -R 'inline-capitalization|text-transform'`
 after building those targets. The integration test uses only the public ABI;
 the intrinsic supplement reuses the existing private test core objects.
+
+## Out-of-flow flex static placement
+
+Each absolute or fixed child with both insets auto on an axis aligns its margin
+box independently within its immediate flex parent's final content box. Final
+height clamps and the originally resolved padding determine that rectangle.
+Row/column, start/center/end, align-self, stretch-as-start and the sole-item
+space-between fallback retain their existing native semantics, including negative
+alignment residuals. Out-of-flow siblings do not participate in flex distribution.
+
+The static rectangle is separate from the positioning containing block. Absolute
+percentage sizes, percentage margins and explicit insets still use the padding
+block. Fixed children use the viewport, or the completed effective transform
+owner in prepared layout. Rebuilt fixed descendants take their static anchor
+from the surviving immediate parent's completed content rectangle, even when a
+different ancestor supplies their sizing/inset block.
+
+Later parent placement and relative movement carry direct flex fixed children's
+auto axes, while explicit viewport inset axes remain anchored. Ordinary
+descendants inherit the allowed movement once; nested fixed barriers retain their
+per-axis behavior. This is a bounded native contract, not a general rewrite of
+non-flex fixed positioning or a claim of full browser CSS conformance.
+
+`aether.flex-static-position` exercises public geometry and consumers in legacy
+and freshly prepared layouts with active checks under `NDEBUG`.
+`aether.flex-static-position-lifetime` shares the existing private core object
+target and checks replacement reachability, indexes and allocation-failure
+recovery. Registry checks and sanitizer runs with leak detection disabled do not
+establish leak freedom. No installed header, ABI or capability changes are needed.
