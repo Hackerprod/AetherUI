@@ -7,6 +7,9 @@
 #include <cstring>
 #include <string>
 #include <vector>
+#if !defined(_WIN32)
+#include <dlfcn.h>
+#endif
 
 static unsigned checks=0, failures=0, control_failures=0, scenarios=0, rectangles=0;
 static std::string label;
@@ -100,6 +103,12 @@ static std::vector<Case> cases(){
     basic("absolute-margins-once","#item{margin-left:3px;margin-top:4px}",{3,34,40,20});
     out.push_back({"empty-strut-signed",host("<div id='empty'></div>"+item),"#host{overflow:hidden}#empty{margin-top:9px;margin-bottom:-4px}",{{"item",{0,5,40,20}},{"empty",{0,9,300,0},true},{"host",{0,0,300,200},true}}});
     for(bool add:{false,true}) out.push_back({add?"auto-height-with-item":"auto-height-no-item",host(previous+(add?item:"")+"<div id='next'></div>"),"#host{height:auto;overflow:hidden}#next{width:60px;height:10px}",add?std::vector<Expected>{{"item",{0,30,40,20}},{"prev",{0,0,80,30},true},{"next",{0,30,60,10},true},{"host",{0,0,300,40},true}}:std::vector<Expected>{{"prev",{0,0,80,30},true},{"next",{0,30,60,10},true},{"host",{0,0,300,40},true}}});
+    // No whitespace nodes: an OOF marker must not split adjoining margins.
+    for(bool add:{false,true}) out.push_back({add?"pending-margin-with-item":"pending-margin-no-item",
+        host(previous+(add?item:"")+"<div id='next'></div>"),
+        "#host{overflow:hidden;height:auto}#prev{margin-bottom:7px}#next{width:60px;height:10px;margin-top:5px}",
+        add?std::vector<Expected>{{"prev",{0,0,80,30},true},{"next",{0,37,60,10},true},{"host",{0,0,300,47},true},{"item",{0,37,40,20}}}
+           :std::vector<Expected>{{"prev",{0,0,80,30},true},{"next",{0,37,60,10},true},{"host",{0,0,300,47},true}}});
     const std::string collapse=host("<div id='before'></div>"+previous+item+"<div id='next'></div><div id='after'></div>");
     out.push_back({"parent-collapse",collapse,"#prev{margin-top:5px;margin-bottom:7px}#next{width:60px;height:10px}#before,#after{position:absolute;width:10px;height:10px}",{{"before",{0,0,10,10}},{"item",{0,37,40,20}},{"after",{0,52,10,10}},{"prev",{0,0,80,30},true},{"next",{0,42,60,10},true}},false});
     out.push_back({"empty-collapse",host("<div id='empty'></div>"+item),"#empty{margin-top:5px;margin-bottom:7px}",{{"item",{0,7,40,20}},{"empty",{0,0,300,0},true}},false});
@@ -197,7 +206,12 @@ static void boundaries(bool p){
     start(p,"intrinsic-input-boundary");Fixture input(p,"<input id='host' value='ab'>");input.css("input{display:block}#host{height:100px}");input.layout();input.border("host",{0,0,300,100},true);
 }
 int main(){
-    const auto matrix=cases();CHECK(matrix.size()==44);
+#if !defined(_WIN32)
+    Dl_info identity{};
+    REQUIRE(dladdr(reinterpret_cast<void*>(&aether_layout_layout),&identity)!=0);
+    std::printf("DSO=%s\n",identity.dli_fname);
+#endif
+    const auto matrix=cases();CHECK(matrix.size()==46);
     unsigned matrix_scenarios=0;
     for(bool p:{false,true}) for(const auto& c:matrix){
         if(p&&!c.paired)continue;
@@ -212,9 +226,9 @@ int main(){
         if(std::string(c.name)=="causal-mixed-baselines"){text_rect(f,"UP",{0,0,20,10});text_rect(f,"down",{20,8,40,10});}
         if(std::string(c.name)=="causal-collapse-inline")text_rect(f,"ab",{0,42,20,10},true);
     }
-    CHECK(matrix_scenarios==83);
+    CHECK(matrix_scenarios==87);
     for(bool p:{false,true}){consumers(p);callback_nonparticipation(p);relayout(p);boundaries(p);}
-    CHECK(scenarios==101);CHECK(rectangles==292);CHECK(checks>=2000);
+    CHECK(scenarios==105);CHECK(rectangles==306);CHECK(checks>=2000);
     std::printf("block-static scenarios=%u rectangles=%u checks=%u failures=%u control_failures=%u normative_failures=%u\n",scenarios,rectangles,checks,failures,control_failures,failures-control_failures);
     return failures?1:0;
 }

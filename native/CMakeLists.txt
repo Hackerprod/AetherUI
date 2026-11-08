@@ -1374,7 +1374,7 @@ endif()
 
 if(AETHERUI_BUILD_TESTS)
     add_executable(aether_block_static_position_test tests/test_block_static_position.cpp)
-    target_link_libraries(aether_block_static_position_test PRIVATE AetherUI::Core)
+    target_link_libraries(aether_block_static_position_test PRIVATE AetherUI::Core ${CMAKE_DL_LIBS})
     add_test(NAME aether.block-static-position COMMAND aether_block_static_position_test)
 
     add_executable(aether_block_static_position_lifetime_test
