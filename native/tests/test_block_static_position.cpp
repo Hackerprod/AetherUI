@@ -113,7 +113,7 @@ static std::vector<Case> cases(){
     out.push_back({"parent-collapse",collapse,"#prev{margin-top:5px;margin-bottom:7px}#next{width:60px;height:10px}#before,#after{position:absolute;width:10px;height:10px}",{{"before",{0,0,10,10}},{"item",{0,37,40,20}},{"after",{0,52,10,10}},{"prev",{0,0,80,30},true},{"next",{0,42,60,10},true}},false});
     out.push_back({"empty-collapse",host("<div id='empty'></div>"+item),"#empty{margin-top:5px;margin-bottom:7px}",{{"item",{0,7,40,20}},{"empty",{0,0,300,0},true}},false});
     out.push_back({"parent-collapse-negative",host(previous+item),"#prev{margin-top:-5px;margin-bottom:7px}",{{"item",{0,37,40,20}},{"prev",{0,0,80,30},true}},false});
-    out.push_back({"flow-button-center","<button id='host'><div id='before'></div><div id='prev'></div><div id='item'></div></button>","button{display:block}#host{height:100px}#prev{height:20px}#before{position:absolute;width:10px;height:10px}",{{"before",{0,40,10,10}},{"item",{0,60,40,20}},{"prev",{0,40,80,20},true},{"host",{0,0,300,100},true}},false});
+    out.push_back({"flow-button-center","<button id='host'><div id='before'></div><div id='prev'></div><div id='item'></div></button>","button{display:block}#host{height:100px;overflow:hidden}#prev{height:20px}#before{position:absolute;width:10px;height:10px}",{{"before",{0,40,10,10}},{"item",{0,60,40,20}},{"prev",{0,40,80,20},true},{"host",{0,0,300,100},true}},false});
     auto inl=[&](const char* name,const std::string& content,const std::string& css,aether_rectf expected){out.push_back({name,host(content),css,{{"item",expected},{"host",{0,0,300,200},true}}});};
     inl("inline-prefix", "ab"+item,"",{0,20,40,20});
     inl("inline-both-sides","ab"+item+"cd","",{0,20,40,20});
