@@ -107,16 +107,29 @@ float layout_table_children(
         row_box->style = row_style;
         register_box(result, row_box);
 
+        struct cell_completion_s {
+            element_completion_s completion;
+            size_t flow_begin = 0, flow_end = 0;
+            size_t tail_begin = 0, tail_end = 0;
+        };
+        std::vector<cell_completion_s> cells;
+        cells.reserve(row.cells.size());
+        const size_t row_flow_begin = result->paint_order.size();
         float cursor_x = content.x;
         float row_height = 0.f;
         for (size_t column = 0; column < row.cells.size(); ++column) {
             const float column_width = column_widths[column];
+            cell_completion_s cell;
+            cell.flow_begin = result->paint_order.size();
             auto* cell_box = layout_element(engine, styles, row.cells[column],
                                             {cursor_x, cursor_y, column_width, content.height}, containing_height,
                                             cursor_y, true,
-                                            0.f, false, 0.f, forced_height_kind_e::none, true, result);
+                                            0.f, false, 0.f, forced_height_kind_e::none, true, result,
+                                            nullptr, &cell.completion);
+            cell.flow_end = result->paint_order.size();
             row_height = std::max(row_height, cell_box->margin_box.height);
             row_box->add_child(cell_box);
+            cells.push_back(cell);
             cursor_x += column_width;
         }
 
@@ -124,6 +137,31 @@ float layout_table_children(
         row_box->padding_box = row_box->content_box;
         row_box->border_box = row_box->content_box;
         row_box->margin_box = row_box->content_box;
+        const size_t tail_begin = result->paint_order.size();
+        for (auto& cell : cells) {
+            auto* box = cell.completion.box;
+            auto allocated = box->border_box;
+            const float decorations = aether_thicknessf_vertical(cell.completion.padding) +
+                                      aether_thicknessf_vertical(cell.completion.border);
+            allocated.height = std::max(decorations, row_height -
+                aether_thicknessf_vertical(cell.completion.margin));
+            cell.tail_begin = result->paint_order.size();
+            layout_complete_element(engine, styles, cell.completion, allocated, result, true);
+            cell.tail_end = result->paint_order.size();
+        }
+        if (result->records_boxes && result->paint_order.size() != tail_begin) {
+            // Restore cell flow + completion registration chronology with one
+            // linear scratch copy. Numeric boundaries survive vector growth.
+            std::vector<aether_layout_box_s*> ordered;
+            ordered.reserve(result->paint_order.size() - row_flow_begin);
+            for (const auto& cell : cells) {
+                ordered.insert(ordered.end(), result->paint_order.begin() + cell.flow_begin,
+                               result->paint_order.begin() + cell.flow_end);
+                ordered.insert(ordered.end(), result->paint_order.begin() + cell.tail_begin,
+                               result->paint_order.begin() + cell.tail_end);
+            }
+            std::copy(ordered.begin(), ordered.end(), result->paint_order.begin() + row_flow_begin);
+        }
         parent_box->add_child(row_box);
         cursor_y += row_height;
     }

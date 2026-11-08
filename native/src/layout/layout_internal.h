@@ -51,6 +51,20 @@ using percentage_height_s = std::optional<float>;
 enum class forced_height_kind_e { none, definite, indefinite };
 bool length_depends_on_percentage(aether_css_length value);
 
+// A row-owned continuation, never an owner or a cross-layout cache. Natural
+// in-flow children remain attached; only the completion tail is deferred.
+struct element_completion_s {
+    aether_layout_box_s* box = nullptr;
+    aether_thicknessf margin{}, padding{}, border{};
+    aether_rectf containing_block{};
+    percentage_height_s containing_height;
+};
+void layout_complete_element(const aether_layout_engine_s* engine,
+    const StyleLookup* styles, const element_completion_s& completion,
+    aether_rectf final_border, aether_layout_result_s* result,
+    bool table_allocation = false);
+void layout_recompute_saved_scroll(aether_layout_box_s* box);
+
 aether_layout_box_s* layout_element(
     const aether_layout_engine_s* engine,
     const StyleLookup* styles,
@@ -68,7 +82,8 @@ aether_layout_box_s* layout_element(
     /* CSS Overflow 3.3: propagated viewport overflow used ONLY for the root
        box's scroll metrics. Null for every non-root element; the root's own
        computed overflow stays untouched (paint keeps the used value). */
-    const int32_t* viewport_overflow_override = nullptr);
+    const int32_t* viewport_overflow_override = nullptr,
+    element_completion_s* deferred_completion = nullptr);
 
 float layout_flow_children(
     const aether_layout_engine_s* engine,

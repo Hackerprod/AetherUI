@@ -405,7 +405,8 @@ aether_layout_box_s* layout_element(
     float forced_border_height, forced_height_kind_e forced_height_kind,
     bool is_independent_layout_item,
     aether_layout_result_s* result,
-    const int32_t* viewport_overflow_override)
+    const int32_t* viewport_overflow_override,
+    element_completion_s* deferred_completion)
 {
     auto style = get_style(styles, element);
     auto* box = result->create_box();
@@ -621,54 +622,88 @@ aether_layout_box_s* layout_element(
     border_height = clamp_border_height(engine, style, border_height,
         containing_height.value_or(NAN), height_decorations, true, element);
 
-    const aether_rectf final_border = {border_x, border_y, border_width, border_height};
-    const auto final_padding = aether_rectf_deflate(final_border, border);
-    const auto final_content = aether_rectf_deflate(final_padding, padding);
-
-    // Out-of-flow sizing/insets use the padding block (or fixed containing block),
-    // independently of flex static alignment in the final content rectangle.
-    layout_positioned_children(engine, styles, box, element,
-                               final_padding, final_content, result);
-
-    // Scroll metrics are calculated once for both axes from the same
-    // descendant-overflow walk.  This deliberately avoids separate X/Y
-    // implementations drifting apart as the layout model grows.
-    // A scroll-container value (auto/scroll/hidden) accumulates overflow;
-    // only the root box may substitute the propagated viewport overflow.
-    const int32_t scroll_overflow_x = viewport_overflow_override
-        ? viewport_overflow_override[0] : style.overflow_x;
-    const int32_t scroll_overflow_y = viewport_overflow_override
-        ? viewport_overflow_override[1] : style.overflow_y;
-    const bool scrolls_x = aether_overflow_is_scroll_container(scroll_overflow_x);
-    const bool scrolls_y = aether_overflow_is_scroll_container(scroll_overflow_y);
-    // The viewport's scroll area is the viewport itself: the root box measures
-    // its overflow against the viewport extent even when its own height is auto
-    // (the page must scroll by default), whereas a normal element only scrolls
-    // against a definite content height.
-    const float scroll_base_height = viewport_overflow_override
+    box->scroll_flow_height = content_height;
+    box->scroll_base_height = viewport_overflow_override
         ? engine->viewport_height : definite_content_height;
-    if (scrolls_x || (scrolls_y && std::isfinite(scroll_base_height))) {
-        float right = content_x + content_width;
-        float bottom = content_y + std::max(0.f, content_height);
-        accumulate_scrollable_descendant_extent(box, scrolls_x, scrolls_y, right, bottom);
-
-        if (scrolls_x) {
-            const float content_extent = std::max(content_width, right - content_x);
-            box->scroll.scrollable_overflow_x = std::max(0.f, content_extent - content_width);
-        }
-        if (scrolls_y && std::isfinite(scroll_base_height)) {
-            const float content_extent = std::max(content_height, bottom - content_y);
-            box->scroll.scrollable_overflow_y = std::max(0.f, content_extent - scroll_base_height);
-        }
-
+    const int32_t overflow_x = viewport_overflow_override
+        ? viewport_overflow_override[0] : style.overflow_x;
+    const int32_t overflow_y = viewport_overflow_override
+        ? viewport_overflow_override[1] : style.overflow_y;
+    box->scroll_completion_flags = LAYOUT_SCROLL_VALID |
+        (aether_overflow_is_scroll_container(overflow_x) ? LAYOUT_SCROLL_X : 0) |
+        (aether_overflow_is_scroll_container(overflow_y) ? LAYOUT_SCROLL_Y : 0);
+    const element_completion_s completion{box, margin, padding, border,
+                                         containing_block, containing_height};
+    const aether_rectf natural_border{border_x, border_y, border_width, border_height};
+    if (deferred_completion) {
+        // Internal ancestor lookup can see meaningful natural geometry, but no
+        // positioned/scroll/relative completion has run on this cell yet.
+        box->border_box = natural_border;
+        box->padding_box = aether_rectf_deflate(natural_border, border);
+        box->content_box = aether_rectf_deflate(box->padding_box, padding);
+        box->margin_box = {containing_block.x, border_y - box->collapsed_margin_before,
+            border_width + aether_thicknessf_horizontal(margin),
+            border_height + box->collapsed_margin_before + box->collapsed_margin_after};
+        *deferred_completion = completion;
+    } else {
+        layout_complete_element(engine, styles, completion, natural_border, result);
     }
+    return box;
+}
 
+void layout_recompute_saved_scroll(aether_layout_box_s* box) {
+    const auto flags = box->scroll_completion_flags;
+    if (!(flags & LAYOUT_SCROLL_VALID)) return;
+    const bool scrolls_x = (flags & LAYOUT_SCROLL_X) != 0;
+    const bool scrolls_y = (flags & LAYOUT_SCROLL_Y) != 0;
+    const auto& content = box->content_box;
+    const float flow_height = box->scroll_flow_height;
+    const float base_height = box->scroll_base_height;
+    // Never change stored offsets or sample callbacks. Placement/relative
+    // translations have already changed this live content origin when repairing.
+    box->scroll.scrollable_overflow_x = 0.f;
+    box->scroll.scrollable_overflow_y = 0.f;
+    if (scrolls_x || (scrolls_y && std::isfinite(base_height))) {
+        float right = content.x + content.width;
+        float bottom = content.y + std::max(0.f, flow_height);
+        accumulate_scrollable_descendant_extent(box, scrolls_x, scrolls_y, right, bottom);
+        if (scrolls_x) {
+            const float extent = std::max(content.width, right - content.x);
+            box->scroll.scrollable_overflow_x = std::max(0.f, extent - content.width);
+        }
+        if (scrolls_y && std::isfinite(base_height)) {
+            const float extent = std::max(flow_height, bottom - content.y);
+            box->scroll.scrollable_overflow_y = std::max(0.f, extent - base_height);
+        }
+    }
+}
+
+void layout_complete_element(const aether_layout_engine_s* engine,
+    const StyleLookup* styles, const element_completion_s& completion,
+    aether_rectf final_border, aether_layout_result_s* result, bool table_allocation)
+{
+    auto* box = completion.box;
+    const auto& style = box->style;
+    const auto& containing_block = completion.containing_block;
+    const auto containing_height = completion.containing_height;
+    const auto final_padding = aether_rectf_deflate(final_border, completion.border);
+    const auto final_content = aether_rectf_deflate(final_padding, completion.padding);
+    layout_positioned_children(engine, styles, box, box->element,
+                               final_padding, final_content, result);
     box->border_box = final_border;
     box->padding_box = final_padding;
     box->content_box = final_content;
-    box->margin_box  = { containing_block.x, border_y - box->collapsed_margin_before,
-                         border_width + aether_thicknessf_horizontal(margin),
-                         border_height + box->collapsed_margin_before + box->collapsed_margin_after };
+    box->margin_box = {containing_block.x, final_border.y - box->collapsed_margin_before,
+        final_border.width + aether_thicknessf_horizontal(completion.margin),
+        final_border.height + box->collapsed_margin_before + box->collapsed_margin_after};
+    if (table_allocation) {
+        box->scroll_base_height = final_content.height;
+        if (result->records_boxes) {
+            box->scroll_completion_flags |= LAYOUT_SCROLL_TABLE_CELL;
+            result->has_finalized_table_cells = true;
+        }
+    }
+    layout_recompute_saved_scroll(box);
 
     // Relative positioning preserves the element's space in normal flow while moving its visual
     // box (and its descendants) by the requested inset. A specified left/top wins over right/bottom.
@@ -683,7 +718,6 @@ aether_layout_box_s* layout_element(
         box->own_relative_dy = dy;
         if (dx != 0.f || dy != 0.f) apply_relative_visual_offset(box, dx, dy);
     }
-    return box;
 }
 
 /* ── LayoutAtomicControl ───────────────────────────────────────────── */

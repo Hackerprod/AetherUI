@@ -988,6 +988,14 @@ if(AETHERUI_BUILD_TESTS)
     target_include_directories(aether_table_layout_test PRIVATE src/layout)
     add_test(NAME aether.table-layout COMMAND aether_table_layout_test)
 
+    add_executable(aether_table_cell_final_contract_test tests/test_table_cell_final_contract.cpp)
+    target_link_libraries(aether_table_cell_final_contract_test PRIVATE AetherUI::Core)
+    add_test(NAME aether.table-cell-final-contract COMMAND aether_table_cell_final_contract_test)
+
+    add_executable(aether_table_cell_final_height_test tests/test_table_cell_final_height.cpp)
+    target_link_libraries(aether_table_cell_final_height_test PRIVATE AetherUI::Core)
+    add_test(NAME aether.table-cell-final-height COMMAND aether_table_cell_final_height_test)
+
     add_executable(aether_table_layout_integration_test tests/test_table_layout_integration.cpp)
     target_link_libraries(aether_table_layout_integration_test PRIVATE AetherUI::Core)
     add_test(NAME aether.table-layout-integration COMMAND aether_table_layout_integration_test)
@@ -1229,6 +1237,13 @@ if(AETHERUI_BUILD_TESTS)
     add_library(aether_flex_text_test_core OBJECT ${immutable_layout_core_sources})
     target_include_directories(aether_flex_text_test_core PRIVATE include src)
     target_compile_definitions(aether_flex_text_test_core PRIVATE AETHER_EXPORTS)
+    add_executable(aether_table_cell_final_private_test
+        tests/test_table_cell_final_private.cpp
+        $<TARGET_OBJECTS:aether_flex_text_test_core>)
+    target_include_directories(aether_table_cell_final_private_test PRIVATE include src)
+    target_compile_definitions(aether_table_cell_final_private_test PRIVATE AETHER_EXPORTS)
+    add_test(NAME aether.table-cell-final-private COMMAND aether_table_cell_final_private_test)
+
     foreach(flex_text_test lifetime sequences)
         add_executable(aether_flex_text_${flex_text_test}_test
             tests/test_flex_text_${flex_text_test}.cpp
