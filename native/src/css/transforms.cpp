@@ -240,19 +240,9 @@ bool parse_origin_component(const std::string& source, const css_component_value
         else return false;
         return true;
     }
-    aether::css::calc_value_s number;
-    if (component.token.kind == css_variable_token_kind::function) {
-        if (!aether::css::try_parse_calc(spelling, number) ||
-            number.kind != aether::css::calc_value_kind_e::length) return false;
-    } else {
-        if (!aether::css::try_parse_numeric_literal(spelling, number)) return false;
-        // Only a literal Number zero may become a length. calc(0) remains Number.
-        if (number.kind == aether::css::calc_value_kind_e::number) {
-            if (number.number != 0.0) return false;
-            number.length = aether_css_length_zero();
-        }
-    }
-    out = {origin_component_kind::length, number.length};
+    aether_css_length length{};
+    if (!parse_length(spelling, &length)) return false;
+    out = {origin_component_kind::length, length};
     return true;
 }
 
