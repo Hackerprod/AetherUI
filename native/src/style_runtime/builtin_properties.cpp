@@ -234,22 +234,25 @@ static bool bi_try_font_family(const char* src, std::string& out) {
     const auto& family = families.front();
     css_component_cursor cursor(family);
     css_component_value component;
-    out.clear();
+    std::string value;
     while (cursor.next(component)) {
         const auto spelling = family.substr(component.begin, component.end - component.begin);
-        if (component.token.kind != css_variable_token_kind::ident) {
-            if (!out.empty() || spelling.size() < 2 ||
-                (spelling.front() != '\'' && spelling.front() != '"')) return false;
-            out = spelling.substr(1, spelling.size() - 2);
-            return !out.empty() && !cursor.next(component) && cursor.valid();
-        }
-        if (!out.empty()) out += ' ';
         css_variable_lexer decoder(spelling.data(), spelling.size());
+        if (component.token.kind != css_variable_token_kind::ident) {
+            if (!value.empty() || component.token.serialization != css_variable_serialization::string ||
+                !decoder.decode_string(value) || value.empty() ||
+                cursor.next(component) || !cursor.valid()) return false;
+            out.swap(value);
+            return true;
+        }
+        if (!value.empty()) value += ' ';
         if (!decoder.decode_identifier([](void* context, const char* bytes, size_t count) {
             static_cast<std::string*>(context)->append(bytes, count); return true;
-        }, &out)) return false;
+        }, &value)) return false;
     }
-    return cursor.valid() && !out.empty();
+    if (!cursor.valid() || value.empty()) return false;
+    out.swap(value);
+    return true;
 }
 
 // Line-height preserves the existing zero-valued NUMBER calc compatibility.

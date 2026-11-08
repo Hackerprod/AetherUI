@@ -125,6 +125,48 @@ bool css_variable_lexer::decode_identifier(css_identifier_sink sink, void* conte
     name(var, url, dashed, sink, context);
     return !failed_ && cursor_ == length_;
 }
+bool css_variable_lexer::decode_string(std::string& out) {
+    if (cursor_ >= length_) return false;
+    const auto quote = read(cursor_++);
+    if (failed_ || (quote != '\'' && quote != '"')) return false;
+    std::string value;
+    auto append = [](void* context, const char* bytes, size_t size) {
+        static_cast<std::string*>(context)->append(bytes, size);
+        return true;
+    };
+    while (cursor_ < length_) {
+        const auto c = read(cursor_);
+        if (failed_) return false;
+        if (c == quote) {
+            ++cursor_;
+            if (cursor_ != length_) return false;
+            out.swap(value);
+            return true;
+        }
+        if (newline(c)) return false;
+        unsigned int decoded;
+        if (c == '\\') {
+            if (cursor_ + 1 == length_) return false;
+            const auto next = read(cursor_ + 1);
+            if (failed_) return false;
+            if (newline(next)) {
+                cursor_ += 2;
+                if (next == '\r' && cursor_ < length_) {
+                    const auto after = read(cursor_);
+                    if (failed_) return false;
+                    if (after == '\n') ++cursor_;
+                }
+                continue;
+            }
+            decoded = escape();
+        } else decoded = scalar();
+        if (failed_) return false;
+        // Embedded NUL is representable by this private span API, unlike the
+        // public C string source. Apply CSS preprocessing replacement locally.
+        emit_scalar(decoded == 0 ? 0xfffd : decoded, append, &value);
+    }
+    return false;
+}
 bool css_variable_lexer::decode_url(std::string& out) {
     // Decode once into owned temporary storage. Emitted delimiters are data,
     // never input to the lexer; publication and allocation failure stay atomic.
