@@ -48,7 +48,7 @@ struct Case { const char* label; std::string actual, expected; };
 const char* gradient = "linear-gradient(rebeccapurple 0%,lightgoldenrodyellow 100%)";
 const char* hex_gradient = "linear-gradient(#663399 0%,#fafad2 100%)";
 std::string reference_expected(const std::string& tone, bool shorthand, const std::string& explicit_tone = "#4b0082") {
-    return "color:" + tone + ";" + (shorthand ? "background:currentColor;" : "background-color:currentColor;") +
+    return "color:" + tone + ";" + (shorthand ? "background:" : "background-color:") + tone + ";" +
         "border:3px solid " + tone + ";box-shadow:1px 2px " + tone + ",3px 4px " + tone + ",5px 6px " + explicit_tone +
         ";text-shadow:1px 2px " + tone + ",3px 4px " + tone + ",5px 6px " + explicit_tone + ";";
 }
@@ -85,10 +85,9 @@ void run(bool baseline_controls) {
         {"duplicate colors rejected", "background:#ffefd5;background:indigo coral;", "background:#ffefd5;"},
         {"invalid stop rejects whole gradient", "background-image:" + h + ";background-image:linear-gradient(indigo,notacolor);", "background-image:" + h + ";"},
         {"currentColor gradient remains unsupported", "background-image:" + h + ";background-image:linear-gradient(indigo,currentColor);", "background-image:" + h + ";"},
-        {"currentColor compound remains unsupported", "background:#ffefd5;background:" + g + " currentColor;", "background:#ffefd5;"},
-        // Compare the existing background currentColor routes against the same
-        // routes with a concrete hex producer. This checks stability, not CSS
-        // correctness or newly implemented contextual background support.
+        {"currentColor compound external color", "background:#ffefd5;background:" + g + " currentColor;", "background:" + h + " #663399;"},
+        // Concrete background expectations independently require contextual resolution.
+        // The separate gradient-stop negative above remains unsupported.
         {"references before producer", "background-color:currentColor;border:3px solid;box-shadow:1px 2px,3px 4px currentColor,5px 6px indigo;text-shadow:1px 2px,3px 4px currentColor,5px 6px indigo;color:rebeccapurple;",
          reference_expected("#663399", false)},
         {"references after producer and background fallback", "color:rebeccapurple;background:currentColor;border:3px solid currentColor;box-shadow:1px 2px,3px 4px currentColor,5px 6px indigo;text-shadow:1px 2px,3px 4px currentColor,5px 6px indigo;",
