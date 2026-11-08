@@ -64,32 +64,47 @@ bool parse_length(const std::string& source, aether_css_length& out, bool allow_
 bool parse_position(const std::string& source, aether_background_position_s& out) {
     auto words = split_words(source);
     if (words.empty() || words.size() > 2) return false;
-    out.x = aether_css_length_zero();
-    out.y = aether_css_length_zero();
-    out.x.unit = AETHER_CSS_UNIT_PERCENT;
-    out.y.unit = AETHER_CSS_UNIT_PERCENT;
-    bool x_set = false, y_set = false;
-    for (const auto& word : words) {
+    enum class axis { horizontal, vertical, center, numeric };
+    struct component { axis kind; aether_css_length length; };
+    auto classify = [](const std::string& word, component& result) {
         const auto value = str_to_lower(word);
-        if ((value == "left" || value == "right") && !x_set) {
-            out.x.value = value == "right" ? 100.f : 0.f; x_set = true; continue;
+        result.length = aether_css_length_zero();
+        result.length.unit = AETHER_CSS_UNIT_PERCENT;
+        if (value == "left" || value == "right") {
+            result.kind = axis::horizontal;
+            result.length.value = value == "right" ? 100.f : 0.f;
+        } else if (value == "top" || value == "bottom") {
+            result.kind = axis::vertical;
+            result.length.value = value == "bottom" ? 100.f : 0.f;
+        } else if (value == "center") {
+            result.kind = axis::center;
+            result.length.value = 50.f;
+        } else {
+            result.kind = axis::numeric;
+            if (!parse_length(value, result.length, false)) return false;
         }
-        if ((value == "top" || value == "bottom") && !y_set) {
-            out.y.value = value == "bottom" ? 100.f : 0.f; y_set = true; continue;
-        }
-        if (value == "center") {
-            if (!x_set) { out.x.value = 50.f; x_set = true; continue; }
-            if (!y_set) { out.y.value = 50.f; y_set = true; continue; }
-            return false;
-        }
-        aether_css_length length{};
-        if (!parse_length(value, length, false)) return false;
-        if (!x_set) { out.x = length; x_set = true; }
-        else if (!y_set) { out.y = length; y_set = true; }
-        else return false;
+        return true;
+    };
+    component first{}, second{};
+    if (!classify(words[0], first)) return false;
+    aether_background_position_s position{};
+    position.x = position.y = aether_css_length_zero();
+    position.x.unit = position.y.unit = AETHER_CSS_UNIT_PERCENT;
+    position.x.value = position.y.value = 50.f;
+    if (words.size() == 1) {
+        if (first.kind == axis::vertical) position.y = first.length;
+        else position.x = first.length;
+    } else {
+        if (!classify(words[1], second)) return false;
+        // Numeric pairs retain X/Y order; only keyword pairs may swap axes.
+        const bool must_xy = first.kind == axis::horizontal || second.kind == axis::vertical ||
+            first.kind == axis::numeric || second.kind == axis::numeric;
+        const bool must_yx = first.kind == axis::vertical || second.kind == axis::horizontal;
+        if (must_xy && must_yx) return false;
+        position.x = must_yx ? second.length : first.length;
+        position.y = must_yx ? first.length : second.length;
     }
-    if (!x_set && y_set) out.x.value = 50.f;
-    if (x_set && !y_set) out.y.value = 50.f;
+    out = position;
     return true;
 }
 

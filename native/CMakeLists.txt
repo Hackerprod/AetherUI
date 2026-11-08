@@ -513,6 +513,25 @@ if(AETHERUI_BUILD_TESTS)
     target_link_libraries(aether_background_image_display_list_test PRIVATE AetherUI::Core)
     add_test(NAME aether.background-image-display-list COMMAND aether_background_image_display_list_test)
 
+    add_executable(aether_background_position_parser_test tests/test_background_position_parser.cpp
+        src/style_runtime/builtin_properties.cpp src/style_runtime/transition_properties.cpp
+        src/style_runtime/shadow_values.cpp src/style_runtime/css_variable_tokens.cpp
+        src/css/css_length.cpp src/css/background_layers.cpp src/css/linear_gradient.cpp
+        src/css/border_radii.cpp src/css/backdrop_filters.cpp src/css/transforms.cpp)
+    target_compile_definitions(aether_background_position_parser_test PRIVATE AETHER_CSS_NUMERIC_ONLY)
+    target_link_libraries(aether_background_position_parser_test PRIVATE AetherUI::Core)
+    add_test(NAME aether.background-position-parser COMMAND aether_background_position_parser_test)
+    add_executable(aether_background_position_pipeline_test tests/test_background_position_pipeline.cpp)
+    target_link_libraries(aether_background_position_pipeline_test PRIVATE AetherUI::Core)
+    add_test(NAME aether.background-position-pipeline COMMAND aether_background_position_pipeline_test)
+    add_executable(aether_background_position_display_list_test tests/test_background_position_display_list.cpp)
+    target_link_libraries(aether_background_position_display_list_test PRIVATE AetherUI::Core)
+    add_test(NAME aether.background-position-display-list COMMAND aether_background_position_display_list_test)
+
+    add_executable(aether_background_position_context_test tests/test_background_position_context.cpp)
+    target_link_libraries(aether_background_position_context_test PRIVATE AetherUI::Core)
+    add_test(NAME aether.background-position-context COMMAND aether_background_position_context_test)
+
     add_executable(aether_background_value_consistency_test tests/test_background_value_consistency.cpp)
     target_link_libraries(aether_background_value_consistency_test PRIVATE AetherUI::Core)
     add_test(NAME aether.background-value-consistency COMMAND aether_background_value_consistency_test)
@@ -1196,7 +1215,7 @@ endif()
 if(AETHERUI_BUILD_TESTS)
     # These white-box dispatcher tests compile their real registry locally.
     # Its immutable parent readers stay private rather than expanding the ABI.
-    foreach(reader_test aether_gradient_boundary_dispatch_test aether_transform_origin_dispatch_test
+    foreach(reader_test aether_background_position_parser_test aether_gradient_boundary_dispatch_test aether_transform_origin_dispatch_test
             aether_transform_dispatch_test aether_measure_property_scratch_test)
         target_sources(${reader_test} PRIVATE src/css/computed_style.cpp src/css/frozen_style.cpp src/css/frozen_c_string.cpp
             src/css/frozen_measure_read.cpp src/css/style_freeze.cpp
