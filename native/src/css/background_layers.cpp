@@ -19,18 +19,8 @@ std::vector<std::string> split_trimmed(const std::string& source, char separator
 std::vector<std::string> split_words(const std::string& source) { return css_split_components(source); }
 
 bool parse_url(const std::string& source, std::string& out) {
-    const auto text = str_trim(source);
-    if (!str_starts_with_i(text, "url(") || text.size() < 6 || text.back() != ')') return false;
-    auto body = str_trim(text.substr(4, text.size() - 5));
-    if (body.empty()) return false;
-    if (body.front() == '\'' || body.front() == '"') {
-        const char quote = body.front();
-        if (body.size() < 2 || body.back() != quote) return false;
-        body = body.substr(1, body.size() - 2);
-    } else if (body.find_first_of(" \t\r\n\"'") != std::string::npos) return false;
-    if (body.empty()) return false;
-    out = body;
-    return true;
+    css_variable_lexer lexer(source.data(), source.size());
+    return lexer.decode_url(out);
 }
 
 bool parse_image(const std::string& source, aether_background_layer& out) {

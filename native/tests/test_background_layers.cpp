@@ -9,7 +9,95 @@ static void require(bool condition, const char* message) {
     if (!condition) { std::fprintf(stderr, "FAIL: %s\n", message); std::exit(1); }
 }
 
+// Expected identities are literal bytes, never produced by the decoder under test.
+static void expect_url(const std::string& css, const char* identity) {
+    aether_background_layer_list result{};
+    require(aether_background_image_list_try_parse(css, &result), css.c_str());
+    require(result.count == 1 && result.items &&
+        result.items[0].kind == AETHER_BACKGROUND_LAYER_IMAGE_URL && result.items[0].image_source,
+        "URL result must contain an owned image source");
+    require(std::strcmp(result.items[0].image_source, identity) == 0, css.c_str());
+    aether_background_layer_list_free(&result);
+}
+
+static void escaped_urls() {
+    struct example { const char* css; const char* identity; };
+    const example cases[] = {
+        {"url(hero.png)", "hero.png"}, {"url(caf\xc3\xa9.png)", "caf\xc3\xa9.png"},
+        {"url(hero%2Epng)", "hero%2Epng"}, {"URL('Hero/../A%2Epng')", "Hero/../A%2Epng"},
+        {R"(url(hero\2e png))", "hero.png"}, {R"(url('hero\2e png'))", "hero.png"},
+        {R"(url(hero\.png))", "hero.png"}, {R"(url("hero\.png"))", "hero.png"},
+        {R"(url(\7x))", "\x07x"},
+        {R"(url(\2e))", "."}, {R"(url(\00002e))", "."},
+        {R"(url(\00002e7))", ".7"}, {R"(url(\2E))", "."},
+        {R"(url(\e9.png))", "\xc3\xa9.png"},
+        {R"(url(\1f642.png))", "\xf0\x9f\x99\x82.png"},
+        {R"(url(\0.png))", "\xef\xbf\xbd.png"},
+        {R"(url(\d800.png))", "\xef\xbf\xbd.png"},
+        {R"(url(\dfff.png))", "\xef\xbf\xbd.png"},
+        {R"(url(\110000.png))", "\xef\xbf\xbd.png"},
+        {R"(url(\10ffff.png))", "\xf4\x8f\xbf\xbf.png"},
+        {R"(url(a\)\(\,\/\'\"b))", "a)(,/'\"b"},
+        {R"(url('a\'\"\)\(\,\/b'))", "a'\")(,/b"},
+        {R"(url(a\29\28\2c\2f\22 b))", "a)(,/\"b"},
+        {R"(url(a\ ))", "a "}, {R"(url('a\20 '))", "a "},
+        {R"(url(\5c 2e))", "\\2e"}, {R"(url('\\2e'))", "\\2e"},
+        {R"(url('\2f*literal*\2f'))", "/*literal*/"},
+        {R"(url('/*literal*/'))", "/*literal*/"},
+        {R"(url('a\2e  b'))", "a. b"},
+        {"url(  hero.png \t)", "hero.png"},
+    };
+    for (const auto& item : cases) expect_url(item.css, item.identity);
+    for (const std::string separator : {" ", "\t", "\n", "\r", "\r\n", "\f"}) {
+        expect_url("url(hero\\2e" + separator + "png)", "hero.png");
+        expect_url("url('hero\\2e" + separator + "png')", "hero.png");
+    }
+    for (const std::string line : {"\n", "\r", "\r\n", "\f"})
+        expect_url("url('he\\" + line + "ro.png')", "hero.png");
+
+    const char* malformed[] = {
+        "url()", "url('')", "url(\"\")", "url('", "url(a", "url('a')junk",
+        "url(a b)", "url(a(b)", "url('a\nb')", "url('a\rb')", "url('a\fb')",
+        "url('a' 'b')", "url(a\x01" "b)", "url(a\x7f" "b)",
+        R"(url('a\'))", R"(url(a\))", R"(url(a\2e  b))",
+        "url(he\\\nro.png)", "url(he\\\rro.png)", "url(he\\\r\nro.png)", "url(he\\\fro.png)",
+        "url(\xc0\xaf)", "url('\xed\xa0\x80')", "url('\xf4\x90\x80\x80')",
+    };
+    for (const auto* css : malformed) {
+        aether_background_layer_list result{};
+        require(!aether_background_image_list_try_parse(css, &result), css);
+        require(result.count == 0 && !result.items, "malformed URL must not publish layers");
+    }
+    for (const std::string css : {std::string("url(a\0b)", 8), std::string("url('a\0b')", 10)}) {
+        aether_background_layer_list result{};
+        require(!aether_background_image_list_try_parse(css, &result) && !result.items && !result.count,
+            "literal embedded NUL must not enter a C-string resource identity");
+    }
+    aether_background_shorthand_s shorthand{};
+    require(aether_background_shorthand_try_parse(R"(url('hero\2e png') center / cover no-repeat)", shorthand),
+        "escaped shorthand parses");
+    require(shorthand.image == R"(url('hero\2e png'))", "shorthand retains CSS spelling, not decoded identity");
+    expect_url(shorthand.image, "hero.png");
+    aether_background_layer_list mixed{};
+    require(aether_background_image_list_try_parse(
+        R"(url(hero\2e png), linear-gradient(90deg, red, blue), url(other\.png))", &mixed),
+        "escaped URL and gradient list parses");
+    require(mixed.count == 3 && mixed.items && mixed.items[0].image_source && mixed.items[2].image_source &&
+        mixed.items[1].kind == AETHER_BACKGROUND_LAYER_LINEAR_GRADIENT &&
+        std::strcmp(mixed.items[0].image_source, "hero.png") == 0 &&
+        std::strcmp(mixed.items[2].image_source, "other.png") == 0, "mixed list preserves order and identities");
+    const auto* old_items = mixed.items;
+    require(!aether_background_image_list_try_parse("url(new.png), url('')", &mixed) &&
+        mixed.items == old_items && mixed.count == 3 && mixed.items[0].image_source &&
+        std::strcmp(mixed.items[0].image_source, "hero.png") == 0,
+        "failed replacement preserves the previously owned complete list");
+    aether_background_layer_list_free(&mixed);
+    require(!aether_background_image_list_try_parse("url(hero.png), url('')", &mixed) && !mixed.items && !mixed.count,
+        "a malformed later layer cannot publish an earlier valid layer");
+}
+
 int main() {
+    escaped_urls();
     aether_background_layer_list layers{};
     require(aether_background_image_list_try_parse(
         "url('asset://mountain'), linear-gradient(90deg, red, blue)", &layers),

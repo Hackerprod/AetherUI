@@ -47,6 +47,8 @@ public:
     // Decode exactly one identifier spanning the remaining input, not arbitrary
     // escaped text. Callers must discard any partial sink output on failure.
     bool decode_identifier(css_identifier_sink sink, void* context);
+    // Private CSS URL consumer. Preserve output on syntax/allocation failure.
+    bool decode_url(std::string& out);
 private:
     const char* data_;
     size_t length_, cursor_;

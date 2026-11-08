@@ -142,6 +142,80 @@ void integration() {
     family(chain(2) + "font-family:var(--a2)small-family", "small-family");
     family(chain(20) + "font-family:var(--a20,outer-family)", "parent-family", true);
 }
+void escaped_background_variables() {
+    const char* declarations[] = {
+        R"(--image:url(hero\2e png);background-image:var(--image))",
+        R"(--image:url('hero\.png');background:var(--image) center / cover no-repeat)",
+        R"(background-image:var(--missing,url('hero\00002e png')))",
+        "--image:url('hero\\2e\npng');background-image:var(--image)",
+        "--image:url('hero\\2e\r\npng');background:var(--image)",
+        "--image:url('he\\\nro.png');background-image:var(--image)",
+    };
+    for (const auto* declaration : declarations) {
+        fixture f;
+        f.load(declaration);
+        require(f.style.background_layers.count == 1 && f.style.background_layers.items, declaration);
+        const auto& layer = f.style.background_layers.items[0];
+        require(layer.kind == AETHER_BACKGROUND_LAYER_IMAGE_URL && layer.image_source &&
+            std::strcmp(layer.image_source, "hero.png") == 0, "variable background uses decoded identity");
+        require(f.var_errors == 0, "valid escaped background has no variable error");
+    }
+    {
+        fixture f;
+        f.load(R"(--image:url('\5c 2e');background:var(--image))");
+        require(f.style.background_layers.count == 1 && f.style.background_layers.items &&
+            f.style.background_layers.items[0].image_source &&
+            std::strcmp(f.style.background_layers.items[0].image_source, "\\2e") == 0,
+            "variable substitution and shorthand must not decode the same URL twice");
+    }
+    {
+        fixture f;
+        f.load("--image:url('');background-image:url(previous.png);background-image:var(--image,url(fallback.png))");
+        require(f.style.background_layers.count == 0,
+            "selected invalid variable URL neither restores previous declaration nor chooses fallback");
+    }
+}
+void string_hex_spans() {
+    using kind = css_variable_token_kind;
+    using category = css_variable_serialization;
+    for (const std::string separator : {" ", "\t", "\n", "\r", "\r\n", "\f"}) {
+        const std::string source = "'hero\\2e" + separator + "png'";
+        css_variable_lexer lexer(source.data(), source.size());
+        const auto token = lexer.next();
+        require(token.kind == kind::other && token.serialization == category::string &&
+            token.begin == 0 && token.end == source.size() && !token.eof_recoverable &&
+            token.escape_tail == css_variable_escape_tail::none && lexer.next().kind == kind::end,
+            "hex terminator stays within one unchanged string span");
+        custom_property_scope_s scope;
+        scope.local["--image"] = source;
+        std::string out;
+        require(variable_resolve("var(--image)", &scope, 32, 65536, out) && out == source,
+            "string serialization preserves original hex and terminator bytes");
+        require(variable_resolve("var(--image)'next'", &scope, 32, 65536, out) && out == source + "'next'",
+            "string token joining must not insert identifier escape-tail bytes");
+    }
+    for (const std::string source : {"'hero\\2e", "'hero\\2e\r"}) {
+        css_variable_lexer lexer(source.data(), source.size());
+        const auto token = lexer.next();
+        require(token.kind == kind::error && token.serialization == category::string &&
+            token.eof_recoverable && token.begin == 0 && token.end == source.size() &&
+            token.escape_tail == css_variable_escape_tail::none && lexer.next().kind == kind::end,
+            "incomplete hex string retains recovery, category, span and no escape tail");
+        require(validate_pending_declaration_value(source), "generic EOF string syntax remains recoverable");
+        custom_property_scope_s scope;
+        scope.local["--image"] = source;
+        std::string out = "sentinel";
+        require(!variable_resolve("var(--image)", &scope, 32, 65536, out) && out.empty(),
+            "legacy resolver still rejects incomplete strings without publishing serialized fragments");
+    }
+    // Do not turn this hex-only scanner fix into stricter general string UTF-8 admission.
+    for (const std::string source : {"'\xc0\xaf'", "'\\\xc0\xaf'"}) {
+        css_variable_lexer lexer(source.data(), source.size());
+        const auto token = lexer.next();
+        require(token.kind == kind::other && token.serialization == category::string && token.end == source.size(),
+            "general string scanner retains prior byte admission");
+    }
+}
 void lexical() {
     using kind = css_variable_token_kind;
     const char* opaque[] = {"'var(--x)'", "\"var(--x)\"", "\"a\\\"var(--x)\"", "xvar(--x)", "#var(--x)", "@var(--x)", "1var(--x)", "var (--x)", "var/**/(--x)", "url(var(--x))"};
@@ -265,6 +339,6 @@ void identifier_decoder() {
 }
 }
 int main() {
-    try { lexical(); identifier_decoder(); private_resolver(); integration(); std::puts("PASS CSS variable strings G1-G12, decoded identifiers and measured5"); return 0; }
+    try { lexical(); string_hex_spans(); identifier_decoder(); private_resolver(); integration(); escaped_background_variables(); std::puts("PASS CSS variable strings G1-G12, decoded identifiers and measured5"); return 0; }
     catch (const std::exception& e) { std::fprintf(stderr, "FAIL CSS variable strings: %s\n", e.what()); return 1; }
 }
