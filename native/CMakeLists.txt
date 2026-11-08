@@ -420,6 +420,7 @@ if(AETHERUI_BUILD_TESTS)
     add_test(NAME aether.gradient-boundary-dispatch COMMAND aether_gradient_boundary_dispatch_test)
 
     add_executable(aether_transform_origin_dispatch_test tests/test_transform_origin_dispatch.cpp
+        tests/test_corner_radius_registry.cpp
         src/style_runtime/builtin_properties.cpp src/style_runtime/transition_properties.cpp
         src/style_runtime/shadow_values.cpp src/style_runtime/css_variable_tokens.cpp
         src/css/css_length.cpp src/css/background_layers.cpp src/css/linear_gradient.cpp
@@ -1407,4 +1408,12 @@ if(AETHERUI_BUILD_TESTS)
     add_executable(aether_flex_static_position_contextual_test tests/test_flex_static_position_contextual.cpp)
     target_link_libraries(aether_flex_static_position_contextual_test PRIVATE AetherUI::Core)
     add_test(NAME aether.flex-static-position-contextual COMMAND aether_flex_static_position_contextual_test)
+endif()
+
+if(AETHERUI_BUILD_TESTS)
+    foreach(kind pipeline geometry context)
+        add_executable(aether_corner_radius_${kind}_test tests/test_corner_radius_${kind}.cpp)
+        target_link_libraries(aether_corner_radius_${kind}_test PRIVATE AetherUI::Core ${CMAKE_DL_LIBS})
+        add_test(NAME aether.corner-radius-${kind} COMMAND aether_corner_radius_${kind}_test)
+    endforeach()
 endif()

@@ -1097,3 +1097,30 @@ CSS-wide handling is unchanged, including native `revert` meaning initial.
 Position lists repeat modulo their length over image layers. Contextual positions
 are stored independently of image count and inherit as computed measures.
 Invalid background shorthands publish none of their five target declarations.
+
+### Physical corner radius pairs
+
+The four physical `border-*-radius` longhands accept one or two supported
+length/percentage components. A single component supplies both axes; a pair is
+horizontal then vertical. Slash-separated values, a third component, negative
+literals and malformed components reject the whole declaration. Typed length
+`calc()` expressions retain existing semantics, including internal division and
+negative computed values clamped by used-radius geometry. Percentages use box
+width horizontally and height vertically. Relative units compute in the existing
+font/root/viewport context.
+
+Ordinary invalid declarations leave earlier eligible values intact. An invalid
+selected variable result becomes initial zero, not an earlier declaration or the
+fallback of a defined variable. Explicit inheritance copies the selected computed
+corner. The aggregate `border-radius` parser and independent registry-winner
+architecture are unchanged: a selected physical corner overrides that corner of
+the aggregate in either declaration text order. This is native compatibility,
+not browser shorthand expansion or a general cascade correction.
+
+`aether.corner-radius-pipeline`, `aether.corner-radius-context` and
+`aether.corner-radius-geometry` exercise public grammar, deferred values,
+context/lifecycle, aggregate controls and headless display-list geometry. The
+existing `aether.transform-origin-dispatch` also checks corner parser aliases,
+atomic application and registration/inheritance callbacks. These checks remain
+active under NDEBUG. Display-list evidence is not pixel/browser parity; this
+change does not add rounded native hit testing or change public ABI/bindings.
