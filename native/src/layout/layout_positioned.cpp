@@ -44,6 +44,7 @@ void layout_positioned_children(
     aether_layout_box_s* parent_box,
     aether_node_s* parent,
     aether_rectf positioning_block,
+    aether_rectf parent_content_box,
     aether_layout_result_s* result, aether_node_s* only_node)
 {
     auto flex_static_position = [&](const BoxStyleSnapshot& child_style,
@@ -181,7 +182,7 @@ void layout_positioned_children(
         }
 
         const auto static_anchor = parent_box->style.display == AETHER_DISPLAY_FLEX
-            ? flex_static_position(style, containing, child_box->margin_box)
+            ? flex_static_position(style, parent_content_box, child_box->margin_box)
             : static_position(node);
         float x = static_anchor.x;
         if (std::isfinite(left)) {
@@ -221,7 +222,7 @@ void finalize_fixed_children(const aether_layout_engine_s* engine, const StyleLo
             delete child;
             const auto previous_count = parent->children.size();
             layout_positioned_children(engine, styles, parent, node->parent,
-                parent->padding_box, result, node);
+                parent->padding_box, parent->content_box, result, node);
             if (parent->children.size() != previous_count + 1)
                 throw std::runtime_error("Fixed child preparation did not produce a box");
             child = parent->children.back();
