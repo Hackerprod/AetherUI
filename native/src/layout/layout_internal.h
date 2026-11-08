@@ -210,11 +210,6 @@ const std::vector<aether_node_s*>& collect_flex_items(
     aether_node_s* parent,
     const BoxStyleSnapshot& parent_style);
 
-void collect_text_items(aether_node_s* owner,
-                        const BoxStyleSnapshot& style,
-                        const std::string& text,
-                        std::vector<inline_item_s>& output);
-
 void register_box(aether_layout_result_s* result, aether_layout_box_s* box);
 
 int32_t flex_cross_alignment(const BoxStyleSnapshot& container,

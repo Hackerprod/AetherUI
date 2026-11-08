@@ -1338,3 +1338,18 @@ if(AETHERUI_BUILD_TESTS AND NOT MSVC)
         endif()
     endforeach()
 endif()
+
+if(AETHERUI_BUILD_TESTS)
+    add_executable(aether_inline_capitalization_test tests/test_inline_capitalization.cpp)
+    target_link_libraries(aether_inline_capitalization_test PRIVATE AetherUI::Core)
+    add_test(NAME aether.inline-capitalization COMMAND aether_inline_capitalization_test)
+endif()
+
+if(AETHERUI_BUILD_TESTS)
+    add_executable(aether_inline_capitalization_intrinsic_test
+        tests/test_inline_capitalization_intrinsic.cpp
+        $<TARGET_OBJECTS:aether_flex_text_test_core>)
+    target_include_directories(aether_inline_capitalization_intrinsic_test PRIVATE include src)
+    target_compile_definitions(aether_inline_capitalization_intrinsic_test PRIVATE AETHER_EXPORTS)
+    add_test(NAME aether.inline-capitalization-intrinsic COMMAND aether_inline_capitalization_intrinsic_test)
+endif()
