@@ -2,7 +2,7 @@
 #include "layout_internal.h"
 
 #include <algorithm>
-#include <cctype>
+#include "../primitives/presentation_text.h"
 #include <cmath>
 #include <cstring>
 #include <string>
@@ -12,7 +12,7 @@ static std::string normalize_whitespace(const std::string& value) {
     std::string result;
     bool prev_space = true; // start true so leading spaces are skipped
     for (char c : value) {
-        if (std::isspace(static_cast<unsigned char>(c))) {
+        if (aether::presentation_space_byte(static_cast<unsigned char>(c))) {
             if (!prev_space) {
                 result += ' ';
                 prev_space = true;

@@ -1,6 +1,6 @@
 #include "inline_text.h"
 
-#include <cctype>
+#include "../primitives/presentation_text.h"
 
 namespace {
 
@@ -9,7 +9,8 @@ bool is_line_break(const char value) {
 }
 
 bool is_horizontal_space(const char value) {
-    return std::isspace(static_cast<unsigned char>(value)) && !is_line_break(value);
+    // Preserve the historical C presentation set, including VT and FF.
+    return aether::presentation_space_byte(static_cast<unsigned char>(value)) && !is_line_break(value);
 }
 
 void append_token(std::vector<aether_inline_text_token_s>& output,

@@ -6,7 +6,7 @@
 #include <utility>
 
 #include <algorithm>
-#include <cctype>
+#include "../primitives/presentation_text.h"
 #include <cmath>
 #include <cstring>
 #include <sstream>
@@ -1065,7 +1065,7 @@ static void collect_text_items(aether_node_s* owner,
         output.push_back(inline_item_s::text_item(
             owner, style,
             aether_apply_text_transform(text, style.text_transform, context.starts_word)));
-        context.starts_word = std::isspace(static_cast<unsigned char>(output.back().text.back())) != 0;
+        context.starts_word = aether::presentation_space_byte(static_cast<unsigned char>(output.back().text.back())) != 0;
     }
 }
 
@@ -1080,7 +1080,7 @@ static inline_node_role_e append_inline_node(
     if (node->type == AETHER_NODE_TEXT) {
         if (!aether_inline_text_has_visible_content(node->text, parent_style.white_space)) {
             if (!node->text.empty())
-                context.starts_word = std::isspace(static_cast<unsigned char>(node->text.back())) != 0;
+                context.starts_word = aether::presentation_space_byte(static_cast<unsigned char>(node->text.back())) != 0;
             return inline_node_role_e::ignored;
         }
         collect_text_items(parent, parent_style, node->text, output, context);
