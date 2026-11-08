@@ -164,6 +164,18 @@ if(AETHERUI_BUILD_TESTS)
     target_link_libraries(aether_rgb_runtime_test PRIVATE AetherUI::Core)
     add_test(NAME aether.rgb-runtime COMMAND aether_rgb_runtime_test)
 
+    add_executable(aether_background_current_color_test tests/test_background_current_color.cpp)
+    target_link_libraries(aether_background_current_color_test PRIVATE AetherUI::Core)
+    add_test(NAME aether.background-current-color COMMAND aether_background_current_color_test)
+
+    add_executable(aether_named_colors_test tests/test_named_colors.cpp)
+    target_link_libraries(aether_named_colors_test PRIVATE AetherUI::Core)
+    add_test(NAME aether.named-colors COMMAND aether_named_colors_test)
+
+    add_executable(aether_named_colors_runtime_test tests/test_named_colors_runtime.cpp)
+    target_link_libraries(aether_named_colors_runtime_test PRIVATE AetherUI::Core)
+    add_test(NAME aether.named-colors-runtime COMMAND aether_named_colors_runtime_test)
+
     add_executable(aether_rgb_tokens_test tests/test_rgb_tokens.cpp)
     target_link_libraries(aether_rgb_tokens_test PRIVATE AetherUI::Core)
     add_test(NAME aether.rgb-tokens COMMAND aether_rgb_tokens_test)

@@ -44,11 +44,13 @@ public:
 aether_status_t freeze_custom_scope(const CustomPropertyInput&, FrozenScopeRef parent, FrozenScopeRef& output) noexcept;
 class FrozenColorMetadata {
     const std::array<bool, 4> border_;
+    const bool background_;
     const ImmutableArray<uint8_t> text_, box_;
 public:
-    FrozenColorMetadata(std::array<bool,4> border, ImmutableArray<uint8_t> text, ImmutableArray<uint8_t> box) noexcept
-        : border_(border), text_(std::move(text)), box_(std::move(box)) {}
+    FrozenColorMetadata(std::array<bool,4> border, ImmutableArray<uint8_t> text, ImmutableArray<uint8_t> box, bool background) noexcept
+        : border_(border), background_(background), text_(std::move(text)), box_(std::move(box)) {}
     bool border(size_t i) const { return border_.at(i); }
+    bool background() const noexcept { return background_; }
     size_t text_shadow_count() const noexcept { return text_.size(); }
     bool text_shadow_at(size_t i) const { return text_.view().at(i) != 0; }
     size_t box_shadow_count() const noexcept { return box_.size(); }
@@ -63,6 +65,7 @@ public:
     explicit ColorMetadataReadView(const color_resolution_state_s& value) noexcept : builder_(&value) {}
     explicit ColorMetadataReadView(const FrozenColorMetadata& value) noexcept : frozen_(&value) {}
     bool border(size_t i) const;
+    bool background() const noexcept;
     size_t text_shadow_count() const noexcept;
     bool text_shadow_at(size_t i) const;
     size_t box_shadow_count() const noexcept;

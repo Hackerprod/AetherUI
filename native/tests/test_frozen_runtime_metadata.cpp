@@ -94,11 +94,28 @@ void colors() {
     color_resolution_state_s input;
     input.border_uses_current_color[1]=false;input.border_uses_current_color[3]=false;
     input.text_shadow_uses_current_color={true,false,true};input.box_shadow_uses_current_color={false,true};
+    ColorMetadataReadView builder(input);
+    need(!builder.background(),"background builder defaults concrete");
     FrozenColorRef old;need(freeze_color_metadata({},old)==AETHER_OK,"empty colors");
-    sweep(old,[&](auto& out){return freeze_color_metadata(input,out);},"color sweep");
+    need(!old->background()&&!ColorMetadataReadView(*old).background(),"background frozen defaults concrete");
+    input.background_uses_current_color=true;
+    need(builder.background(),"background builder reads symbolic flag");
+    sweep(old,[&](auto& out){
+        const auto status=freeze_color_metadata(input,out);
+        if(status==AETHER_ERROR_OUT_OF_MEMORY)
+            need(out==old&&!out->background(),"OOM preserves concrete background metadata");
+        else if(status==AETHER_OK)
+            need(out->background(),"color sweep freezes symbolic background");
+        return status;
+    },"color sweep");
     FrozenColorRef result;need(freeze_color_metadata(input,result)==AETHER_OK,"color freeze");
     input.text_shadow_uses_current_color.clear();input.border_uses_current_color[0]=false;
+    input.background_uses_current_color=false;
     ColorMetadataReadView view(*result);
+    need(view.background()&&result->background()&&!builder.background(),"background freeze isolated from builder mutation");
+    FrozenColorRef concrete;
+    need(freeze_color_metadata(input,concrete)==AETHER_OK&&!ColorMetadataReadView(*concrete).background(),"background concrete replacement");
+    need(view.background(),"old symbolic metadata survives concrete replacement");
     need(view.border(0)&&!view.border(1)&&view.border(2)&&!view.border(3),"four border flags");
     need(view.text_shadow_count()==3&&view.text_shadow_at(0)&&!view.text_shadow_at(1)&&view.text_shadow_at(2),"exact text flags");
     need(view.box_shadow_count()==2&&!view.box_shadow_at(0)&&view.box_shadow_at(1),"exact box flags");

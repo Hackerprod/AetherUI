@@ -45,7 +45,7 @@ int main() {
     for(const char* source : {"revert-layer","inherit left","in/**/herit","inherit)","initial initial","inherit /*"})
         check(origin->css_wide(source)==property_css_wide_e::none,"CSS-wide classification never accepts mixed tokens");
     std::string out="sentinel"; check(!origin->parse(nullptr,out)&&out=="sentinel","null callback source");
-    // The contextual measure cycle explicitly opts these properties in. Keep
+    // Contextual geometry and background color explicitly opt these properties in. Keep
     // an exact allowlist so an accidental new hook or a lost hook still fails.
     const std::set<std::string> contextual = {
         "width","height","min-width","min-height","max-width","max-height","flex-basis",
@@ -55,7 +55,7 @@ int main() {
         "font-size","line-height","row-gap","column-gap",
         "transform","transform-origin","border-radius","border-top-left-radius","border-top-right-radius",
         "border-bottom-left-radius","border-bottom-right-radius","background-image","background-position","background-size",
-        "text-shadow","box-shadow"
+        "text-shadow","box-shadow","background-color"
     };
     for (const auto& name : contextual) check(registry.try_get(name.c_str())!=nullptr,"contextual allowlist property registered");
     for(const auto& definition : registry.definitions) {

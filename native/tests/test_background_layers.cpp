@@ -96,7 +96,40 @@ static void escaped_urls() {
         "a malformed later layer cannot publish an earlier valid layer");
 }
 
+static void contextual_shorthand() {
+    aether_background_shorthand_s result{};
+    for (const char* color : {"currentColor", "ReD", "transparent"}) {
+        const std::string value = color;
+        require(aether_background_shorthand_try_parse("url(asset://x) center / 10px " + value, result),
+            "single size followed by final color");
+        require(result.size == "10px" && result.has_color && result.color == value,
+            "single size must not consume the color");
+        require(aether_background_shorthand_try_parse("url(asset://x) center / 10px 20px " + value, result),
+            "two sizes followed by final color");
+        require(result.size == "10px 20px" && result.color == value, "two sizes are retained");
+        require(aether_background_shorthand_try_parse("none " + value, result) &&
+            result.image == "none" && result.color == value, "explicit none and final color");
+    }
+    require(aether_background_shorthand_try_parse("none", result) && !result.has_color && result.image == "none",
+        "none resets omitted color");
+    require(aether_background_shorthand_try_parse("CuRrEnTcOlOr", result) && result.color == "CuRrEnTcOlOr",
+        "standalone symbol preserved for longhand");
+    require(aether_background_shorthand_try_parse(
+        "url(asset://x), linear-gradient(red,blue) center / cover no-repeat currentColor", result) &&
+        result.has_color && result.color == "currentColor" && result.size == "auto auto, cover",
+        "final contextual color with two image layers");
+    for (const char* css : {"none none", "none url(asset://x)", "url(asset://x) none",
+            "url(asset://x) url(asset://y)", "currentColor red", "red currentColor",
+            "url(asset://x) currentColor,url(asset://y)", "none center / 10px nonsense",
+            "none center / 10px 20px 30px currentColor", "none center / currentColor",
+            "linear-gradient(red,currentColor)"})
+        require(!aether_background_shorthand_try_parse(css, result), css);
+    aether_background_layer_list layers{};
+    require(!aether_background_image_list_try_parse("currentColor", &layers), "symbol is not an image");
+}
+
 int main() {
+    contextual_shorthand();
     escaped_urls();
     aether_background_layer_list layers{};
     require(aether_background_image_list_try_parse(

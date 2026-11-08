@@ -30,7 +30,7 @@ void pipeline(const std::string& compile_locale, const std::string& resolve_loca
     set(compile_locale);
     aether_doc_t doc{};
     check(aether_doc_create(&doc) == AETHER_OK, "create document");
-    check(aether_doc_parse_html(doc, "<html><body><div id='parent'><div id='literal'></div><div id='deferred'></div><div id='badliteral'></div><div id='badvar'></div></div></body></html>") == AETHER_OK, "parse HTML");
+    check(aether_doc_parse_html(doc, "<html><body><div id='parent'><div id='literal'></div><div id='deferred'></div><div id='badliteral'></div><div id='badvar'></div><div id='namedliteral'></div><div id='nameddeferred'></div></div></body></html>") == AETHER_OK, "parse HTML");
     aether_style_runtime_t runtime{};
     aether_style_runtime_options_t options{};
     aether_style_environment_t environment{800, 600, 1, 16, 0, 0, 0};
@@ -40,6 +40,8 @@ void pipeline(const std::string& compile_locale, const std::string& resolve_loca
         "#parent{color:#2468ac;}"
         "#literal{color:rgba(12.5,25.5,255,.25);background-color:rgba(50%,25%,0%,50%);}"
         "#deferred{--r:12.5;--a:.25;--p:50%;color:rgba(var(--r),25.5,255,var(--a));background-color:rgba(var(--p),25%,0%,50%);}"
+        "#namedliteral{color:INDIGO;background-color:ReBeccAPuRple;}"
+        "#nameddeferred{--tone:INDIGO;--bg:ReBeccAPuRple;color:var(--tone);background-color:var(--bg);}"
         "#badliteral{color:red;color:rgb(1,2%,3);}"
         "#badvar{--bad:rgb(1,2%,3);color:red;color:var(--bad,blue);}",
         2, "rgb-locale.css", &sheet, nullptr) == AETHER_OK, "compile stylesheet");
@@ -53,20 +55,23 @@ void pipeline(const std::string& compile_locale, const std::string& resolve_loca
         aether_node_t node{};
         aether_computed_style_handle_t handle{};
         check(aether_style_runtime_get_update(updates[i], &node, &handle, nullptr) == AETHER_OK, "read update");
-        for (const char* id : {"literal", "deferred", "badliteral", "badvar"}) {
+        for (const char* id : {"literal", "deferred", "badliteral", "badvar", "namedliteral", "nameddeferred"}) {
             if (node != aether_doc_get_element_by_id(doc, id)) continue;
             aether_computed_style_t style{};
             check(aether_computed_style_copy(handle, &style) == AETHER_OK, "copy style");
             if (std::string(id) == "literal" || std::string(id) == "deferred") {
                 check(same_color(style.color, {12.5f/255.f,25.5f/255.f,1,.25f}), "decimal RGB compile/resolve " + std::string(id));
                 check(same_color(style.background_color, {.5f,.25f,0,.5f}), "percentage compile/resolve " + std::string(id));
+            } else if (std::string(id) == "namedliteral" || std::string(id) == "nameddeferred") {
+                check(same_color(style.color, {75/255.f,0,130/255.f,1}), "named color compile/resolve " + std::string(id));
+                check(same_color(style.background_color, {102/255.f,51/255.f,153/255.f,1}), "named background compile/resolve " + std::string(id));
             } else if (std::string(id) == "badliteral") check(same_color(style.color, {1,0,0,1}), "invalid literal lower survives");
             else check(same_color(style.color, {36/255.f,104/255.f,172/255.f,1}), "invalid computed color inherits");
             aether_computed_style_free(&style); ++seen;
         }
         aether_computed_style_handle_destroy(handle);
     }
-    check(seen == 4, "all locale targets inspected");
+    check(seen == 6, "all locale targets inspected");
     check(before == std::setlocale(LC_ALL, nullptr), "pipeline did not change locale");
     aether_style_updates_free(updates, count);
     aether_style_runtime_destroy(runtime); aether_doc_destroy(doc);
@@ -108,7 +113,8 @@ int main(int argc, char** argv) {
         std::vector<std::string> inputs = {
             "rgba(12.5,25.5,255,.25)", "rgba(50%,25%,0%,50%)", "rgb(1,2%,3)",
             "rgb(0x10,2,3)", "rgba(1,2,3,0x1p-1)", "rgb(1.,2,3)", "rgb(1,2,3/*)",
-            "rgba(1,2,3,0,5)", "rgba(1,2,3,50%)", "rgba(10%,20%,30%,.5)"
+            "rgba(1,2,3,0,5)", "rgba(1,2,3,50%)", "rgba(10%,20%,30%,.5)",
+            "INDIGO", "LIME", "ReBeccAPuRple", "LIGHTSLATEGRAY", "transparent", "notacolor"
         };
         for (const char* n : {"1e-40", "1e-45", "1e-999", "-1e-999", "-1e-40", "+.5",
                               "3.4028234e38", "3.4028235e38", "3.4028236e38", "-3.4028236e38", "1e39", "-1e39"}) {

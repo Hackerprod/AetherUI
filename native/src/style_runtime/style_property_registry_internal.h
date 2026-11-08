@@ -58,6 +58,7 @@ using property_apply_fn = std::function<void(aether_computed_style_t* style, con
 /* Public computed styles are concrete. Private symbolic metadata survives
    in runtime node state so inherited currentColor can resolve for descendants. */
 struct color_resolution_state_s {
+    bool background_uses_current_color = false;
     bool border_uses_current_color[4] = { true, true, true, true };
     std::vector<bool> text_shadow_uses_current_color;
     std::vector<bool> box_shadow_uses_current_color;

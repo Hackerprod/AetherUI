@@ -70,7 +70,7 @@ aether_status_t freeze_color_metadata(const color_resolution_state_s& input, Fro
             [&](size_t i) { return uint8_t(input.text_shadow_uses_current_color[i]); });
         auto box = ImmutableArray<uint8_t>::generate(input.box_shadow_uses_current_color.size(),
             [&](size_t i) { return uint8_t(input.box_shadow_uses_current_color[i]); });
-        auto prepared=std::make_shared<const FrozenColorMetadata>(border,std::move(text),std::move(box));
+        auto prepared=std::make_shared<const FrozenColorMetadata>(border,std::move(text),std::move(box),input.background_uses_current_color);
         output=std::move(prepared); return AETHER_OK;
     } catch(const std::bad_alloc&) { return AETHER_ERROR_OUT_OF_MEMORY; }
       catch(...) { return AETHER_ERROR_INVALID_STATE; }
@@ -79,6 +79,7 @@ bool ColorMetadataReadView::border(size_t i) const {
     if(i>=4) throw std::out_of_range("border flag");
     return frozen_ ? frozen_->border(i) : builder_->border_uses_current_color[i];
 }
+bool ColorMetadataReadView::background() const noexcept { return frozen_ ? frozen_->background() : builder_->background_uses_current_color; }
 size_t ColorMetadataReadView::text_shadow_count() const noexcept { return frozen_ ? frozen_->text_shadow_count() : builder_->text_shadow_uses_current_color.size(); }
 bool ColorMetadataReadView::text_shadow_at(size_t i) const { return frozen_ ? frozen_->text_shadow_at(i) : bool(builder_->text_shadow_uses_current_color.at(i)); }
 size_t ColorMetadataReadView::box_shadow_count() const noexcept { return frozen_ ? frozen_->box_shadow_count() : builder_->box_shadow_uses_current_color.size(); }
