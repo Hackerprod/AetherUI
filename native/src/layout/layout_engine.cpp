@@ -127,7 +127,8 @@ static void offset_box_descendants(aether_layout_box_s* box, float dx, float dy,
          result->effective_fixed_container_nodes.count(box->element) != 0);
     for (auto* child : box->children) {
         float child_dx = dx, child_dy = dy;
-        if (prepared && !local_fixed_container && child->kind == LAYOUT_BOX_ELEMENT &&
+        if ((prepared || box->style.display == AETHER_DISPLAY_FLEX) &&
+            !local_fixed_container && child->kind == LAYOUT_BOX_ELEMENT &&
             child->style.position == AETHER_POSITION_FIXED) {
             if (child->style.inset.left.unit != AETHER_CSS_UNIT_AUTO ||
                 child->style.inset.right.unit != AETHER_CSS_UNIT_AUTO) child_dx = 0.f;
@@ -161,9 +162,18 @@ static void apply_relative_visual_offset(aether_layout_box_s* box, float dx, flo
     offset_rect(box->padding_box, dx, dy);
     offset_rect(box->content_box, dx, dy);
     for (auto* child : box->children) {
-        // Fixed descendants and their entire subtree keep their existing viewport placement.
-        if (child->style.position != AETHER_POSITION_FIXED)
-            apply_relative_visual_offset(child, dx, dy);
+        float child_dx = dx, child_dy = dy;
+        if (child->style.position == AETHER_POSITION_FIXED) {
+            // Only direct flex static axes follow the parent's visual movement.
+            // Explicit viewport insets and unrelated non-flex fixed anchors stay put.
+            if (box->style.display != AETHER_DISPLAY_FLEX) continue;
+            if (child->style.inset.left.unit != AETHER_CSS_UNIT_AUTO ||
+                child->style.inset.right.unit != AETHER_CSS_UNIT_AUTO) child_dx = 0.f;
+            if (child->style.inset.top.unit != AETHER_CSS_UNIT_AUTO ||
+                child->style.inset.bottom.unit != AETHER_CSS_UNIT_AUTO) child_dy = 0.f;
+        }
+        if (child_dx != 0.f || child_dy != 0.f)
+            apply_relative_visual_offset(child, child_dx, child_dy);
     }
 }
 
@@ -611,13 +621,14 @@ aether_layout_box_s* layout_element(
     border_height = clamp_border_height(engine, style, border_height,
         containing_height.value_or(NAN), height_decorations, true, element);
 
-    // Absolute and fixed descendants do not take part in normal-flow sizing. Their containing
-    // block is this element's finished padding box (the final height resolved above).
+    const aether_rectf final_border = {border_x, border_y, border_width, border_height};
+    const auto final_padding = aether_rectf_deflate(final_border, border);
+    const auto final_content = aether_rectf_deflate(final_padding, padding);
+
+    // Out-of-flow sizing/insets use the padding block (or fixed containing block),
+    // independently of flex static alignment in the final content rectangle.
     layout_positioned_children(engine, styles, box, element,
-                               {border_x + border.left, border_y + border.top,
-                                std::max(0.f, border_width - aether_thicknessf_horizontal(border)),
-                                std::max(0.f, border_height - aether_thicknessf_vertical(border))},
-                               result);
+                               final_padding, final_content, result);
 
     // Scroll metrics are calculated once for both axes from the same
     // descendant-overflow walk.  This deliberately avoids separate X/Y
@@ -652,9 +663,9 @@ aether_layout_box_s* layout_element(
 
     }
 
-    box->border_box = { border_x, border_y, border_width, border_height };
-    box->padding_box = aether_rectf_deflate(box->border_box, border);
-    box->content_box = aether_rectf_deflate(box->padding_box, padding);
+    box->border_box = final_border;
+    box->padding_box = final_padding;
+    box->content_box = final_content;
     box->margin_box  = { containing_block.x, border_y - box->collapsed_margin_before,
                          border_width + aether_thicknessf_horizontal(margin),
                          border_height + box->collapsed_margin_before + box->collapsed_margin_after };
