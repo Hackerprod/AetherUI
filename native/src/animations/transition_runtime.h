@@ -30,7 +30,20 @@ AETHER_API void aether_transition_runtime_destroy(aether_transition_runtime_t ru
    transition or finished endpoint. A missing property bit or non-positive
    duration immediately removes both active and finished entries for that
    node/property, even when the value is unchanged. Cancellation does not need
-   a tick; the host must apply the current style and paint it. */
+   a tick; the host must apply the current style and paint it.
+
+   Times are converted only when a new transition actually needs installation:
+   positive duration uses float seconds * 1000, truncation and a 1 ms minimum;
+   delay uses double seconds * 1000 and truncation. Unrepresentable conversions
+   return AETHER_ERROR_INVALID_STATE without changing any runtime entry, even
+   another property's cancellation. A host ignoring this error sees the old
+   state, not a replacement or cancellation. This temporal rejection guarantee
+   does not change the existing allocation-failure behavior. NaN duration is
+   ineligible, like non-positive duration; unused invalid times do not reject.
+
+   All int64 host timestamps are accepted. The conceptual now_ms + delay may
+   lie outside int64 without saturation. Active entries can move backwards with
+   the host clock; finished endpoints remain retained and do not restart. */
 AETHER_API aether_status_t aether_transition_runtime_observe(
     aether_transition_runtime_t runtime,
     aether_node_t node,
