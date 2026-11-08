@@ -1124,3 +1124,23 @@ existing `aether.transform-origin-dispatch` also checks corner parser aliases,
 atomic application and registration/inheritance callbacks. These checks remain
 active under NDEBUG. Display-list evidence is not pixel/browser parity; this
 change does not add rounded native hit testing or change public ABI/bindings.
+
+### Opacity numeric policy
+
+Native opacity accepts a whole CSS number or adjacent percentage, with surrounding
+CSS whitespace/comments. A private C locale converts to finite binary64; percentages
+are divided by 100 and clamped to [0,1] before narrowing to float. Finite underflow
+is accepted and zero is canonical positive zero. Binary64 overflow, NaN/Infinity,
+hexadecimal syntax, trailing tokens and calc/math are rejected. Float round-trip
+normalization preserves representable tiny values rather than rounding to six decimals.
+
+An invalid literal preserves an earlier valid declaration; an admitted deferred
+winner invalid after variable substitution leaves the native non-inherited initial 1.
+Opacity still has no explicit-inheritance/CSS-wide callback: literal initial/unset/
+revert and unsupported inherit yield native 1, and substituted CSS-wide words reject
+to that same initial value. This is not browser origin rollback or full inheritance.
+
+The active public `aether.opacity-pipeline` regression covers inline/sheet literal
+and variable routes. Registry, transition and contextual controls remain in their
+existing executables. Validation receipts distinguish headless command evidence from
+pixels/browser parity and report unavailable locale/leak coverage explicitly.

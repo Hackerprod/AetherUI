@@ -419,6 +419,10 @@ if(AETHERUI_BUILD_TESTS)
     target_link_libraries(aether_gradient_boundary_dispatch_test PRIVATE AetherUI::Core)
     add_test(NAME aether.gradient-boundary-dispatch COMMAND aether_gradient_boundary_dispatch_test)
 
+    add_executable(aether_opacity_pipeline_test tests/test_opacity_pipeline.cpp)
+    target_link_libraries(aether_opacity_pipeline_test PRIVATE AetherUI::Core ${CMAKE_DL_LIBS})
+    add_test(NAME aether.opacity-pipeline COMMAND aether_opacity_pipeline_test)
+
     add_executable(aether_transform_origin_dispatch_test tests/test_transform_origin_dispatch.cpp
         tests/test_corner_radius_registry.cpp
         src/style_runtime/builtin_properties.cpp src/style_runtime/transition_properties.cpp
