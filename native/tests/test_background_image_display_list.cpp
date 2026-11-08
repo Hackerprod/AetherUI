@@ -126,6 +126,11 @@ static void run_case(const char* declaration) {
     require(aether_style_runtime_add_stylesheet(runtime,
         "#image { background-image: url('next\\2e png'); }", 0,
         "mutated-image.css", &changed_sheet, nullptr) == AETHER_OK, "mutation stylesheet");
+    aether_style_update_t* changed_updates = nullptr;
+    const int32_t changed_count = aether_style_runtime_resolve_subtree(
+        runtime, aether_doc_get_body(document), &changed_updates);
+    require(changed_count > 0, "mutated styles resolved before snapshot");
+    aether_style_updates_free(changed_updates, changed_count);
     aether_style_map_t changed_styles = nullptr;
     require(aether_style_runtime_create_resolved_style_map(runtime, document, &changed_styles) == AETHER_OK,
         "mutated style map");
