@@ -1,6 +1,7 @@
 #include <aether/aether.h>
 #include "../src/style_runtime/style_runtime_types.h"
 #include "../src/style_runtime/css_variable_tokens.h"
+#include <algorithm>
 #include <cstdio>
 #include <cstring>
 #include <functional>
@@ -14,8 +15,13 @@ struct fixture {
     aether_computed_style_t style{};
     bool copied = false;
     int var_errors = 0;
+    int diagnostics = 0;
+    int value_errors = 0;
+    std::string error_value;
     std::string text;
-    static void diagnostic(const char* code, const char*, const char*, const char*, void* user) {
+    static void diagnostic(const char* code, const char*, const char* value, const char*, void* user) {
+        ++static_cast<fixture*>(user)->diagnostics;
+        if (std::strcmp(code, "AETHER-CSS-VALUE") == 0) { ++static_cast<fixture*>(user)->value_errors; static_cast<fixture*>(user)->error_value = value ? value : ""; }
         if (std::strcmp(code, "AETHER-CSS-VAR") == 0) ++static_cast<fixture*>(user)->var_errors;
     }
     ~fixture() {
@@ -24,9 +30,9 @@ struct fixture {
         if (doc) aether_doc_destroy(doc);
     }
     void load(const std::string& declaration, bool inlined = false, const std::string& extra = "") {
-        const auto html = "<!doctype html><html><body><div id='target'" +
-            (inlined ? " style=\"" + declaration + "\"" : std::string()) + "></div></body></html>";
-        require(aether_doc_create(&doc) == AETHER_OK && aether_doc_parse_html(doc, html.c_str()) == AETHER_OK, "document");
+        const auto html = "<!doctype html><html><body><div id='target'></div></body></html>";
+        require(aether_doc_create(&doc) == AETHER_OK && aether_doc_parse_html(doc, html) == AETHER_OK, "document");
+        if (inlined) require(aether_element_set_attribute(aether_doc_get_element_by_id(doc, "target"), "style", declaration.c_str()) == AETHER_OK, "inline attribute");
         aether_style_runtime_options_t options{};
         aether_style_environment_t env{800, 600, 1, 16, 0, 0, 0};
         require(aether_style_runtime_create(&options, &env, diagnostic, this, &runtime) == AETHER_OK, "runtime");
@@ -76,8 +82,10 @@ struct fixture {
 void family(const std::string& css, const char* expected, bool var_error = false, bool inlined = false) {
     fixture f;
     f.load(css, inlined);
+    require(std::memchr(f.style.font_family, 0, sizeof(f.style.font_family)), "terminated family");
     require(f.style.font_family == std::string(expected), css + " expected=" + expected + " actual=" + f.style.font_family);
     require((f.var_errors > 0) == var_error, css + " diagnostic");
+    if (!var_error) require(f.diagnostics == 0, css + " unexpected diagnostic");
 }
 std::string chain(int n) {
     std::string css = "--a0:var(--missing,);";
@@ -142,6 +150,95 @@ void integration() {
     family(chain(2) + "font-family:var(--a2)small-family", "small-family");
     family(chain(20) + "font-family:var(--a20,outer-family)", "parent-family", true);
 }
+void string_decoder() {
+    struct Case { std::string source, expected; };
+    const std::vector<Case> cases = {
+        {R"("AB")", "AB"}, {"'AB'", "AB"}, {R"("A\42")", "AB"},
+        {R"("A\000042 C")", "ABC"}, {R"("A\42  C")", "AB C"},
+        {R"("A\"B")", "A\"B"}, {R"('A\'B')", "A'B"}, {R"("A\\B")", "A\\B"},
+        {R"("\5c 42")", "\\42"}, {R"("A\2c B")", "A,B"}, {R"("A\a B")", "A\nB"},
+        {R"("\0")", "\xef\xbf\xbd"}, {R"("\d800")", "\xef\xbf\xbd"},
+        {R"("\110000")", "\xef\xbf\xbd"}, {R"("\e9")", "\xc3\xa9"},
+        {R"("\1f642")", "\xf0\x9f\x99\x82"}, {R"("\000041B")", "AB"},
+        {"'  AB  '", "  AB  "}, {"'/*x*/var(--q)'", "/*x*/var(--q)"}, {"''", ""},
+        {"\"A'B\"", "A'B"}, {"'A\"B'", "A\"B"}, {"'\xc3\xa9'", "\xc3\xa9"},
+        {"'\\\xc3\xa9'", "\xc3\xa9"}, {std::string("'A\0B'", 5), "A\xef\xbf\xbd" "B"},
+        {std::string("'A\\\0B'", 6), "A\xef\xbf\xbd" "B"}, {"'A\tB'", "A\tB"}
+    };
+    auto success = [](const std::string& source, const std::string& expected) {
+        std::string out = "sentinel";
+        css_variable_budget measured;
+        css_variable_lexer lexer(source.data(), source.size(), 0, &measured);
+        require(lexer.decode_string(out) && out == expected, "string exact semantic bytes");
+        const size_t cost = 1048576 - measured.remaining;
+        require(cost > 0, "nonzero measured string cost");
+        out = source;
+        css_variable_budget exact{cost};
+        css_variable_lexer alias(out.data(), out.size(), 0, &exact);
+        require(alias.decode_string(out) && out == expected && exact.remaining == 0, "string exact budget and alias");
+        out = source;
+        css_variable_budget short_budget{cost - 1};
+        css_variable_lexer short_alias(out.data(), out.size(), 0, &short_budget);
+        require(!short_alias.decode_string(out) && out == source && short_budget.exhausted, "string short budget preserves alias");
+    };
+    for (const auto& c : cases) success(c.source, c.expected);
+    for (const std::string line : {"\n", "\r", "\r\n", "\f"}) {
+        success("'A\\" + line + "B'", "AB");
+        success("'A\\42" + line + "C'", "ABC");
+    }
+    for (const std::string bad : {"", "AB", "'AB", "'A\\", "'A'B", "'A\nB'", "'A\rB'", "'A\fB'",
+                                 "'\xc0\xaf'", "'\xed\xa0\x80'", "'\xf4\x90\x80\x80'", "'\xe2\x82'", "'\\\xc0\xaf'"}) {
+        std::string out = "sentinel";
+        css_variable_lexer lexer(bad.data(), bad.size());
+        require(!lexer.decode_string(out) && out == "sentinel", "invalid string preserves output");
+        out = bad;
+        css_variable_lexer alias(out.data(), out.size());
+        require(!alias.decode_string(out) && out == bad, "invalid string preserves aliased source");
+    }
+}
+void escaped_families() {
+    struct Case { const char* css; const char* expected; };
+    const Case cases[] = {
+        {R"(font-family:"A\42")", "AB"}, {R"(font-family:'A\000042 C')", "ABC"},
+        {R"(font-family:"A\"B")", "A\"B"}, {R"(font-family:'A\\B')", "A\\B"},
+        {"font-family:'A\\\nB'", "AB"}, {R"(--f:'A\42';font-family:var(--f))", "AB"},
+        {"font-family:'AB'", "AB"}, {R"(font-family:A\42)", "AB"},
+        {R"(font-family:var(--missing,'A\42'))", "AB"},
+        {R"(--f:'A\42';--g:var(--f);font-family:var(--g))", "AB"},
+        {R"(--f:'\5c 42';font-family:var(--f))", "\\42"},
+        {R"(--f:'\76 ar(--missing)';font-family:var(--f))", "var(--missing)"},
+        {R"(font-family:'A\2c B',Second)", "A,B"}, {"font-family:'A,B',Second", "A,B"},
+        {"font-family:'AB',123", "AB"}, {"font-family:'AB',", "AB"},
+        {"font-family:Times/**/New", "Times New"}, {"--f:Times;--g:New;font-family:var(--f)var(--g)", "Times New"},
+        {"font-family:'initial'", "initial"}, {"font-family:'inherit'", "inherit"},
+        {R"(font-family:'\69 nitial')", "initial"}, {"font-family:'serif'", "serif"},
+        {"font-family:'A\"B'", "A\"B"}, {"font-family:\"A'B\"", "A'B"},
+        {R"(font-family:'\e9\1f642')", "\xc3\xa9\xf0\x9f\x99\x82"},
+        {"font-family:'previous';font-family:'A' extra", "previous"},
+        {"font-family:'previous';font-family:''", "previous"},
+        {"font-family:'previous';font-family:'\\\n'", "previous"},
+    };
+    for (bool inlined : {false, true}) {
+        for (const auto& c : cases) family(c.css, c.expected, false, inlined);
+        fixture f;
+        f.load("--f:'A' extra;font-family:previous;font-family:var(--f)", inlined);
+        require(std::string(f.style.font_family) == "parent-family", "deferred invalid family inherits rather than reviving prior declaration");
+        require(f.value_errors == 1 && f.error_value == "'A' extra", "deferred rejection preserves original diagnostic bytes");
+        for (size_t n : {size_t(62), size_t(63), size_t(64)}) {
+            std::string escaped;
+            for (size_t i = 0; i < n; ++i) escaped += "\\41 ";
+            fixture length;
+            length.load("font-family:'" + escaped + "'", inlined);
+            require(sizeof(length.style.font_family) == 64 && length.style.font_family[63] == 0 &&
+                std::string(length.style.font_family) == std::string(std::min(size_t(63), n), 'A'), "existing 63 byte ABI cut");
+        }
+        fixture unicode;
+        unicode.load("font-family:'" + std::string(62, 'A') + "\\e9'", inlined);
+        require(std::string(unicode.style.font_family) == std::string(62, 'A') + "\xc3" &&
+            unicode.style.font_family[63] == 0, "existing ABI cut may split UTF-8");
+    }
+}
+
 void escaped_background_variables() {
     const char* declarations[] = {
         R"(--image:url(hero\2e png);background-image:var(--image))",
@@ -339,6 +436,6 @@ void identifier_decoder() {
 }
 }
 int main() {
-    try { lexical(); string_hex_spans(); identifier_decoder(); private_resolver(); integration(); escaped_background_variables(); std::puts("PASS CSS variable strings G1-G12, decoded identifiers and measured5"); return 0; }
+    try { string_decoder(); escaped_families(); lexical(); string_hex_spans(); identifier_decoder(); private_resolver(); integration(); escaped_background_variables(); std::puts("PASS CSS variable strings G1-G12, decoded identifiers and measured5"); return 0; }
     catch (const std::exception& e) { std::fprintf(stderr, "FAIL CSS variable strings: %s\n", e.what()); return 1; }
 }
