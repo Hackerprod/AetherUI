@@ -1353,3 +1353,12 @@ if(AETHERUI_BUILD_TESTS)
     target_compile_definitions(aether_inline_capitalization_intrinsic_test PRIVATE AETHER_EXPORTS)
     add_test(NAME aether.inline-capitalization-intrinsic COMMAND aether_inline_capitalization_intrinsic_test)
 endif()
+
+if(AETHERUI_BUILD_TESTS)
+    add_executable(aether_flex_static_position_lifetime_test
+        tests/test_flex_static_position_lifetime.cpp
+        $<TARGET_OBJECTS:aether_flex_text_test_core>)
+    target_include_directories(aether_flex_static_position_lifetime_test PRIVATE include src)
+    target_compile_definitions(aether_flex_static_position_lifetime_test PRIVATE AETHER_EXPORTS)
+    add_test(NAME aether.flex-static-position-lifetime COMMAND aether_flex_static_position_lifetime_test)
+endif()
