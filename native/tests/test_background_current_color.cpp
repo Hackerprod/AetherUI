@@ -36,6 +36,7 @@ struct Fixture {
     ~Fixture(){aether_style_revision_destroy(revision);aether_style_runtime_destroy(runtime);aether_doc_destroy(doc);}
     aether_node_t node(const char* id){auto n=aether_doc_get_element_by_id(doc,id);need(n!=nullptr,"node");return n;}
     int64_t add(const std::string& css,int layer=2){int64_t s{};need(aether_style_runtime_add_stylesheet(runtime,css.c_str(),layer,"background-current-color",&s,nullptr)==AETHER_OK,"sheet");return s;}
+    void style(const char* id,const std::string& css){need(aether_element_set_attribute(node(id),"style",css.c_str())==AETHER_OK,"inline style mutation");}
     void resolve(){
         aether_style_transaction_t tx{};aether_style_revision_t next{};
         need(aether_style_runtime_prepare_revision(runtime,aether_doc_get_document_element(doc),nullptr,&tx)==AETHER_OK,"prepare");
@@ -73,9 +74,10 @@ void basics(bool baseline){
         {"literal invalid retains fallback","background-color:blue;background-color:nonsense;",blue},
         {"var symbol","--b:currentColor;background-color:var(--b);",purple},
         {"var concrete","--b:blue;background-color:var(--b);",blue},
-        {"var initial","--b:initial;background-color:currentColor;background-color:var(--b);",clear},
-        {"var unset","--b:unset;background-color:currentColor;background-color:var(--b);",clear},
-        {"var revert","--b:revert;background-color:currentColor;background-color:var(--b);",clear},
+        {"var initial","background-color:currentColor;background-color:var(--missing,initial);",clear},
+        {"var unset","background-color:currentColor;background-color:var(--missing,unset);",clear},
+        {"var revert","background-color:currentColor;background-color:var(--missing,revert);",clear},
+        {"custom inherit absent stays missing","--b:inherit;background-color:currentColor;background-color:var(--b);",clear},
         {"var fallback","background-color:var(--missing,currentColor);",purple},
         {"var missing no resurrection","background-color:blue;background-color:var(--missing);",clear},
         {"var invalid no resurrection","--b:nonsense;background-color:blue;background-color:var(--b,lime);",clear},
@@ -121,30 +123,35 @@ void compound(){
 }
 void mutations_and_inheritance(){
     Fixture f("<html id='root'><body><div id='parent'><div id='x'><div id='grand'></div></div><div id='plain'></div><div id='short'></div><div id='variable'></div></div><div id='fixed'></div></body></html>");
-    f.add("#parent{color:red;background-color:red;}#x{color:blue;background-color:inherit;}#grand{color:lime;background-color:inherit;}#plain{color:blue;}#short{color:blue;background:inherit;}#variable{color:blue;--b:inherit;background-color:var(--b);}#fixed{color:red;background-color:blue;}#root{background-color:inherit;}");
+    f.add("#parent{color:red;background-color:red;}#x{color:blue;background-color:inherit;}#grand{color:lime;background-color:inherit;}#plain{color:blue;}#short{color:blue;background:inherit;}#variable{color:blue;background-color:var(--missing,inherit);}#fixed{color:red;background-color:blue;}#root{background-color:inherit;}");
     f.resolve();f.expect("root",clear,"inherit with no parent");f.expect("x",red,"concrete inherited background");f.expect("grand",red,"concrete chain");f.expect("plain",clear,"no implicit background inheritance");
     // Full traversal must recalculate descendants even when the parent's visible
     // RGBA is unchanged. Public style reuse must not reuse old symbolic metadata.
-    f.add("#parent{background-color:currentColor;}");f.resolve();
+    // Mutate DOM declarations, not stylesheets: adding a sheet clears runtime
+    // states and would test new-node ALL_BITS rather than incremental probes.
+    f.style("parent","background-color:currentColor;");f.resolve();
     check(f.expect("parent",red,"parent unchanged RGBA forward")==AETHER_STYLE_IMPACT_NONE,"parent metadata-only no visual impact");
     auto impact=f.expect("x",blue,"symbolic inherit uses child producer");check((impact&AETHER_STYLE_IMPACT_PAINT)!=0,"child symbolic change paints");
     check((impact&(AETHER_STYLE_IMPACT_LAYOUT|AETHER_STYLE_IMPACT_TEXT_LAYOUT))==0,"isolated child background has no layout impact");
     f.expect("grand",lime,"symbolic inheritance chain");f.expect("short",blue,"shorthand explicit inheritance");f.expect("variable",blue,"var explicit inheritance");f.expect("plain",clear,"symbol not inherited by default");
     f.resolve();check(f.expect("x",blue,"no-op retains symbolic child")==AETHER_STYLE_IMPACT_NONE,"no-op child no visible update");
-    f.add("#parent{background-color:red;}");f.resolve();check(f.expect("parent",red,"parent unchanged RGBA reverse")==AETHER_STYLE_IMPACT_NONE,"reverse parent metadata-only");
+    f.style("parent","background-color:red;");f.resolve();check(f.expect("parent",red,"parent unchanged RGBA reverse")==AETHER_STYLE_IMPACT_NONE,"reverse parent metadata-only");
     check((f.expect("x",red,"reverse symbolic to concrete child")&AETHER_STYLE_IMPACT_PAINT)!=0,"reverse child paints");f.expect("grand",red,"reverse concrete chain");
-    f.add("#x{background-color:currentColor;}");f.resolve();f.expect("x",blue,"restore local reference");
-    f.add("#x{color:lime;}#fixed{color:lime;}");f.resolve();
+    f.style("x","color:blue;background-color:currentColor;");f.resolve();f.expect("x",blue,"restore local reference");
+    f.style("x","color:lime;background-color:currentColor;");f.style("fixed","color:lime;");f.resolve();
     check((f.expect("x",lime,"same runtime producer changes reference")&AETHER_STYLE_IMPACT_PAINT)!=0,"producer paints contextual background");
     // Do not forbid legitimate color-producer impacts here.
     f.expect("fixed",blue,"explicit background unaffected by producer");
     for(const auto& reset:std::vector<std::string>{"blue","transparent","initial","unset","revert","var(--missing)"}){
-        f.add("#x{color:red;background-color:currentColor;}");f.resolve();f.expect("x",red,"seed reset reference");
-        f.add("#x{background-color:"+reset+";}");f.resolve();const auto expected=reset=="blue"?blue:clear;f.expect("x",expected,"reset "+reset);
-        f.add("#x{color:lime;}");f.resolve();f.expect("x",expected,"reset has no sticky flag "+reset);
+        f.style("x","color:red;background-color:currentColor;");f.resolve();f.expect("x",red,"seed reset reference");
+        f.style("x","color:red;background-color:"+reset+";");f.resolve();const auto expected=reset=="blue"?blue:clear;f.expect("x",expected,"reset "+reset);
+        f.style("x","color:lime;background-color:"+reset+";");f.resolve();f.expect("x",expected,"reset has no sticky flag "+reset);
     }
-    const auto sheet=f.add("#x{background-color:currentColor;}");f.resolve();f.expect("x",lime,"removable symbol");
-    need(aether_style_runtime_remove_stylesheet(f.runtime,sheet)==AETHER_TRUE,"remove sheet");f.resolve();f.expect("x",clear,"removal restores invalid deferred initial");
+    f.style("x","color:lime;background-color:currentColor;");f.resolve();f.expect("x",lime,"removable symbol");
+    // The public DOM ABI has no remove_attribute; empty style removes all inline
+    // declarations while keeping the same node and cached previous revision.
+    f.style("x","");f.resolve();f.expect("x",red,"removal restores concrete inherited background");
+    f.style("x","color:lime;");f.resolve();f.expect("x",red,"removed reference does not revive on producer change");
 }
 void retained_and_stale(){
     aether_computed_style_handle_t old{},latest{},from_update{};aether_style_revision_t retained{};
@@ -158,7 +165,7 @@ void retained_and_stale(){
         Flat copy(old);check(equal(copy.value.background_color,red),"old public copy red");
         need(aether_computed_style_copy(old,&retained_copy)==AETHER_OK,"copy retained beyond owners");
         aether_style_transaction_t tx{};need(aether_style_runtime_prepare_revision(f.runtime,aether_doc_get_document_element(f.doc),nullptr,&tx)==AETHER_OK,"prepare stale");
-        f.add("#x{color:lime;}");aether_style_revision_t rejected{};
+        f.style("x","color:lime;");aether_style_revision_t rejected{};
         check(aether_style_runtime_commit_revision(f.runtime,tx,&rejected)==AETHER_ERROR_INVALID_STATE&&rejected==nullptr,"stale transaction rejected atomically");
         aether_style_transaction_destroy(tx);aether_style_revision_destroy(rejected);
         aether_style_revision_t current{};need(aether_style_runtime_retain_revision(f.runtime,&current)==AETHER_OK,"retain after stale");
