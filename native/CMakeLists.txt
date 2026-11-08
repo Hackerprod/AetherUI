@@ -1464,6 +1464,14 @@ if(AETHERUI_BUILD_TESTS)
     add_executable(aether_inline_capitalization_test tests/test_inline_capitalization.cpp)
     target_link_libraries(aether_inline_capitalization_test PRIVATE AetherUI::Core)
     add_test(NAME aether.inline-capitalization COMMAND aether_inline_capitalization_test)
+    foreach(text_locale C en_US tr_TR)
+        add_test(NAME aether.text-locale-${text_locale}
+            COMMAND aether_inline_capitalization_test --text-locale ${text_locale})
+        set_tests_properties(aether.text-locale-${text_locale} PROPERTIES RUN_SERIAL TRUE)
+    endforeach()
+    set_tests_properties(aether.text-locale-en_US aether.text-locale-tr_TR
+        PROPERTIES SKIP_RETURN_CODE 77)
+
 endif()
 
 if(AETHERUI_BUILD_TESTS)

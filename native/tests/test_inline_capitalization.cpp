@@ -4,6 +4,7 @@
 #include <aether/aether_contextual_style.h>
 #include <algorithm>
 #include <cmath>
+#include <clocale>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -295,6 +296,11 @@ static void continuity() {
     simple("collected space", "<span>hel </span><span>lo</span>", "Hel Lo");
     simple("direct omitted space", "<span>hel</span> <span>lo</span>",
            "HelLo"); // Existing omission, not a rendered-space assertion.
+    simple("collected VT", "<span>hel\v</span><span>lo</span>", "Hel Lo");
+    simple("collected FF", "<span>hel\f</span><span>lo</span>", "Hel Lo");
+    simple("omitted VT", "<span>hel</span>\v<span>lo</span>", "HelLo");
+    simple("omitted FF", "<span>hel</span>\f<span>lo</span>", "HelLo");
+    simple("high byte continuation", "<span>hel\xC3\x89</span><span>lo</span>", "Hel\xC3\x89lo");
     simple("none subtree", "hel<span style='display:none'>ignored </span><span>lo</span>", "Hello");
     simple("relative continuity", "hel<span style='position:relative'>lo</span>", "Hello");
     for (const char *ws : {"normal", "nowrap", "pre", "pre-wrap", "pre-line"}) {
@@ -644,9 +650,12 @@ static void public_sizing_and_isolation() {
 }
 
 static void generated() {
+    for (const char *ending : {"", "\xC3\x89"})
     for (const char *pseudo : {"before", "after"})
         for (const char *kind : {"inline", "none", "inline-block", "block", "absolute", "fixed"}) {
-            scenario = std::string("generated ") + pseudo + " " + kind;
+            // Two representative high-byte pseudo cases, not another kind matrix.
+            if (*ending && std::strcmp(kind, "inline") != 0) continue;
+            scenario = std::string("generated ") + pseudo + " " + kind + ending;
             const bool before = std::string(pseudo) == "before",
                        ignored = std::string(kind) == "none",
                        isolated = std::string(kind) == "absolute" || std::string(kind) == "fixed",
@@ -654,7 +663,7 @@ static void generated() {
                            std::string(kind) == "inline-block" || std::string(kind) == "block";
             const std::string rule =
                 std::string("#generated::") + pseudo +
-                "{content:'mid';font-family:Pseudo;font-weight:700;color:#ab1234;" +
+                "{content:'mid" + ending + "';font-family:Pseudo;font-weight:700;color:#ab1234;" +
                 (isolated ? "position:" : "display:") + kind + "}";
             Fixture f("hel<span id='generated'>lo</span><span id='suffix'>end</span>", rule);
             const auto source = Fixture::dom(f.node());
@@ -674,7 +683,7 @@ static void generated() {
             } else {
                 REQUIRE(owner);
                 CHECK(owner != f.node("generated"));
-                CHECK(generated_text == ((isolated || boundary) ? "Mid" : "mid"));
+                CHECK(generated_text == (std::string((isolated || boundary) ? "Mid" : "mid") + ending));
                 CHECK(owned(f, "generated") == ((boundary && before) ? "Lo" : "lo"));
                 CHECK(owned(f, "suffix") == ((boundary && !before) ? "End" : "end"));
                 auto handle = aether_style_map_get(f.map, owner);
@@ -832,12 +841,314 @@ static void noncapitalize_preservation() {
                                                                         : "Lo"));
     }
 }
+
+// Dedicated environmental ABI path. No ordinary Fixture, Meter, CHECK or REQUIRE
+// is reachable here: every failure unwinds before the explicit locale restoration.
+namespace text_locale_case {
+struct Failure {};
+struct State {
+    unsigned checks = 0, completed = 0;
+    void need(bool yes, const char* label) {
+        ++checks;
+        if (!yes) { std::fprintf(stderr, "text-locale failure: %s\n", label); throw Failure{}; }
+    }
+    void api(aether_status_t status) { need(status == AETHER_OK, "public API status"); }
+};
+struct Capture {
+    char observations[64][128]{};
+    unsigned count = 0;
+    bool error = false;
+    static aether_text_metrics_t measure(const char* text, const aether_computed_style_t*,
+                                         float, void* opaque) noexcept {
+        auto& c = *static_cast<Capture*>(opaque);
+        if (!text || c.count == 64) { c.error = true; return {1, 20, 15}; }
+        unsigned n = 0;
+        while (n < 128 && text[n]) ++n;
+        if (n == 128) { c.error = true; return {1, 20, 15}; }
+        float width = 0;
+        for (unsigned i = 0; i < n; ++i) {
+            const unsigned char b = static_cast<unsigned char>(text[i]);
+            c.observations[c.count][i] = text[i];
+            width += b >= 'A' && b <= 'Z' ? 13 : b >= 'a' && b <= 'z' ? 7 : b == ' ' ? 3 : 5;
+        }
+        c.observations[c.count++][n] = 0;
+        return {width, 20, 15};
+    }
+    static aether_text_metrics_t contextual(const char* text, const aether_computed_style_t* style,
+                                            float, float width, void* opaque) noexcept {
+        return measure(text, style, width, opaque);
+    }
+    bool saw(const char* text) const noexcept {
+        for (unsigned i = 0; i < count; ++i)
+            if (std::strcmp(observations[i], text) == 0) return true;
+        return false;
+    }
+};
+struct Owners {
+    Capture capture;
+    aether_doc_t doc{};
+    aether_style_runtime_t runtime{};
+    aether_style_transaction_t transaction{};
+    aether_style_revision_t revision{};
+    aether_style_map_t map{}, legacy_map{};
+    aether_layout_engine_t engine{};
+    aether_layout_result_t result{}, legacy_result{};
+    aether_display_list_builder_t builder{};
+    ~Owners() noexcept {
+        if (builder) aether_display_list_builder_destroy(builder);
+        if (legacy_result) aether_layout_result_destroy(legacy_result);
+        if (result) aether_layout_result_destroy(result);
+        if (engine) aether_layout_destroy(engine);
+        if (legacy_map) aether_style_map_destroy(legacy_map);
+        if (map) aether_style_map_destroy(map);
+        if (revision) aether_style_revision_destroy(revision);
+        if (transaction) aether_style_transaction_destroy(transaction);
+        if (runtime) aether_style_runtime_destroy(runtime);
+        if (doc) aether_doc_destroy(doc);
+    }
+};
+struct Updates {
+    aether_style_update_t* value{};
+    int count = 0;
+    ~Updates() noexcept { if (value) aether_style_updates_free(value, count < 0 ? 0 : count); }
+};
+struct String {
+    char* value{};
+    ~String() noexcept { if (value) aether_string_free(value); }
+};
+struct List {
+    aether_display_list_t value{};
+    ~List() noexcept { if (value) aether_display_list_destroy(value); }
+};
+struct Command {
+    aether_paint_command_t value{};
+    ~Command() noexcept { aether_paint_command_free(&value); }
+};
+struct Restore {
+    const std::string& ctype;
+    const std::string& numeric;
+    bool& failed;
+    bool done = false;
+    bool restore() noexcept {
+        const char* p = std::setlocale(LC_CTYPE, ctype.c_str());
+        bool ok = p && std::strcmp(p, ctype.c_str()) == 0;
+        p = std::setlocale(LC_CTYPE, nullptr);
+        ok = p && std::strcmp(p, ctype.c_str()) == 0 && ok;
+        p = std::setlocale(LC_NUMERIC, nullptr);
+        ok = p && std::strcmp(p, numeric.c_str()) == 0 && ok;
+        done = true;
+        if (!ok) failed = true;
+        return ok;
+    }
+    ~Restore() noexcept { if (!done) restore(); }
+};
+static std::string select(State& s, const char* requested) {
+    const char* p = std::setlocale(LC_CTYPE, requested);
+    s.need(p != nullptr, "select required locale");
+    return std::string(p); // Copy before any subsequent setlocale call.
+}
+static void unchanged(State& s, const std::string& selected) {
+    const char* p = std::setlocale(LC_CTYPE, nullptr);
+    s.need(p && selected == p, "LC_CTYPE changed during product operation");
+}
+static void legacy_map(State& s, Owners& o, aether_style_map_t* destination) {
+    Updates updates;
+    updates.count = aether_style_runtime_resolve_subtree(o.runtime,
+        aether_doc_get_document_element(o.doc), &updates.value);
+    s.need(updates.count >= 0, "legacy resolve");
+    s.api(aether_style_runtime_create_resolved_style_map(o.runtime, o.doc, destination));
+}
+static void initialize(State& s, Owners& o, const char* html, const char* css, bool contextual) {
+    s.api(aether_doc_create(&o.doc));
+    s.api(aether_doc_parse_html(o.doc, html));
+    aether_style_environment_t env{400, 240, 1, 16, 0, 0, 0};
+    s.api(aether_style_runtime_create(nullptr, &env, nullptr, nullptr, &o.runtime));
+    int64_t sheet{};
+    s.api(aether_style_runtime_add_stylesheet(o.runtime, css, 0, "text-locale", &sheet, nullptr));
+    if (contextual) {
+        s.api(aether_style_runtime_prepare_revision(o.runtime,
+            aether_doc_get_document_element(o.doc), &env, &o.transaction));
+        s.api(aether_style_runtime_commit_revision(o.runtime, o.transaction, &o.revision));
+        s.api(aether_style_revision_create_map(o.revision, &o.map));
+    } else legacy_map(s, o, &o.map);
+    s.api(aether_layout_create(Capture::measure, &o.capture, &o.engine));
+    s.api(aether_display_list_builder_create(Capture::measure, &o.capture, &o.builder));
+    if (contextual) {
+        aether_layout_set_contextual_text_measurer(o.engine, Capture::contextual, &o.capture);
+        aether_display_list_builder_set_contextual_text_measurer(o.builder, Capture::contextual, &o.capture);
+    }
+    s.api(aether_layout_layout(o.engine, o.doc, o.map, 400, 240, nullptr, nullptr, &o.result));
+    s.need(!o.capture.error, "capture after layout");
+    s.need(o.result != nullptr, "layout exists");
+}
+static void attribute(State& s, aether_node_t node, const char* name, const char* expected) {
+    String actual;
+    actual.value = aether_element_get_attribute(node, name);
+    s.need(actual.value && std::strcmp(actual.value, expected) == 0, "authored attribute unchanged");
+}
+static void verify_paint(State& s, Owners& o, aether_layout_result_t result,
+                          const char* expected, int text_count, int commands = -1) {
+    List list;
+    s.api(aether_display_list_build(o.builder, result, nullptr, &list.value));
+    s.need(!o.capture.error, "capture after paint");
+    s.need(list.value != nullptr, "display list exists");
+    const int count = aether_display_list_get_count(list.value);
+    s.need(count >= 0 && (commands < 0 || count == commands), "paint command count");
+    std::string joined;
+    int texts = 0;
+    for (int i = 0; i < count; ++i) {
+        Command cmd;
+        s.api(aether_display_list_get_command(list.value, i, &cmd.value));
+        if (cmd.value.tag == AETHER_PAINT_DRAW_TEXT) {
+            s.need(cmd.value.data.draw_text.text != nullptr, "paint text exists");
+            joined += cmd.value.data.draw_text.text;
+            ++texts;
+        }
+    }
+    s.need(texts == text_count && joined == expected, "literal paint bytes and text count");
+}
+static void verify_span_boxes(State& s, aether_layout_box_t box, std::string& joined,
+                              unsigned& fragments, float& width) {
+    s.need(box != nullptr, "span layout box");
+    String text;
+    text.value = aether_layout_box_get_text(box);
+    if (text.value && *text.value) {
+        joined += text.value;
+        width += aether_layout_box_get_border_box(box).width;
+        ++fragments;
+    }
+    for (int i = 0; i < aether_layout_box_get_child_count(box); ++i)
+        verify_span_boxes(s, aether_layout_box_get_child(box, i), joined, fragments, width);
+}
+constexpr const char* input_html = "<html><body><input id='probe' value='A\xC3\x89'></body></html>";
+constexpr const char* input_css = "html,body{display:block;margin:0;padding:0}input{display:inline-block;"
+    "width:120px;height:30px;border:0;padding:0;text-transform:lowercase;font-size:16px;line-height:20px}";
+static void fixed_input(State& s, const std::string& selected) {
+    const auto c = select(s, "C");
+    Owners o;
+    initialize(s, o, input_html, input_css, false);
+    auto node = aether_doc_get_element_by_id(o.doc, "probe");
+    s.need(node != nullptr, "fixed input node");
+    verify_paint(s, o, o.result, "a\xC3\x89", 1, 5);
+    attribute(s, node, "value", "A\xC3\x89"); unchanged(s, c);
+    select(s, selected.c_str());
+    verify_paint(s, o, o.result, "a\xC3\x89", 1, 5);
+    attribute(s, node, "value", "A\xC3\x89"); unchanged(s, selected);
+    select(s, "C");
+    verify_paint(s, o, o.result, "a\xC3\x89", 1, 5);
+    attribute(s, node, "value", "A\xC3\x89"); unchanged(s, c);
+    select(s, selected.c_str());
+    s.api(aether_element_set_attribute(node, "value", "i I"));
+    verify_paint(s, o, o.result, "i i", 1, 5);
+    attribute(s, node, "value", "i I"); unchanged(s, selected);
+    ++s.completed;
+}
+static void measured_span(State& s, const std::string& selected) {
+    // A..Z=13, a..z=7, SP=3, other bytes=5: a+C3+89 + SP + i+i = 34.
+    for (const char* phase : {"C", selected.c_str()}) {
+        const auto active = select(s, phase);
+        Owners o;
+        initialize(s, o, "<html><body><div id='probe'><span>A\xC3\x89\viI</span></div></body></html>",
+            "*{margin:0;padding:0;border:0}html,body,div{display:block}"
+            "#probe{width:200px;font-size:16px;line-height:20px;text-transform:lowercase}", false);
+        s.need(o.capture.count > 0 && o.capture.saw("a\xC3\x89") && o.capture.saw("ii") &&
+            !o.capture.saw("a\xE3\x89"), "literal measured bytes, not corrupted variant");
+        for (unsigned i = 0; i < o.capture.count; ++i)
+            s.need(std::strcmp(o.capture.observations[i], "a\xC3\x89") == 0 ||
+                   std::strcmp(o.capture.observations[i], "ii") == 0 ||
+                   std::strcmp(o.capture.observations[i], " ") == 0,
+                   "every measured span observation matches a literal token");
+        auto node = aether_doc_get_element_by_id(o.doc, "probe");
+        s.need(node != nullptr, "span host");
+        auto box = aether_layout_result_find_primary_box(o.result, node);
+        std::string joined;
+        unsigned fragments = 0;
+        float width = 0;
+        verify_span_boxes(s, box, joined, fragments, width);
+        s.need(joined == "a\xC3\x89 ii" && fragments == 3 && std::fabs(width - 34.f) < .01f,
+            "span literal layout bytes and metric width");
+        s.need(std::fabs(aether_layout_box_get_height(box) - 20.f) < .01f, "span line height");
+        verify_paint(s, o, o.result, "a\xC3\x89 ii", 3);
+        String source;
+        auto span = aether_node_get_child(node, 0);
+        s.need(span != nullptr, "span DOM element");
+        auto text_node = aether_node_get_child(span, 0);
+        s.need(text_node != nullptr && aether_node_get_type(text_node) == AETHER_NODE_TEXT, "span DOM text node");
+        source.value = aether_node_get_text_content(text_node);
+        s.need(source.value && std::strcmp(source.value, "A\xC3\x89\viI") == 0, "span DOM original");
+        unchanged(s, active);
+    }
+    ++s.completed;
+}
+static void retained_context(State& s, const std::string& selected) {
+    const auto c = select(s, "C");
+    Owners o;
+    initialize(s, o, input_html, input_css, true);
+    legacy_map(s, o, &o.legacy_map);
+    s.api(aether_layout_layout(o.engine, o.doc, o.legacy_map, 400, 240, nullptr, nullptr, &o.legacy_result));
+    s.need(!o.capture.error, "capture after legacy counterpart layout");
+    auto node = aether_doc_get_element_by_id(o.doc, "probe");
+    s.need(node != nullptr, "snapshot input");
+    verify_paint(s, o, o.result, "a\xC3\x89", 1, 5);
+    verify_paint(s, o, o.legacy_result, "a\xC3\x89", 1, 5); unchanged(s, c);
+    select(s, selected.c_str());
+    verify_paint(s, o, o.result, "a\xC3\x89", 1, 5);
+    s.api(aether_element_set_attribute(node, "value", ""));
+    s.api(aether_element_set_attribute(node, "placeholder", "B\xC3\x89 I"));
+    verify_paint(s, o, o.result, "a\xC3\x89", 1, 5);
+    verify_paint(s, o, o.legacy_result, "b\xC3\x89 i", 1, 5);
+    attribute(s, node, "value", "");
+    attribute(s, node, "placeholder", "B\xC3\x89 I"); unchanged(s, selected);
+    ++s.completed;
+}
+} // namespace text_locale_case
+
+static int run_text_locale_case(const char* requested) {
+    using namespace text_locale_case;
+    State state;
+    bool failed = false, absent = false, restored = false;
+    unsigned effective = 0;
+    std::string original, numeric, selected;
+    try {
+        const char* p = std::setlocale(LC_CTYPE, nullptr);
+        state.need(p != nullptr, "capture original LC_CTYPE"); original = p;
+        p = std::setlocale(LC_NUMERIC, nullptr);
+        state.need(p != nullptr, "capture original LC_NUMERIC"); numeric = p;
+        Restore guard{original, numeric, failed};
+        try {
+            p = std::setlocale(LC_CTYPE, requested);
+            if (!p) {
+                state.need(std::strcmp(requested, "C") != 0, "mandatory C locale unavailable");
+                absent = true;
+            } else {
+                selected = p;
+                fixed_input(state, selected);
+                measured_span(state, selected);
+                retained_context(state, selected);
+                state.need(state.completed == 3, "all three dedicated fixtures completed");
+                effective = 1;
+            }
+        } catch (...) { failed = true; }
+        // All product owners have unwound before this explicit, checked restore.
+        restored = guard.restore();
+    } catch (...) { failed = true; }
+    std::printf("text-locale requested=%s resolved=%s effective=%u fixtures=%u checks=%u restored=%d status=%s\n",
+        requested, selected.empty() ? "unavailable" : selected.c_str(), effective, state.completed,
+        state.checks, int(restored), failed || !restored ? "FAIL" : absent ? "SKIP" : "PASS");
+    return failed || !restored ? 1 : absent ? 77 : 0;
+}
 int main(int argc, char **argv) {
+    if (argc == 3 && std::strcmp(argv[1], "--text-locale") == 0 &&
+        (std::strcmp(argv[2], "C") == 0 || std::strcmp(argv[2], "en_US") == 0 ||
+         std::strcmp(argv[2], "tr_TR") == 0))
+        return run_text_locale_case(argv[2]);
     if (argc == 2 && std::string(argv[1]) == "--noncapitalize-preservation") {
         noncapitalize_preservation();
         std::printf("fixtures=%u checks=%u failures=%u\n", fixtures, checks, failures);
         return failures ? 1 : 0;
     }
+
+    if (argc != 1) { std::fprintf(stderr, "invalid arguments\n"); return 2; }
 
     test("unsplit", "hello", "Hello", 41);
     test("split", "hel<span id='suffix'>lo</span>", "Hello", 41);

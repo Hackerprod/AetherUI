@@ -75,5 +75,46 @@ int main() {
     require(!aether_inline_text_has_visible_content(" \t\n", AETHER_WHITE_SPACE_NORMAL) &&
                 aether_inline_text_has_visible_content(" \t\n", AETHER_WHITE_SPACE_PRE),
             "anonymous flex-item creation must discard only collapsible whitespace runs");
+    unsigned byte_cases = 0;
+    const std::string spaces = " \t\v\f\r\n";
+    for (unsigned byte = 0; byte < 256; ++byte) {
+        const std::string value(1, static_cast<char>(byte));
+        const bool space = spaces.find(value[0]) != std::string::npos;
+        require_tokens(aether_tokenize_inline_text(value, AETHER_WHITE_SPACE_NORMAL),
+            {{space ? token_kind::collapsible_space : token_kind::word, space ? " " : value}},
+            "all-byte normal tokenizer oracle");
+        require(aether_inline_text_has_visible_content(value, AETHER_WHITE_SPACE_NORMAL) == !space,
+            "all-byte normal visibility oracle");
+        ++byte_cases;
+    }
+    require(byte_cases == 256, "complete tokenizer byte domain");
+    for (int mode : {AETHER_WHITE_SPACE_NORMAL, AETHER_WHITE_SPACE_NOWRAP,
+                    AETHER_WHITE_SPACE_PRE, AETHER_WHITE_SPACE_PRE_WRAP, AETHER_WHITE_SPACE_PRE_LINE}) {
+        const bool preserve = mode == AETHER_WHITE_SPACE_PRE || mode == AETHER_WHITE_SPACE_PRE_WRAP;
+        const bool breaks = preserve || mode == AETHER_WHITE_SPACE_PRE_LINE;
+        require_tokens(aether_tokenize_inline_text("a \t\v\fb\r\nc", mode),
+            {{token_kind::word, "a"},
+             {preserve ? token_kind::preserved_space : token_kind::collapsible_space, preserve ? " \t\v\f" : " "},
+             {token_kind::word, "b"},
+             {breaks ? token_kind::forced_break : token_kind::collapsible_space, breaks ? "" : " "},
+             {token_kind::word, "c"}}, "five-mode historical whitespace tokens");
+        for (const std::string newline : {"\n", "\r", "\r\n"})
+            require_tokens(aether_tokenize_inline_text(newline, mode),
+                {{breaks ? token_kind::forced_break : token_kind::collapsible_space, breaks ? "" : " "}},
+                "single LF/CR/CRLF token");
+        if (breaks)
+            require_tokens(aether_tokenize_inline_text("\r\r", mode),
+                {{token_kind::forced_break, ""}, {token_kind::forced_break, ""}}, "two CR breaks");
+        else
+            require_tokens(aether_tokenize_inline_text("\r\r", mode),
+                {{token_kind::collapsible_space, " "}}, "two CR collapse");
+        const std::string high = "\x80\xA0\xC3\xD0\xDD\xE9\xFF\xC2\xA0";
+        require_tokens(aether_tokenize_inline_text(high, mode), {{token_kind::word, high}}, "opaque high-byte word");
+        require(aether_inline_text_has_visible_content(high, mode), "high bytes visible in every mode");
+        require(!aether_inline_text_has_visible_content("", mode), "empty remains invisible");
+        require(aether_inline_text_has_visible_content(" \t\v\f", mode) == preserve, "horizontal-only visibility");
+        require(aether_white_space_allows_soft_wrap(mode) ==
+            (mode != AETHER_WHITE_SPACE_PRE && mode != AETHER_WHITE_SPACE_NOWRAP), "five-mode wrapping contract");
+    }
     return 0;
 }

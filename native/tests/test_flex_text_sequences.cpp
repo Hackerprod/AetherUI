@@ -243,21 +243,28 @@ static void inherited_style(MapMode mode,bool contextual) {
 static void whitespace(MapMode mode,bool contextual) {
     for(const char* ws:{"normal","nowrap","pre","pre-wrap","pre-line"}) {
         std::string css=std::string("#flex{white-space:")+ws+"}";
-        for(const char* space:{" ","  ","\t","\n"}) for(bool adjacent:{false,true}) {
+        for(const char* space:{" ","  ","\t","\n","\v","\f","\r","\r\n"}) for(bool adjacent:{false,true}) {
             scenario=std::string("mixed whitespace ")+ws;
             Fixture a(std::string("A")+space+"B",css,mode,contextual);
             Fixture b(std::string("A<!--x-->")+space+"<!--y-->B",css,mode,contextual,false,adjacent);
             equivalent(a,b);
             if(std::string(space)==" " && std::string(ws)=="normal") REQUIRE(near(aether_layout_box_get_width(b.first()),30));
         }
-        for(const char* content:{"","<!--only-->","   ","\t\n"," <!--x--> \n<i style='display:none'>HIDDEN</i>"}) {
+        for(const char* content:{"","<!--only-->","   ","\t\n","\v","\f","\r","\r\n"," \t\v\f\r\n"," <!--x--> \n<i style='display:none'>HIDDEN</i>"}) {
             scenario=std::string("suppressed whitespace ")+ws;
             Fixture f(content,css,mode,contextual);
             REQUIRE(f.items().empty()); REQUIRE(f.paint().empty());
             REQUIRE(near(aether_layout_box_get_height(f.box()),0));
             REQUIRE(near(f.intrinsic(false),0)); REQUIRE(near(f.intrinsic(true),0));
         }
-        Fixture nbsp("&#160;",css,mode,contextual); REQUIRE(nbsp.items().size()==1); REQUIRE(!nbsp.paint().empty());
+        Fixture nbsp("&#160;",css,mode,contextual);
+        REQUIRE(nbsp.items().size()==1); REQUIRE(text(nbsp.paint()) == "\xC2\xA0");
+        REQUIRE(near(aether_layout_box_get_width(nbsp.first()),20));
+        REQUIRE(near(nbsp.intrinsic(false),20)); REQUIRE(near(nbsp.intrinsic(true),20));
+        Fixture utf8("A\xC3\x89",css,mode,contextual);
+        REQUIRE(utf8.items().size()==1); REQUIRE(text(utf8.paint()) == "A\xC3\x89");
+        REQUIRE(near(aether_layout_box_get_width(utf8.first()),30));
+        REQUIRE(near(utf8.intrinsic(false),30)); REQUIRE(near(utf8.intrinsic(true),20));
         Fixture decorated(" <!--x--> ",css+"#flex{height:50px;padding:3px;border:2px solid black}",mode,contextual);
         REQUIRE(decorated.items().empty()); REQUIRE(decorated.paint().empty()); REQUIRE(near(aether_layout_box_get_height(decorated.box()),60));
     }

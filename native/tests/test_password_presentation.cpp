@@ -308,6 +308,13 @@ static void sequence(Case& c,bool ctx) {
     c.api(aether_element_set_attribute(f.node,"value",""));f.m.secret="";f.m.expected="Type here";f.refresh();auto l4=f.layout();paint(f,l4,"Type here");f.dom("");
     auto box=aether_layout_result_find_primary_box(l0,f.node);c.need(box!=nullptr);
     scan(f,retained.value,B2,true,0,aether_layout_box_get_content_box(box),12);c.check(18,true);
+    c.api(aether_element_set_attribute(f.node,"placeholder","A\xC3\x89"));
+    c.api(aether_element_set_attribute(f.node,"style","text-transform:lowercase"));
+    f.m.hidden=false;f.m.expected="a\xC3\x89";f.refresh();auto l5=f.layout();
+    paint(f,l5,"a\xC3\x89");f.dom("");
+    c.api(aether_element_set_attribute(f.node,"style","text-transform:none"));
+    f.m.expected="A\xC3\x89";f.refresh();auto l6=f.layout();paint(f,l6,"A\xC3\x89");
+    if(ctx)paint(f,l5,"a\xC3\x89");
     c.check(19,f.m.calls>0);c.check(2,f.m.calls>0);
 }
 static void callback_case(Case& c,bool ctx,bool caret,int action) {
@@ -357,7 +364,7 @@ int main(int argc,char** argv) {
     if(argc>2 || !identity(argc==2?argv[1]:std::getenv("AETHER_EXPECT_LIBRARY"))) {
         std::puts("INFRA loaded-library identity mismatch/unsupported; no cases executed");return 2;
     }
-    std::printf("password-public expected_cases=138 ndebug=%d identity=%s\n",
+    std::printf("password-public expected_cases=140 ndebug=%d identity=%s\n",
 #ifdef NDEBUG
         1,
 #else
@@ -385,6 +392,14 @@ int main(int argc,char** argv) {
         basic(c,ctx,"DemoSecret42",B12,"password",nullptr,css);
         basic(c,ctx,"DemoSecret42",ordinary[i],"text",nullptr,css,false);
     });
+    for(bool ctx:{false,true})run("locale","bytes",ctx,[&](Case& c){
+        const std::string css="input{text-transform:lowercase;}";
+        basic(c,ctx,"A\xC3\x89","a\xC3\x89","text",nullptr,css,false);
+        basic(c,ctx,"","a\xC3\x89","text","A\xC3\x89",css,false);
+        basic(c,ctx,"A\xC3\x89",B2,"password",nullptr,css);
+        basic(c,ctx,"","a\xC3\x89","password","A\xC3\x89",css,false);
+        basic(c,ctx,"A\xC3\x89","A\xC3\x89","text",nullptr,"input{text-transform:none;}",false);
+    });
     for(bool ctx:{false,true})for(unsigned i=0;i<4;++i){char n[4];std::snprintf(n,sizeof(n),"%u",i);run("geometry",n,ctx,[&](Case& c){
         const std::string css=std::string("input{font-size:")+(i==1?"24":"12")+"px;width:"+(i==2?"20":"140")+
             "px;text-shadow:1px 2px 0 red,3px 4px 0 blue;}";
@@ -403,8 +418,8 @@ int main(int argc,char** argv) {
         run("mutate",name,ctx,[&](Case& c){callback_case(c,ctx,caret,action);});
     }
     for(bool ctx:{false,true})for(bool caret:{false,true})run("release",caret?"layout":"map",ctx,[&](Case& c){callback_case(c,ctx,caret,caret?4:3);});
-    std::printf("SUMMARY cases=%u expected=138 failed=%u blocked=%u checks=%llu failures=%llu omitted_details=%llu\n",
+    std::printf("SUMMARY cases=%u expected=140 failed=%u blocked=%u checks=%llu failures=%llu omitted_details=%llu\n",
         cases,failed_cases,blocked_cases,checks,failures,failures-details);
-    if(cases!=138 || blocked_cases)return 2;
+    if(cases!=140 || blocked_cases)return 2;
     return failed_cases?1:0;
 }

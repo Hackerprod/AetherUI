@@ -56,6 +56,20 @@ int main() {
         Fixture joined_fixture("hel lo");
         for (auto mode : {Mode::min_content, Mode::max_content})
             CHECK(near(intrinsic(boundary, false, mode, 200, {"Hel", "Lo"}), intrinsic(joined_fixture, false, mode, 200, {"Hel", "Lo"})));
+        scenario = "intrinsic VT boundary";
+        Fixture vertical("<span>hel\v</span><span>lo</span>");
+        CHECK(near(intrinsic(vertical, false, Mode::max_content, 200, {"Hel", "Lo"}), 50));
+        CHECK(near(intrinsic(vertical, false, Mode::min_content, 200, {"Hel", "Lo"}), 27));
+        CHECK(near(intrinsic(vertical, true, Mode::max_content, 60, {"Hel", "Lo"}), 20));
+        CHECK(joined(vertical.runs()) == "Hel Lo");
+        CHECK(vertical.paint() == "Hel Lo");
+        scenario = "intrinsic opaque high-byte continuation";
+        Fixture high("<span>hel\xC3\x89</span><span>lo</span>");
+        CHECK(near(intrinsic(high, false, Mode::max_content, 200, {"Hel\xC3\x89", "lo"}), 51));
+        CHECK(near(intrinsic(high, false, Mode::min_content, 200, {"Hel\xC3\x89", "lo"}), 37));
+        CHECK(near(intrinsic(high, true, Mode::max_content, 60, {"Hel\xC3\x89", "lo"}), 20));
+        CHECK(joined(high.runs()) == "Hel\xC3\x89" "lo");
+        CHECK(high.paint() == "Hel\xC3\x89" "lo");
         scenario = "private empty text nodes";
         Fixture empty("<span id='start'>x</span>hel<span id='middle'>x</span><span>lo</span><span id='end'>x</span>");
         // Public ABI cannot create empty text nodes. This private supplement makes
