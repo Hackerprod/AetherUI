@@ -31,6 +31,15 @@ enum layout_box_kind_t : int32_t {
     LAYOUT_BOX_TEXT,
 };
 
+// Construction-only facts for table-related effective-fixed overflow repair.
+// Text boxes keep these invalid. No style pointers or callback samples are retained.
+enum layout_scroll_completion_flag : uint8_t {
+    LAYOUT_SCROLL_VALID = 1,
+    LAYOUT_SCROLL_X = 2,
+    LAYOUT_SCROLL_Y = 4,
+    LAYOUT_SCROLL_TABLE_CELL = 8,
+};
+
 struct aether_layout_result_s;
 struct aether_style_map_s;
 struct aether_layout_box_s;
@@ -98,6 +107,10 @@ struct aether_layout_box_s {
     aether_rectf border_box{};
     aether_rectf padding_box{};
     aether_rectf content_box{};
+    float scroll_flow_height = 0.f;
+    float scroll_base_height = NAN;
+    uint8_t scroll_completion_flags = 0;
+
 
     aether_layout_box_s() = default;
     aether_layout_box_s(const aether_layout_box_s&) = delete;
@@ -253,6 +266,8 @@ struct aether_layout_result_s {
     // Measurement passes can build detached trees. Only final-layout boxes are
     // published through the query and paint indexes.
     bool records_boxes = true;
+    // Only published cells finished by the collected table algorithm enable repair.
+    bool has_finalized_table_cells = false;
     size_t live_box_count = 0;
     bool abandoned = false;
     LayoutBoxRegistry allocated_boxes;

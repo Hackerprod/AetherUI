@@ -920,6 +920,49 @@ Generated pseudo-elements are still recreated by the runtime, so their identity
 changes require layout even when triggered by a visibility declaration.
 Canvas background propagation remains separate from a box's own visibility.
 
+## Unspanned table cell completion
+
+Phase-1 automatic table columns allocate a common row margin height to their
+collected cells. Each cell keeps its native resolved margins and decorations:
+its final border height is the row height minus its top/bottom margins, with a
+padding/border floor. Negative margins can therefore make a border box taller
+than its row. Relative offsets move the visual cell, not the following row.
+Ordinary in-flow children keep their natural size and top placement.
+
+Authored height and min/max-height determine the natural row contribution.
+The subsequent table allocation is authoritative and is not capped again by
+max-height. A cell naturally capped at20 beside a cell80 finishes at80; a
+min-height100 cell makes the row100. Generic blocks and flex items retain their
+existing height clamps.
+
+Native percentage semantics are intentionally bounded: auto height or min-height
+alone does not establish an in-flow percentage reference. An authored definite
+height keeps its original reference even after row allocation: height40 with an
+in-flow height50% child still gives child20 in a row80. Percentage/calc cell
+heights resolve only against an originally definite incoming containing height.
+Absolute descendants instead use the final padding box; prepared effective-fixed
+owners are reconstructed against final geometry. This is a native compatibility
+rule, not a claim of browser table conformance.
+
+Cells retain their in-flow subtree and finish direct positioned children, scroll
+ranges and relative placement once after row sizing. Their scroll viewport uses
+the final content height, retaining original raw flow extent. Table-related
+prepared fixed reconstruction repairs affected ancestor ranges without sampling
+offset callbacks or changing stored offsets. Explicit hit/input consumers still
+sample and clamp requested offsets; display lists emit host-managed scroll scopes.
+Contextual visual overflow sampling remains a separate later pass.
+
+Positioned measurement callbacks can now occur after sibling cells' in-flow
+callbacks. There is no callback ordering guarantee; measurement callbacks must
+remain deterministic under the existing contract. Row completion does not repeat
+in-flow nested-table layout. It uses row-local continuation records and, when
+positioned boxes were indexed, linear pointer scratch to restore cell flow then
+completion paint-index ordering. No persistent layout cache is introduced.
+
+Spans, row-group sizing, table/row authored-height distribution, border collapse
+or spacing, anonymous table construction, baseline/vertical alignment,
+fragmentation and vertical writing remain outside this phase.
+
 ## Atomic shorthand declarations
 
 The declaration compiler stages every longhand expansion before publishing the group.
