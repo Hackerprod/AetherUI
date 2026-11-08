@@ -45,7 +45,7 @@ int main() {
     for(const char* source : {"revert-layer","inherit left","in/**/herit","inherit)","initial initial","inherit /*"})
         check(origin->css_wide(source)==property_css_wide_e::none,"CSS-wide classification never accepts mixed tokens");
     std::string out="sentinel"; check(!origin->parse(nullptr,out)&&out=="sentinel","null callback source");
-    // Contextual geometry and background color explicitly opt these properties in. Keep
+    // Contextual properties and computed backdrop lists explicitly opt in. Keep
     // an exact allowlist so an accidental new hook or a lost hook still fails.
     const std::set<std::string> contextual = {
         "width","height","min-width","min-height","max-width","max-height","flex-basis",
@@ -57,12 +57,15 @@ int main() {
         "border-bottom-left-radius","border-bottom-right-radius","background-image","background-position","background-size",
         "text-shadow","box-shadow","background-color"
     };
+    const std::set<std::string> computed_lists = {"backdrop-filter", "-webkit-backdrop-filter"};
     for (const auto& name : contextual) check(registry.try_get(name.c_str())!=nullptr,"contextual allowlist property registered");
+    for (const auto& name : computed_lists) check(registry.try_get(name.c_str())!=nullptr,"computed list allowlist property registered");
     for(const auto& definition : registry.definitions) {
         const bool expected = contextual.count(definition.name) != 0;
-        check(static_cast<bool>(definition.css_wide)==expected,"exact CSS-wide hook coverage");
+        const bool computed_list = computed_lists.count(definition.name) != 0;
+        check(static_cast<bool>(definition.css_wide)==(expected||computed_list),"exact CSS-wide hook coverage");
         check(static_cast<bool>(definition.inherit_context)==expected,"exact contextual inheritance coverage");
-        check(static_cast<bool>(definition.inherit_explicit)==(definition.name=="transform-origin"),"legacy inheritance hook remains origin-only");
+        check(static_cast<bool>(definition.inherit_explicit)==(definition.name=="transform-origin"||computed_list),"exact explicit inheritance hook coverage");
     }
     std::printf("transform-origin dispatch: %d checks, %d failures\n",checks,failures);
     const int corner_failures = run_corner_radius_registry_tests();
