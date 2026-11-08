@@ -1372,6 +1372,19 @@ if(AETHERUI_BUILD_TESTS)
     add_test(NAME aether.flex-intrinsic-width COMMAND aether_flex_intrinsic_width_test)
 endif()
 
+if(AETHERUI_BUILD_TESTS)
+    add_executable(aether_block_static_position_test tests/test_block_static_position.cpp)
+    target_link_libraries(aether_block_static_position_test PRIVATE AetherUI::Core)
+    add_test(NAME aether.block-static-position COMMAND aether_block_static_position_test)
+
+    add_executable(aether_block_static_position_lifetime_test
+        tests/test_block_static_position_lifetime.cpp
+        $<TARGET_OBJECTS:aether_flex_text_test_core>)
+    target_include_directories(aether_block_static_position_lifetime_test PRIVATE include src)
+    target_compile_definitions(aether_block_static_position_lifetime_test PRIVATE AETHER_EXPORTS)
+    add_test(NAME aether.block-static-position-lifetime COMMAND aether_block_static_position_lifetime_test)
+endif()
+
 if(AETHERUI_BUILD_TESTS AND NOT MSVC)
     # Keep every test translation unit on the same floating-point contract as
     # the core without changing the core's benchmark-comparable compiler flags.
@@ -1430,5 +1443,13 @@ if(AETHERUI_BUILD_TESTS)
         add_executable(aether_corner_radius_${kind}_test tests/test_corner_radius_${kind}.cpp)
         target_link_libraries(aether_corner_radius_${kind}_test PRIVATE AetherUI::Core ${CMAKE_DL_LIBS})
         add_test(NAME aether.corner-radius-${kind} COMMAND aether_corner_radius_${kind}_test)
+    endforeach()
+endif()
+
+if(AETHERUI_BUILD_TESTS AND NOT MSVC)
+    # These selected regressions are registered below the common FP policy loop.
+    foreach(target aether_inline_capitalization_test aether_flex_static_position_test
+            aether_flex_static_position_contextual_test aether_flex_static_position_lifetime_test)
+        target_compile_options(${target} PRIVATE -ffp-contract=off)
     endforeach()
 endif()
