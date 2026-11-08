@@ -1,5 +1,6 @@
 #ifndef AETHER_TRANSITION_OPACITY_PAINT_CASES_H
 #define AETHER_TRANSITION_OPACITY_PAINT_CASES_H
+#include <string>
 
 // Included after require(), near(), and measure_text() in test_transition_runtime.cpp.
 // No contextual samples: the unchanged legacy layout must consume the current
@@ -200,7 +201,63 @@ static void opacity_paint_case(int phase, bool zero_duration, bool fractional) {
     aether_doc_destroy(doc);
 }
 
+// Parser-originated endpoints and command alpha, separate from the legacy
+// cancellation scenarios above. No pixels or browser parity are inferred.
+static void opacity_numeric_endpoints() {
+    aether_doc_t doc{};
+    require(aether_doc_create(&doc)==AETHER_OK,"numeric opacity document");
+    require(aether_doc_parse_html(doc,"<body><div id='owner'><div id='child'></div></div></body>")==AETHER_OK,"numeric opacity html");
+    const auto node=aether_doc_get_element_by_id(doc,"owner");
+    struct Case { const char* text; float expected; };
+    for (const auto& c : {Case{"50%",.5f},Case{"150%",1},Case{"-20%",0},Case{"1e-7",1e-7f}}) {
+        aether_style_runtime_t styles_runtime{}; aether_style_map_t styles{};
+        const std::string css=std::string("#owner{opacity:")+c.text+";transition:opacity 1s linear}";
+        opacity_paint_resolve(doc,css.c_str(),&styles_runtime,&styles);
+        auto after=opacity_paint_style(styles,node);
+        require(after.opacity==c.expected && std::isfinite(after.opacity),"numeric opacity resolved endpoint exact");
+        auto before=opacity_paint_style(styles,node); before.opacity=(c.expected==0 || c.expected==1e-7f)?1:0;
+        aether_transition_runtime_t transitions{};
+        require(aether_transition_runtime_create(&transitions)==AETHER_OK,"numeric transition create");
+        require(aether_transition_runtime_observe(transitions,node,&before,&after,0)==AETHER_OK,"numeric transition observe");
+        require(aether_transition_runtime_tick(transitions,500)==AETHER_TRUE,"numeric midpoint active");
+        float value=-1;
+        require(aether_transition_runtime_opacity_override(transitions,node,&value)==AETHER_TRUE,"numeric midpoint override");
+        require(value==(before.opacity+c.expected)*.5f,"numeric midpoint exact, including tiny positive");
+        require(aether_transition_runtime_tick(transitions,1000)==AETHER_FALSE,"numeric complete");
+        // Existing legacy transitions use float interpolation without endpoint
+        // snapping, and ignore deltas <=1e-4. For 1 -> 1e-7 the final native
+        // value is exactly 2^-23, not the parsed endpoint. Preserve that scope
+        // limit while proving a tiny positive endpoint is not normalized away.
+        const float legacy_end=c.expected==1e-7f ? 0x1p-23f : c.expected;
+        require(aether_transition_runtime_opacity_override(transitions,node,&value)==AETHER_TRUE && value==legacy_end,"numeric endpoint existing float interpolation");
+        if (c.expected==1e-7f) require(value>0,"tiny endpoint stays positive");
+        after.transition_duration=0;
+        require(aether_transition_runtime_observe(transitions,node,&before,&after,1100)==AETHER_OK,"numeric zero duration");
+        require(aether_transition_runtime_has_active(transitions)==AETHER_FALSE,"zero duration inactive");
+        aether_transition_runtime_destroy(transitions);
+        aether_computed_style_free(&before); aether_computed_style_free(&after);
+        aether_style_map_destroy(styles); aether_style_runtime_destroy(styles_runtime);
+    }
+    aether_style_runtime_t runtime{}; aether_style_map_t styles{};
+    opacity_paint_resolve(doc,
+        "body{display:block;margin:0}#owner{display:block;width:100px;height:60px;background:red;opacity:50%}"
+        "#child{display:block;width:30px;height:20px;background:blue;opacity:50%}",&runtime,&styles);
+    aether_layout_engine_t engine{}; aether_layout_result_t layout{};
+    aether_display_list_builder_t builder{}; aether_display_list_t list{};
+    require(aether_layout_create(measure_text,nullptr,&engine)==AETHER_OK,"numeric layout create");
+    require(aether_layout_layout(engine,doc,styles,240,160,nullptr,nullptr,&layout)==AETHER_OK,"numeric layout");
+    require(aether_display_list_builder_create(measure_text,nullptr,&builder)==AETHER_OK,"numeric builder");
+    require(aether_display_list_build_with_styles(builder,layout,styles,nullptr,&list)==AETHER_OK,"numeric paint");
+    const auto owner=opacity_paint_find(list,false), child=opacity_paint_find(list,true);
+    require(owner.found && owner.color.a==.5f,"authored 50 percent opaque solid alpha");
+    require(child.found && child.color.a==.25f,"parent and child percentages accumulate");
+    aether_display_list_destroy(list); aether_display_list_builder_destroy(builder);
+    aether_layout_result_destroy(layout); aether_layout_destroy(engine);
+    aether_style_map_destroy(styles); aether_style_runtime_destroy(runtime); aether_doc_destroy(doc);
+}
+
 static void test_display_list_opacity_cancellation() {
+    opacity_numeric_endpoints();
     for (int phase = 0; phase != 3; ++phase) {
         for (int reason = 0; reason != 2; ++reason) {
             for (int fractional = 0; fractional != 2; ++fractional) {

@@ -8,6 +8,8 @@ using namespace aether::style;
 #include "css_component_values.h"
 #include "../primitives/ascii_text.h"
 #include <limits>
+#include <charconv>
+#include "../css/css_numeric_conversion_internal.h"
 #include <algorithm>
 #include "../css/border_utils.h"
 #include "../css/css_length_internal.h"
@@ -144,16 +146,53 @@ static bool bi_try_nullable_integer(const char* src, std::string& out) {
     return bi_try_integer(src, out);
 }
 
-static bool bi_try_opacity(const char* src, std::string& out) {
-    if (!src || !*src) return false;
-    char* end = nullptr;
-    float v = std::strtof(src, &end);
-    if (end == src) return false;
-    while (*end == ' ') ++end;
-    if (*end != '\0') return false;
-    if (v < 0.0f || v > 1.0f) return false;
-    out = std::to_string(v);
+// Opacity alone accepts one CSS number/percentage, converted in a private C
+// locale. Finite binary64 underflow is allowed; nonfinite overflow is not.
+static bool bi_opacity_value(const std::string& source, float& result) {
+    css_component_cursor cursor(source);
+    css_component_value component, extra;
+    if (!cursor.next(component)) return false;
+    const auto category = component.token.serialization;
+    const bool percentage = category == css_variable_serialization::percentage;
+    if (category != css_variable_serialization::number && !percentage) return false;
+    if (cursor.next(extra) || !cursor.valid()) return false;
+    const std::string number = source.substr(component.begin,
+        component.token.numeric_end - component.begin);
+    aether::css::c_numeric_locale locale;
+    const auto converted = locale.parse_double(number);
+    if (!converted.valid) return false;
+    const double scaled = percentage ? converted.value / 100.0 : converted.value;
+    const double bounded = std::clamp(scaled, 0.0, 1.0);
+    float value = static_cast<float>(bounded);
+    if (value == 0) value = 0.0f; // Canonical positive zero, including underflow.
+    if (!std::isfinite(value) || value < 0 || value > 1) return false;
+    result = value;
     return true;
+}
+
+static bool bi_try_opacity(const char* src, std::string& out) {
+    if (!src) return false;
+    // Runtime substitution can alias out, including an interior source pointer.
+    const std::string source(src);
+    float value;
+    if (!bi_opacity_value(source, value)) return false;
+    char buffer[64];
+    const auto formatted = std::to_chars(buffer, buffer + sizeof(buffer), value,
+        std::chars_format::general, std::numeric_limits<float>::max_digits10);
+    if (formatted.ec != std::errc{}) return false;
+    std::string staged(buffer, formatted.ptr);
+    out = std::move(staged);
+    return true;
+}
+
+static property_apply_result_s bi_apply_opacity(aether_computed_style_t* style,
+                                               const std::string& source) {
+    float value;
+    if (!bi_opacity_value(source, value))
+        return property_apply_result_s::failure("AETHER-CSS-OPACITY",
+            "Opacity requires one finite CSS number or percentage.");
+    style->opacity = value;
+    return {};
 }
 
 static bool bi_try_font_weight(const char* src, std::string& out) {
@@ -1151,9 +1190,8 @@ void builtin_properties_register(style_property_registry_s* reg) {
         });
 
     // opacity
-    reg->register_property("opacity", false, STYLE_IMPACT_COMPOSITE | STYLE_IMPACT_HITTEST,
-        "1", bi_try_opacity,
-        [](aether_computed_style_t* st, const std::string& v) { st->opacity = std::strtof(v.c_str(), nullptr); });
+    reg->register_property_checked("opacity", false, STYLE_IMPACT_COMPOSITE | STYLE_IMPACT_HITTEST,
+        "1", bi_try_opacity, bi_apply_opacity);
 
     // -webkit-background-clip
     {

@@ -9,6 +9,7 @@ int checks=0, failures=0;
 void check(bool ok,const char* label) { ++checks; if(!ok) { ++failures; std::fprintf(stderr,"FAIL: %s\n",label); } }
 }
 int run_corner_radius_registry_tests();
+int run_opacity_registry_tests();
 
 int main() {
     style_property_registry_s registry;
@@ -64,5 +65,7 @@ int main() {
         check(static_cast<bool>(definition.inherit_explicit)==(definition.name=="transform-origin"),"legacy inheritance hook remains origin-only");
     }
     std::printf("transform-origin dispatch: %d checks, %d failures\n",checks,failures);
-    return (run_corner_radius_registry_tests() || failures) ? 1 : 0;
+    const int corner_failures = run_corner_radius_registry_tests();
+    const int opacity_failures = run_opacity_registry_tests();
+    return (corner_failures || opacity_failures || failures) ? 1 : 0;
 }

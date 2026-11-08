@@ -314,7 +314,37 @@ static void sampler_timing_contract() {
     }
 }
 
+static void opacity_percentage_endpoint() {
+    aether_doc_t doc{}; aether_style_runtime_t styles{};
+    REQUIRE(aether_doc_create(&doc)==AETHER_OK);
+    REQUIRE(aether_doc_parse_html(doc,"<html><body><div id='opacity' style='opacity:50%'></div></body></html>")==AETHER_OK);
+    aether_style_runtime_options_t options{}; aether_style_environment_t env{200,100,1,16,0,0,0};
+    REQUIRE(aether_style_runtime_create(&options,&env,nullptr,nullptr,&styles)==AETHER_OK);
+    aether_style_update_t* updates{};
+    const int count=aether_style_runtime_resolve_subtree(styles,aether_doc_get_document_element(doc),&updates);
+    REQUIRE(count>0); aether_style_updates_free(updates,count);
+    aether_style_map_t map{};
+    REQUIRE(aether_style_runtime_create_resolved_style_map(styles,doc,&map)==AETHER_OK);
+    auto handle=aether_style_map_get(map,aether_doc_get_element_by_id(doc,"opacity")); REQUIRE(handle);
+    aether_computed_style_t parsed{}; REQUIRE(aether_computed_style_copy(handle,&parsed)==AETHER_OK);
+    REQUIRE(parsed.opacity==.5f);
+    Style from(0),to(0); from.h.style.opacity=0; to.h.style.opacity=parsed.opacity;
+    to.h.style.transition_properties=AETHER_TRANSITION_PROPERTY_OPACITY;
+    aether_contextual_transition_runtime_t runtime{}; REQUIRE(aether_contextual_transition_create(&runtime)==AETHER_OK);
+    aether_contextual_transition_event event{1,0,reinterpret_cast<aether_node_t>(1),&from.h,&to.h};
+    for (int time : {500,1000}) {
+        aether_contextual_transition_batch_t batch{};
+        REQUIRE(aether_contextual_transition_prepare(runtime,&event,1,time,&batch)==AETHER_OK);
+        REQUIRE(sample(batch,to).opacity==(time==500?.25f:.5f));
+        aether_contextual_transition_batch_destroy(batch);
+    }
+    aether_contextual_transition_destroy(runtime); aether_computed_style_free(&parsed);
+    aether_computed_style_handle_destroy(handle); aether_style_map_destroy(map);
+    aether_style_runtime_destroy(styles); aether_doc_destroy(doc);
+}
+
 int main(){
+    opacity_percentage_endpoint();
     sampler_input_contract();
     sampler_timing_contract();
     sampler_binding_contract();
