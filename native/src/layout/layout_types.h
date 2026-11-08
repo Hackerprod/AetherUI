@@ -74,6 +74,15 @@ private:
     aether_layout_box_s* head_ = nullptr;
 };
 
+// Flow-construction state only: offsets refer to the explicit flow content origin.
+// Node identities are pinned by the result assets; never retain a box/style pointer.
+struct block_static_anchor_s {
+    aether_node_s* node = nullptr;
+    aether_node_s* cursor_owner = nullptr;
+    float inline_offset = 0.f;
+    float block_offset = 0.f;
+};
+
 struct aether_layout_box_s {
     aether_layout_result_s* owner = nullptr;
     layout_box_kind_t kind = LAYOUT_BOX_ELEMENT;
@@ -81,6 +90,9 @@ struct aether_layout_box_s {
     BoxStyleSnapshot style{};
     aether_node_s* presentation_owner = nullptr;
     std::vector<aether_layout_box_s*> children;
+    // Cleared by positioned completion, including deferred table-cell completion.
+    // Published snapshots and clones never contain logical construction records.
+    std::vector<block_static_anchor_s> block_static_anchors;
     std::string text;
     bool  is_atomic_control = false;
     std::string control_display_text;
@@ -217,6 +229,14 @@ struct inline_item_s {
     std::string           text;
     bool is_atomic = false;
     bool is_line_break = false;
+    // Only the final flow collector creates these zero-consumption markers.
+    size_t block_anchor_index = static_cast<size_t>(-1);
+
+    static inline_item_s block_anchor(size_t index) {
+        inline_item_s i;
+        i.block_anchor_index = index;
+        return i;
+    }
 
     static inline_item_s text_item(aether_node_s* el, const BoxStyleSnapshot& s,
                                    const std::string& t) {
