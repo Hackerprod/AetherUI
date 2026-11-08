@@ -278,12 +278,22 @@ static float layout_atomic_control(
     aether_thicknessf padding,
     aether_thicknessf border);
 
+// One stack-local context per collected native inline sequence. It never escapes
+// collection, so measurement callbacks cannot alter another sequence's state.
+struct inline_capitalization_context_s {
+    bool starts_word = true;
+};
+
+static void collect_text_items(aether_node_s* owner,
+    const BoxStyleSnapshot& style, const std::string& text,
+    std::vector<inline_item_s>& output, inline_capitalization_context_s& context);
+
 static void collect_inline_element(
     const aether_layout_engine_s* engine,
     const StyleLookup* styles,
     aether_node_s* element,
     const BoxStyleSnapshot& style,
-    std::vector<inline_item_s>& output);
+    std::vector<inline_item_s>& output, inline_capitalization_context_s& context);
 
 enum class inline_node_role_e { ignored, inline_content, block_content };
 
@@ -293,7 +303,7 @@ static inline_node_role_e append_inline_node(
     aether_node_s* parent,
     const BoxStyleSnapshot& parent_style,
     aether_node_s* node,
-    std::vector<inline_item_s>& output);
+    std::vector<inline_item_s>& output, inline_capitalization_context_s& context);
 
 static float measure_intrinsic_flex_width(
     const aether_layout_engine_s* engine,
@@ -706,7 +716,8 @@ static bool collect_anonymous_flex_text_items(
     for (const auto* child : element->children) {
         if (child->type == AETHER_NODE_TEXT) text.append(child->text);
     }
-    collect_text_items(element, style, text, output);
+    inline_capitalization_context_s context;
+    collect_text_items(element, style, text, output, context);
     return true;
 }
 
@@ -724,6 +735,7 @@ float layout_flow_children(
 {
     float cursor_y = content.y;
     std::vector<inline_item_s> inline_items;
+    inline_capitalization_context_s context;
     if (collect_anonymous_flex_text_items(parent, parent_style, inline_items)) {
         return layout_inline_items(engine, styles, parent_box, inline_items,
             content.x, content.y, content.width, content.height, containing_height, parent_style, result);
@@ -752,7 +764,7 @@ float layout_flow_children(
     };
 
     for (auto* node : parent->children) {
-        const auto role = append_inline_node(engine, styles, parent, parent_style, node, inline_items);
+        const auto role = append_inline_node(engine, styles, parent, parent_style, node, inline_items, context);
         if (role == inline_node_role_e::block_content) {
             const auto child_style = get_style(styles, node);
                 flush_inline();
@@ -923,30 +935,41 @@ static void collect_inline_element(
     const StyleLookup* styles,
     aether_node_s* element,
     const BoxStyleSnapshot& style,
-    std::vector<inline_item_s>& output)
+    std::vector<inline_item_s>& output, inline_capitalization_context_s& context)
 {
     for (auto* node : element->children) {
         if (node->type == AETHER_NODE_TEXT) {
-            collect_text_items(element, style, node->text, output);
+            collect_text_items(element, style, node->text, output, context);
         } else if (node->type == AETHER_NODE_ELEMENT) {
             auto child_style = get_style(styles, node);
+            if (child_style.display == AETHER_DISPLAY_NONE) continue;
+            const bool isolated = is_out_of_flow(child_style);
+            const bool block = child_style.display == AETHER_DISPLAY_BLOCK ||
+                child_style.display == AETHER_DISPLAY_FLEX || child_style.display == AETHER_DISPLAY_TABLE;
+            inline_capitalization_context_s independent;
+            auto& child_context = (isolated || block) ? independent : context;
             if (child_style.display == AETHER_DISPLAY_LINE_BREAK) {
                 output.push_back(inline_item_s::line_break(node, child_style));
+                child_context.starts_word = true;
             } else if (is_opaque_single_line_control(node) || child_style.display == AETHER_DISPLAY_INLINE_BLOCK) {
                 output.push_back(inline_item_s::atomic(node, child_style));
-            } else if (child_style.display != AETHER_DISPLAY_NONE) {
-                collect_inline_element(engine, styles, node, child_style, output);
+                child_context.starts_word = true;
+            } else {
+                // Nested positioned/block content keeps its existing flattened
+                // output and geometry; only capitalization is isolated here.
+                collect_inline_element(engine, styles, node, child_style, output, child_context);
             }
+            if (block && !isolated) context.starts_word = true;
         }
     }
 }
 
 /* ── CollectTextItems ──────────────────────────────────────────────── */
 
-void collect_text_items(aether_node_s* owner,
+static void collect_text_items(aether_node_s* owner,
                         const BoxStyleSnapshot& style,
                         const std::string& text,
-                        std::vector<inline_item_s>& output)
+                        std::vector<inline_item_s>& output, inline_capitalization_context_s& context)
 {
     if (!text.empty()) {
         // The text item's element must be the OWNER (for generated content, the
@@ -957,7 +980,8 @@ void collect_text_items(aether_node_s* owner,
         // host's 80px). Selector combinators still navigate via style_origin.
         output.push_back(inline_item_s::text_item(
             owner, style,
-            aether_apply_text_transform(text, style.text_transform)));
+            aether_apply_text_transform(text, style.text_transform, context.starts_word)));
+        context.starts_word = std::isspace(static_cast<unsigned char>(output.back().text.back())) != 0;
     }
 }
 
@@ -967,13 +991,15 @@ static inline_node_role_e append_inline_node(
     aether_node_s* parent,
     const BoxStyleSnapshot& parent_style,
     aether_node_s* node,
-    std::vector<inline_item_s>& output)
+    std::vector<inline_item_s>& output, inline_capitalization_context_s& context)
 {
     if (node->type == AETHER_NODE_TEXT) {
         if (!aether_inline_text_has_visible_content(node->text, parent_style.white_space)) {
+            if (!node->text.empty())
+                context.starts_word = std::isspace(static_cast<unsigned char>(node->text.back())) != 0;
             return inline_node_role_e::ignored;
         }
-        collect_text_items(parent, parent_style, node->text, output);
+        collect_text_items(parent, parent_style, node->text, output, context);
         return inline_node_role_e::inline_content;
     }
     if (node->type != AETHER_NODE_ELEMENT) return inline_node_role_e::ignored;
@@ -984,14 +1010,17 @@ static inline_node_role_e append_inline_node(
     }
     if (child_style.display == AETHER_DISPLAY_BLOCK || child_style.display == AETHER_DISPLAY_FLEX ||
         child_style.display == AETHER_DISPLAY_TABLE) {
+        context.starts_word = true;
         return inline_node_role_e::block_content;
     }
     if (child_style.display == AETHER_DISPLAY_LINE_BREAK) {
         output.push_back(inline_item_s::line_break(node, child_style));
+        context.starts_word = true;
     } else if (is_opaque_single_line_control(node) || child_style.display == AETHER_DISPLAY_INLINE_BLOCK) {
         output.push_back(inline_item_s::atomic(node, child_style));
+        context.starts_word = true;
     } else {
-        collect_inline_element(engine, styles, node, child_style, output);
+        collect_inline_element(engine, styles, node, child_style, output, context);
     }
     return inline_node_role_e::inline_content;
 }
@@ -1059,6 +1088,7 @@ float measure_intrinsic_width(
     // never choose a different DOM traversal from the visible formatter.
     float content_width = 0.f;
     std::vector<inline_item_s> inline_items;
+    inline_capitalization_context_s context;
     auto flush_inline = [&]() {
         if (inline_items.empty()) return;
         content_width = std::max(content_width,
@@ -1072,7 +1102,7 @@ float measure_intrinsic_width(
     }
 
     for (auto* child : element->children) {
-        const auto role = append_inline_node(engine, styles, element, style, child, inline_items);
+        const auto role = append_inline_node(engine, styles, element, style, child, inline_items, context);
         if (role != inline_node_role_e::block_content) continue;
         flush_inline();
         content_width = std::max(content_width,
@@ -1133,6 +1163,7 @@ float measure_intrinsic_height(
         }
     } else {
         std::vector<inline_item_s> inline_items;
+        inline_capitalization_context_s context;
         const auto flush_inline = [&]() {
             if (inline_items.empty()) return;
             add_height(measure_inline_items_height(
@@ -1141,7 +1172,7 @@ float measure_intrinsic_height(
         };
         if (!collect_anonymous_flex_text_items(element, style, inline_items)) {
             for (auto* child : element->children) {
-                const auto role = append_inline_node(engine, styles, element, style, child, inline_items);
+                const auto role = append_inline_node(engine, styles, element, style, child, inline_items, context);
                 if (role != inline_node_role_e::block_content) continue;
                 flush_inline();
                 measure_child(child);
