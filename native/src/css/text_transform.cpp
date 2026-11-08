@@ -3,10 +3,14 @@
 #include <cctype>
 
 std::string aether_apply_text_transform(const std::string& value, int32_t text_transform) {
+    return aether_apply_text_transform(value, text_transform, true);
+}
+
+std::string aether_apply_text_transform(const std::string& value, int32_t text_transform, bool starts_word) {
     if (text_transform == AETHER_TEXT_TRANSFORM_NONE) return value;
 
     std::string result = value;
-    bool word_start = true;
+    bool word_start = starts_word;
     for (char& character : result) {
         const auto byte = static_cast<unsigned char>(character);
         if (text_transform == AETHER_TEXT_TRANSFORM_UPPERCASE) {
