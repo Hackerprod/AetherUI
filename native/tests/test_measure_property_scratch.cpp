@@ -142,6 +142,7 @@ void equivalent_applicators(style_property_registry_s& registry) {
             {"row-gap","calc(0% + 1em)"}, {"column-gap","2rem"}, {"width","calc(50% - 50% + 30px)"},
             {"height","0%"}, {"padding-left","2em"}, {"border-left-width","1rem"},
             {"background-position","1em 2rem, 10vw 20vh"}, {"background-size","2em 1rem, cover, 0% auto"},
+            {"backdrop-filter","blur(calc(10px - 1em)) blur(calc(-2px + 1em))"}, {"backdrop-filter","blur(1rem) blur(2vw) blur(3vh)"},
             {"text-shadow","1em 1rem currentColor, 2vw 3vh red"}, {"box-shadow","inset 1em 2rem 3px currentColor"}}) {
         const auto& definition = property(registry, item.name);
         const std::string source = item.source;

@@ -345,20 +345,73 @@ static bool bi_try_gradient(const char* src, std::string& out) {
 
 static property_apply_result_s bi_apply_gradient(aether_computed_style_t* st, const std::string& value);
 
-static property_apply_result_s bi_apply_backdrop_filter(aether_computed_style_t* st, const std::string& value) {
-    aether_backdrop_filter_list replacement{};
-    aether_backdrop_filter_parse_error_e error{};
-    if (!aether_backdrop_filter_list_try_parse(value, &replacement, &error)) {
-        const char* message = error == aether_backdrop_filter_parse_error_e::unsupported_operation
-            ? "The backdrop-filter function is not supported by the current compositor model."
-            : error == aether_backdrop_filter_parse_error_e::unsupported_parameter
-                ? "The backdrop-filter function has an unsupported parameter."
-                : "The backdrop-filter value is syntactically invalid.";
-        return property_apply_result_s::failure("AETHER-CSS-BACKDROP-FILTER", message);
+namespace {
+struct backdrop_filter_staging {
+    aether_backdrop_filter_list value{};
+    ~backdrop_filter_staging() { aether_backdrop_filter_list_free(&value); }
+    void publish(aether_computed_style_t* style) {
+        aether_backdrop_filter_list_free(&style->backdrop_filters);
+        style->backdrop_filters = value;
+        value = {};
     }
-    aether_backdrop_filter_list_free(&st->backdrop_filters);
-    st->backdrop_filters = replacement;
+};
+}
+
+static property_apply_result_s bi_backdrop_filter_error(aether_backdrop_filter_parse_error_e error) {
+    const char* message = error == aether_backdrop_filter_parse_error_e::unsupported_operation
+        ? "The backdrop-filter function is not supported by the current compositor model."
+        : error == aether_backdrop_filter_parse_error_e::unsupported_parameter
+            ? "The backdrop-filter function has an unsupported parameter."
+            : "The backdrop-filter value is syntactically invalid.";
+    return property_apply_result_s::failure("AETHER-CSS-BACKDROP-FILTER", message);
+}
+
+static bool bi_try_backdrop_filter(const char* source, std::string& out) {
+    // Deferred validation can alias source and out. Preserve original inner trivia.
+    const std::string owned = str_trim(source ? source : "");
+    backdrop_filter_staging parsed;
+    if (!aether_backdrop_filter_list_try_parse(owned, &parsed.value)) return false;
+    out = owned;
+    return true;
+}
+
+static property_apply_result_s bi_backdrop_filter_parse_failure(const char* source) {
+    backdrop_filter_staging parsed;
+    aether_backdrop_filter_parse_error_e error{};
+    if (aether_backdrop_filter_list_try_parse(source ? source : "", &parsed.value, &error)) return {};
+    return bi_backdrop_filter_error(error);
+}
+
+static property_apply_result_s bi_apply_backdrop_filter(property_apply_context_s& context,
+                                                        const std::string& value) {
+    backdrop_filter_staging parsed;
+    aether_backdrop_filter_parse_error_e error{};
+    if (!aether_backdrop_filter_list_try_parse(value, &parsed.value, &error))
+        return bi_backdrop_filter_error(error);
+    const auto inputs = context.measures->read().inputs();
+    for (int32_t i = 0; i < parsed.value.count; ++i) {
+        auto& length = parsed.value.items[i].length_amount;
+        length = measure_compute_length(length, inputs);
+        length.value = std::max(0.f, length.value);
+    }
+    parsed.publish(context.style);
     return {};
+}
+
+static void bi_inherit_backdrop_filter(aether_computed_style_t* style, ComputedStyleReadView parent) {
+    const auto filters = parent.backdrop_filters();
+    backdrop_filter_staging parsed;
+    if (!filters.empty()) {
+        if (filters.size() > static_cast<size_t>(std::numeric_limits<int32_t>::max()) ||
+            filters.size() > std::numeric_limits<size_t>::max() / sizeof(aether_backdrop_filter))
+            throw std::bad_alloc();
+        parsed.value.items = static_cast<aether_backdrop_filter*>(
+            std::malloc(filters.size() * sizeof(aether_backdrop_filter)));
+        if (!parsed.value.items) throw std::bad_alloc();
+        parsed.value.count = static_cast<int32_t>(filters.size());
+        std::copy(filters.begin(), filters.end(), parsed.value.items);
+    }
+    parsed.publish(style);
 }
 
 static bool bi_try_background_image(const char* src, std::string& out) {
@@ -1138,14 +1191,12 @@ void builtin_properties_register(style_property_registry_s* reg) {
 
     // Backdrop-filter is a non-inherited ordered operation list. The compositor v1
     // currently understands blur(); unsupported functions are diagnosed explicitly.
-    reg->register_property_checked("backdrop-filter", false, STYLE_IMPACT_PAINT | STYLE_IMPACT_COMPOSITE,
-        "none",
-        [](const char* source, std::string& out) { out = str_trim(source ? source : ""); return !out.empty(); },
-        [](aether_computed_style_t* st, const std::string& value) { return bi_apply_backdrop_filter(st, value); });
-    reg->register_property_checked("-webkit-backdrop-filter", false, STYLE_IMPACT_PAINT | STYLE_IMPACT_COMPOSITE,
-        "none",
-        [](const char* source, std::string& out) { out = str_trim(source ? source : ""); return !out.empty(); },
-        [](aether_computed_style_t* st, const std::string& value) { return bi_apply_backdrop_filter(st, value); });
+    for (const char* name : {"backdrop-filter", "-webkit-backdrop-filter"}) {
+        reg->register_property_checked_with_context(name, false, STYLE_IMPACT_PAINT | STYLE_IMPACT_COMPOSITE,
+            "none", bi_try_backdrop_filter, bi_apply_backdrop_filter, bi_backdrop_filter_parse_failure);
+        reg->definitions.back().inherit_explicit = bi_inherit_backdrop_filter;
+        reg->definitions.back().css_wide = bi_origin_css_wide;
+    }
 
     // background-image
     reg->register_property_checked("background-image", false, STYLE_IMPACT_PAINT,

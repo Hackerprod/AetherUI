@@ -40,7 +40,7 @@ static bool store_length_component(double number, float& output) {
 // Fix the CSS token span before invoking the C conversion routine. In
 // particular, C hexadecimal numbers and an incomplete fraction are not CSS.
 static bool parse_numeric_token(std::string_view source, size_t& position, calc_value_s& output,
-                                aether::css::c_numeric_locale& locale) {
+                                aether::css::c_numeric_locale& locale, double* original_number = nullptr) {
     const size_t start = position;
     size_t end = start;
     if (end < source.size() && (source[end] == '+' || source[end] == '-')) ++end;
@@ -92,6 +92,7 @@ static bool parse_numeric_token(std::string_view source, size_t& position, calc_
     }
     position = end;
     output = value;
+    if (original_number) *original_number = number;
     return true;
 }
 
@@ -273,14 +274,16 @@ private:
 
 } // namespace
 
-bool aether::css::try_parse_numeric_literal(std::string_view source, calc_value_s& output) {
+bool aether::css::try_parse_numeric_literal(std::string_view source, calc_value_s& output, double* original_number) {
     while (!source.empty() && css_space(source.front())) source.remove_prefix(1);
     while (!source.empty() && css_space(source.back())) source.remove_suffix(1);
     size_t position = 0;
     calc_value_s value{};
     c_numeric_locale locale;
-    if (!parse_numeric_token(source, position, value, locale) || position != source.size()) return false;
+    double number = 0.0;
+    if (!parse_numeric_token(source, position, value, locale, &number) || position != source.size()) return false;
     output = value;
+    if (original_number) *original_number = number;
     return true;
 }
 

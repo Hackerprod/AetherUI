@@ -36,6 +36,8 @@ struct PreparedNodeResult {
     FrozenStyleRef style;
     std::shared_ptr<measure_state_s> measures;
     FrozenScopeRef custom_properties;
+    // Transaction-local computed terminals; never exported or retained by snapshots.
+    FrozenScopeRef backdrop_custom_properties;
     FrozenColorRef color_references;
     uint32_t declared_impact=0, declared_inherited_impact=0, inherited_change_impact=0, impact=0;
 };
@@ -478,7 +480,18 @@ static PreparedNodeResult* compute_node(aether_style_runtime_s* runtime, aether_
         ((!node->parent) || (node->parent->type == AETHER_NODE_DOCUMENT &&
           aether_doc_get_document_element(static_cast<aether_doc_s*>(node->parent)) == node));
     std::vector<cascade_entry_s> cascade(static_cast<size_t>(registry->property_count()));
-    std::unordered_map<std::string, cascade_entry_custom_s> custom_winners;
+    struct custom_winner_s {
+        cascade_priority_t priority{};
+        // Compiled rules and the inline vector own these strings throughout preparation.
+        const custom_property_declaration_s* declaration = nullptr;
+        void offer(const cascade_priority_t& p, const custom_property_declaration_s& d) {
+            if (!declaration || cascade_priority_compare(&p, &priority) >= 0) {
+                priority = p;
+                declaration = &d;
+            }
+        }
+    };
+    std::unordered_map<std::string, custom_winner_s> custom_winners;
     cascade_entry_custom_s content_winner;
 
     std::vector<const compiled_rule_s*> candidates;
@@ -502,7 +515,7 @@ static PreparedNodeResult* compute_node(aether_style_runtime_s* runtime, aether_
                 declaration.important, false, rule->layer, rule->selector.specificity,
                 rule->source_order, declaration.declaration_order
             };
-            custom_winners[declaration.name].offer(priority, declaration.source);
+            custom_winners[declaration.name].offer(priority, declaration);
         }
         for (const auto& declaration : rule->content_declarations) {
             cascade_priority_t priority{
@@ -535,20 +548,39 @@ static PreparedNodeResult* compute_node(aether_style_runtime_s* runtime, aether_
                 declaration.important, true, style_sheet_layer::author,
                 specificity_s{1, 0, 0}, INT32_MAX, declaration.declaration_order
             };
-            custom_winners[declaration.name].offer(priority, declaration.source);
+            custom_winners[declaration.name].offer(priority, declaration);
         }
     }
 
     custom_property_sources_s sources;
+    bool backdrop_sources_differ = parent && parent->backdrop_custom_properties != parent->custom_properties;
     for (const auto& pair : custom_winners) {
-        auto value = str_trim(pair.second.source);
+        const auto& declaration = *pair.second.declaration;
+        auto value = str_trim(declaration.source);
         if (str_iequals(value, "inherit") || str_iequals(value, "unset")) continue;
-        sources.emplace(pair.first, custom_property_source_s{pair.second.source,
-            str_iequals(value, "initial") || str_iequals(value, "revert")});
+        const bool initial = str_iequals(value, "initial") || str_iequals(value, "revert");
+        sources.emplace(pair.first, custom_property_source_s{declaration.source, initial});
+        if (!initial && declaration.original_source) backdrop_sources_differ = true;
     }
 
     auto scope = compute_frozen_custom_property_scope(sources, parent ? parent->custom_properties : nullptr,
         runtime->options.max_variable_depth, runtime->options.max_variable_expansion_length);
+    // Ordinary nodes share the exact legacy scope without a second source map or
+    // resolution. Only effective winning differences (or inherited differences)
+    // need a focal view. CSS-wide classification always comes from the legacy winner.
+    auto backdrop_scope = scope;
+    if (backdrop_sources_differ) {
+        custom_property_sources_s backdrop_sources;
+        for (const auto& pair : sources) {
+            const auto& declaration = *custom_winners.at(pair.first).declaration;
+            backdrop_sources.emplace(pair.first, custom_property_source_s{
+                !pair.second.initial && declaration.original_source
+                    ? *declaration.original_source : pair.second.source, pair.second.initial});
+        }
+        backdrop_scope = compute_frozen_custom_property_scope(backdrop_sources,
+            parent ? parent->backdrop_custom_properties : nullptr,
+            runtime->options.max_variable_depth, runtime->options.max_variable_expansion_length);
+    }
 
     // Custom properties have no dependency on the final ordinary style in this
     // runtime. Compile each pending group once per node, then offer either all
@@ -682,7 +714,8 @@ static PreparedNodeResult* compute_node(aether_style_runtime_s* runtime, aether_
             value = initial_value;
             break;
         case compiled_value_mode::deferred: {
-            if (!resolve_frozen_computed_value(compiled.deferred_source.c_str(), scope.get(),
+            if (!resolve_frozen_computed_value(compiled.deferred_source.c_str(),
+                                  definition.name == "backdrop-filter" ? backdrop_scope.get() : scope.get(),
                                   runtime->options.max_variable_depth,
                                   runtime->options.max_variable_expansion_length, value)) {
                 report(runtime, "AETHER-CSS-VAR", definition.name.c_str(),
@@ -871,6 +904,7 @@ static PreparedNodeResult* compute_node(aether_style_runtime_s* runtime, aether_
     else require_style_status(freeze_style(next,state->style));
     state->measures = measures;
     state->custom_properties = std::move(scope);
+    state->backdrop_custom_properties = std::move(backdrop_scope);
     // Always refresh symbolic metadata, even when identical RGBA reused the style.
     // prepare_tree visits descendants regardless of parent impact: explicit background
     // inherit must observe concrete <-> currentColor changes with the same parent RGBA.
