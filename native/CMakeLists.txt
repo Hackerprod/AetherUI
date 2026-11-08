@@ -1385,6 +1385,21 @@ if(AETHERUI_BUILD_TESTS)
     add_test(NAME aether.block-static-position-lifetime COMMAND aether_block_static_position_lifetime_test)
 endif()
 
+if(AETHERUI_BUILD_TESTS)
+    add_executable(aether_password_presentation_test tests/test_password_presentation.cpp)
+    target_link_libraries(aether_password_presentation_test PRIVATE AetherUI::Core ${CMAKE_DL_LIBS})
+    add_test(NAME aether.password-presentation COMMAND aether_password_presentation_test)
+
+    # Authentic shared core objects make process-local allocation injection
+    # exercise the implementation without adding an installed ABI seam.
+    add_executable(aether_password_presentation_lifetime_test
+        tests/test_password_presentation_lifetime.cpp
+        $<TARGET_OBJECTS:aether_flex_text_test_core>)
+    target_include_directories(aether_password_presentation_lifetime_test PRIVATE include src)
+    target_compile_definitions(aether_password_presentation_lifetime_test PRIVATE AETHER_EXPORTS)
+    add_test(NAME aether.password-presentation-lifetime COMMAND aether_password_presentation_lifetime_test)
+endif()
+
 if(AETHERUI_BUILD_TESTS AND NOT MSVC)
     # Keep every test translation unit on the same floating-point contract as
     # the core without changing the core's benchmark-comparable compiler flags.
