@@ -7,6 +7,8 @@
    This module owns the CSS border-radius value model and its used-value
    normalization.  It deliberately does not know about DOM or paint commands. */
 bool aether_border_radii_try_parse(const std::string& value, aether_border_radii* out);
+/* Negative or non-finite box dimensions yield zero radii. Zero dimensions
+   are valid; zero sums do not constrain the other axis. Box position is unused. */
 aether_corner_radii aether_border_radii_resolve(const aether_border_radii& radii,
                                                 aether_rectf border_box, float font_size);
 aether_corner_radii aether_border_radii_resolve(const aether_border_radii& radii,

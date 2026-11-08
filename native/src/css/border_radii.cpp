@@ -50,20 +50,33 @@ static float resolve(aether_css_length value, float reference, float font_size, 
 
 aether_corner_radii aether_border_radii_resolve(const aether_border_radii& value,
                                                 aether_rectf box, float font_size, float root_font_size, float vw, float vh) {
+    if (!std::isfinite(box.width) || !std::isfinite(box.height) || box.width < 0.f || box.height < 0.f)
+        return {};
     aether_corner_radii result{
         resolve(value.top_left.horizontal, box.width, font_size, root_font_size, vw, vh), resolve(value.top_left.vertical, box.height, font_size, root_font_size, vw, vh),
         resolve(value.top_right.horizontal, box.width, font_size, root_font_size, vw, vh), resolve(value.top_right.vertical, box.height, font_size, root_font_size, vw, vh),
         resolve(value.bottom_right.horizontal, box.width, font_size, root_font_size, vw, vh), resolve(value.bottom_right.vertical, box.height, font_size, root_font_size, vw, vh),
         resolve(value.bottom_left.horizontal, box.width, font_size, root_font_size, vw, vh), resolve(value.bottom_left.vertical, box.height, font_size, root_font_size, vw, vh)};
-    const float factor = std::min({1.f,
-        box.width / std::max(.0001f, result.top_left_x + result.top_right_x),
-        box.width / std::max(.0001f, result.bottom_left_x + result.bottom_right_x),
-        box.height / std::max(.0001f, result.top_left_y + result.bottom_left_y),
-        box.height / std::max(.0001f, result.top_right_y + result.bottom_right_y)});
-    if (factor < 1.f) {
-        float* values = &result.top_left_x;
-        for (int i = 0; i < 8; ++i) values[i] *= factor;
-    }
+    // Keep the common scale in double through the final products: a finite
+    // pair can overflow float, and a useful scale can be smaller than float.
+    double factor = 1.0;
+    const auto constrain = [&factor](double first, double second, double extent) {
+        const double sum = first + second;
+        if (sum > extent) factor = std::min(factor, extent / sum);
+    };
+    constrain(result.top_left_x, result.top_right_x, box.width);
+    constrain(result.bottom_left_x, result.bottom_right_x, box.width);
+    constrain(result.top_left_y, result.bottom_left_y, box.height);
+    constrain(result.top_right_y, result.bottom_right_y, box.height);
+    if (factor == 1.0) return result;
+    result.top_left_x = static_cast<float>(static_cast<double>(result.top_left_x) * factor);
+    result.top_left_y = static_cast<float>(static_cast<double>(result.top_left_y) * factor);
+    result.top_right_x = static_cast<float>(static_cast<double>(result.top_right_x) * factor);
+    result.top_right_y = static_cast<float>(static_cast<double>(result.top_right_y) * factor);
+    result.bottom_right_x = static_cast<float>(static_cast<double>(result.bottom_right_x) * factor);
+    result.bottom_right_y = static_cast<float>(static_cast<double>(result.bottom_right_y) * factor);
+    result.bottom_left_x = static_cast<float>(static_cast<double>(result.bottom_left_x) * factor);
+    result.bottom_left_y = static_cast<float>(static_cast<double>(result.bottom_left_y) * factor);
     return result;
 }
 
