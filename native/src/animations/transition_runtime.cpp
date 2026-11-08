@@ -12,7 +12,8 @@ struct active_transition_s {
     aether_node_t node = nullptr;
     int32_t property = 0;
     int32_t timing = AETHER_TRANSITION_TIMING_LINEAR;
-    int64_t start_ms = 0;
+    int64_t observed_ms = 0;
+    int64_t delay_ms = 0;
     int64_t duration_ms = 1;
     float opacity_from = 0.f;
     float opacity_to = 0.f;
@@ -113,14 +114,50 @@ aether_transform_matrix resolve_matrix(const aether_computed_style_t& style) {
         kPlaceholderRootFontSize, kPlaceholderViewport);
 }
 
-int64_t transition_duration_ms(float seconds) {
-    const int64_t ms = static_cast<int64_t>(seconds * 1000.0f);
-    return ms > 0 ? ms : 1;
+// Preserve the historical float product/truncation for duration. The wide
+// prefilter avoids floating overflow; the actual float product decides range.
+bool transition_times_ms(float duration, float delay, int64_t& duration_ms,
+                         int64_t& delay_ms) {
+    if (!std::isfinite(duration) || static_cast<double>(duration) * 1000.0 >= 0x1p64)
+        return false;
+    const float duration_product = duration * 1000.0f;
+    if (!std::isfinite(duration_product) || duration_product >= 0x1p63f)
+        return false;
+    const double delay_product = static_cast<double>(delay) * 1000.0;
+    if (!std::isfinite(delay_product) || delay_product < -0x1p63 ||
+        delay_product >= 0x1p63)
+        return false;
+    const auto ms = static_cast<int64_t>(duration_product);
+    duration_ms = ms > 0 ? ms : 1;
+    delay_ms = static_cast<int64_t>(delay_product);
+    return true;
+}
+
+// Clamp mathematical (now - observed - delay) without forming a signed
+// difference, an absolute start timestamp, or a potentially 65-bit sum.
+uint64_t transition_elapsed_ms(const active_transition_s& transition, int64_t now_ms) {
+    const auto duration = static_cast<uint64_t>(transition.duration_ms);
+    const bool forward = now_ms >= transition.observed_ms;
+    const auto magnitude = forward ?
+        static_cast<uint64_t>(now_ms) - static_cast<uint64_t>(transition.observed_ms) :
+        static_cast<uint64_t>(transition.observed_ms) - static_cast<uint64_t>(now_ms);
+    if (transition.delay_ms >= 0) {
+        const auto delay = static_cast<uint64_t>(transition.delay_ms);
+        if (!forward || magnitude <= delay) return 0;
+        return std::min(magnitude - delay, duration);
+    }
+    const auto delay = uint64_t{0} - static_cast<uint64_t>(transition.delay_ms);
+    if (!forward) {
+        if (magnitude >= delay) return 0;
+        return std::min(delay - magnitude, duration);
+    }
+    if (magnitude >= duration || delay >= duration - magnitude) return duration;
+    return magnitude + delay; // Proven strictly below duration.
 }
 
 // One clock sample is shared by interruption, initial negative delay and tick.
 float sample_transition(active_transition_s& transition, int64_t now_ms) {
-    const float p = std::clamp(static_cast<float>(now_ms - transition.start_ms) /
+    const float p = std::clamp(static_cast<float>(transition_elapsed_ms(transition, now_ms)) /
         static_cast<float>(transition.duration_ms), 0.f, 1.f);
     const float eased = apply_timing(transition.timing, p);
     if (transition.property == AETHER_TRANSITION_PROPERTY_OPACITY)
@@ -168,6 +205,31 @@ AETHER_API aether_status_t aether_transition_runtime_observe(
     const bool transform_eligible = after->transition_duration > 0.f &&
         (props & AETHER_TRANSITION_PROPERTY_TRANSFORM) != 0;
 
+    const bool opacity_changed = opacity_eligible &&
+        std::fabs(before->opacity - after->opacity) > kOpacityEpsilon;
+    bool transform_changed = false;
+    aether_transform_matrix transform_from{}, transform_to{};
+    if (transform_eligible) {
+        transform_from = resolve_matrix(*before);
+        transform_to = resolve_matrix(*after);
+        transform_changed = !matrix_equal(transform_from, transform_to);
+        if (transform_changed) {
+            // Preflight must not persist an interruption sample on rejection.
+            for (const auto& entry : runtime->active) {
+                if (entry.node != node || entry.property != AETHER_TRANSITION_PROPERTY_TRANSFORM)
+                    continue;
+                auto sampled = entry;
+                sample_transition(sampled, now_ms);
+                transform_from = sampled.current_matrix;
+                break;
+            }
+        }
+    }
+    int64_t duration_ms = 1, delay_ms = 0;
+    if ((opacity_changed || (transform_changed && !matrix_equal(transform_from, transform_to))) &&
+        !transition_times_ms(after->transition_duration, after->transition_delay, duration_ms, delay_ms))
+        return AETHER_ERROR_INVALID_STATE;
+
     const auto drop_finished = [&](int32_t property) {
         auto& finished = runtime->finished;
         finished.erase(std::remove_if(finished.begin(), finished.end(),
@@ -187,7 +249,8 @@ AETHER_API aether_status_t aether_transition_runtime_observe(
         }
     };
     const auto install = [&](active_transition_s transition) {
-        transition.start_ms = now_ms + static_cast<int64_t>(after->transition_delay * 1000.0);
+        transition.observed_ms = now_ms;
+        transition.delay_ms = delay_ms;
         if (sample_transition(transition, now_ms) >= 1.f) {
             runtime->finished.push_back({node, transition.property,
                 transition.current_opacity, transition.current_matrix});
@@ -205,7 +268,7 @@ AETHER_API aether_status_t aether_transition_runtime_observe(
                 return entry.node == node && entry.property == AETHER_TRANSITION_PROPERTY_OPACITY;
             }), active.end());
         drop_finished(AETHER_TRANSITION_PROPERTY_OPACITY);
-    } else if (std::fabs(before->opacity - after->opacity) > kOpacityEpsilon) {
+    } else if (opacity_changed) {
         float from = before->opacity;
         supersede_active(AETHER_TRANSITION_PROPERTY_OPACITY, &from, nullptr);
         drop_finished(AETHER_TRANSITION_PROPERTY_OPACITY);
@@ -213,7 +276,7 @@ AETHER_API aether_status_t aether_transition_runtime_observe(
         transition.node = node;
         transition.property = AETHER_TRANSITION_PROPERTY_OPACITY;
         transition.timing = after->transition_timing;
-        transition.duration_ms = transition_duration_ms(after->transition_duration);
+        transition.duration_ms = duration_ms;
         transition.opacity_from = from;
         transition.opacity_to = after->opacity;
         install(transition);
@@ -222,17 +285,17 @@ AETHER_API aether_status_t aether_transition_runtime_observe(
     if (!transform_eligible) {
         supersede_active(AETHER_TRANSITION_PROPERTY_TRANSFORM, nullptr, nullptr);
         drop_finished(AETHER_TRANSITION_PROPERTY_TRANSFORM);
-    } else if (!matrix_equal(resolve_matrix(*before), resolve_matrix(*after))) {
-        auto from = resolve_matrix(*before);
-        const auto to = resolve_matrix(*after);
-        supersede_active(AETHER_TRANSITION_PROPERTY_TRANSFORM, nullptr, &from);
+    } else if (transform_changed) {
+        const auto& from = transform_from;
+        const auto& to = transform_to;
+        supersede_active(AETHER_TRANSITION_PROPERTY_TRANSFORM, nullptr, nullptr);
         drop_finished(AETHER_TRANSITION_PROPERTY_TRANSFORM);
         if (!matrix_equal(from, to)) {
             active_transition_s transition{};
             transition.node = node;
             transition.property = AETHER_TRANSITION_PROPERTY_TRANSFORM;
             transition.timing = after->transition_timing;
-            transition.duration_ms = transition_duration_ms(after->transition_duration);
+            transition.duration_ms = duration_ms;
             transition.matrix_from = from;
             transition.matrix_to = to;
             install(transition);
