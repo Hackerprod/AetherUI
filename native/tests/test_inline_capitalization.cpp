@@ -6,6 +6,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <functional>
 #include <string>
 #include <vector>
@@ -385,6 +386,143 @@ static void provenance(bool revision) {
     if (revision)
         CHECK(f.meter.contextual_calls > 0);
 }
+// Family expectations are independent semantic bytes, never values copied from
+// another consumer. In particular, the emitted backslash is not a second escape.
+template <size_t N>
+static void family_bytes(const char (&actual)[N], const std::string &expected) {
+    CHECK(N == 64);
+    REQUIRE(expected.size() < N);
+    CHECK(std::memcmp(actual, expected.data(), expected.size()) == 0);
+    CHECK(actual[expected.size()] == '\0');
+    CHECK(actual[N - 1] == '\0');
+}
+static void escaped_family_consumers(bool revision) {
+    struct Case { const char *css; std::string bytes; };
+    const Case cases[] = {
+        {R"('\5c 42')", std::string("\x5c" "42", 3)},
+        {R"('\e9')", std::string("\xc3\xa9", 2)},
+        {R"('\1f642')", std::string("\xf0\x9f\x99\x82", 4)},
+    };
+    for (const auto &c : cases)
+        for (bool gradient : {false, true}) {
+            scenario = std::string(revision ? "revision" : "resolved") +
+                       " escaped family " + c.css + (gradient ? " gradient" : " text");
+            Fixture f("<span id='suffix'>hello</span>",
+                      std::string("#host{font-family:") + c.css +
+                          "}#suffix{text-shadow:2px 3px 1px #112233;" +
+                          (gradient ? "background:linear-gradient(red,blue);background-clip:text;"
+                                    : "") + "}", revision);
+            // The leaf inherits the already-decoded value from the parent.
+            for (const char *id : {"host", "suffix"}) {
+                auto handle = aether_style_map_get(f.map, f.node(id));
+                REQUIRE(handle);
+                aether_computed_style_t copy{};
+                REQUIRE(aether_computed_style_copy(handle, &copy) == AETHER_OK);
+                family_bytes(copy.font_family, c.bytes);
+                aether_computed_style_free(&copy);
+                aether_computed_style_handle_destroy(handle);
+            }
+            bool measured = false;
+            for (const auto &t : f.meter.styled)
+                if (t.text == "Hello") {
+                    measured = true;
+                    CHECK(t.family == c.bytes);
+                }
+            CHECK(measured);
+            CHECK(owned(f, "suffix") == "Hello");
+            CHECK(Fixture::dom(f.node()) == "hello");
+            if (revision)
+                CHECK(f.meter.contextual_calls > 0);
+
+            aether_display_list_builder_t builder{};
+            aether_display_list_t list{};
+            REQUIRE(aether_display_list_builder_create(Meter::measure, &f.meter, &builder) ==
+                    AETHER_OK);
+            if (revision)
+                aether_display_list_builder_set_contextual_text_measurer(
+                    builder, Meter::contextual, &f.meter);
+            REQUIRE(aether_display_list_build(builder, f.result, nullptr, &list) == AETHER_OK);
+            unsigned text_count = 0, gradient_count = 0, shadow_count = 0;
+            for (int i = 0; i < aether_display_list_get_count(list); ++i) {
+                aether_paint_command_t command{};
+                REQUIRE(aether_display_list_get_command(list, i, &command) == AETHER_OK);
+                if (command.tag == AETHER_PAINT_DRAW_TEXT) {
+                    const auto &t = command.data.draw_text;
+                    REQUIRE(t.text);
+                    CHECK(std::string(t.text) == "Hello");
+                    family_bytes(t.font_family, c.bytes);
+                    ++text_count;
+                } else if (command.tag == AETHER_PAINT_DRAW_TEXT_GRADIENT) {
+                    const auto &t = command.data.draw_text_gradient;
+                    REQUIRE(t.text);
+                    CHECK(std::string(t.text) == "Hello");
+                    family_bytes(t.font_family, c.bytes);
+                    ++gradient_count;
+                } else if (command.tag == AETHER_PAINT_DRAW_TEXT_SHADOW) {
+                    const auto &t = command.data.draw_text_shadow;
+                    REQUIRE(t.text);
+                    CHECK(std::string(t.text) == "Hello");
+                    family_bytes(t.font_family, c.bytes);
+                    ++shadow_count;
+                }
+                aether_paint_command_free(&command);
+            }
+            CHECK(gradient ? gradient_count > 0 : text_count > 0);
+            CHECK(gradient ? text_count == 0 : gradient_count == 0);
+            CHECK(shadow_count > 0);
+            aether_display_list_destroy(list);
+            aether_display_list_builder_destroy(builder);
+        }
+}
+static void escaped_family_snapshots(bool revision) {
+    scenario = revision ? "revision escaped family snapshots" : "resolved escaped family snapshots";
+    const std::string old_bytes("A\x5c" "42", 4);
+    const std::string new_bytes("\xc3\xa9\xf0\x9f\x99\x82", 6);
+    aether_computed_style_handle_t old_handle{}, new_handle{}, cloned_handle{};
+    aether_computed_style_t old_copy{}, new_copy{};
+    {
+        Fixture f("<span id='suffix'>hello</span>",
+                  R"(#host{--family:'A\5c 42';font-family:var(--family)})", revision);
+        old_handle = aether_style_map_get(f.map, f.node("suffix"));
+        REQUIRE(old_handle);
+        REQUIRE(aether_computed_style_copy(old_handle, &old_copy) == AETHER_OK);
+        REQUIRE(aether_computed_style_handle_clone(old_handle, &cloned_handle) == AETHER_OK);
+        REQUIRE(cloned_handle);
+        family_bytes(old_copy.font_family, old_bytes);
+        REQUIRE(aether_element_set_attribute(f.node(), "style",
+                                             R"(--family:'\e9\1f642')") == AETHER_OK);
+        f.resolve(); // Destroys the old map; retained public handles own their data.
+        f.layout();
+        new_handle = aether_style_map_get(f.map, f.node("suffix"));
+        REQUIRE(new_handle);
+        REQUIRE(aether_computed_style_copy(new_handle, &new_copy) == AETHER_OK);
+        family_bytes(new_copy.font_family, new_bytes);
+        family_bytes(old_copy.font_family, old_bytes);
+        CHECK(owned(f, "suffix") == "Hello");
+    } // Runtime, stylesheet, maps and document are gone before inspecting exports.
+    const auto verify_handle = [&](aether_computed_style_handle_t handle,
+                                   const std::string &bytes) {
+        aether_computed_style_t copy{};
+        REQUIRE(aether_computed_style_copy(handle, &copy) == AETHER_OK);
+        family_bytes(copy.font_family, bytes);
+        aether_computed_style_free(&copy);
+    };
+    verify_handle(old_handle, old_bytes);
+    verify_handle(cloned_handle, old_bytes);
+    verify_handle(new_handle, new_bytes);
+    family_bytes(old_copy.font_family, old_bytes);
+    family_bytes(new_copy.font_family, new_bytes);
+    // Mutating an owned ABI copy cannot change either retained snapshot.
+    old_copy.font_family[0] = 'X';
+    verify_handle(old_handle, old_bytes);
+    verify_handle(cloned_handle, old_bytes);
+    verify_handle(new_handle, new_bytes);
+    aether_computed_style_free(&old_copy);
+    aether_computed_style_free(&new_copy);
+    aether_computed_style_handle_destroy(old_handle);
+    aether_computed_style_handle_destroy(cloned_handle);
+    aether_computed_style_handle_destroy(new_handle);
+}
 static void boundaries() {
     for (const char *display : {"block", "flex", "table", "inline-block"})
         for (const char *content : {"", "end", "end "}) {
@@ -706,6 +844,10 @@ int main(int argc, char **argv) {
     continuity();
     provenance(false);
     provenance(true);
+    escaped_family_consumers(false);
+    escaped_family_consumers(true);
+    escaped_family_snapshots(false);
+    escaped_family_snapshots(true);
     boundaries();
     public_sizing_and_isolation();
     generated();

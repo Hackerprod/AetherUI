@@ -49,6 +49,9 @@ public:
     bool decode_identifier(css_identifier_sink sink, void* context);
     // Private CSS URL consumer. Preserve output on syntax/allocation failure.
     bool decode_url(std::string& out);
+    // Decode one closed string spanning the remaining input. Atomic, alias-safe
+    // publication; emitted syntax is data and is never decoded a second time.
+    bool decode_string(std::string& out);
 private:
     const char* data_;
     size_t length_, cursor_;

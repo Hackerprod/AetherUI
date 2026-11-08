@@ -107,6 +107,26 @@ int main() {
 
     style_property_registry_s registry;
     builtin_properties_register(&registry); registry.seal();
+    // Reuse this real builtin registry rather than exporting a private parser
+    // or compiling another copy of its dependencies for the family contract.
+    const auto* family = registry.try_get("font-family");
+    check(family && family->parse, "font-family registered parser");
+    if (!family || !family->parse) return 1;
+    for (const auto& example : std::vector<std::pair<std::string, std::string>>{
+            {R"('A\42')", "AB"}, {R"('\5c 42')", "\\42"},
+            {R"(A\42)", "AB"}, {"Times/**/New", "Times New"},
+            {R"('\69 nitial')", "initial"}}) {
+        std::string value = example.first;
+        check(family->parse(value.c_str(), value) && value == example.second, "family aliased semantic publication");
+        value = "sentinel";
+        check(family->parse(example.first.c_str(), value) && value == example.second, "family separate semantic publication");
+    }
+    for (const std::string source : {"'A' extra", "'A' 'B'", "Alpha 123", "''", "'\\\n'", "'\xc0\xaf'", "'AB', 'unfinished"}) {
+        std::string value = source;
+        check(!family->parse(value.c_str(), value) && value == source, "family invalid alias preserves original");
+        value = "sentinel";
+        check(!family->parse(source.c_str(), value) && value == "sentinel", "family invalid preserves output");
+    }
     const auto* property = registry.try_get("background-position");
     const auto* images = registry.try_get("background-image");
     check(property && property->parse && property->apply_checked && images && images->apply_checked,
