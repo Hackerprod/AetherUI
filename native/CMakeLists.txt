@@ -1366,6 +1366,12 @@ if(AETHERUI_BUILD_TESTS AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
     add_test(NAME aether.contextual-sampler-atomic COMMAND aether_contextual_sampler_atomic_test)
 endif()
 
+if(AETHERUI_BUILD_TESTS)
+    add_executable(aether_flex_intrinsic_width_test tests/test_flex_intrinsic_width.cpp)
+    target_link_libraries(aether_flex_intrinsic_width_test PRIVATE AetherUI::Core ${CMAKE_DL_LIBS})
+    add_test(NAME aether.flex-intrinsic-width COMMAND aether_flex_intrinsic_width_test)
+endif()
+
 if(AETHERUI_BUILD_TESTS AND NOT MSVC)
     # Keep every test translation unit on the same floating-point contract as
     # the core without changing the core's benchmark-comparable compiler flags.

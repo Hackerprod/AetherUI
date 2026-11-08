@@ -9,7 +9,7 @@ static void require(bool value, const char* message) {
     if (!value) { std::fprintf(stderr, "FAIL: %s\n", message); std::exit(1); }
 }
 
-static bool same(float actual, float expected) { return std::fabs(actual - expected) < .001f; }
+static bool same(float actual, float expected) { return std::isfinite(actual) && std::isfinite(expected) && std::fabs(actual - expected) < .001f; }
 
 int main() {
     require(same(aether_intrinsic_min_from_unbreakable_fragments({50.f, 80.f, 30.f}), 80.f),
@@ -36,17 +36,22 @@ int main() {
         "a forced line break must split max-content lines while preserving each unbreakable minimum");
 
     const std::vector<float> cards{100.f, 70.f, 90.f};
-    require(same(aether_intrinsic_flex_main_contribution(cards, false, false, 20.f,
-                                                          aether_intrinsic_size_mode_e::min_content), 300.f),
-        "a single-line row flex min-content contribution must sum children because it cannot wrap them");
-    require(same(aether_intrinsic_flex_main_contribution(cards, false, false, 20.f,
-                                                          aether_intrinsic_size_mode_e::max_content), 300.f),
-        "a single-line row flex max-content contribution must sum children and gaps");
-    require(same(aether_intrinsic_flex_main_contribution(cards, false, true, 20.f,
-                                                          aether_intrinsic_size_mode_e::max_content), 100.f),
-        "a wrapping row flex container must allow later children to form another line");
-    require(same(aether_intrinsic_flex_main_contribution(cards, true, false, 20.f,
-                                                          aether_intrinsic_size_mode_e::max_content), 100.f),
-        "a column flex container's horizontal contribution must be its widest child");
+    for (bool column : {false, true}) for (bool wrap : {false, true})
+        for (auto mode : {aether_intrinsic_size_mode_e::min_content,
+                          aether_intrinsic_size_mode_e::max_content}) {
+            const float expected = column || (wrap && mode == aether_intrinsic_size_mode_e::min_content)
+                ? 100.f : 300.f;
+            require(same(aether_intrinsic_flex_main_contribution(cards, column, wrap, 20.f, mode), expected),
+                    "row/column, wrap/nowrap, min/max finite matrix");
+            require(same(aether_intrinsic_flex_main_contribution({}, column, wrap, 20.f, mode), 0), "empty has no gap");
+            require(same(aether_intrinsic_flex_main_contribution({100}, column, wrap, 20.f, mode), 100), "singleton has no gap");
+        }
+    for (float gap : {0.f, -20.f})
+        require(same(aether_intrinsic_flex_main_contribution(cards, false, true, gap,
+            aether_intrinsic_size_mode_e::max_content), 260), "zero and negative gap policy");
+    require(same(aether_intrinsic_flex_main_contribution({10.25f,20.5f}, false, true, 1.25f,
+        aether_intrinsic_size_mode_e::max_content), 32), "fractional wrapping maximum");
+    require(same(aether_intrinsic_flex_main_contribution({10.25f,20.5f}, false, true, 1.25f,
+        aether_intrinsic_size_mode_e::min_content), 20.5f), "fractional wrapping minimum");
     return 0;
 }
