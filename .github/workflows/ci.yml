@@ -1,217 +1,154 @@
-name: CI
+name: Isolated locale-thread diagnostic
 
 on:
   push:
-  pull_request:
+    branches: [archive/password-locale-diagnostic-20261108]
 
 permissions:
   contents: read
 
 jobs:
-  native:
-    name: Native core (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 20
-    strategy:
-      fail-fast: false
-      matrix:
-        os:
-          - ubuntu-latest
-          - macos-latest
-
+  paired-macos:
+    runs-on: macos-26
+    timeout-minutes: 15
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Configure
-        run: >-
-          cmake
-          -S native
-          -B artifacts/build/native-ci
-          -DCMAKE_BUILD_TYPE=Release
-          -DCMAKE_INSTALL_PREFIX=${{ github.workspace }}/artifacts/native-ci
-          -DAETHERUI_BUILD_TESTS=ON
-
-      - name: Build
+      - uses: actions/checkout@v4
+        with:
+          ref: 6688e4e9cf9a7370e74fef488fb688e8f47db9ac
+          path: baseline
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          ref: edd0afddb40f290bf2d4f07f3ca551cac0fbdbc2
+          path: candidate
+          persist-credentials: false
+      - name: Verify exact input trees and record environment
         shell: bash
         run: |
-          if [[ "$RUNNER_OS" == "macOS" ]]; then
-            # Keep Make from starting every compile at once on the macOS runner.
-            (
-              echo "::group::macOS build resources (before)"
-              printf 'Runner image: %s %s\n' "${ImageOS:-unknown}" "${ImageVersion:-unknown}"
-              printf 'Runner architecture: %s\n' "${RUNNER_ARCH:-unknown}"
-              sw_vers
-              sysctl hw.logicalcpu hw.memsize
-              sysctl vm.swapusage
-              vm_stat
-              echo "::endgroup::"
-            ) || true
-
-            if /usr/bin/time -l cmake --build artifacts/build/native-ci --config Release --parallel 3; then
-              build_status=0
-            else
-              build_status=$?
-            fi
-
-            (
-              echo "::group::macOS build resources (after)"
-              sysctl vm.swapusage
-              vm_stat
-              echo "::endgroup::"
-            ) || true
-            exit "$build_status"
-          fi
-
-          if [[ "$RUNNER_OS" == "Linux" ]]; then
-            # Keep the Ubuntu build parallelism bounded while collecting diagnostics.
-            (
-              echo "::group::Linux build resources (before)"
-              printf 'Runner image: %s %s\n' "${ImageOS:-unknown}" "${ImageVersion:-unknown}"
-              printf 'Runner architecture: %s\n' "${RUNNER_ARCH:-unknown}"
-              nproc
-              free -h
-              df -h .
-              echo "::endgroup::"
-            ) || true
-
-            build_command=(cmake --build artifacts/build/native-ci --config Release --parallel 3)
-            if [[ -x /usr/bin/time ]]; then
-              build_command=(/usr/bin/time -v "${build_command[@]}")
-            fi
-            if "${build_command[@]}"; then
-              build_status=0
-            else
-              build_status=$?
-            fi
-
-            (
-              echo "::group::Linux build resources (after)"
-              free -h
-              df -h .
-              echo "::endgroup::"
-            ) || true
-            exit "$build_status"
-          fi
-
-          cmake --build artifacts/build/native-ci --config Release --parallel
-
-      - name: Test
-        run: ctest --test-dir artifacts/build/native-ci -C Release --output-on-failure
-
-      - name: Install
-        run: cmake --install artifacts/build/native-ci --config Release
-
-  windows-dotnet:
-    # Temporarily paused until the Windows/.NET failures are fixed.
-    # Remove this condition to re-enable the Windows job.
-    if: ${{ false }}
-    name: Native core + .NET reference binding
-    runs-on: windows-latest
-    timeout-minutes: 30
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup .NET
-        uses: actions/setup-dotnet@v4
-        with:
-          dotnet-version: 10.0.302
-
-      - name: Configure native core
-        run: >-
-          cmake
-          -S native
-          -B artifacts/build/native/win-x64
-          -A x64
-          -DAETHERUI_BUILD_TESTS=ON
-          -DCMAKE_INSTALL_PREFIX=${{ github.workspace }}/artifacts/native/win-x64
-
-      - name: Build native core
-        run: cmake --build artifacts/build/native/win-x64 --config Release --parallel
-
-      - name: Test native core
-        run: ctest --test-dir artifacts/build/native/win-x64 -C Release --output-on-failure
-
-      - name: Install native core
-        run: cmake --install artifacts/build/native/win-x64 --config Release
-
-      - name: Configure installed-package consumer
-        run: >-
-          cmake
-          -S native/tests/package_consumer
-          -B artifacts/build/package-consumer/win-x64
-          -A x64
-          -DCMAKE_PREFIX_PATH=${{ github.workspace }}/artifacts/native/win-x64
-
-      - name: Test installed-package consumer
+          set -euo pipefail
+          mkdir -p evidence
+          test "$(git -C baseline rev-parse HEAD)" = 6688e4e9cf9a7370e74fef488fb688e8f47db9ac
+          test "$(git -C baseline rev-parse HEAD^{tree})" = 8115e54d58767791e3ce2162221b1a241de16072
+          test "$(git -C candidate rev-parse HEAD)" = edd0afddb40f290bf2d4f07f3ca551cac0fbdbc2
+          test "$(git -C candidate rev-parse HEAD^{tree})" = 57b637477016cc17ac56f99cc27b85f8e6b051f0
+          {
+            printf 'Image: %s %s; arch: %s\n' "${ImageOS:-unknown}" "${ImageVersion:-unknown}" "${RUNNER_ARCH:-unknown}"
+            sw_vers
+            clang++ --version
+            xcrun lldb --version
+            git -C baseline rev-parse HEAD HEAD^{tree}
+            git -C candidate rev-parse HEAD HEAD^{tree}
+          } | tee evidence/environment.txt
+      - name: Prepare debugger observer
+        shell: bash
         run: |
-          cmake --build artifacts/build/package-consumer/win-x64 --config Release --parallel
-          ctest --test-dir artifacts/build/package-consumer/win-x64 -C Release --output-on-failure
-
-      - name: Restore .NET binding
-        run: dotnet restore bindings/dotnet/AetherUI.DotNet.sln -p:AetherNativeRuntimeIdentifier=win-x64
-
-      - name: Build .NET binding
-        run: >-
-          dotnet build bindings/dotnet/AetherUI.DotNet.sln
-          -c Release
-          --no-restore
-          -p:AetherNativeRuntimeIdentifier=win-x64
-
-      - name: Run .NET integration tests
-        run: >-
-          dotnet run
-          --project bindings/dotnet/tests/AetherUI.Tests/AetherUI.Tests.csproj
-          -c Release
-          --no-build
-          -p:AetherNativeRuntimeIdentifier=win-x64
-
-      - name: Run Direct2D WARP pixel regression
-        run: >-
-          dotnet run
-          --project bindings/dotnet/tests/AetherUI.Windows.RegressionTests/AetherUI.Windows.RegressionTests.csproj
-          -c Release
-          -p:AetherNativeRuntimeIdentifier=win-x64
-
-      - name: Pack .NET binding
-        shell: pwsh
+          cat > "$RUNNER_TEMP/locale_observer.py" <<'PY_OBSERVER'
+          import json, os, traceback
+          import lldb
+          result_path = os.environ["DIAG_RESULT"]
+          record = {"version": os.environ["DIAG_VERSION"], "outcome": "diagnostic_error"}
+          process = None
+          try:
+              debugger = lldb.debugger
+              debugger.SetAsync(False)
+              target = debugger.CreateTarget(os.environ["DIAG_BINARY"])
+              if not target.IsValid():
+                  raise RuntimeError("LLDB could not create target")
+              launch = lldb.SBLaunchInfo([])
+              launch.SetWorkingDirectory(os.environ["DIAG_CWD"])
+              launch.AddOpenFileAction(1, os.environ["DIAG_STDOUT"], False, True)
+              launch.AddOpenFileAction(2, os.environ["DIAG_STDERR"], False, True)
+              error = lldb.SBError()
+              process = target.Launch(launch, error)
+              record["launch_error"] = error.GetCString()
+              record["state"] = int(process.GetState())
+              if error.Fail():
+                  record["outcome"] = "launch_failed"
+              elif process.GetState() == lldb.eStateExited:
+                  record["exit_status"] = process.GetExitStatus()
+                  record["exit_description"] = process.GetExitDescription()
+                  record["outcome"] = "pass" if process.GetExitStatus() == 0 else "test_failed"
+              elif process.GetState() in (lldb.eStateStopped, lldb.eStateCrashed, lldb.eStateSuspended):
+                  record["outcome"] = "stopped_or_crashed"
+                  record["threads"] = [{"id": t.GetThreadID(), "reason": int(t.GetStopReason()),
+                                         "description": t.GetStopDescription(2048)} for t in process]
+                  debugger.HandleCommand("process status")
+                  debugger.HandleCommand("thread backtrace all")
+                  debugger.HandleCommand("register read pc")
+              else:
+                  record["outcome"] = "unexpected_process_state"
+          except Exception:
+              record["exception"] = traceback.format_exc()
+          finally:
+              with open(result_path, "w") as stream:
+                  json.dump(record, stream, indent=2)
+              print("DIAGNOSTIC_RESULT " + json.dumps(record), flush=True)
+              if process and process.IsValid() and process.GetState() != lldb.eStateExited:
+                  process.Kill()
+          PY_OBSERVER
+      - name: Build and observe each focused executable once
+        shell: bash
         run: |
-          New-Item artifacts/packages -ItemType Directory -Force | Out-Null
-          $projects = @(
-            'bindings/dotnet/src/AetherUI.Core.Native.Interop/AetherUI.Core.Native.Interop.csproj',
-            'bindings/dotnet/src/AetherUI.Core/AetherUI.Core.csproj',
-            'bindings/dotnet/src/AetherUI.Windows/AetherUI.Windows.csproj',
-            'bindings/dotnet/src/AetherUI.Generator/AetherUI.Generator.csproj'
-          )
-          foreach ($project in $projects) {
-            dotnet pack $project -c Release --no-build -o artifacts/packages `
-              -p:AetherNativeRuntimeIdentifier=win-x64
-            if ($LASTEXITCODE -ne 0) { throw "Packing failed: $project" }
-          }
-
-      - name: Verify NuGet RID asset
-        shell: pwsh
-        run: |
-          Add-Type -AssemblyName System.IO.Compression.FileSystem
-          $package = Get-ChildItem artifacts/packages/AetherUI.Core.Native.Interop.*.nupkg |
-            Where-Object Name -NotLike '*.symbols.nupkg' |
-            Select-Object -First 1
-          if (-not $package) { throw 'Interop package was not produced.' }
-          $archive = [IO.Compression.ZipFile]::OpenRead($package.FullName)
-          try {
-            if ($archive.Entries.FullName -notcontains 'runtimes/win-x64/native/aether_core.dll') {
-              throw 'Interop package is missing runtimes/win-x64/native/aether_core.dll.'
-            }
-          }
-          finally {
-            $archive.Dispose()
-          }
-
-      - name: Upload packages
+          set +e
+          set -uo pipefail
+          for version in baseline candidate; do
+            cmake -S "$version/native" -B "build-$version" -DCMAKE_BUILD_TYPE=Release -DAETHERUI_BUILD_TESTS=ON > "evidence/$version-configure.log" 2>&1
+            configure_status=$?
+            printf '%s\n' "$configure_status" > "evidence/$version-configure.status"
+            if [[ "$configure_status" != 0 ]]; then continue; fi
+            cmake --build "build-$version" --config Release --target aether_length_locale_threads_test --parallel 3 > "evidence/$version-build.log" 2>&1
+            build_status=$?
+            printf '%s\n' "$build_status" > "evidence/$version-build.status"
+            if [[ "$build_status" != 0 ]]; then continue; fi
+            export DIAG_VERSION="$version"
+            export DIAG_BINARY="$GITHUB_WORKSPACE/build-$version/aether_length_locale_threads_test"
+            export DIAG_CWD="$GITHUB_WORKSPACE/build-$version"
+            export DIAG_RESULT="$GITHUB_WORKSPACE/evidence/$version-result.json"
+            export DIAG_STDOUT="$GITHUB_WORKSPACE/evidence/$version-stdout.txt"
+            export DIAG_STDERR="$GITHUB_WORKSPACE/evidence/$version-stderr.txt"
+            xcrun lldb --batch -o "script exec(open('$RUNNER_TEMP/locale_observer.py').read())" > "evidence/$version-lldb.log" 2>&1
+            printf '%s\n' "$?" > "evidence/$version-debugger.status"
+            cat "evidence/$version-result.json" 2>/dev/null || true
+            python3 - <<'PY_LOGS'
+          import os
+          from pathlib import Path
+          version = os.environ["DIAG_VERSION"]
+          limit = 32768
+          for suffix in ("lldb.log", "stdout.txt", "stderr.txt"):
+              path = Path(f"evidence/{version}-{suffix}")
+              print(f"=== {path.name}: first {limit} bytes maximum ===", flush=True)
+              if not path.exists():
+                  print("[FILE MISSING]", flush=True)
+                  continue
+              with path.open("rb") as stream:
+                  data = stream.read(limit + 1)
+              print(data[:limit].decode("utf-8", errors="replace"), flush=True)
+              if len(data) > limit:
+                  print("[TRUNCATED: full file retained in diagnostic artifact]", flush=True)
+          PY_LOGS
+          done
+      - name: Preserve compact diagnostic evidence
+        if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: AetherUI-packages
-          path: artifacts/packages/*
-          if-no-files-found: error
+          name: locale-thread-paired-diagnostic
+          path: evidence/
+          retention-days: 7
+          if-no-files-found: warn
+      - name: Evaluate actual test outcomes
+        if: always()
+        shell: bash
+        run: |
+          python3 - <<'PY_EVALUATE'
+          import json
+          from pathlib import Path
+          outcomes = {}
+          for version in ("baseline", "candidate"):
+              p = Path(f"evidence/{version}-result.json")
+              outcomes[version] = json.loads(p.read_text()) if p.exists() else {"outcome": "missing_result"}
+              status = Path(f"evidence/{version}-debugger.status")
+              outcomes[version]["debugger_status"] = status.read_text().strip() if status.exists() else "missing"
+          print(json.dumps(outcomes, indent=2))
+          print("Two passing observations do not establish a root cause or replace full CI gates.")
+          raise SystemExit(0 if all(r.get("outcome") == "pass" and r.get("debugger_status") == "0" for r in outcomes.values()) else 1)
+          PY_EVALUATE
