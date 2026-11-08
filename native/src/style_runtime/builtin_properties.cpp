@@ -273,6 +273,29 @@ static bool bi_try_border_radii(const char* src, std::string& out) {
     return true;
 }
 
+// Physical corner longhands have a pair grammar, not the aggregate 1-4/slash grammar.
+static bool bi_read_corner_radius(const std::string& source, aether_corner_radius& out) {
+    bool valid = false;
+    const auto components = css_split_components(source, &valid);
+    if (!valid || components.empty() || components.size() > 2) return false;
+    aether_corner_radius parsed{};
+    if (!bi_css_length(components[0], parsed.horizontal, true)) return false;
+    parsed.vertical = parsed.horizontal;
+    if (components.size() == 2 && !bi_css_length(components[1], parsed.vertical, true)) return false;
+    out = parsed;
+    return true;
+}
+
+static bool bi_try_corner_radius(const char* source, std::string& out) {
+    if (!source) return false;
+    // Deferred resolution aliases source and out, including potentially interior pointers.
+    const std::string owned = str_trim(source);
+    aether_corner_radius parsed{};
+    if (!bi_read_corner_radius(owned, parsed)) return false;
+    out = owned;
+    return true;
+}
+
 static bool bi_try_gradient(const char* src, std::string& out) {
     aether_linear_gradient gradient{};
     if (!aether_linear_gradient_try_parse(src, &gradient)) return false;
@@ -1224,10 +1247,10 @@ void builtin_properties_register(style_property_registry_s* reg) {
         "0", bi_try_border_radii,
         [](aether_computed_style_t* st, const std::string& v) { aether_border_radii_try_parse(v, &st->border_radii); });
     auto register_corner_radius = [&reg](const char* name, aether_corner_radius aether_border_radii::* member) {
-        reg->register_property(name, false, STYLE_IMPACT_PAINT | STYLE_IMPACT_HITTEST, "0", bi_try_border_radii,
+        reg->register_property(name, false, STYLE_IMPACT_PAINT | STYLE_IMPACT_HITTEST, "0", bi_try_corner_radius,
             [member](aether_computed_style_t* st, const std::string& value) {
-                aether_border_radii parsed;
-                if (aether_border_radii_try_parse(value, &parsed)) st->border_radii.*member = parsed.top_left;
+                aether_corner_radius parsed{};
+                if (bi_read_corner_radius(value, parsed)) st->border_radii.*member = parsed;
             });
     };
     register_corner_radius("border-top-left-radius", &aether_border_radii::top_left);
