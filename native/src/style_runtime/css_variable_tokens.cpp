@@ -13,6 +13,26 @@ int hex(unsigned char c) {
     if (c >= 'A' && c <= 'F') return c - 'A' + 10;
     return -1;
 }
+bool emit_scalar(unsigned int c, css_identifier_sink sink, void* context) {
+    char bytes[4];
+    size_t size = 0;
+    if (c < 0x80) bytes[size++] = static_cast<char>(c);
+    else if (c < 0x800) {
+        bytes[size++] = static_cast<char>(0xc0 | (c >> 6));
+        bytes[size++] = static_cast<char>(0x80 | (c & 0x3f));
+    } else if (c < 0x10000) {
+        bytes[size++] = static_cast<char>(0xe0 | (c >> 12));
+        bytes[size++] = static_cast<char>(0x80 | ((c >> 6) & 0x3f));
+        bytes[size++] = static_cast<char>(0x80 | (c & 0x3f));
+    } else {
+        bytes[size++] = static_cast<char>(0xf0 | (c >> 18));
+        bytes[size++] = static_cast<char>(0x80 | ((c >> 12) & 0x3f));
+        bytes[size++] = static_cast<char>(0x80 | ((c >> 6) & 0x3f));
+        bytes[size++] = static_cast<char>(0x80 | (c & 0x3f));
+    }
+    return sink(context, bytes, size);
+}
+
 }
 unsigned char css_variable_lexer::read(size_t at) {
     if (at >= length_ || failed_) return 0;
@@ -87,23 +107,7 @@ void css_variable_lexer::name(bool& var, bool& url, bool& dashed,
         else break;
         if (failed_) break;
         if (sink) {
-            char bytes[4];
-            size_t size = 0;
-            if (c < 0x80) bytes[size++] = static_cast<char>(c);
-            else if (c < 0x800) {
-                bytes[size++] = static_cast<char>(0xc0 | (c >> 6));
-                bytes[size++] = static_cast<char>(0x80 | (c & 0x3f));
-            } else if (c < 0x10000) {
-                bytes[size++] = static_cast<char>(0xe0 | (c >> 12));
-                bytes[size++] = static_cast<char>(0x80 | ((c >> 6) & 0x3f));
-                bytes[size++] = static_cast<char>(0x80 | (c & 0x3f));
-            } else {
-                bytes[size++] = static_cast<char>(0xf0 | (c >> 18));
-                bytes[size++] = static_cast<char>(0x80 | ((c >> 12) & 0x3f));
-                bytes[size++] = static_cast<char>(0x80 | ((c >> 6) & 0x3f));
-                bytes[size++] = static_cast<char>(0x80 | (c & 0x3f));
-            }
-            if (!sink(context, bytes, size)) { failed_ = true; break; }
+            if (!emit_scalar(c, sink, context)) { failed_ = true; break; }
         }
         if (count < 2 && c != '-') dashed = false;
         if (c >= 'A' && c <= 'Z') c += 'a' - 'A';
@@ -120,6 +124,72 @@ bool css_variable_lexer::decode_identifier(css_identifier_sink sink, void* conte
     bool var, url, dashed;
     name(var, url, dashed, sink, context);
     return !failed_ && cursor_ == length_;
+}
+bool css_variable_lexer::decode_url(std::string& out) {
+    // Decode once into owned temporary storage. Emitted delimiters are data,
+    // never input to the lexer; publication and allocation failure stay atomic.
+    std::string value;
+    auto append = [](void* context, const char* bytes, size_t size) {
+        static_cast<std::string*>(context)->append(bytes, size);
+        return true;
+    };
+    auto skip_white = [&] {
+        while (cursor_ < length_ && !failed_ && white(read(cursor_))) ++cursor_;
+    };
+    skip_white();
+    for (const char expected : {'u', 'r', 'l', '('}) {
+        auto c = read(cursor_);
+        if (c >= 'A' && c <= 'Z') c += 'a' - 'A';
+        if (cursor_ == length_ || failed_ || c != expected) return false;
+        ++cursor_;
+    }
+    skip_white();
+    const auto first = read(cursor_);
+    const unsigned char quote = first == '\'' || first == '"' ? first : 0;
+    if (quote) ++cursor_;
+    bool closed = false;
+    while (cursor_ < length_ && !failed_) {
+        auto c = read(cursor_);
+        if (quote ? c == quote : c == ')') {
+            ++cursor_;
+            closed = true;
+            break;
+        }
+        if (!quote && white(c)) {
+            skip_white();
+            if (read(cursor_) != ')' || cursor_ == length_) return false;
+            ++cursor_;
+            closed = true;
+            break;
+        }
+        if (newline(c) || c == 0 || (!quote &&
+            (c == '\'' || c == '"' || c == '(' || c <= 8 || c == 11 ||
+             (c >= 14 && c <= 31) || c == 127))) return false;
+        unsigned int decoded = 0;
+        if (c == '\\') {
+            if (cursor_ + 1 == length_) return false;
+            if (newline(read(cursor_ + 1))) {
+                if (!quote) return false;
+                ++cursor_;
+                const auto line = read(cursor_++);
+                if (line == '\r' && read(cursor_) == '\n') ++cursor_;
+                continue;
+            }
+            decoded = escape();
+        } else decoded = scalar();
+        if (failed_ || decoded == 0) return false;
+        emit_scalar(decoded, append, &value);
+    }
+    if (!closed || failed_ || value.empty()) return false;
+    if (quote) {
+        skip_white();
+        if (cursor_ == length_ || read(cursor_) != ')') return false;
+        ++cursor_;
+    }
+    skip_white();
+    if (failed_ || cursor_ != length_) return false;
+    out.swap(value);
+    return true;
 }
 css_variable_token css_variable_lexer::next() {
     css_variable_token t;
@@ -171,8 +241,17 @@ css_variable_token css_variable_lexer::next() {
             if (newline(q)) return finish(css_variable_token_kind::error);
             if (q == '\\') {
                 if (cursor_ >= length_) break;
-                const auto e = read(cursor_++);
-                if (e == '\r' && read(cursor_) == '\n') ++cursor_;
+                if (hex(read(cursor_)) >= 0) {
+                    // Advance the complete hex escape, including its optional
+                    // newline terminator, without decoding general strings or
+                    // changing their EOF serialization metadata.
+                    --cursor_;
+                    (void)escape();
+                    escape_tail_ = css_variable_escape_tail::none;
+                } else {
+                    const auto e = read(cursor_++);
+                    if (e == '\r' && read(cursor_) == '\n') ++cursor_;
+                }
             }
         }
         t.eof_recoverable = !failed_;
