@@ -149,6 +149,17 @@ bool is_repeat_word(const std::string& word) {
     return lower == "repeat" || lower == "no-repeat" || lower == "repeat-x" || lower == "repeat-y" || lower == "space" || lower == "round";
 }
 
+// Consume one repeat-style unit, not two words collected across other units.
+// Aliases are complete alternatives; a basic pair must remain contiguous.
+void consume_repeat(const std::vector<std::string>& words, size_t& index, std::string& out) {
+    out = words[index];
+    const auto first = str_to_lower(words[index]);
+    if (first == "repeat-x" || first == "repeat-y" || index + 1 == words.size()) return;
+    const auto next = str_to_lower(words[index + 1]);
+    if (next == "repeat" || next == "no-repeat" || next == "space" || next == "round")
+        out += " " + words[++index];
+}
+
 } // namespace
 
 bool aether_background_image_list_try_parse(const std::string& source, aether_background_layer_list* out_layers) {
@@ -196,6 +207,7 @@ bool aether_background_repeat_list_try_parse(const std::string& source, std::vec
 
 bool aether_background_shorthand_try_parse(const std::string& source, aether_background_shorthand_s& out) {
     out = {};
+    aether_background_shorthand_s replacement{};
     std::vector<std::string> images, positions, sizes, repeats;
     const auto layers = split_trimmed(source, ',');
     if (layers.empty()) return false;
@@ -205,20 +217,23 @@ bool aether_background_shorthand_try_parse(const std::string& source, aether_bac
         const auto after_slash = slash < 0 ? std::string{} : str_trim(layers[index].substr(slash + 1));
         if (slash >= 0 && after_slash.empty()) return false;
         std::string image = "none", position, repeat;
-        bool has_image = false;
+        bool has_image = false, seen_repeat = false;
         std::vector<std::string> position_words;
-        for (const auto& word : split_words(before_size)) {
+        const auto words_before = split_words(before_size);
+        for (size_t word_index = 0; word_index < words_before.size(); ++word_index) {
+            const auto& word = words_before[word_index];
             if (str_iequals(word, "none") || str_starts_with_i(word, "url(") || str_starts_with_i(word, "linear-gradient")) {
                 if (has_image) return false;
                 image = word;
                 has_image = true;
             } else if (is_repeat_word(word)) {
-                if (!repeat.empty()) repeat += " ";
-                repeat += word;
+                if (seen_repeat) return false;
+                seen_repeat = true;
+                consume_repeat(words_before, word_index, repeat);
             } else {
                 if (is_background_color(word)) {
-                    if (index + 1 != layers.size() || out.has_color) return false;
-                    out.color = word; out.has_color = true;
+                    if (index + 1 != layers.size() || replacement.has_color) return false;
+                    replacement.color = word; replacement.has_color = true;
                 } else position_words.push_back(word);
             }
         }
@@ -244,14 +259,16 @@ bool aether_background_shorthand_try_parse(const std::string& source, aether_bac
                 }
             }
             for (; consumed < words.size(); ++consumed) {
-                if (is_repeat_word(words[consumed]) && repeat.empty()) {
-                    repeat = words[consumed];
+                if (is_repeat_word(words[consumed])) {
+                    if (seen_repeat) return false;
+                    seen_repeat = true;
+                    consume_repeat(words, consumed, repeat);
                     continue;
                 }
-                if (index + 1 == layers.size() && !out.has_color &&
+                if (index + 1 == layers.size() && !replacement.has_color &&
                     is_background_color(words[consumed])) {
-                    out.color = words[consumed];
-                    out.has_color = true;
+                    replacement.color = words[consumed];
+                    replacement.has_color = true;
                     continue;
                 }
                 return false;
@@ -273,6 +290,8 @@ bool aether_background_shorthand_try_parse(const std::string& source, aether_bac
         images.push_back(image); positions.push_back(position.empty() ? "0% 0%" : position);
         sizes.push_back(size_text.empty() ? "auto auto" : size_text); repeats.push_back(repeat.empty() ? "repeat repeat" : repeat);
     }
-    out.image = join(images); out.position = join(positions); out.size = join(sizes); out.repeat = join(repeats);
+    replacement.image = join(images); replacement.position = join(positions);
+    replacement.size = join(sizes); replacement.repeat = join(repeats);
+    out = std::move(replacement);
     return true;
 }

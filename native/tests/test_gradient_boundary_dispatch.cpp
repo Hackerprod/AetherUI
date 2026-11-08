@@ -60,6 +60,10 @@ int main() {
         "linear-gradient (red,blue)", "linear-gradient/**/(red,blue)",
         "linear-gradient(red,blue) junk", "linear-gradient(red,blue)/**/none",
         "linear-gradient(red,blue)rgb(1,2,3)", "linear-gradient(red,blue))",
+        "linear-gradient(red,blue) center / cover repeat no-repeat round",
+        "linear-gradient(red,blue) repeat center no-repeat",
+        "linear-gradient(red,blue) center / cover repeat red no-repeat",
+        "linear-gradient(red,blue) repeat center / cover no-repeat",
         "linear-gradient(red,blue)[]", "linear-gradient(red,blue);", "linear-gradient(red,blue) !important"
     };
     for (const char* source : invalid) {
