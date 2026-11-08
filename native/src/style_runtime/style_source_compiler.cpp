@@ -187,7 +187,9 @@ static bool try_compile_longhand(
     }
 
     compiled_property_declaration_s decl;
-    decl.property_id = def->id;
+    // This supported pair is one cascade slot, including deferred/CSS-wide modes.
+    decl.property_id = def->name == "-webkit-backdrop-filter"
+        ? registry->try_get("backdrop-filter")->id : def->id;
     decl.value = compiled;
     decl.important = important;
     decl.declaration_order = declaration_order;
@@ -233,6 +235,7 @@ bool style_source_compile_shorthand(
 
 static declaration_compilation_result compile_declarations(
     const std::string& source,
+    const std::string& original,
     style_property_registry_s* registry,
     aether_style_diagnostic_fn diagnostics_callback,
     void* diagnostics_user_data)
@@ -253,6 +256,9 @@ static declaration_compilation_result compile_declarations(
             custom_property_declaration_s custom;
             custom.name = name;
             custom.source = value;
+            std::string original_value = original.substr(segment.colon + 1, segment.end - segment.colon - 1);
+            css_strip_important(original_value);
+            if (original_value != value) custom.original_source = std::move(original_value);
             custom.important = important;
             custom.declaration_order = declaration_order++;
             result.custom.push_back(custom);
@@ -261,6 +267,10 @@ static declaration_compilation_result compile_declarations(
 
         if (value.empty()) continue;
         name = str_to_lower(name);
+        if (name == "backdrop-filter" || name == "-webkit-backdrop-filter") {
+            value = original.substr(segment.colon + 1, segment.end - segment.colon - 1);
+            css_strip_important(value);
+        }
         if (name == "content") {
             compiled_content_declaration_s content;
             content.source = value;
@@ -396,7 +406,9 @@ static aether_status_t compile_range(
             selector_parse_list(selector_text.c_str(), selectors);
         }
 
-        auto declarations = compile_declarations(declaration_text, registry, diagnostics_callback, diagnostics_user_data);
+        auto declarations = compile_declarations(declaration_text,
+            original.substr(opening + 1, extent->body_end - opening - 1),
+            registry, diagnostics_callback, diagnostics_user_data);
 
         if (!selectors.empty() &&
             (!declarations.properties.empty() || !declarations.custom.empty() || !declarations.content.empty() ||
@@ -450,8 +462,8 @@ aether_status_t style_source_compile(
     auto* registry = style_property_registry_get_global();
     if (!registry) return AETHER_ERROR_INVALID_STATE;
 
-    // Both views have identical byte offsets. Only selectors need the original
-    // comments; declarations, media and rule discovery keep their existing path.
+    // Both views have identical byte offsets. Selectors and the focal backdrop
+    // consumer retain original tokens; other consumers keep the legacy view.
     const std::string original(source);
     const std::string cleaned = text_splitter_remove_comments(original);
     if (cleaned.size() != original.size()) return AETHER_ERROR_INVALID_STATE;
@@ -511,8 +523,9 @@ aether_status_t style_source_compile_inline(
     auto* registry = style_property_registry_get_global();
     if (!registry) return AETHER_ERROR_INVALID_STATE;
 
-    std::string cleaned = text_splitter_remove_comments(source);
-    auto result = compile_declarations(cleaned, registry, diagnostics_callback, diagnostics_user_data);
+    const std::string original(source);
+    const std::string cleaned = text_splitter_remove_comments(original);
+    auto result = compile_declarations(cleaned, original, registry, diagnostics_callback, diagnostics_user_data);
 
     out_properties = std::move(result.properties);
     out_custom = std::move(result.custom);

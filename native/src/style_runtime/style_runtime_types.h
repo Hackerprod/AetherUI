@@ -15,6 +15,7 @@
 #include <algorithm>
 #include <cmath>
 #include <memory>
+#include <optional>
 
 // ═══ String utilities (inline, shared) ═════════════════════════
 
@@ -292,6 +293,8 @@ struct custom_property_declaration_s {
     std::string source;
     bool important = false;
     int32_t declaration_order = 0;
+    // Only backdrop-filter consumes this optional original-token view.
+    std::optional<std::string> original_source;
 };
 
 struct compiled_content_declaration_s {

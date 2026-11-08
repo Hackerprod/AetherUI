@@ -1,6 +1,7 @@
 #include <new>
 #include "../style_runtime/css_component_values.h"
 #include "backdrop_filters.h"
+#include "css_length_internal.h"
 
 #include "../style_runtime/style_runtime_types.h"
 
@@ -18,10 +19,38 @@ bool parse_blur(const std::string& function, aether_backdrop_filter* out) {
     if (open == std::string::npos || function.back() != ')') return false;
     const auto name = str_trim(function.substr(0, open));
     if (!str_iequals(name, "blur")) return false;
-    const auto amount = str_trim(function.substr(open + 1, function.size() - open - 2));
-    aether_css_length length{};
-    if (amount.empty() || aether_css_length_try_parse(amount.c_str(), &length) != AETHER_TRUE ||
-        length.unit == AETHER_CSS_UNIT_AUTO || length.unit == AETHER_CSS_UNIT_PERCENT || length.value < 0.f) return false;
+    const auto amount = function.substr(open + 1, function.size() - open - 2);
+    css_component_cursor cursor(amount);
+    css_component_value component, extra;
+    aether_css_length length = aether_css_length_zero();
+    if (cursor.next(component)) {
+        if (cursor.next(extra) || !cursor.valid()) return false;
+        const auto argument = amount.substr(component.begin, component.end - component.begin);
+        aether::css::calc_value_s parsed{};
+        if (component.token.kind == css_variable_token_kind::function) {
+            // Reject percentage tokens before arithmetic can cancel their units.
+            css_variable_lexer lexer(argument.data(), argument.size());
+            for (;;) {
+                const auto token = lexer.next();
+                if (token.kind == css_variable_token_kind::end) break;
+                if (token.kind == css_variable_token_kind::error ||
+                    token.serialization == css_variable_serialization::percentage) return false;
+            }
+            if (!aether::css::try_parse_calc(argument, parsed) ||
+                parsed.kind != aether::css::calc_value_kind_e::length) return false;
+            length = parsed.length;
+        } else {
+            double original_number = 0.0;
+            if (!aether::css::try_parse_numeric_literal(argument, parsed, &original_number)) return false;
+            if (parsed.kind == aether::css::calc_value_kind_e::number) {
+                if (original_number != 0.0) return false;
+            } else {
+                // Validate before float rounding can hide a negative nonzero literal.
+                if (original_number < 0.0 || parsed.length.unit == AETHER_CSS_UNIT_PERCENT) return false;
+                length = parsed.length;
+            }
+        }
+    } else if (!cursor.valid()) return false;
     *out = {AETHER_BACKDROP_FILTER_BLUR, length, 0.f};
     return true;
 }
@@ -34,10 +63,12 @@ bool aether_backdrop_filter_list_try_parse(const std::string& source,
     if (!out_filters) return false;
     if (out_error) *out_error = aether_backdrop_filter_parse_error_e::none;
     const auto value = str_trim(source);
-    if (str_iequals(value, "none")) { aether_backdrop_filter_list_free(out_filters); return true; }
     bool valid = false;
     const auto functions = split_functions(value, &valid);
     if (!valid || functions.empty()) { if (out_error) *out_error = aether_backdrop_filter_parse_error_e::syntax; return false; }
+    if (functions.size() == 1 && str_iequals(functions.front(), "none")) {
+        aether_backdrop_filter_list_free(out_filters); return true;
+    }
     std::vector<aether_backdrop_filter> replacement;
     replacement.reserve(functions.size());
     for (const auto& function : functions) {

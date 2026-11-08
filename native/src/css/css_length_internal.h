@@ -14,7 +14,7 @@ struct calc_value_s {
 };
 
 // Parses a complete CSS numeric literal without coercing Number to Length.
-bool try_parse_numeric_literal(std::string_view source, calc_value_s& output);
+bool try_parse_numeric_literal(std::string_view source, calc_value_s& output, double* original_number = nullptr);
 
 // Evaluates a complete calc expression without coercing its resulting kind.
 bool try_parse_calc(std::string_view source, calc_value_s& output);
