@@ -5,7 +5,16 @@
 #include "../dom/dom_types.h"
 
 #include <algorithm>
+#include <cstddef>
+#include <new>
 #include <string>
+
+// Private presentation contract: one UTF-8 U+2022 (three bytes) per valid
+// Unicode scalar, or per byte when recovering from malformed UTF-8.
+inline std::size_t aether_password_mask_byte_count(std::size_t units, std::size_t max_bytes) {
+    if (units > max_bytes / 3) throw std::bad_alloc();
+    return units * 3;
+}
 
 enum aether_form_control_content_model_e {
     AETHER_FORM_CONTROL_ORDINARY_CONTENT,
