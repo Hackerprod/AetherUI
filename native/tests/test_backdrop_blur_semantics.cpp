@@ -178,8 +178,17 @@ void sticky_focal_scope(){
 }
 void isolated_legacy_root(){
     Fixture f;f.in(f.parent,"--a:calc(1px /*comment*/ + 2px)");f.in(f.node,"backdrop-filter:blur(var(--a,4px))");f.resolve();f.expect({3});
-    aether_style_update_t* updates{};const int n=aether_style_runtime_resolve_subtree(f.runtime,f.node,&updates);need(n>=0,"legacy subtree resolution");aether_style_updates_free(updates,n);
-    aether_style_revision_t isolated{};ok(aether_style_runtime_retain_revision(f.runtime,&isolated),"retain isolated legacy result");f.expect({4},nullptr,isolated);aether_style_revision_destroy(isolated);
+    aether_style_update_t* updates{};const int n=aether_style_runtime_resolve_subtree(f.runtime,f.node,&updates);need(n>0,"legacy subtree resolution");
+    unsigned found=0;
+    for(int i=0;i<n;++i){aether_node_t node{};aether_computed_style_handle_t handle{};
+        ok(aether_style_runtime_get_update(updates[i],&node,&handle,nullptr),"legacy update");
+        if(node==f.node){++found;Flat style;ok(aether_computed_style_copy(handle,&style.s),"copy isolated style");
+            need(style.s.backdrop_filters.count==1&&style.s.backdrop_filters.items[0].length_amount.value==4,"isolated focal scope uses fallback");}
+        aether_computed_style_handle_destroy(handle);}
+    need(found==1,"isolated node changed exactly once");aether_style_updates_free(updates,n);
+    // The contextual retain API deliberately rejects a legacy revision.
+    aether_style_revision_t isolated{};need(aether_style_runtime_retain_revision(f.runtime,&isolated)==AETHER_ERROR_INVALID_STATE&&!isolated,"legacy revision is not contextual");
+    f.expect({3}); // The older contextual snapshot remains independently readable.
 }
 }
 int main(){sticky_focal_scope();isolated_legacy_root();grammar();cascade();variables();comments();context_and_snapshots();std::printf("PASS blur semantics: %u cases, %u active checks\n",cases,checks);}
