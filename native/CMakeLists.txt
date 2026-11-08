@@ -554,6 +554,10 @@ if(AETHERUI_BUILD_TESTS)
     target_link_libraries(aether_background_position_display_list_test PRIVATE AetherUI::Core)
     add_test(NAME aether.background-position-display-list COMMAND aether_background_position_display_list_test)
 
+    add_executable(aether_background_repeat_runtime_test tests/test_background_repeat_runtime.cpp)
+    target_link_libraries(aether_background_repeat_runtime_test PRIVATE AetherUI::Core)
+    add_test(NAME aether.background-repeat-runtime COMMAND aether_background_repeat_runtime_test)
+
     add_executable(aether_background_position_context_test tests/test_background_position_context.cpp)
     target_link_libraries(aether_background_position_context_test PRIVATE AetherUI::Core)
     add_test(NAME aether.background-position-context COMMAND aether_background_position_context_test)
