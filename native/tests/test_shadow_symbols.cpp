@@ -44,6 +44,7 @@ struct Fixture {
         nodes[0] = aether_doc_get_element_by_id(doc, "p");
         nodes[1] = aether_doc_get_element_by_id(doc, "m");
         nodes[2] = aether_doc_get_element_by_id(doc, "g");
+        need(nodes[0] && nodes[1] && nodes[2], "fixture nodes");
         aether_style_runtime_options_t opts{};
         opts.max_variable_depth = 32;
         opts.max_variable_expansion_length = 65536;
@@ -60,7 +61,7 @@ struct Fixture {
     void set(int i, const char* s) {
         need(aether_element_set_attribute(nodes[i], "style", s) == AETHER_OK, "set inline");
     }
-    void resolve(bool retain = false, aether_node_t changed = nullptr) {
+    void resolve(bool retain = false, aether_node_t changed = nullptr, int retain_node = 0) {
         for (int i = 0; i < 3; ++i) {
             seen[i] = false;
             impacts[i] = 0;
@@ -70,7 +71,7 @@ struct Fixture {
         const int n = changed
             ? aether_style_runtime_resolve_state_changes(rt, root, &changed, 1, &u)
             : aether_style_runtime_resolve_subtree(rt, root, &u);
-        need(n >= 0, "resolve");
+        need(n >= 0 && (n == 0 || u), "resolve");
         update_count = n;
         for (int j = 0; j < n; ++j) {
             aether_node_t node{};
@@ -84,7 +85,7 @@ struct Fixture {
                     impacts[i] = impact;
                     aether_computed_style_free(&cached[i]);
                     need(aether_computed_style_copy(h, &cached[i]) == AETHER_OK, "copy");
-                    if (retain && i == 0) {
+                    if (retain && i == retain_node) {
                         need(!retained, "retain once");
                         retained = h;
                         keep = true;
@@ -283,6 +284,88 @@ void deferred_noop() {
     f.resolve();
     f.shadow(2, 0, red, "valid replacement clears deferred inherited symbol");
 }
+// A split group must invalidate the whole computed value, while preserving
+// inherited symbol identity even when the intermediary's RGBA does not change.
+void split_group_deferred_noop() {
+    Fixture f;
+    f.sheet("#p{color:red;text-shadow:1px 2px currentColor;box-shadow:7px 8px blue}"
+            "#m{color:red;text-shadow:1px 2px red;box-shadow:3px 4px red}#g{color:blue}");
+    f.resolve(true, nullptr, 1);
+    f.shadow(2, 0, red, "split fixture initially inherits explicit red");
+    need(f.cached[1].text_shadows.count == 1 && f.cached[1].text_shadows.items &&
+             f.cached[1].box_shadows.count == 1 && f.cached[1].box_shadows.items,
+         "split fixture initial lists");
+    // Retain the intermediary's original explicit value, not its symbolic parent.
+    need(f.retained != nullptr, "retain middle style");
+    const auto retained = f.retained;
+    aether_computed_style_t snapshot{};
+    need(aether_computed_style_copy(retained, &snapshot) == AETHER_OK, "middle snapshot");
+    check(snapshot.text_shadows.items != f.cached[1].text_shadows.items &&
+              snapshot.box_shadows.items != f.cached[1].box_shadows.items,
+          "split snapshot lists do not alias cached lists");
+    f.set(1, "--bad:1px red 2px;text-shadow:var(--bad,9px 10px blue);"
+             "box-shadow:var(--bad,9px 10px blue)");
+    f.resolve();
+    f.shadow(1, 0, red, "split middle inherits same RGBA with symbolic identity");
+    f.shadow(2, 0, blue, "split invalid publishes inherited symbol to blue descendant");
+    f.painted(2, "split descendant receives PAINT|INHERITED");
+    check(f.cached[0].box_shadows.count == 1 && f.cached[1].box_shadows.count == 0 &&
+              f.cached[2].box_shadows.count == 0,
+          "split invalid box becomes none, never parent or var fallback");
+    f.resolve();
+    check(f.update_count == 0, "repeat split-invalid resolution has no updates");
+    f.set(2, "color:#00ff00");
+    f.resolve();
+    f.shadow(2, 0, lime, "split inherited symbol tracks descendant color mutation");
+    f.shadow(1, 0, red, "descendant color does not contaminate middle");
+    f.set(1, "--bad:1px 2px red 3px;text-shadow:var(--bad,9px 10px blue);"
+             "box-shadow:var(--bad,9px 10px blue)");
+    f.resolve();
+    f.shadow(2, 0, lime, "color before blur also preserves inherited symbol");
+    check(f.cached[1].box_shadows.count == 0, "color before blur keeps invalid box empty");
+    f.set(1, "text-shadow:1px 2px red;box-shadow:3px 4px red");
+    f.resolve();
+    f.shadow(2, 0, red, "valid replacement clears split inherited symbol");
+    check(f.cached[1].box_shadows.count == 1 && f.cached[1].box_shadows.items &&
+              f.cached[1].box_shadows.items[0].offset_x == 3 &&
+              color(f.cached[1].box_shadows.items[0].color, red),
+          "valid box restores explicit geometry and color");
+    f.set(2, "color:blue");
+    f.resolve();
+    f.shadow(2, 0, red, "restored explicit color stays fixed after descendant mutation");
+    f.resolve();
+    check(f.update_count == 0, "repeat restored resolution has no updates");
+    aether_style_runtime_destroy(f.rt);
+    f.rt = nullptr;
+    aether_doc_destroy(f.doc);
+    f.doc = nullptr;
+    aether_computed_style_t old{};
+    need(aether_computed_style_copy(retained, &old) == AETHER_OK,
+         "split retained handle survives runtime and doc destruction");
+    need(old.text_shadows.count == 1 && old.text_shadows.items &&
+             old.box_shadows.count == 1 && old.box_shadows.items &&
+             snapshot.text_shadows.count == 1 && snapshot.text_shadows.items &&
+             snapshot.box_shadows.count == 1 && snapshot.box_shadows.items,
+         "split retained and copied list storage");
+    check(old.text_shadows.items[0].offset_x == 1 &&
+              color(old.text_shadows.items[0].color, red) &&
+              old.box_shadows.items[0].offset_x == 3 &&
+              color(old.box_shadows.items[0].color, red),
+          "split old handle preserves both original explicit lists");
+    check(old.text_shadows.items != snapshot.text_shadows.items &&
+              old.box_shadows.items != snapshot.box_shadows.items,
+          "split handle copy and snapshot do not alias");
+    aether_computed_style_handle_destroy(retained);
+    f.retained = nullptr;
+    aether_computed_style_free(&old);
+    check(snapshot.text_shadows.items[0].offset_x == 1 &&
+              color(snapshot.text_shadows.items[0].color, red) &&
+              snapshot.box_shadows.items[0].offset_x == 3 &&
+              color(snapshot.box_shadows.items[0].color, red),
+          "split snapshot survives runtime, handle and sibling-copy destruction");
+    aether_computed_style_free(&snapshot);
+}
+
 } // namespace
 int main() {
     noop_transitions();
@@ -290,6 +373,7 @@ int main() {
     direct_changed_parent(true);
     mixed_lists();
     deferred_noop();
+    split_group_deferred_noop();
     std::printf("Shadow symbols: %d checks, %d failures\n", checks, failures);
     return failures ? 1 : 0;
 }

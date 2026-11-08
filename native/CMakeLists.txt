@@ -139,6 +139,10 @@ if(AETHERUI_BUILD_TESTS)
     target_link_libraries(aether_shadow_symbols_test PRIVATE AetherUI::Core)
     add_test(NAME aether.shadow-symbols COMMAND aether_shadow_symbols_test)
 
+    add_executable(aether_shadow_grammar_consumers_test tests/test_shadow_grammar_consumers.cpp)
+    target_link_libraries(aether_shadow_grammar_consumers_test PRIVATE AetherUI::Core)
+    add_test(NAME aether.shadow-grammar-consumers COMMAND aether_shadow_grammar_consumers_test)
+
     if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
         add_executable(aether_rgb_locale_failure_test tests/test_rgb_locale_failure.cpp
             src/css/color_rgba.cpp src/style_runtime/css_variable_tokens.cpp)
