@@ -1268,7 +1268,7 @@ endif()
 if(AETHERUI_BUILD_TESTS)
     # These white-box dispatcher tests compile their real registry locally.
     # Its immutable parent readers stay private rather than expanding the ABI.
-    foreach(reader_test aether_background_position_parser_test aether_gradient_boundary_dispatch_test aether_transform_origin_dispatch_test
+    foreach(reader_test aether_flex_number_registry_test aether_background_position_parser_test aether_gradient_boundary_dispatch_test aether_transform_origin_dispatch_test
             aether_transform_dispatch_test aether_measure_property_scratch_test)
         target_sources(${reader_test} PRIVATE src/css/computed_style.cpp src/css/frozen_style.cpp src/css/frozen_c_string.cpp
             src/css/frozen_measure_read.cpp src/css/style_freeze.cpp
