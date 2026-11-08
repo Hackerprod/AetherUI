@@ -203,17 +203,40 @@ void layout_positioned_children(
 }
 
 namespace {
-void finalize_fixed_children(const aether_layout_engine_s* engine, const StyleLookup* styles,
-    aether_layout_result_s* result, aether_layout_box_s* parent) {
+bool contains_finalized_table_cell(const aether_layout_box_s* box) {
+    if (box->scroll_completion_flags & LAYOUT_SCROLL_TABLE_CELL) return true;
+    for (const auto* child : box->children)
+        if (contains_finalized_table_cell(child)) return true;
+    return false;
+}
+
+bool finalize_fixed_children(const aether_layout_engine_s* engine, const StyleLookup* styles,
+    aether_layout_result_s* result, aether_layout_box_s* parent, bool inside_table_cell) {
+    const bool tables = result->has_finalized_table_cells;
+    inside_table_cell = tables && (inside_table_cell ||
+        (parent->scroll_completion_flags & LAYOUT_SCROLL_TABLE_CELL));
+    bool changed_table_descendant = false;
     for (size_t index = 0; index < parent->children.size(); ++index) {
         auto* child = parent->children[index];
         bool has_container = false;
+        bool table_owner = false;
         if (child->kind == LAYOUT_BOX_ELEMENT && child->style.position == AETHER_POSITION_FIXED) {
             for (auto* ancestor = child->element->parent; ancestor; ancestor = ancestor->parent) {
-                if (result->effective_fixed_container_nodes.count(ancestor)) { has_container = true; break; }
+                if (result->effective_fixed_container_nodes.count(ancestor)) {
+                    has_container = true;
+                    if (tables) {
+                        const auto* owner = result->find_primary_box(ancestor);
+                        table_owner = owner && (owner->scroll_completion_flags & LAYOUT_SCROLL_TABLE_CELL);
+                    }
+                    break;
+                }
             }
         }
+        bool table_rebuilt = false;
         if (has_container) {
+            // Inspect before deletion; retain no pointer into the replaced tree.
+            table_rebuilt = tables && (inside_table_cell || table_owner ||
+                                       contains_finalized_table_cell(child));
             auto* node = child->element;
             // Only after the complete flow pass are ancestor auto block sizes
             // known. Re-run positioned sizing, not just a visual translation:
@@ -228,13 +251,18 @@ void finalize_fixed_children(const aether_layout_engine_s* engine, const StyleLo
             child = parent->children.back();
             parent->children.pop_back();
             parent->children.insert(parent->children.begin() + index, child);
+            if (result->has_finalized_table_cells && !table_rebuilt)
+                table_rebuilt = contains_finalized_table_cell(child);
         }
-        finalize_fixed_children(engine, styles, result, child);
+        const bool child_changed = finalize_fixed_children(engine, styles, result, child, inside_table_cell);
+        changed_table_descendant = changed_table_descendant || table_rebuilt || child_changed;
     }
+    if (changed_table_descendant) layout_recompute_saved_scroll(parent);
+    return changed_table_descendant;
 }
 }
 void layout_finalize_fixed_containers(const aether_layout_engine_s* engine,
     const StyleLookup* styles, aether_layout_result_s* result) {
     if (result->root && result->effective_context_enabled)
-        finalize_fixed_children(engine, styles, result, result->root);
+        finalize_fixed_children(engine, styles, result, result->root, false);
 }

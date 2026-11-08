@@ -71,6 +71,9 @@ aether_layout_box_s* clone_box_tree(aether_layout_result_s* destination, const a
     box->kind = source->kind; box->element = source->element; box->style = source->style;
     box->text = source->text; box->is_atomic_control = source->is_atomic_control;
     box->control_display_text = source->control_display_text; box->control_shows_placeholder = source->control_shows_placeholder;
+    box->scroll_flow_height = source->scroll_flow_height;
+    box->scroll_base_height = source->scroll_base_height;
+    box->scroll_completion_flags = source->scroll_completion_flags;
     box->scroll = source->scroll; box->visual_sample_valid = source->visual_sample_valid;
     box->visual_has_transform = source->visual_has_transform; box->visual_transform = source->visual_transform;
     box->visual_opacity = source->visual_opacity; box->visual_timestamp = source->visual_timestamp;
@@ -93,6 +96,7 @@ AETHER_API aether_status_t aether_layout_clone_snapshot(aether_layout_result_t s
         result = std::make_unique<aether_layout_result_s>();
         result->abandoned = true;
         result->assets = source->assets;
+        result->has_finalized_table_cells = source->has_finalized_table_cells;
         result->effective_context_enabled = source->effective_context_enabled;
         result->effective_fixed_container_nodes = source->effective_fixed_container_nodes;
         result->viewport = source->viewport; result->root_font_size = source->root_font_size;

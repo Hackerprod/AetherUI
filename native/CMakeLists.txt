@@ -988,6 +988,10 @@ if(AETHERUI_BUILD_TESTS)
     target_include_directories(aether_table_layout_test PRIVATE src/layout)
     add_test(NAME aether.table-layout COMMAND aether_table_layout_test)
 
+    add_executable(aether_table_cell_final_height_test tests/test_table_cell_final_height.cpp)
+    target_link_libraries(aether_table_cell_final_height_test PRIVATE AetherUI::Core)
+    add_test(NAME aether.table-cell-final-height COMMAND aether_table_cell_final_height_test)
+
     add_executable(aether_table_layout_integration_test tests/test_table_layout_integration.cpp)
     target_link_libraries(aether_table_layout_integration_test PRIVATE AetherUI::Core)
     add_test(NAME aether.table-layout-integration COMMAND aether_table_layout_integration_test)
