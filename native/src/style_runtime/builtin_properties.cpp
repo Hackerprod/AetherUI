@@ -1078,7 +1078,14 @@ void builtin_properties_register(style_property_registry_s* reg) {
     // CSS repeats the final supplied value when there are fewer values than layers.
     reg->register_property_checked("background-position", false, STYLE_IMPACT_PAINT,
         "0% 0%",
-        [](const char* source, std::string& out) { out = str_trim(source ? source : ""); return !out.empty(); },
+        [](const char* source, std::string& out) {
+            // Substitution may pass out.c_str() as source: stage before publishing.
+            std::string text = str_trim(source ? source : "");
+            std::vector<aether_background_position_s> positions;
+            if (!aether_background_position_list_try_parse(text, positions)) return false;
+            out = std::move(text);
+            return true;
+        },
         [](aether_computed_style_t* st, const std::string& value) -> property_apply_result_s {
             std::vector<aether_background_position_s> positions;
             if (!aether_background_position_list_try_parse(value, positions))
