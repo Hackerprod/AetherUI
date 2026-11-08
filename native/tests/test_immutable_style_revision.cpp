@@ -14,7 +14,7 @@ static FrozenNodeRef record(aether_node_s& n, aether_doc_s& d, FrozenDocumentRef
     in.style=std::make_shared<const FrozenStyle>(StyleScalars{},payload);
     in.measures=std::make_shared<const FrozenMeasures>(MeasureScalarValues{},document,ImmutableArray<MeasureBackgroundPosition>{},ImmutableArray<MeasureBackgroundSize>{},ImmutableArray<FrozenPropertyDependency>{});
     ok(freeze_custom_scope({}, {}, in.custom_properties));
-    in.color_references=std::make_shared<const FrozenColorMetadata>(std::array<bool,4>{},ImmutableArray<uint8_t>{},ImmutableArray<uint8_t>{});
+    in.color_references=std::make_shared<const FrozenColorMetadata>(std::array<bool,4>{},ImmutableArray<uint8_t>{},ImmutableArray<uint8_t>{},false);
     in.node_lifetime=n.identity; in.node_identity=aether_node_identity(&n);
     in.document_lifetime=d.identity;in.document_identity=aether_node_identity(&d);in.generated_leaf=leaf;
     FrozenNodeRef out;ok(freeze_node_record(in,out));return out;

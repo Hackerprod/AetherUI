@@ -1112,11 +1112,29 @@ void builtin_properties_register(style_property_registry_s* reg) {
     // ── Paint ──────────────────────────────────────────────────
 
     // background-color
-    reg->register_property("background-color", false, STYLE_IMPACT_PAINT,
+    reg->register_property_with_context("background-color", false, STYLE_IMPACT_PAINT,
         "transparent", bi_try_color,
-        [](aether_computed_style_t* st, const std::string& v) {
-            aether_color_rgba c; if (aether_color_rgba_try_parse(v.c_str(), &c)) st->background_color = c;
+        [](property_apply_context_s& context, const std::string& value) {
+            if (str_iequals(value, "currentColor")) {
+                context.color_resolution->background_uses_current_color = true;
+            } else {
+                aether_color_rgba color;
+                if (aether_color_rgba_try_parse(value.c_str(), &color)) {
+                    context.style->background_color = color;
+                    context.color_resolution->background_uses_current_color = false;
+                }
+            }
         });
+    // Background is not inherited by default. Only explicit inherit carries its
+    // symbol, which the final color pass resolves against the child's producer.
+    // Unlike aggregate geometry inheritance, this adds no measure dependency.
+    reg->definitions.back().css_wide = bi_origin_css_wide;
+    reg->definitions.back().inherit_context = [](property_apply_context_s& context,
+            ComputedStyleReadView parent, const MeasuresReadView*) {
+        context.style->background_color = parent.scalars().background_color;
+        context.color_resolution->background_uses_current_color =
+            context.parent_color_resolution && context.parent_color_resolution->background();
+    };
 
     // Backdrop-filter is a non-inherited ordered operation list. The compositor v1
     // currently understands blur(); unsupported functions are diagnosed explicitly.

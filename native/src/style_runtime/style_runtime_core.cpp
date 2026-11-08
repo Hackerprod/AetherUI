@@ -57,6 +57,7 @@ static void require_style_status(aether_status_t status) {
 }
 static color_resolution_state_s copy_color_state(const FrozenColorMetadata& source) {
     color_resolution_state_s result;
+    result.background_uses_current_color=source.background();
     for(size_t i=0;i<4;++i)result.border_uses_current_color[i]=source.border(i);
     for(size_t i=0;i<source.text_shadow_count();++i)result.text_shadow_uses_current_color.push_back(source.text_shadow_at(i));
     for(size_t i=0;i<source.box_shadow_count();++i)result.box_shadow_uses_current_color.push_back(source.box_shadow_at(i));
@@ -369,6 +370,8 @@ static bool is_color_producer(const style_property_definition_s& definition) {
 
 static void resolve_symbolic_colors(aether_computed_style_t& style,
                                     const color_resolution_state_s& references) {
+    if (references.background_uses_current_color)
+        style.background_color = style.color;
     if (references.border_uses_current_color[static_cast<int>(aether_border_side_t::top)])
         style.border_colors.top = style.color;
     if (references.border_uses_current_color[static_cast<int>(aether_border_side_t::right)])
@@ -647,7 +650,7 @@ static PreparedNodeResult* compute_node(aether_style_runtime_s* runtime, aether_
     if (parent) {
         // text-shadow is inherited, and currentColor inside an inherited
         // shadow must remain symbolic until this node's own color is known.
-        // Borders and box-shadow are not inherited, so their symbolic state
+        // Background, borders and box-shadow are not inherited, so their symbolic state
         // starts from the CSS initial values for this node.
         color_references.text_shadow_uses_current_color =
             copy_text_color_flags(*parent->color_references);
@@ -868,6 +871,9 @@ static PreparedNodeResult* compute_node(aether_style_runtime_s* runtime, aether_
     else require_style_status(freeze_style(next,state->style));
     state->measures = measures;
     state->custom_properties = std::move(scope);
+    // Always refresh symbolic metadata, even when identical RGBA reused the style.
+    // prepare_tree visits descendants regardless of parent impact: explicit background
+    // inherit must observe concrete <-> currentColor changes with the same parent RGBA.
     require_style_status(freeze_color_metadata(color_references,state->color_references));
     state->declared_impact = declared_impact;
     state->declared_inherited_impact = declared_inherited_impact;

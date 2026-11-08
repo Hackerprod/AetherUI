@@ -33,7 +33,7 @@ int main() {
     auto old=record;in.node_identity++;need(freeze_node_record(in,record)==AETHER_ERROR_INVALID_STATE&&record==old,"bad token atomic");in.node_identity--;
     in.origin=RecordOrigin::runtime;need(freeze_node_record(in,record)==AETHER_ERROR_INVALID_STATE&&record==old,"runtime requires metadata");
     FrozenScopeRef scope;ok(freeze_custom_scope({}, {},scope));
-    in.custom_properties=scope;in.color_references=std::make_shared<const FrozenColorMetadata>(std::array<bool,4>{true,false,true,false},ImmutableArray<uint8_t>{},ImmutableArray<uint8_t>{});
+    in.custom_properties=scope;in.color_references=std::make_shared<const FrozenColorMetadata>(std::array<bool,4>{true,false,true,false},ImmutableArray<uint8_t>{},ImmutableArray<uint8_t>{},false);
     auto document=std::make_shared<const FrozenDocumentMeasureContext>(DocumentMeasureValues{1280,720,16,20,9,in.document_identity});
     in.measures=std::make_shared<const FrozenMeasures>(MeasureScalarValues{},document,ImmutableArray<MeasureBackgroundPosition>{},ImmutableArray<MeasureBackgroundSize>{},ImmutableArray<FrozenPropertyDependency>{});
     ok(freeze_node_record(in,record));need(record->measures()==in.measures&&record->custom_properties()==scope&&record->color_references()==in.color_references,"runtime metadata owners exact");

@@ -137,6 +137,13 @@ std::string join(const std::vector<std::string>& values) {
     return result;
 }
 
+// The shorthand carries the contextual color token to its longhand; gradient
+// stops and the concrete RGBA parser intentionally do not accept this symbol.
+bool is_background_color(const std::string& word) {
+    aether_color_rgba color{};
+    return str_iequals(word, "currentcolor") || aether_color_rgba_try_parse(word.c_str(), &color);
+}
+
 bool is_repeat_word(const std::string& word) {
     const auto lower = str_to_lower(word);
     return lower == "repeat" || lower == "no-repeat" || lower == "repeat-x" || lower == "repeat-y" || lower == "space" || lower == "round";
@@ -198,17 +205,18 @@ bool aether_background_shorthand_try_parse(const std::string& source, aether_bac
         const auto after_slash = slash < 0 ? std::string{} : str_trim(layers[index].substr(slash + 1));
         if (slash >= 0 && after_slash.empty()) return false;
         std::string image = "none", position, repeat;
+        bool has_image = false;
         std::vector<std::string> position_words;
         for (const auto& word : split_words(before_size)) {
-            if (str_starts_with_i(word, "url(") || str_starts_with_i(word, "linear-gradient")) {
-                if (image != "none") return false;
+            if (str_iequals(word, "none") || str_starts_with_i(word, "url(") || str_starts_with_i(word, "linear-gradient")) {
+                if (has_image) return false;
                 image = word;
+                has_image = true;
             } else if (is_repeat_word(word)) {
                 if (!repeat.empty()) repeat += " ";
                 repeat += word;
             } else {
-                aether_color_rgba color{};
-                if (aether_color_rgba_try_parse(word.c_str(), &color)) {
+                if (is_background_color(word)) {
                     if (index + 1 != layers.size() || out.has_color) return false;
                     out.color = word; out.has_color = true;
                 } else position_words.push_back(word);
@@ -228,7 +236,7 @@ bool aether_background_shorthand_try_parse(const std::string& source, aether_bac
                 if (!parse_length(first, first_length, true)) return false;
                 size_text = words[0];
                 consumed = 1;
-                if (words.size() > 1 && !is_repeat_word(words[1])) {
+                if (words.size() > 1 && !is_repeat_word(words[1]) && !is_background_color(words[1])) {
                     aether_css_length second_length{};
                     if (!parse_length(words[1], second_length, true)) return false;
                     size_text += " " + words[1];
@@ -240,9 +248,8 @@ bool aether_background_shorthand_try_parse(const std::string& source, aether_bac
                     repeat = words[consumed];
                     continue;
                 }
-                aether_color_rgba color{};
                 if (index + 1 == layers.size() && !out.has_color &&
-                    aether_color_rgba_try_parse(words[consumed].c_str(), &color)) {
+                    is_background_color(words[consumed])) {
                     out.color = words[consumed];
                     out.has_color = true;
                     continue;
