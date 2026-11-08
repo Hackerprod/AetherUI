@@ -981,3 +981,28 @@ composition, strict controls, cascade and repeated resolution. Execution results
 for native and .NET tests must be reported separately; adding these tests does
 not establish .NET execution, Chromium execution or visual equivalence. No new
 DOM invalidation contract, public ABI or global recursion limit is introduced.
+
+### Inline capitalization continuity
+
+Native `text-transform: capitalize` carries a stack-local word-start context across
+ordinary inline descendants, adjacent text nodes and style changes. Measured,
+stored and painted fragments retain their original owner/style partitions; DOM
+text is not rewritten. Empty nodes and `display:none` are transparent. Hidden
+text still participates. Out-of-flow descendants do not affect surrounding
+capitalization; nested positioned content retains its existing flattened output.
+
+This is a bounded native contract, not complete browser casing parity. Explicit
+breaks, blocks, atomic inline boxes and opaque controls separate sequences.
+Nested block-in-inline geometry and nested positioned geometry remain unchanged.
+Direct discarded whitespace advances capitalization but still has no emitted
+space box. Split fragments remain separate wrapping/min-content tokens: under
+the regression metrics `Hel` + `lo` has max-content 41 and min-content 27, whereas
+unsplit `Hello` has both 41. Soft wrapping does not restart capitalization.
+Casing remains the existing byte-oriented, whitespace-delimited algorithm, not
+Unicode/language/punctuation-aware title casing.
+
+Focused regression targets are `aether_inline_capitalization_test`,
+`aether_inline_capitalization_intrinsic_test` and `aether_text_transform_test`.
+Run `ctest --test-dir <build> --output-on-failure -R 'inline-capitalization|text-transform'`
+after building those targets. The integration test uses only the public ABI;
+the intrinsic supplement reuses the existing private test core objects.
