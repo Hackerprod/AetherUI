@@ -273,7 +273,9 @@ static void positioned_cases(int mode) {
             "#automatic{position:absolute;width:5px;height:5px}");
         rect("percent",f.border("percent"),{30,0,5,40});
         rect("opposing",f.border("opposing"),{40,10,5,55});
-        rect("automatic",f.border("automatic"),{20,0,5,5});
+        // Direct absolute BLOCK follows the 20px in-flow block's insertion point,
+        // rather than using that predecessor's right/top corner.
+        rect("automatic",f.border("automatic"),{0,20,5,5});
         f.hit(32,35,"percent"); f.hit(42,60,"opposing"); f.paint({0,0,100,80});
     }
     {

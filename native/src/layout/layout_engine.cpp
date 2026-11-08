@@ -567,6 +567,7 @@ aether_layout_box_s* layout_element(
             std::isfinite(definite_content_height)) {
             const float dy = aether_control_flow_centering_offset(definite_content_height, content_height);
             for (auto* child : box->children) offset_box(child, 0.f, dy);
+            for (auto& anchor : box->block_static_anchors) anchor.block_offset += dy;
         }
     }
 
@@ -594,7 +595,11 @@ aether_layout_box_s* layout_element(
         start_facts.establishes_block_formatting_context = has_bfc;
         if (first_is_block && aether_parent_start_margin_adjoins_child(start_facts)) {
             box->collapsed_margin_before = aether_collapse_adjoining_margins(margin.top, first->collapsed_margin_before);
-            offset_box(first, 0, content_y - normal_flow_border_box(first).y);
+            const float dy = content_y - normal_flow_border_box(first).y;
+            offset_box(first, 0, dy);
+            for (auto& anchor : box->block_static_anchors) {
+                if (anchor.cursor_owner == first->element) anchor.block_offset += dy;
+            }
             content_height = std::max(0.f, content_height - first->collapsed_margin_before);
         }
 
@@ -609,6 +614,9 @@ aether_layout_box_s* layout_element(
             content_height = std::max(0.f, content_height - last->collapsed_margin_after);
         }
     }
+
+    // Cursor provenance has served its construction-only correction purpose.
+    for (auto& anchor : box->block_static_anchors) anchor.cursor_owner = nullptr;
 
     // Resolve the final border height (content + explicit + min/max clamps) before laying
     // out positioned descendants: their containing block is the finished padding box, so a
@@ -787,6 +795,7 @@ float layout_flow_children(
     }
     bool has_pending_margin = false;
     float pending_margin = 0.f;
+    aether_node_s* cursor_owner = nullptr;
 
     auto flush_inline = [&]() {
         if (inline_items.empty()) return;
@@ -802,6 +811,7 @@ float layout_flow_children(
         // A non-empty inline line separates adjacent block margins. Whitespace
         // alone has zero height and must not prevent the normal CSS collapse.
         if (used > 0.f) {
+            cursor_owner = nullptr;
             has_pending_margin = false;
             pending_margin = 0.f;
         }
@@ -809,6 +819,20 @@ float layout_flow_children(
     };
 
     for (auto* node : parent->children) {
+        if (node->type == AETHER_NODE_ELEMENT && node->pseudo_element == aether_pseudo_element_t::none) {
+            const auto style = get_style(styles, node);
+            if (style.position == AETHER_POSITION_ABSOLUTE &&
+                (style.display == AETHER_DISPLAY_BLOCK || style.display == AETHER_DISPLAY_FLEX ||
+                 style.display == AETHER_DISPLAY_TABLE)) {
+                const size_t index = parent_box->block_static_anchors.size();
+                parent_box->block_static_anchors.push_back({node, cursor_owner, 0.f,
+                    cursor_y - content.y + (has_pending_margin ? pending_margin : 0.f)});
+                // A marker never creates a run or flushes a pending block margin.
+                // Existing real runs retain their existing whitespace/flush behavior.
+                if (!inline_items.empty()) inline_items.push_back(inline_item_s::block_anchor(index));
+                continue;
+            }
+        }
         const auto role = append_inline_node(engine, styles, parent, parent_style, node, inline_items, context);
         if (role == inline_node_role_e::block_content) {
             const auto child_style = get_style(styles, node);
@@ -841,6 +865,7 @@ float layout_flow_children(
                 } else {
                     const auto flow_border = normal_flow_border_box(child_box);
                     cursor_y = flow_border.y + flow_border.height;
+                    cursor_owner = node;
                     pending_margin = child_box->collapsed_margin_after;
                 }
                 has_pending_margin = true;
@@ -867,6 +892,7 @@ float layout_inline_items(
     float cursor_y = start_y;
     const float minimum_line_height = std::max(layout_used_line_height(engine, parent_box->element, parent_style), 1.f);
     float line_height = minimum_line_height;
+    float prefix_ascent = 0.f, prefix_descent = 0.f;
     int line_start_index = static_cast<int>(parent_box->children.size());
     std::vector<line_range> line_widths;
 
@@ -899,11 +925,22 @@ float layout_inline_items(
         }
         cursor_x = start_x;
         line_height = minimum_line_height;
+        prefix_ascent = prefix_descent = 0.f;
         line_start_index = end;
     };
 
     bool previous_collapsible_space = false;
     for (auto& item : items) {
+        if (item.block_anchor_index != static_cast<size_t>(-1)) {
+            const bool has_prefix = static_cast<int>(parent_box->children.size()) > line_start_index;
+            // Use only already measured prefix metrics. Later atoms, text or wraps
+            // cannot change this hypothetical block insertion point.
+            auto& anchor = parent_box->block_static_anchors[item.block_anchor_index];
+            anchor.block_offset += cursor_y - start_y +
+                (has_prefix ? std::max(line_height, prefix_ascent + prefix_descent) : 0.f);
+            if (has_prefix || cursor_y != start_y) anchor.cursor_owner = nullptr;
+            continue;
+        }
         if (item.is_line_break) {
             finish_line(true);
             previous_collapsible_space = false;
@@ -961,6 +998,8 @@ float layout_inline_items(
             if (result->records_boxes) result->paint_order.push_back(fragment);
             cursor_x += metrics.width;
             line_height = std::max(line_height, metrics.height);
+            prefix_ascent = std::max(prefix_ascent, metrics.baseline);
+            prefix_descent = std::max(prefix_descent, std::max(0.f, metrics.height - metrics.baseline));
             previous_collapsible_space = collapsible;
         }
     }

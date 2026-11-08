@@ -121,6 +121,7 @@ void layout_positioned_children(
         return aether_rectf{positioning_block.x, positioning_block.y, 0.f, 0.f};
     };
 
+    size_t block_anchor_index = 0;
     for (auto* node : parent->children) {
         if (only_node && only_node != node) continue;
         if (node->type != AETHER_NODE_ELEMENT) continue;
@@ -181,9 +182,19 @@ void layout_positioned_children(
             child_box->collapsed_margin_after = vertical.end;
         }
 
-        const auto static_anchor = parent_box->style.display == AETHER_DISPLAY_FLEX
-            ? flex_static_position(style, parent_content_box, child_box->margin_box)
-            : static_position(node);
+        aether_rectf static_anchor;
+        // Capture records and the DOM walk share insertion order. No reverse scan,
+        // retained iterator, or dependency on previously completed OOF children.
+        if (!only_node && block_anchor_index < parent_box->block_static_anchors.size() &&
+            parent_box->block_static_anchors[block_anchor_index].node == node) {
+            const auto anchor = parent_box->block_static_anchors[block_anchor_index++];
+            static_anchor = {parent_content_box.x + anchor.inline_offset,
+                             parent_content_box.y + anchor.block_offset, 0.f, 0.f};
+        } else {
+            static_anchor = parent_box->style.display == AETHER_DISPLAY_FLEX
+                ? flex_static_position(style, parent_content_box, child_box->margin_box)
+                : static_position(node);
+        }
         float x = static_anchor.x;
         if (std::isfinite(left)) {
             x = containing.x + left;
@@ -200,6 +211,9 @@ void layout_positioned_children(
         offset_box(child_box, x - flow_margin.x, y - flow_margin.y);
         parent_box->add_child(child_box);
     }
+    // The result publishes geometry, not the scratch insertion history. Fixed-only
+    // re-finalization uses completed geometry and never consumes these records.
+    if (!only_node) parent_box->block_static_anchors.clear();
 }
 
 namespace {
