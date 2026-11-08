@@ -15,7 +15,7 @@ static unsigned checks = 0;
 #define REQUIRE(condition) do { ++checks; if (!(condition)) { std::fprintf(stderr, "FAIL [%s] %s:%d: %s\n", scenario.c_str(), __FILE__, __LINE__, #condition); std::abort(); } } while (false)
 using aether::style::MapMode;
 using aether::layout::StyleLookup;
-static bool near(float a, float b) { return std::fabs(a-b) < .01f; }
+static bool near(float a, float b) { return std::isfinite(a) && std::isfinite(b) && std::fabs(a-b) < .01f; }
 struct Meter {
     bool nonlinear = false;
     bool inherited = false;
@@ -158,6 +158,21 @@ struct Fixture {
         out.push_back({aether_layout_box_get_kind(b),text ? text : "",aether_layout_box_get_border_box(b),aether_layout_box_get_child_count(b)});
         aether_string_free(text);
         for(int i=0;i<aether_layout_box_get_child_count(b);++i) geometry(aether_layout_box_get_child(b,i),out);
+    }
+    void intrinsic_pair(float minimum, float maximum, bool reverse) {
+        aether_layout_result_s provisional;
+        provisional.build_overlay = std::make_unique<aether::layout::MutableLayoutOverlay>();
+        const StyleLookup lookup(map->current,provisional.build_overlay.get(),result->assets->default_style);
+        const BoxStyleSnapshot style(lookup.lookup_node_owner(node()));
+        engine->measure_styles = &lookup; engine->measure_document = doc->identity;
+        for (int i=0;i<4;++i) {
+            const bool max = (i%2==0) == reverse;
+            const auto sizing = max ? aether_intrinsic_size_mode_e::max_content : aether_intrinsic_size_mode_e::min_content;
+            const float value = measure_intrinsic_width(engine,&lookup,node(),style,{}, {},200,&provisional,sizing);
+            REQUIRE(near(value,max?maximum:minimum));
+            REQUIRE(provisional.primary_boxes.empty()); REQUIRE(provisional.paint_order.empty());
+        }
+        engine->measure_styles = nullptr; engine->measure_document.reset();
     }
     float intrinsic(bool height, aether_intrinsic_size_mode_e sizing = aether_intrinsic_size_mode_e::min_content) {
         // A real mutable result and lookup share the collector and overlay during measurement.
@@ -316,9 +331,30 @@ static void boundaries(MapMode mode,bool contextual) {
     REQUIRE(aether_element_set_attribute(f.node("mark"),"style","display:none") == AETHER_OK);
     f.resolve(); f.layout(); REQUIRE(f.items().size()==1); REQUIRE(text(f.paint())=="AB");
 }
+static void intrinsic_modes(MapMode mode,bool contextual) {
+    const std::string css="#outer{display:flex;width:600px}#flex{width:auto;flex:0 0 auto;flex-wrap:wrap;gap:20px;align-items:flex-start}"
+        "#flex>span{height:20px;flex:0 0 auto}";
+    for(bool reverse:{false,true}) {
+        scenario="wrapping fixed-card intrinsic modes";
+        Fixture f("<span style='width:100px'></span><span style='width:70px'></span><span style='width:90px'></span>",css,mode,contextual);
+        f.intrinsic_pair(100,300,reverse);
+        REQUIRE(near(aether_layout_box_get_width(f.box()),300)); REQUIRE(near(aether_layout_box_get_height(f.box()),20));
+        std::vector<Geometry> before,after;Fixture::geometry(f.box(),before);f.layout();Fixture::geometry(f.box(),after);
+        REQUIRE(before.size()==after.size());for(size_t i=0;i<before.size();++i) REQUIRE(same_rect(before[i].rect,after[i].rect));
+        for(const char* content:{"AB CD<span style='width:70px'></span>",
+            "A<!--comment-->B <i style='display:none'>hidden</i>CD<span style='width:70px'></span>",
+            "AB CD<span id='mark' style='position:absolute'></span><span style='width:70px'></span>"}) {
+            scenario="anonymous text wrapping intrinsic modes";
+            Fixture t(content,css,mode,contextual); t.intrinsic_pair(70,140,reverse);
+            REQUIRE(t.items().size()==2); REQUIRE(near(aether_layout_box_get_width(t.box()),140));
+            REQUIRE(near(aether_layout_box_get_height(t.box()),20));
+        }
+    }
+}
 int main(int argc, char** argv) {
     const std::string group=argc>1?argv[1]:"all";
     for(auto mode:{MapMode::contextual,MapMode::legacy_complete,MapMode::legacy_partial}) for(bool contextual:{false,true}) {
+        if(group=="all"||group=="intrinsic-modes") intrinsic_modes(mode,contextual);
         if(group=="all"||group=="continuity") continuity(mode,contextual);
         if(group=="all"||group=="whitespace") whitespace(mode,contextual);
         if(group=="all"||group=="inheritance") inherited_style(mode,contextual);

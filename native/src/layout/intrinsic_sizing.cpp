@@ -50,11 +50,10 @@ float aether_intrinsic_flex_main_contribution(
     aether_intrinsic_size_mode_e mode) {
     if (child_contributions.empty()) return 0.f;
     const auto largest = *std::max_element(child_contributions.begin(), child_contributions.end());
-    (void)mode;
-    // A single-line row cannot choose another line in either intrinsic mode, so
-    // it sums its children. A column or a wrapping row can place subsequent
-    // items on a different line and therefore contributes only its widest item.
-    if (column_direction || wraps)
+    // Horizontal column sizing and a wrapping row's minimum use the widest
+    // contribution. Row max-content keeps all items and gaps on one line;
+    // a nowrap row also retains that sum for its minimum.
+    if (column_direction || (wraps && mode == aether_intrinsic_size_mode_e::min_content))
         return std::max(0.f, largest);
 
     float result = 0.f;

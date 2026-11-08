@@ -1150,3 +1150,21 @@ and interpolates in float without snapping the final sample. For example, an
 endpoint parsed as 1e-7 remains exact in computed style, while a legacy 1-to-1e-7
 transition finishes at 2^-23 through existing cancellation rounding. This parser
 change does not alter transition precision or eligibility.
+
+### Flex intrinsic horizontal widths
+
+Wrapping rows keep distinct minimum and preferred widths: the minimum uses the
+widest child contribution, while the preferred width sums the child contributions
+and horizontal gaps. Nowrap rows retain the sum for both modes; columns retain
+the existing widest-child horizontal reduction. Container padding and borders
+are added once outside this reduction. Automatic flex minimums still request
+minimum-content sizing, so wrapping containers may shrink below their preferred
+width without shrinking below the widest contribution.
+
+This is a bounded contribution model, not complete CSS Flexbox intrinsic sizing.
+It does not add column-wrap preferred-width layout, reverse directions, writing
+modes, constrained shrink-to-fit rules, or comprehensive child flex-basis/min/max
+contribution constraints. Existing nonnegative-contribution flooring and deferred
+percentage-gap resolution are unchanged. The public `aether.flex-intrinsic-width`
+test covers fixed cards, decorations, signed margins with positive outer widths,
+gaps, exclusions, parent clamps, atomic-inline propagation and result/style reuse.
