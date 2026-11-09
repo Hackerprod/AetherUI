@@ -26,13 +26,15 @@ internal static class D2ContextTests
             host.ResetMetrics(); Native.Reset();
             for(var i=0;i<12;++i) {host.PointerMoved(new(5,25+(i%2)*20));host.Render();}
             Check(Native.Read(out var counters)==0,"counters");
+            Check(Native.ReadLegacy(out var legacy)==0,"legacy counters");
+            Check(legacy.Compute==0 && legacy.StateEntries==0 && legacy.MapCopies==0,"no-op resolver/map work");
             Check(counters.Calls>=12,"EnsureVisualTree must call context preparation");
             Check(counters.Backing==0 && counters.Active==0 && counters.Static==0 && counters.Builds==0 && counters.Allocations==0 && counters.Fallbacks==0,"no context work after warmup: "+counters);
             Check(host.Metrics.LayoutBuilds==0 && host.Metrics.VisualStyleMapBuilds==0 && host.Metrics.VisualStyleMapUpdates==0 && host.Metrics.DisplayListBuilds==0 && host.Metrics.PaintChunkBuilds==0,"no-op host rebuild");
             Check(host.ProjectedBoxEntriesVisited==boxes && ReferenceEquals(layout,host.Layout) && ReferenceEquals(styles,Field<object>(host,"_styles")),"no box walk or projection replacement");
             Check(renderer.Frames==frames,"hover no-op must not paint");
             Oracle(host);
-            Console.WriteLine($"PASS D2 real hover pipeline cards={size} static={owners}: {counters}");
+            Console.WriteLine($"PASS D2 real hover pipeline cards={size} static={owners}: {counters}; hit_queries={legacy.HitQueries} hit_boxes={legacy.HitBoxes} (E remains unoptimized)");
         }
         TransitionLifecycle();
         SemanticAndVisualDeltas();
@@ -127,6 +129,11 @@ internal static class D2ContextTests
         public void Dispose() {}
     }
     [StructLayout(LayoutKind.Sequential)]
+    internal struct LegacyCounts
+    {
+        internal ulong Compute,StateEntries,Records,Entries,Prepares,Publications,Fallbacks,MapCopies,ContextEntries,ContextBuilds,HitQueries,HitBoxes,PaintOrderChildren;
+    }
+    [StructLayout(LayoutKind.Sequential)]
     internal struct Counts
     {
         internal ulong Calls,Backing,Active,Updates,Builds,Reuses,Fallbacks,Allocations,Index,Static,Reason;
@@ -136,6 +143,7 @@ internal static class D2ContextTests
     {
         [DllImport("aether_core",EntryPoint="aether_work_counters_set_enabled")] internal static extern int Enable(int enabled);
         [DllImport("aether_core",EntryPoint="aether_work_counters_reset")] internal static extern void Reset();
+        [DllImport("aether_core",EntryPoint="aether_work_counters_get_v1")] internal static extern int ReadLegacy(out LegacyCounts counts);
         [DllImport("aether_core",EntryPoint="aether_context_work_counters_get_v1")] internal static extern int Read(out Counts counts);
         [DllImport("aether_core",EntryPoint="aether_layout_clone_snapshot")] internal static extern int Clone(IntPtr layout,out IntPtr clone);
         [DllImport("aether_core",EntryPoint="aether_layout_result_destroy")] internal static extern void Destroy(IntPtr layout);

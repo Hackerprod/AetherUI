@@ -114,10 +114,12 @@ static void generated_staging_and_contextual() {
 }
 static void destroyed_owner() {
  Fixture f;f.style("transform:translateX(20px)");f.prepare(true);f.build();
- auto token=f.node->identity;auto frozen=f.layout->effective_context_owners;
+ auto* old_node=f.node;auto token=f.node->identity;auto frozen=f.layout->effective_context_owners;
  auto base=aether_computed_style_default();aether_transform_operation operation{};auto target=transformed(operation,30);
  ok(aether_transition_runtime_observe(f.transitions,f.node,&base,&target,0));
  aether_doc_destroy(f.doc);f.doc=nullptr;f.node=nullptr;CHECK(!token->alive);
+ CHECK(f.layout->effective_fixed_container(old_node)); // Historical lookup must not dereference dead DOM.
+ aether_transform_matrix ignored{};CHECK(!aether_transition_runtime_transform_override(f.transitions,old_node,&ignored));
  CHECK(!aether_transition_runtime_tick(f.transitions,100));
  aether_bool_t changed=0;ok(aether_layout_prepare_transition_context(f.engine,f.transitions,f.map,f.layout,&changed));CHECK(changed);
  CHECK(f.engine->prepared_context_owners->owners.empty());CHECK(frozen->owners.size()==1);

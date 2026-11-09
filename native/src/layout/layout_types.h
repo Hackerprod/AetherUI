@@ -271,7 +271,12 @@ struct aether_layout_result_s {
     bool effective_context_enabled = false;
     aether::style::ContextOwnersRef effective_context_owners;
     bool effective_fixed_container(aether_node_s* node) const noexcept {
-        return effective_context_owners && node && effective_context_owners->owners.find(reinterpret_cast<uintptr_t>(node->identity.get()));
+        if(!effective_context_owners || !node || !assets || !assets->base) return false;
+        // Resolve through retained immutable assets, never dereference an old
+        // frame's raw DOM pointer merely to obtain its identity token.
+        const auto view=assets->base->lookup(node);
+        return view && effective_context_owners->owners.find(
+            reinterpret_cast<uintptr_t>(view.payload_owner()->node_lifetime().get()));
     }
     aether::layout::LayoutAssetsRef assets;
     std::unique_ptr<aether::layout::MutableLayoutOverlay> build_overlay;

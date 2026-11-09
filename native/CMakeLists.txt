@@ -1677,3 +1677,11 @@ if(AETHERUI_BUILD_TESTS AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
     target_compile_definitions(aether_effective_context_owners_test PRIVATE $<TARGET_PROPERTY:aether_core,COMPILE_DEFINITIONS>)
     target_compile_definitions(aether_effective_context_owners_oom_test PRIVATE $<TARGET_PROPERTY:aether_core,COMPILE_DEFINITIONS>)
 endif()
+
+if(AETHERUI_BUILD_TESTS)
+    # Exact externally supplied failing reproducer from the combined test tree.
+    add_executable(aether_generated_context_staging_test tests/test_generated_context_staging.cpp)
+    target_include_directories(aether_generated_context_staging_test PRIVATE include src)
+    target_link_libraries(aether_generated_context_staging_test PRIVATE AetherUI::Core)
+    add_test(NAME aether.generated-context-staging COMMAND aether_generated_context_staging_test)
+endif()
