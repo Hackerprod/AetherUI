@@ -32,7 +32,10 @@ Successful legacy mutation/structure epoch counts are preserved:
   There is no public text setter today; internal text writers can declare text
   using the typed helper or retain unknown/full fallback with the legacy helper.
 
-Only actual document roots own coverage. Detached or other non-document roots
+Only actual C++ document roots own coverage. The DOM enum alone does not prove
+`aether_doc_s` storage: a base node tagged DOCUMENT has no journal. Both touch
+and the accessor check the dynamic type using the build's enabled RTTI.
+Detached or other non-document roots
 still advance their previous identity epochs but return no journal. Reattachment
 is structural and must continue to resolve fully. Generated/anonymous staging
 writes remain under existing style-tree publication guards, not this DOM journal.

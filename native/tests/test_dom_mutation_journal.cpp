@@ -27,6 +27,12 @@ static aether_doc_s* document() {
 }
 
 int main() {
+    // A document tag does not authenticate derived document/journal storage.
+    aether_node_s standalone;
+    standalone.type = AETHER_NODE_DOCUMENT;
+    aether_element_set_state(&standalone, 1);
+    CHECK(standalone.identity->mutation_epoch == 1);
+    CHECK(aether_node_mutation_journal(&standalone) == nullptr);
     auto* doc = document();
     auto* body = aether_doc_get_body(doc);
     auto* child = aether_node_get_child(body, 0);

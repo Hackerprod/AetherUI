@@ -64,9 +64,13 @@ inline void aether_node_touch_typed(aether_node_s* node, aether::dom::MutationKi
     ++root->identity->mutation_epoch;
     if (structure) ++root->identity->structure_epoch;
     if (root->type == AETHER_NODE_DOCUMENT) {
-        static_cast<aether_doc_s*>(root)->mutation_journal.append(
-            (subject ? subject : node)->identity, kind, root->identity->mutation_epoch,
-            root->identity->structure_epoch, old_state, new_state);
+        // A type tag alone is not proof of document storage (internal standalone
+        // roots may use the document tag). Such roots remain without coverage.
+        if (auto* document = dynamic_cast<aether_doc_s*>(root)) {
+            document->mutation_journal.append(
+                (subject ? subject : node)->identity, kind, root->identity->mutation_epoch,
+                root->identity->structure_epoch, old_state, new_state);
+        }
     }
     // Detached/non-document roots retain their existing epochs but have no
     // journal coverage. Reattachment is always a structural/full invalidation.
@@ -77,8 +81,9 @@ inline void aether_node_touch(aether_node_s* node, bool structure = false) noexc
 }
 inline const aether::dom::MutationJournal* aether_node_mutation_journal(aether_node_s* node) noexcept {
     auto* root = aether_dom_root(node);
-    return root && root->type == AETHER_NODE_DOCUMENT
-        ? &static_cast<aether_doc_s*>(root)->mutation_journal : nullptr;
+    if (!root || root->type != AETHER_NODE_DOCUMENT) return nullptr;
+    auto* document = dynamic_cast<aether_doc_s*>(root);
+    return document ? &document->mutation_journal : nullptr;
 }
 inline void aether_node_mark_attached(aether_node_s* node, bool attached) noexcept {
     if (!node) return;
