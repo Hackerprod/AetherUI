@@ -62,10 +62,11 @@ public:
 
 private:
     friend struct ::aether_style_transaction_s;
-    // Only an already-published authentic FULL transaction currently calls this.
+    // Only an already-published transaction with bound private resolver authority
+    // calls this. Numeric epochs/status alone are not recognition authority.
     // No allocation, callback or DOM input mutation. Old runtimes below floor
     // lose incremental eligibility, never the readability of their snapshots.
-    void acknowledge_full_publication(uint64_t input_epoch) noexcept {
+    void acknowledge_certified_publication(uint64_t input_epoch) noexcept {
         if(monotonicity_lost_ || input_epoch < floor_epoch_ || input_epoch != last_epoch_)return;
         for(size_t i=0;i<size_;++i)records_[i]={};
         size_=0;floor_epoch_=input_epoch;loss_=JournalLoss::none;

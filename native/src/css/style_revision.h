@@ -62,8 +62,8 @@ struct PayloadDirectoryEntry {
 struct PayloadManifestEntry { aether_node_s* node=nullptr; FrozenNodePayloadRef payload; };
 using PayloadDirectory=PersistentIndex<PayloadDirectoryEntry>;
 using PayloadManifest=PersistentIndex<PayloadManifestEntry>;
-// Complete freshly prepared output, never an unchecked unchanged-node list.
-// Certification traverses every entry; only its private result can enter delta freeze.
+// Schema input: validation traverses supplied entries, not the DOM. Even a
+// contextual result does not prove completeness or current resolver coverage.
 struct FullPayloadRevisionInput {
     bool contextual=true;
     uint64_t generation=0,document_identity=0,input_epoch=0,structure_epoch=0,style_tree_epoch=0;
@@ -74,14 +74,30 @@ struct FullPayloadRevisionInput {
     std::vector<PayloadRevisionEntry> retired; // Full cross-document import only; never dereference retired nodes.
 };
 class StateRevisionPreparation;
+class FullRevisionPreparation;
+class CertifiedPublicationReceipt;
+using CertifiedPublicationReceiptRef=std::shared_ptr<const CertifiedPublicationReceipt>;
+enum class PublicationOrigin { none, full_resolver, state_resolver };
 class CertifiedRevisionDelta;
 using CertifiedRevisionDeltaRef=std::shared_ptr<const CertifiedRevisionDelta>;
 aether_status_t certify_full_payload_revision(const StyleRevisionRef&,const FullPayloadRevisionInput&,CertifiedRevisionDeltaRef&) noexcept;
 aether_status_t freeze_certified_revision(const CertifiedRevisionDeltaRef&,StyleRevisionRef&) noexcept;
+aether_status_t freeze_certified_revision(const CertifiedRevisionDeltaRef&,StyleRevisionRef&,CertifiedPublicationReceiptRef&) noexcept;
 aether_status_t freeze_style_revision(const StyleRevisionInput&,StyleRevisionRef&) noexcept;
 class CertifiedRevisionDelta {
     mutable std::weak_ptr<const CertifiedRevisionDelta> self_;
     struct Change { size_t position; aether_node_s* node; FrozenNodePayloadRef payload; int32_t state; };
+    // Mechanical data construction grants no coverage authority.
+    struct FullBuildData {
+        FullPayloadRevisionInput header;
+        bool stable=false;
+        std::vector<Change> changes;
+        std::vector<std::pair<uintptr_t,int32_t>> states;
+        std::vector<std::pair<uintptr_t,uint32_t>> impacts;
+        ImmutableArray<FrozenRetiredNode> retired;
+    };
+    static aether_status_t build_full_data(const StyleRevisionRef&,const FullPayloadRevisionInput&,FullBuildData&) noexcept;
+    const PublicationOrigin origin_;
     const StyleRevisionRef base_;
     const FullPayloadRevisionInput header_; // entries deliberately empty: no retained N-vector on stable-order delta.
     const bool stable_order_;
@@ -91,14 +107,31 @@ class CertifiedRevisionDelta {
     const std::vector<std::pair<uintptr_t,uint32_t>> impacts_;
     const ImmutableArray<FrozenRetiredNode> retired_;
     CertifiedRevisionDelta(StyleRevisionRef,FullPayloadRevisionInput,bool,std::vector<Change>,
-        std::vector<std::pair<uintptr_t,int32_t>>,std::vector<std::pair<uintptr_t,uint32_t>>,ImmutableArray<FrozenRetiredNode>);
+        std::vector<std::pair<uintptr_t,int32_t>>,std::vector<std::pair<uintptr_t,uint32_t>>,ImmutableArray<FrozenRetiredNode>,PublicationOrigin=PublicationOrigin::none);
     friend aether_status_t certify_full_payload_revision(const StyleRevisionRef&,const FullPayloadRevisionInput&,CertifiedRevisionDeltaRef&) noexcept;
     friend aether_status_t freeze_certified_revision(const CertifiedRevisionDeltaRef&,StyleRevisionRef&) noexcept;
+    friend aether_status_t freeze_certified_revision(const CertifiedRevisionDeltaRef&,StyleRevisionRef&,CertifiedPublicationReceiptRef&) noexcept;
     friend class ::style_revision_s;
     friend class StateRevisionPreparation;
+    friend class FullRevisionPreparation;
 public:
     size_t changed_payloads()const noexcept{return changes_.size();}
     bool stable_order()const noexcept{return stable_order_;}
+};
+// A transaction-only authority, never retained by a revision or exported handle.
+// The self-owner seal rejects fabricated copies/alias control blocks. No public
+// input or generic schema factory can select an authoritative producer origin.
+class CertifiedPublicationReceipt final {
+    mutable std::weak_ptr<const CertifiedPublicationReceipt> self_;
+    const StyleRevisionRef revision_;
+    const PublicationOrigin origin_;
+    const std::shared_ptr<node_identity_s> document_;
+    const uint64_t generation_,input_epoch_,structure_epoch_,style_tree_epoch_;
+    CertifiedPublicationReceipt(StyleRevisionRef,PublicationOrigin);
+    friend aether_status_t freeze_certified_revision(const CertifiedRevisionDeltaRef&,StyleRevisionRef&,CertifiedPublicationReceiptRef&) noexcept;
+public:
+    bool matches(const CertifiedPublicationReceiptRef&,const StyleRevisionRef&)const noexcept;
+    bool incremental()const noexcept{return origin_==PublicationOrigin::state_resolver;}
 };
 class RevisionEntriesView {
     const style_revision_s* revision_=nullptr;

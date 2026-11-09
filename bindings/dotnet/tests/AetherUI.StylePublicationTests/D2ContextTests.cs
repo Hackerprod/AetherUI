@@ -1,4 +1,6 @@
+using System.Collections.Immutable;
 using System.Reflection;
+using System.Text.Json;
 using System.Runtime.InteropServices;
 using AetherUI.Core.Native;
 using AetherUI.Css;
@@ -24,18 +26,51 @@ internal static class D2ContextTests
             var layout=host.Layout; var styles=Field<object>(host,"_styles");
             var boxes=host.ProjectedBoxEntriesVisited; var frames=renderer.Frames;
             host.ResetMetrics(); Native.Reset();
-            for(var i=0;i<12;++i) {host.PointerMoved(new(5,25+(i%2)*20));host.Render();}
+            for(var i=0;i<520;++i) {host.PointerMoved(new(5,25+(i%2)*20));host.Render();}
             Check(Native.Read(out var counters)==0,"counters");
-            Check(counters.Calls>=12,"EnsureVisualTree must call context preparation");
+            Check(counters.Calls>=520,"EnsureVisualTree must call context preparation");
             Check(counters.Backing==0 && counters.Active==0 && counters.Static==0 && counters.Builds==0 && counters.Allocations==0 && counters.Fallbacks==0,"no context work after warmup: "+counters);
             Check(host.Metrics.LayoutBuilds==0 && host.Metrics.VisualStyleMapBuilds==0 && host.Metrics.VisualStyleMapUpdates==0 && host.Metrics.DisplayListBuilds==0 && host.Metrics.PaintChunkBuilds==0,"no-op host rebuild");
             Check(host.ProjectedBoxEntriesVisited==boxes && ReferenceEquals(layout,host.Layout) && ReferenceEquals(styles,Field<object>(host,"_styles")),"no box walk or projection replacement");
             Check(renderer.Frames==frames,"hover no-op must not paint");
+            Check(Native.Work(out var work)==0 && work.Fallbacks==0 && work.Compute==0 && work.Records==0 && work.Entries==0 && work.MapCopies==0,"sustained no-op must not do periodic full work: "+work);
             Oracle(host);
             Console.WriteLine($"PASS D2 real hover pipeline cards={size} static={owners}: {counters}");
         }
+        SustainedLocalHover();
         TransitionLifecycle();
         SemanticAndVisualDeltas();
+    }
+    // Test-only combined-tree trace: 520 state batches cross the old 128-entry
+    // journal boundary repeatedly. FULL context oracles run outside counters.
+    private static void SustainedLocalHover()
+    {
+        foreach(var size in new[]{100,500,1000})
+        foreach(var owners in new[]{0,1,size})
+        {
+            using var renderer=new PaintCounter();
+            using var host=new UiDocumentHost(new Cards(size,owners,".card:hover{background:blue}"),new ApproximateTextMeasurer(),renderer,new UiHostOptions{Width=400,Height=400});
+            host.ExperimentalStyleDeltas=true;
+            host.Render();host.PointerMoved(new(5,25));host.Render();Oracle(host);
+            var layout=host.Layout;var snapshot=Snapshot(host);var boxes=host.ProjectedBoxEntriesVisited;
+            host.ResetMetrics();Native.Reset();
+            for(var i=0;i<520;++i)
+            {
+                host.PointerMoved(new(5,45-(i%2)*20));host.Render();
+                var styles=Field<StyleMap>(host,"_styles");
+                var on=host.Document!.GetElementById(i%2==0?"c2":"c1")!;
+                var off=host.Document.GetElementById(i%2==0?"c1":"c2")!;
+                Check(styles[on].BackgroundColor==new ColorRgba(0,0,1) && styles[off].BackgroundColor==ColorRgba.Transparent,"local hover projection lost or stale");
+            }
+            Check(Native.Read(out var counters)==0,"sustained context counters");
+            Check(Native.Work(out var work)==0,"sustained style counters");
+            Check(work.Fallbacks==0 && work.Compute==1040 && work.Prepares==520 && work.Publications==520,"local trace must compute two subjects with no periodic FULL: "+work);
+            Check(counters.Calls>=520 && counters.Backing==0 && counters.Active==0 && counters.Static<=1040 && counters.Builds==0 && counters.Allocations==0 && counters.Fallbacks==0,"local hover retains context certificate: "+counters);
+            Check(host.Metrics.LayoutBuilds==0 && ReferenceEquals(layout,host.Layout) && Snapshot(host)==snapshot,"local paint must preserve geometry and context");
+            Check(host.ProjectedBoxEntriesVisited-boxes<=2080 && host.Metrics.StyleUpdatedElements==1040,"local projection must visit indexed subjects only");
+            Oracle(host);
+            Console.WriteLine($"PASS combined sustained local cards={size} static={owners} iterations=520: {counters}; {work}");
+        }
     }
     private static ComputedStyle Transform(float x, float delay=.2f) => new()
     {
@@ -92,6 +127,14 @@ internal static class D2ContextTests
     {
         var map=Field<NativeStyleMap>(host,"_nativeVisualStyleMap");var layout=Field<NativeLayoutResult>(host,"_nativeLayout");var runtime=Field<TransitionRuntimeInterop>(host,"_transitionRuntime");
         Check(Native.Oracle(runtime.Handle,map.Handle,layout.Handle,out var equal)==0 && equal!=0,"full oracle disagrees");
+        // Stage a real exhaustive FULL resolve of the same current native inputs,
+        // never commit it or include its allocations/work in measured counters.
+        var styles=Field<StyleRuntimeInterop>(host,"_nativeStyleRuntime");
+        var current=Field<ImmutableDictionary<IntPtr,NativeComputedStyle>>(styles,"_styles");
+        using var full=styles.PreparePublication(null,400,400,1);
+        Check(full.Styles.Count==current.Count,"FULL projection count differs");
+        foreach(var value in full.Styles)
+            Check(current.TryGetValue(value.Node,out var prior) && JsonSerializer.Serialize(prior)==JsonSerializer.Serialize(value.Style),"FULL projection content differs");
     }
     private static void Check(bool value,string message) {if(!value)throw new InvalidOperationException(message);}
     private sealed class Cards(int count,int owners,string extra=""):UiComponent
@@ -116,9 +159,16 @@ internal static class D2ContextTests
         internal ulong Calls,Backing,Active,Updates,Builds,Reuses,Fallbacks,Allocations,Index,Static,Reason;
         public override readonly string ToString()=>$"calls={Calls} backing={Backing} active={Active} static={Static} builds={Builds} reuse={Reuses} alloc={Allocations} fallback={Fallbacks}/{Reason}";
     }
+    [StructLayout(LayoutKind.Sequential)]
+    internal struct WorkCounts
+    {
+        internal ulong Compute,StateVisits,Records,Entries,Prepares,Publications,Fallbacks,MapCopies,LegacyContextVisits,LegacyContextBuilds,HitQueries,HitBoxes,PaintOrder;
+        public override readonly string ToString()=>$"compute={Compute} state={StateVisits} records={Records} entries={Entries} prepare={Prepares} publish={Publications} full={Fallbacks} mapCopies={MapCopies}";
+    }
     private static class Native
     {
         [DllImport("aether_core",EntryPoint="aether_work_counters_set_enabled")] internal static extern int Enable(int enabled);
+        [DllImport("aether_core",EntryPoint="aether_work_counters_get_v1")] internal static extern int Work(out WorkCounts counts);
         [DllImport("aether_core",EntryPoint="aether_work_counters_reset")] internal static extern void Reset();
         [DllImport("aether_core",EntryPoint="aether_context_work_counters_get_v1")] internal static extern int Read(out Counts counts);
         [DllImport("aether_core",EntryPoint="aether_layout_context_snapshot_info")] internal static extern int Info(IntPtr layout,out ulong serial,out ulong size);

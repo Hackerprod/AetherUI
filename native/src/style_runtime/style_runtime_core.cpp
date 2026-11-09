@@ -31,6 +31,7 @@ using namespace aether::style;
 #include <cctype>
 #include <cstring>
 #include <memory>
+#include <map>
 #include <optional>
 #include <unordered_map>
 #include <unordered_set>
@@ -1195,6 +1196,7 @@ struct aether_style_transaction_s {
     std::unique_ptr<aether_style_update_t[]> legacy_array;
     std::vector<prepared_children_s> links;
     StyleRevisionRef revision;
+    CertifiedPublicationReceiptRef publication_receipt;
     std::unique_ptr<aether_style_revision_handle_s> output;
     std::unique_ptr<stylesheet_diagnostics_s> diagnostics;
     bool committed = false;
@@ -1202,12 +1204,25 @@ struct aether_style_transaction_s {
     aether_style_state_result_t state_result{};
     std::vector<size_t> semantic_delta_positions;
     std::vector<ReconciledState> reconciled_inputs;
-    void acknowledge_full_publication() const noexcept {
-        if(state_result.incremental||!committed||!revision||!revision->contextual()||!document_lifetime||!document_lifetime->alive||
+    bool valid_publication_authority() const noexcept {
+        if(!revision)return false;
+        if(!revision->contextual())return !publication_receipt;
+        if(!publication_receipt||!publication_receipt->matches(publication_receipt,revision))return false;
+        if(!publication_receipt->incremental())return true;
+        const auto* node=static_cast<const aether_node_s*>(document_lifetime->owner);
+        const auto* document=dynamic_cast<const aether_doc_s*>(node);
+        return base_pin&&document&&!document->mutation_journal.coverage_lost(input_epoch)&&
+            base_pin->input_epoch()>=document->mutation_journal.floor_epoch();
+    }
+    void acknowledge_certified_publication() const noexcept {
+        if(!committed||!publication_receipt||!publication_receipt->matches(publication_receipt,revision)||
+            !document_lifetime||!document_lifetime->alive||revision->input_epoch()!=input_epoch||
             document_lifetime->mutation_epoch!=input_epoch)return;
         auto* node=static_cast<aether_node_s*>(const_cast<void*>(document_lifetime->owner));
-        if(auto* document=dynamic_cast<aether_doc_s*>(node))
-            document->mutation_journal.acknowledge_full_publication(input_epoch);
+        if(auto* document=dynamic_cast<aether_doc_s*>(node)) {
+            if(document->mutation_journal.last_epoch()!=input_epoch)return;
+            document->mutation_journal.acknowledge_certified_publication(input_epoch);
+        }
     }
 };
 
@@ -1218,7 +1233,11 @@ static bool valid_measure_environment(const aether_style_environment_t& env) noe
         std::isfinite(env.dpi_scale) && env.dpi_scale > 0;
 }
 AETHER_API uint32_t aether_contextual_style_version(void) { return 1; }
-static aether_status_t prepare_revision_impl(
+// Only this runtime-private producer owns exhaustive traversal and may issue
+// FULL coverage. It accepts neither a supplied entry list nor an import certificate.
+class aether::style::FullRevisionPreparation {
+public:
+static aether_status_t prepare(
     aether_style_runtime_t runtime, aether_node_t root,
     const aether_style_environment_t* environment, aether_style_transaction_t* out_transaction, bool isolate_legacy_root, bool export_legacy_updates) {
     if (out_transaction) *out_transaction = nullptr;
@@ -1297,8 +1316,14 @@ static aether_status_t prepare_revision_impl(
         const auto base=runtime->revision && runtime->revision->document_identity()==d.identity ? runtime->revision : StyleRevisionRef{};
         if(!base&&runtime->revision)for(const auto& old:runtime->revision->entries())
             if(!current_nodes.count(old.node()))revision_input.retired.push_back({old.node(),old.payload(),STYLE_IMPACT_ALL_BITS});
-        require_style_status(certify_full_payload_revision(base,revision_input,certificate));
-        StyleRevisionRef revision;require_style_status(freeze_certified_revision(certificate,revision));
+        CertifiedRevisionDelta::FullBuildData data;
+        require_style_status(CertifiedRevisionDelta::build_full_data(base,revision_input,data));
+        certificate=CertifiedRevisionDeltaRef(new const CertifiedRevisionDelta(base,std::move(data.header),data.stable,
+            std::move(data.changes),std::move(data.states),std::move(data.impacts),std::move(data.retired),PublicationOrigin::full_resolver));
+        certificate->self_=certificate;
+        StyleRevisionRef revision;
+        if(revision_input.contextual)require_style_status(freeze_certified_revision(certificate,revision,transaction->publication_receipt));
+        else require_style_status(freeze_certified_revision(certificate,revision));
         for(const auto& entry:revision_input.entries)if(export_legacy_updates && entry.impact) {
             auto update=std::make_unique<aether_style_update_s>();update->node=entry.node;update->impact=entry.impact;
             FrozenNodeRef record;require_style_status(BoundNodeView::find(revision,entry.node).export_record(record));
@@ -1326,22 +1351,59 @@ static aether_status_t prepare_revision_impl(
     } catch (const std::bad_alloc&) { return AETHER_ERROR_OUT_OF_MEMORY; }
       catch (...) { return AETHER_ERROR_INVALID_STATE; }
 }
+};
+static aether_status_t prepare_revision_impl(aether_style_runtime_t runtime,aether_node_t root,
+    const aether_style_environment_t* environment,aether_style_transaction_t* out_transaction,
+    bool isolate_legacy_root,bool export_legacy_updates) {
+    return FullRevisionPreparation::prepare(runtime,root,environment,out_transaction,isolate_legacy_root,export_legacy_updates);
+}
 AETHER_API aether_status_t aether_style_runtime_prepare_revision(
     aether_style_runtime_t runtime, aether_node_t root,
     const aether_style_environment_t* environment, aether_style_transaction_t* out_transaction) {
     return prepare_revision_impl(runtime, root, environment, out_transaction, false, false);
+}
+static std::unique_ptr<PreparedNodeResult> bind_parent_for_preparation(
+    const FrozenNodePayload& source,const std::shared_ptr<document_measure_context_s>& document) {
+    auto result=std::make_unique<PreparedNodeResult>();result->style=source.style();
+    result->custom_properties=source.custom_properties();result->backdrop_custom_properties=source.backdrop_custom_properties();
+    result->color_references=source.color_references();result->parent_dependencies=source.parent_dependencies();
+    result->measures=std::make_shared<measure_state_s>();auto& values=*result->measures;values.document=document;
+    const auto& frozen=*source.measures();const auto& scalar=frozen.scalars();
+    values.parent_font_size=scalar.parent_font_size;values.self_font_size=scalar.self_font_size;
+    values.line_height={static_cast<measure_line_height_kind_e>(scalar.line_height_kind),scalar.line_height_value};
+    values.row_gap=scalar.row_gap;values.column_gap=scalar.column_gap;values.dependencies=scalar.dependencies;
+    values.background_positions.clear();values.background_sizes.clear();
+    for(const auto& position:frozen.background_positions())values.background_positions.push_back({position.x,position.y});
+    for(const auto& size:frozen.background_sizes())values.background_sizes.push_back({size.kind,size.x,size.y});
+    for(const auto& dependency:frozen.property_dependencies())
+        values.property_dependencies.emplace(std::string(dependency.name().c_str(),dependency.name().size()),dependency.flags());
+    return result;
+}
+static FrozenNodePayloadRef freeze_prepared_state(aether_node_s* node,const PreparedNodeResult& prepared,
+    const std::shared_ptr<node_identity_s>& document) {
+    NodePayloadInput input;input.origin=RecordOrigin::runtime;input.node=node;input.style=prepared.style;
+    input.parent_dependencies=prepared.parent_dependencies;
+    require_style_status(freeze_runtime_measure_payload(*prepared.measures,input.measures));
+    input.custom_properties=prepared.custom_properties;input.backdrop_custom_properties=prepared.backdrop_custom_properties;
+    input.color_references=prepared.color_references;input.declared_impact=prepared.declared_impact;
+    input.declared_inherited_impact=prepared.declared_inherited_impact;
+    // Match the canonical FULL payload; current Prepared propagation stays real.
+    input.inherited_change_impact=0;
+    input.document_lifetime=document;input.document_identity=reinterpret_cast<uintptr_t>(document.get());
+    input.node_lifetime=node->identity;input.node_identity=aether_node_identity(node);
+    FrozenNodePayloadRef result;require_style_status(freeze_node_payload(input,result));return result;
 }
 // This is the only incremental certificate producer. It has no public factory
 // taking an unchecked list of unchanged leaves: it performs journal/AST proof
 // within preparation and owns every input until the transaction is retired.
 class aether::style::StateRevisionPreparation {
 public:
-    static aether_status_t prepare_noop(aether_style_runtime_s* runtime,aether_node_s* document,
+    static aether_status_t prepare_local(aether_style_runtime_s* runtime,aether_node_s* document,
         aether_style_transaction_t* output,
         aether_state_fallback_t& fallback) {
         *output=nullptr;
         const auto base=runtime->revision;
-        if(!base||!base->authentic_owner(base)||base->document_lifetime()!=document->identity||
+        if(!base||!base->authentic_owner(base)||!base->contextual()||base->document_lifetime()!=document->identity||
             base->backing()||runtime->revision_compiled!=runtime->compiled||
             runtime->revision_registry!=style_property_registry_pin())
             return AETHER_ERROR_INVALID_STATE;
@@ -1372,8 +1434,11 @@ public:
                         fallback=AETHER_STATE_FALLBACK_SELECTOR;return AETHER_OK;
                     }
                 }
-        const auto agenda=invalidation::plan(document,runtime->compiled->state_programs,changes);
-        if(!agenda.empty()){fallback=AETHER_STATE_FALLBACK_SELECTOR;return AETHER_OK;}
+        const auto candidates=invalidation::plan(document,runtime->compiled->state_programs,changes);
+        if(!candidates.empty()&&(runtime->compiled->index.may_target_pseudo(aether_pseudo_element_t::before)||
+            runtime->compiled->index.may_target_pseudo(aether_pseudo_element_t::after))) {
+            fallback=AETHER_STATE_FALLBACK_PSEUDO;return AETHER_OK;
+        }
         if(runtime->generation==UINT64_MAX||document->identity->style_tree_epoch==UINT64_MAX)
             return AETHER_ERROR_INVALID_STATE;
         auto transaction=std::make_unique<aether_style_transaction_s>();
@@ -1387,6 +1452,84 @@ public:
         staged.document_measures=std::make_shared<document_measure_context_s>(*runtime->document_measures);
         staged.document_measures->generation=runtime->generation+1;
         transaction->diagnostics=std::make_unique<stylesheet_diagnostics_s>(runtime->diag_cb,runtime->diag_user_data);
+        staged.diag_cb=transaction->diagnostics->collector();staged.diag_user_data=transaction->diagnostics.get();
+        staged.states=runtime->states;
+        // Every agenda/parent/child read comes from the authenticated base. Pin
+        // ownership, not just the token address, before dereferencing its owner.
+        auto live_entry=[&](aether_node_s* node) {
+            const auto* entry=base->directory().find(reinterpret_cast<uintptr_t>(node));
+            if(!entry)throw std::invalid_argument("missing agenda identity");
+            const auto& token=entry->payload->node_lifetime();
+            if(!token||!token->alive||!token->attached||token->owner!=node||
+                entry->payload->node()!=node||entry->payload->document_lifetime()!=document->identity||
+                entry->payload->node_identity()!=reinterpret_cast<uintptr_t>(token.get()))
+                throw std::invalid_argument("dead agenda identity");
+            if(token!=node->identity||token.owner_before(node->identity)||node->identity.owner_before(token))
+                throw std::invalid_argument("unproven agenda identity owner");
+            return entry;
+        };
+        std::map<size_t,aether_node_s*> agenda;
+        auto enqueue=[&](aether_node_s* node) {
+            const auto* entry=live_entry(node);
+            agenda.emplace(entry->position,node);
+        };
+        for(const auto& candidate:candidates) {
+            if(candidate.slot!=aether_pseudo_element_t::none){fallback=AETHER_STATE_FALLBACK_PSEUDO;return AETHER_OK;}
+            enqueue(candidate.host);
+        }
+        std::unordered_map<aether_node_s*,std::unique_ptr<PreparedNodeResult>> parents;
+        std::vector<CertifiedRevisionDelta::Change> outputs;
+        std::vector<std::pair<uintptr_t,uint32_t>> impacts;
+        while(!agenda.empty()) {
+            auto it=agenda.begin();const auto position=it->first;auto* node=it->second;agenda.erase(it);
+            PreparedNodeResult* parent=nullptr;
+            auto* parent_node=node->parent;
+            while(parent_node&&parent_node->type!=AETHER_NODE_ELEMENT)parent_node=parent_node->parent;
+            if(parent_node) {
+                if(const auto found=staged.prepared.find(parent_node);found!=staged.prepared.end())parent=found->second.get();
+                else {
+                    auto cached=parents.find(parent_node);
+                    if(cached==parents.end()) {
+                        const auto* source=live_entry(parent_node);
+                        count_work(WorkCounter::state_entries_visited);
+                        cached=parents.emplace(parent_node,bind_parent_for_preparation(*source->payload,staged.document_measures)).first;
+                    }
+                    parent=cached->second.get();
+                }
+            }
+            uint32_t impact=0,inherited=0;
+            const auto* computed=compute_node(&staged,node,parent,parent?parent->inherited_change_impact:0,impact,inherited);
+            if(staged.document_measures->root_font_size!=base->document()->values().root_font_size) {
+                fallback=AETHER_STATE_FALLBACK_ROOT_FONT;return AETHER_OK;
+            }
+            auto payload=freeze_prepared_state(node,*computed,document->identity);
+            const auto* previous=base->directory().find(reinterpret_cast<uintptr_t>(node));
+            const auto delta=compare_node_semantics(*previous->payload,*payload);
+            if(delta.semantic)outputs.push_back({position,node,std::move(payload),node->state});
+            if(impact)impacts.push_back({position,impact});
+            if(delta.semantic||impact)transaction->semantic_delta_positions.push_back(position);
+            if(impact){++transaction->state_result.visual_delta_count;transaction->state_result.visual_impact|=impact;}
+            if(delta.propagation) {
+                // The initial category walks direct logical children; every
+                // examined payload is counted. It never rebuilds a DOM index.
+                std::vector<aether_node_s*> pending(node->children.begin(),node->children.end());
+                while(!pending.empty()) {
+                    auto* child=pending.back();pending.pop_back();
+                    if(child->is_generated||child->anonymous_flex_owner)continue;
+                    if(child->type!=AETHER_NODE_ELEMENT) {
+                        pending.insert(pending.end(),child->children.begin(),child->children.end());continue;
+                    }
+                    const auto* current=live_entry(child);
+                    count_work(WorkCounter::state_entries_visited);
+                    if(delta.propagation&current->payload->parent_dependencies())enqueue(child);
+                }
+            }
+        }
+        if(document->identity->mutation_epoch!=transaction->input_epoch||
+            document->identity->style_tree_epoch!=transaction->base_style_tree_epoch||
+            runtime->revision!=base||runtime->sheet_epoch!=transaction->base_sheet_epoch||
+            staged.registry!=style_property_registry_pin())
+            return AETHER_ERROR_INVALID_STATE;
         FullPayloadRevisionInput header;
         header.generation=runtime->generation+1;header.document_identity=base->document_identity();
         header.input_epoch=transaction->input_epoch;header.structure_epoch=base->structure_epoch();
@@ -1397,10 +1540,11 @@ public:
         for(const auto& item:reconciled)if(item.old_state!=item.new_state)
             ledger.push_back({reinterpret_cast<uintptr_t>(item.node),item.new_state});
         CertifiedRevisionDeltaRef certificate(new const CertifiedRevisionDelta(base,std::move(header),true,
-            {},std::move(ledger),{},{}));
+            std::move(outputs),std::move(ledger),std::move(impacts),{},PublicationOrigin::state_resolver));
         certificate->self_=certificate;
-        require_style_status(freeze_certified_revision(certificate,transaction->revision));
-        staged.states=RuntimeStateCache(transaction->revision);
+        require_style_status(freeze_certified_revision(certificate,transaction->revision,transaction->publication_receipt));
+        staged.states=RuntimeStateCache(transaction->revision);staged.prepared.clear();
+        transaction->state_result.semantic_delta_count=static_cast<int32_t>(transaction->semantic_delta_positions.size());
         transaction->output=std::make_unique<aether_style_revision_handle_s>();
         transaction->output->value=transaction->revision;
         transaction->state_result.incremental=AETHER_TRUE;
@@ -1444,13 +1588,13 @@ AETHER_API aether_status_t aether_style_runtime_prepare_state_revision(
                 changes,static_cast<size_t>(change_count),reconciled);
             if(reason!=AETHER_STATE_FALLBACK_NONE)fallback=reason;
         } else fallback=AETHER_STATE_FALLBACK_JOURNAL_MISSING;
-        // C3 foundation: this API is explicit but still FULL. Coverage is not a
-        // certificate; no environment variable or caller flag can enable reuse.
+        // FULL remains the fallback. Only the private gated producer can turn
+        // reconciled coverage and a proved local agenda into reuse authority.
         aether_style_transaction_t raw=nullptr;
 #if defined(AETHERUI_ENABLE_STATE_INCREMENTAL)
         if(fallback==AETHER_STATE_FALLBACK_DISABLED) {
             struct guard_s {bool& value;explicit guard_s(bool& v):value(v){value=true;}~guard_s(){value=false;}} guard(runtime->preparing);
-            const auto status=StateRevisionPreparation::prepare_noop(runtime,document,&raw,fallback);
+            const auto status=StateRevisionPreparation::prepare_local(runtime,document,&raw,fallback);
             if(status!=AETHER_OK)return status; // OOM never triggers a larger automatic retry.
         }
 #endif
@@ -1497,7 +1641,11 @@ AETHER_API aether_status_t aether_style_runtime_commit_revision(
         runtime->sheet_epoch != transaction->base_sheet_epoch || !transaction->document_lifetime->alive ||
         transaction->document_lifetime->mutation_epoch != transaction->input_epoch ||
         transaction->document_lifetime->style_tree_epoch != transaction->base_style_tree_epoch) return AETHER_ERROR_INVALID_STATE;
-    // No callbacks, allocation, comparison, diagnostics or fallible work in this
+    if((transaction->base_pin&&!transaction->base_pin->authentic_owner(transaction->base_pin))||
+        transaction->base_compiled_pin!=runtime->revision_compiled||transaction->candidate->compiled!=runtime->compiled||
+        transaction->revision->structure_epoch()!=transaction->document_lifetime->structure_epoch||
+        !transaction->valid_publication_authority())return AETHER_ERROR_INVALID_STATE;
+    // No callbacks, allocation, payload comparison, diagnostics or fallible work in this
     // publication boundary. Old generated storage stays owned by retained frames.
     for (auto& link : transaction->links) {
         for (auto& old : link.host->generated_storage) aether_node_mark_attached(old.get(), false);
@@ -1514,7 +1662,7 @@ AETHER_API aether_status_t aether_style_runtime_commit_revision(
     runtime->revision_compiled = transaction->candidate->compiled;
     runtime->revision_sheet_epoch = transaction->base_sheet_epoch;
     transaction->committed = true;
-    transaction->acknowledge_full_publication();
+    transaction->acknowledge_certified_publication();
     count_work(WorkCounter::revision_publications);
     *out_revision = transaction->output.release();
     // Consumer reentrancy may publish another revision. Outputs above remain

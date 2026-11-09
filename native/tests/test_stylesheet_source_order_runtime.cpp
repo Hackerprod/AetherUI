@@ -508,7 +508,9 @@ static void retained_registry_inputs() {
     check(aether_style_transaction_state_result(transaction,&result)==AETHER_OK&&result.fallback==AETHER_STATE_FALLBACK_REGISTRY&&!result.incremental,"registry replacement never certifies incremental");
     aether_style_transaction_destroy(transaction);aether_style_revision_destroy(base);
 }
+#include "test_publication_receipt.inc"
 int main() {
+    publication_receipt_tests();
     retained_compiled_inputs();
     retained_registry_inputs();
     counter_transaction(); handle_transaction(); source_and_inline_rejection();

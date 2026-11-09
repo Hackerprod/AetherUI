@@ -934,6 +934,9 @@ if(AETHERUI_BUILD_TESTS)
         ${source_order_runtime_sources})
     target_include_directories(aether_stylesheet_source_order_runtime_test PRIVATE include)
     target_compile_definitions(aether_stylesheet_source_order_runtime_test PRIVATE AETHER_EXPORTS)
+    if(AETHERUI_ENABLE_STATE_INCREMENTAL)
+        target_compile_definitions(aether_stylesheet_source_order_runtime_test PRIVATE AETHERUI_ENABLE_STATE_INCREMENTAL)
+    endif()
     if(MSVC)
         target_compile_options(aether_stylesheet_source_order_runtime_test PRIVATE /W4 /utf-8)
         target_compile_definitions(aether_stylesheet_source_order_runtime_test PRIVATE _CRT_SECURE_NO_WARNINGS NOMINMAX)
@@ -1658,4 +1661,13 @@ if(AETHERUI_BUILD_TESTS AND AETHERUI_DOTNET_EXECUTABLE AND AETHERUI_ENABLE_CONTE
         COMMAND bash "${CMAKE_CURRENT_SOURCE_DIR}/../bindings/dotnet/tests/run-context-owner-tests.sh"
         "${AETHERUI_DOTNET_EXECUTABLE}" "$<TARGET_FILE:aether_core>")
     set_tests_properties(aether.effective-context-managed PROPERTIES RUN_SERIAL TRUE)
+endif()
+
+if(AETHERUI_BUILD_TESTS AND AETHERUI_ENABLE_STATE_INCREMENTAL)
+    add_executable(aether_state_local_test tests/test_state_local.cpp
+        src/style_runtime/state_semantics.cpp src/css/frozen_node_record.cpp
+        src/css/frozen_c_string.cpp src/css/frozen_style.cpp src/style_runtime/frozen_runtime_metadata.cpp)
+    target_include_directories(aether_state_local_test PRIVATE include src)
+    target_link_libraries(aether_state_local_test PRIVATE AetherUI::Core)
+    add_test(NAME aether.state-local COMMAND aether_state_local_test)
 endif()
