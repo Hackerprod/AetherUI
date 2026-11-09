@@ -93,7 +93,7 @@ static void batches_and_fallbacks() {
     Fixture f(10);
     aether_element_set_state(f.card,1);aether_element_set_state(f.card,0);
     auto tx=f.prepare();CHECK(result(tx).incremental);f.publish(tx);aether_style_transaction_destroy(tx);
-    aether_element_set_state(f.card,1);tx=f.prepare();CHECK(!result(tx).incremental&&result(tx).fallback==AETHER_STATE_FALLBACK_SELECTOR);f.publish(tx);aether_style_transaction_destroy(tx);
+    aether_element_set_state(f.card,1);tx=f.prepare();CHECK(result(tx).incremental&&result(tx).semantic_delta_count>0&&result(tx).visual_delta_count>0);f.publish(tx);aether_style_transaction_destroy(tx);
     ok(aether_style_runtime_add_stylesheet(f.runtime,".unrelated:has(.other:hover) span {color: red}",2,"relational",nullptr,nullptr));f.full();f.full();
     aether_element_set_state(f.child,1);tx=f.prepare();CHECK(result(tx).incremental);f.publish(tx);aether_style_transaction_destroy(tx);
     ok(aether_style_runtime_add_stylesheet(f.runtime,"span { width:var(--missing) }",2,"diagnostics",nullptr,nullptr));f.full();f.full();

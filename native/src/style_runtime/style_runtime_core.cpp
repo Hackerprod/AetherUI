@@ -31,6 +31,7 @@ using namespace aether::style;
 #include <cctype>
 #include <cstring>
 #include <memory>
+#include <map>
 #include <optional>
 #include <unordered_map>
 #include <unordered_set>
@@ -1372,7 +1373,7 @@ public:
         aether_state_fallback_t& fallback) {
         *output=nullptr;
         const auto base=runtime->revision;
-        if(!base||!base->authentic_owner(base)||base->document_lifetime()!=document->identity||
+        if(!base||!base->authentic_owner(base)||!base->contextual()||base->document_lifetime()!=document->identity||
             base->backing()||runtime->revision_compiled!=runtime->compiled||
             runtime->revision_registry!=style_property_registry_pin())
             return AETHER_ERROR_INVALID_STATE;
@@ -1423,11 +1424,23 @@ public:
         transaction->diagnostics=std::make_unique<stylesheet_diagnostics_s>(runtime->diag_cb,runtime->diag_user_data);
         staged.diag_cb=transaction->diagnostics->collector();staged.diag_user_data=transaction->diagnostics.get();
         staged.states=runtime->states;
+        // Every agenda/parent/child read comes from the authenticated base. Pin
+        // ownership, not just the token address, before dereferencing its owner.
+        auto live_entry=[&](aether_node_s* node) {
+            const auto* entry=base->directory().find(reinterpret_cast<uintptr_t>(node));
+            if(!entry)throw std::invalid_argument("missing agenda identity");
+            const auto& token=entry->payload->node_lifetime();
+            if(!token||!token->alive||!token->attached||token->owner!=node||
+                entry->payload->node()!=node||entry->payload->document_lifetime()!=document->identity||
+                entry->payload->node_identity()!=reinterpret_cast<uintptr_t>(token.get()))
+                throw std::invalid_argument("dead agenda identity");
+            if(token!=node->identity||token.owner_before(node->identity)||node->identity.owner_before(token))
+                throw std::invalid_argument("unproven agenda identity owner");
+            return entry;
+        };
         std::map<size_t,aether_node_s*> agenda;
         auto enqueue=[&](aether_node_s* node) {
-            const auto* entry=base->directory().find(reinterpret_cast<uintptr_t>(node));
-            if(!entry||!entry->payload->node_lifetime()->alive||!entry->payload->node_lifetime()->attached||
-                entry->payload->node_lifetime()!=node->identity)throw std::invalid_argument("unproven agenda identity");
+            const auto* entry=live_entry(node);
             agenda.emplace(entry->position,node);
         };
         for(const auto& candidate:candidates) {
@@ -1447,8 +1460,7 @@ public:
                 else {
                     auto cached=parents.find(parent_node);
                     if(cached==parents.end()) {
-                        const auto* source=base->directory().find(reinterpret_cast<uintptr_t>(parent_node));
-                        if(!source)throw std::invalid_argument("missing complete parent context");
+                        const auto* source=live_entry(parent_node);
                         count_work(WorkCounter::state_entries_visited);
                         cached=parents.emplace(parent_node,bind_parent_for_preparation(*source->payload,staged.document_measures)).first;
                     }
@@ -1477,8 +1489,7 @@ public:
                     if(child->type!=AETHER_NODE_ELEMENT) {
                         pending.insert(pending.end(),child->children.begin(),child->children.end());continue;
                     }
-                    const auto* current=base->directory().find(reinterpret_cast<uintptr_t>(child));
-                    if(!current)throw std::invalid_argument("missing child dependency metadata");
+                    const auto* current=live_entry(child);
                     count_work(WorkCounter::state_entries_visited);
                     if(delta.propagation&current->payload->parent_dependencies())enqueue(child);
                 }

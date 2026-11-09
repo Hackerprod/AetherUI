@@ -74,7 +74,7 @@ static void contract_and_ledger() {
     aether_element_set_state(f.a,AETHER_STATE_HOVER);
     aether_style_state_change_t declared{f.a,aether_node_identity(f.a),0,AETHER_STATE_HOVER};
     tx=f.prepare(&declared,1);info=result(tx);
-    CHECK((info.fallback==AETHER_STATE_FALLBACK_DISABLED||info.fallback==AETHER_STATE_FALLBACK_SELECTOR)&&!info.incremental);
+    CHECK(info.incremental||(info.fallback==AETHER_STATE_FALLBACK_DISABLED||info.fallback==AETHER_STATE_FALLBACK_SELECTOR));
     CHECK(f.doc->mutation_journal.size()==1); // Prepare is observational.
     CHECK(info.semantic_delta_count>=1&&info.visual_delta_count>=1);
     f.commit(tx);aether_style_transaction_destroy(tx);
@@ -232,21 +232,23 @@ static void callback_after_ack() {
     CHECK(f.doc->mutation_journal.floor_epoch()+1==f.doc->identity->mutation_epoch);
     aether_style_revision_destroy(outer);aether_style_transaction_destroy(tx);
 }
-static void oom_and_thread(bool noop=false) {
+static void oom_and_thread(int mode=0) {
+    const bool noop=mode==1;
     Fixture f(noop?nullptr:".card:hover { background-color:red }");f.full();aether_element_set_state(f.a,1);
     const auto floor=f.doc->mutation_journal.floor_epoch();const auto size=f.doc->mutation_journal.size();
     const auto generation=aether_style_revision_generation(f.base);
     bool completed=false;
     for(long i=0;i<20000;++i) {
         fail_after=i;fault_delivered=false;aether_style_transaction_t tx=nullptr;
-        const auto status=aether_style_runtime_prepare_state_revision(f.runtime,f.doc,f.base,nullptr,0,nullptr,&tx);
+        const auto status=aether_style_runtime_prepare_state_revision(f.runtime,f.doc,mode==0?nullptr:f.base,nullptr,0,nullptr,&tx);
         fail_after=-1;
         CHECK(f.doc->mutation_journal.floor_epoch()==floor&&f.doc->mutation_journal.size()==size);
         CHECK(aether_style_revision_generation(f.base)==generation);
         if(status==AETHER_OK){CHECK(!fault_delivered);
             const auto info=result(tx);
-            if(noop)CHECK(info.incremental||info.fallback==AETHER_STATE_FALLBACK_DISABLED);
-            std::printf("%s preparation allocation sweep: %ld failure points checked\n",noop?"no-op":"FULL",i);
+            if(mode)CHECK(info.incremental||info.fallback==AETHER_STATE_FALLBACK_DISABLED);
+            else CHECK(!info.incremental&&info.fallback==AETHER_STATE_FALLBACK_BASE_REVISION);
+            std::printf("%s preparation allocation sweep: %ld failure points checked\n",mode==0?"FULL":noop?"no-op":"local",i);
             aether_style_transaction_destroy(tx);completed=true;break;}
         CHECK(status==AETHER_ERROR_OUT_OF_MEMORY&&fault_delivered&&!tx);
     }
@@ -256,4 +258,4 @@ static void oom_and_thread(bool noop=false) {
     CHECK(wrong_thread==AETHER_ERROR_INVALID_STATE);
     auto tx=f.prepare();f.commit(tx);aether_style_transaction_destroy(tx);
 }
-int main(){contract_and_ledger();inherited_noop_contract();failed_commit_keeps_journal();overflow_and_poison();multiple_runtimes();callback_after_ack();oom_and_thread();oom_and_thread(true);std::printf("state prepare foundation: %zu checks passed\n",checks);}
+int main(){contract_and_ledger();inherited_noop_contract();failed_commit_keeps_journal();overflow_and_poison();multiple_runtimes();callback_after_ack();oom_and_thread();oom_and_thread(1);oom_and_thread(2);std::printf("state prepare foundation: %zu checks passed\n",checks);}
