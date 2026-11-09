@@ -1291,8 +1291,11 @@ static float measure_inline_items_height(
         line_ascent = line_descent = 0.f;
         has_line_content = false;
     };
-    auto append_fragment = [&](float width, float height, bool whitespace, bool allow_wrap) {
-        if (whitespace && !has_line_content) return false;
+    auto append_fragment = [&](float width, float height, bool whitespace,
+                               bool discard_at_line_start, bool allow_wrap) {
+        // Preserved spaces contribute width and metrics even at line start,
+        // but retain their whitespace classification for soft wrapping.
+        if (discard_at_line_start && !has_line_content) return false;
         if (allow_wrap && !whitespace && has_line_content && cursor_x + width > available_width) finish_line(false);
         cursor_x += width;
         line_height = std::max(line_height, height);
@@ -1314,7 +1317,7 @@ static float measure_inline_items_height(
                 engine, styles, item.element, available_width, result, aether_intrinsic_size_mode_e::max_content);
             const float height = measure_intrinsic_height(
                 engine, styles, result, item.element, style, padding, border, available_width);
-            append_fragment(width, height, false, true);
+            append_fragment(width, height, false, false, true);
             previous_collapsible_space = false;
             continue;
         }
@@ -1332,7 +1335,7 @@ static float measure_inline_items_height(
             const auto metrics = engine_measure_text(engine, token.text.c_str(), &item.style, 0.f, item.element);
             // Match final inline layout: forced breaks remain unconditional, but
             // soft wrapping belongs to the text run rather than its parent.
-            if (append_fragment(metrics.width, metrics.height, whitespace,
+            if (append_fragment(metrics.width, metrics.height, whitespace, collapsible,
                                 aether_white_space_allows_soft_wrap(item.style.white_space))) {
                 // Accumulate only accepted text on its post-wrap line, using the
                 // same baseline envelope as final layout without remeasurement.

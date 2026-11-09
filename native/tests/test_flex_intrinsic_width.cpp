@@ -272,6 +272,37 @@ static void baseline_height_regressions() {
     baseline_height_case("atomic only", "<span id='atom' style='display:inline-block;width:10px;height:40px'></span>", 20, {});
     baseline_height_case("empty forced line", "A<br><br>B", 60, {{"A",0,0},{"B",0,40}});
 }
+// Leading preserved whitespace is content, including on a newly forced line.
+static void preserved_height_case(const char* name, const char* mode,
+                                  const char* content, float height,
+                                  float outer_height = 20, bool zero_minimum = false) {
+    scenario = std::string("leading preserved ") + name + "/" + mode;
+    Fixture f("#outer{flex-direction:column;width:50px;height:" + std::to_string(outer_height) +
+              "px;align-items:stretch}#inner{display:block;width:auto;height:120px;flex:0 1 auto;line-height:20px;white-space:" +
+              mode + "}" + (zero_minimum ? "#inner{min-height:0}" : ""), content);
+    near(f.rect().height, height, "automatic preserved minimum");
+    near(f.rect().width, 50, "preserved width");
+}
+static void preserved_height_regressions() {
+    for (const char* mode : {"normal", "nowrap", "pre", "pre-wrap", "pre-line"}) {
+        const bool preserved = !std::strcmp(mode, "pre") || !std::strcmp(mode, "pre-wrap");
+        const bool wrap = !std::strcmp(mode, "pre-wrap");
+        preserved_height_case("leading", mode, "  aa bb", wrap ? 40 : 20);
+        preserved_height_case("split", mode, "<span>  </span><span>aa bb</span>", wrap ? 40 : 20);
+        preserved_height_case("br", mode, "<br>  aa bb", wrap ? 60 : 40);
+        preserved_height_case("CRLF", mode, "\r\n  aa bb", wrap ? 60 : (preserved || !std::strcmp(mode,"pre-line") ? 40 : 20));
+        preserved_height_case("whitespace only", mode, "  ", preserved ? 20 : 5, 5);
+        preserved_height_case("explicit zero minimum", mode, "  aa bb", 20, 20, true);
+    }
+    // Preserved whitespace remains non-wrapping: it must not start a fresh line
+    // merely because its width takes the current line beyond the available width.
+    preserved_height_case("overflowing spaces", "pre-wrap", "aa    bb", 40);
+    preserved_height_case("leading overflow", "pre-wrap", "      aa", 40);
+    baseline_height_case("leading preserved baseline", "<span style='font-size:38px;white-space:pre'> </span>A", 36,
+                         {{" ",0,16},{"A",10,0}});
+    baseline_height_case("leading preserved wrap baseline", "<span style='font-size:38px;white-space:pre-wrap'> </span>A", 36,
+                         {{" ",0,16},{"A",10,0}});
+}
 int main(int argc,char**argv) {
 #if defined(__unix__)
     Dl_info info{}; require(dladdr(reinterpret_cast<void*>(&aether_layout_layout),&info)!=0,"dladdr");
@@ -290,6 +321,7 @@ int main(int argc,char**argv) {
         inline_height_regressions();
         collapsed_height_regressions();
         baseline_height_regressions();
+        preserved_height_regressions();
         {scenario="explicit width";Fixture f("#inner{width:300px}");f.row();}
         for(int outer:{150,80}) {scenario="automatic minimum "+std::to_string(outer);Fixture f("#outer{width:"+std::to_string(outer)+"px}#inner{flex:0 1 auto}");f.lines(outer==80?100:150);}
         {scenario="empty";Fixture f("","");f.width(0);}
