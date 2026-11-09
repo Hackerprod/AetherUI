@@ -401,6 +401,16 @@ public sealed partial class UiDocumentHost
         EnsureDomInputsCurrent();
         DrainInteractionLosses();
         if (_disposed || beforeDrain != _focusRequestSerial) return;
+        if (_focusClaim is { } lost && !lost.IsCurrent)
+        {
+            // The entry may have spent its loss-delivery budget already. Retire only
+            // the stale host reference before visual eligibility reconciliation; keep
+            // its native record/registry for the next batch. Otherwise EnsureVisualTree
+            // would call Focus(null) and mistake that automatic cleanup for a newer
+            // explicit focus request, suppressing this caller's chosen target.
+            _focusClaim = null; _focused = null;
+            if (ReferenceEquals(lost.Session.Focus, lost)) lost.Session.Focus = null;
+        }
         if (!HasCertifiedStyleSnapshot(requireDerived: false) ||
             (_invalidation & (VisualInvalidation.Style | VisualInvalidation.Layout)) != 0) EnsureVisualTree();
         if (_disposed || beforeDrain != _focusRequestSerial) return;

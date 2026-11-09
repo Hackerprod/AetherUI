@@ -255,7 +255,9 @@ internal static class HostInteractionClaimsTests
             if (generated) return;
             generated = true;
             Focus(test.Host, b); right.RemoveChild(b);
-            left.AppendChild(a); Focus(test.Host, a); left.RemoveChild(a);
+            left.AppendChild(a); Focus(test.Host, a);
+            Check(ReferenceEquals(test.Host.FocusedElement, a), "Automatic stale-focus cleanup suppressed an explicit callback focus request.");
+            left.RemoveChild(a);
         };
         Focus(test.Host, a); left.RemoveChild(a);
         test.Host.Render();
