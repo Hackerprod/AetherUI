@@ -67,7 +67,7 @@ int main(){
   }else require(c.compute_nodes==0,"unsupported build remains empty");
   std::printf("cards=%d elements=%d updates=%d compute=%llu records=%llu entries=%llu\n",n,f.elements,count,(unsigned long long)c.compute_nodes,(unsigned long long)c.revision_records_created,(unsigned long long)c.revision_entries_created);
   aether_work_counters_reset();ok(aether_style_runtime_update_resolved_style_map(f.rt,f.map,changed,2));
-  if(supported)require(read_work().map_entries_copied==uint64_t(f.elements),"patch copies N entries");
+  if(supported)require(read_work().map_entries_copied==2,"patch copies only K changed entries");
   aether_bool_t context_changed=0;aether_work_counters_reset();
   ok(aether_layout_prepare_transition_context(f.engine,nullptr,f.map,f.layout,&context_changed));
   if(supported){c=read_work();require(c.transition_context_entries_visited==uint64_t(f.elements)&&c.transition_context_builds==1,"context scans N entries");}

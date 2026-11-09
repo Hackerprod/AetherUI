@@ -541,6 +541,13 @@ if(AETHERUI_BUILD_TESTS)
         target_link_options(aether_frozen_backing_oom_test PRIVATE "-Wl,--wrap=malloc" "-Wl,--wrap=free")
         add_test(NAME aether.frozen-backing-oom COMMAND aether_frozen_backing_oom_test)
 
+        add_executable(aether_persistent_style_backing_test tests/test_persistent_style_backing.cpp
+            src/css/frozen_c_string.cpp src/css/frozen_node_record.cpp
+            src/css/immutable_style_backing.cpp)
+        target_include_directories(aether_persistent_style_backing_test PRIVATE include src)
+        target_link_options(aether_persistent_style_backing_test PRIVATE "-Wl,--wrap=malloc" "-Wl,--wrap=free")
+        add_test(NAME aether.persistent-style-backing COMMAND aether_persistent_style_backing_test)
+
         add_executable(aether_immutable_style_revision_test tests/test_immutable_style_revision.cpp
             src/css/style_revision.cpp src/css/style_map_version.cpp
             src/css/immutable_style_backing.cpp src/css/frozen_node_record.cpp

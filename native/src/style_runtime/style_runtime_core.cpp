@@ -1387,19 +1387,16 @@ AETHER_API aether_status_t aether_style_runtime_update_resolved_style_map(aether
     const auto previous=pin_style_map(map);
     if(node_count<0||(previous&&previous->contextual()))return AETHER_ERROR_INVALID_STATE;
     try {
-        BackingBuildInput backing;if(previous){
-            backing.entries=previous->backing()->entries();
-            count_work(WorkCounter::map_entries_copied, backing.entries.size());
-        }
+        std::vector<BackingPatchEntry> patch;
+        patch.reserve(static_cast<size_t>(node_count));
         for(int32_t i=0;i<node_count;++i){auto* node=nodes[i];if(!node)continue;
             const auto it=runtime->states.find(node);
-            if(it==runtime->states.end())backing.entries.erase(node);
-            else backing.entries.insert_or_assign(node,it->second);
+            patch.push_back({node,it==runtime->states.end()?FrozenNodeRef{}:it->second});
         }
         MapVersionInput input;input.mode=MapMode::legacy_partial;
         if(previous){input.document_lifetime=previous->document_lifetime();input.document_identity=previous->document_identity();
             input.input_epoch=previous->input_epoch();input.structure_epoch=previous->structure_epoch();input.style_tree_epoch=previous->style_tree_epoch();}
-        auto status=freeze_backing(backing,input.backing);if(status!=AETHER_OK)return status;
+        auto status=patch_backing(previous?previous->backing():BackingRef{},patch,input.backing);if(status!=AETHER_OK)return status;
         MapVersionRef next;status=make_map_version(input,next);if(status!=AETHER_OK)return status;
         map->current.swap(next);return AETHER_OK;
     }catch(const std::bad_alloc&){return AETHER_ERROR_OUT_OF_MEMORY;}catch(...){return AETHER_ERROR_INVALID_STATE;}
