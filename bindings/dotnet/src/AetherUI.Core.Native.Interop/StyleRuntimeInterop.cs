@@ -78,7 +78,7 @@ public sealed record NativeStyleChangeResolution(
     public bool StackingOrderChanged { get; init; }
 }
 
-public sealed unsafe class StyleRuntimeInterop : IDisposable
+public sealed unsafe partial class StyleRuntimeInterop : IDisposable
 {
     internal static int ComputedStyleSize => Marshal.SizeOf<ComputedStyleRaw>();
 
@@ -88,7 +88,7 @@ public sealed unsafe class StyleRuntimeInterop : IDisposable
     private long _defaults;
     private long _author;
     private bool _disposed;
-    private readonly Dictionary<IntPtr, NativeComputedStyle> _styles = [];
+    private Dictionary<IntPtr, NativeComputedStyle> _styles = [];
     private readonly Dictionary<IntPtr, int> _elementIndex = [];
     private List<IntPtr> _elements = [];
 
@@ -306,6 +306,8 @@ public sealed unsafe class StyleRuntimeInterop : IDisposable
     {
         if (_disposed) return;
         _disposed = true;
+        if (_managedPublicationRevision != IntPtr.Zero) NativeMethods.StyleRevisionDestroy(_managedPublicationRevision);
+        _managedPublicationRevision = IntPtr.Zero;
         if (_runtime != IntPtr.Zero) NativeMethods.StyleRuntimeDestroy(_runtime);
         _ownedDocument?.Dispose();
         _ownedDocument = null;

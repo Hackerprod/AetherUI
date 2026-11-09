@@ -2,7 +2,9 @@
 #include "../src/css/computed_style_handle.h"
 #include "../src/css/style_map_types.h"
 #include "../src/dom/dom_types.h"
+#if defined(AETHER_TEST_INTERNAL_REGISTRY)
 #include "../src/style_runtime/style_property_registry_internal.h"
+#endif
 #include <cstdio>
 #include <cstdlib>
 #include <thread>
@@ -99,8 +101,13 @@ static void invalid_inputs() {
     auto r=f.resolve();CHECK(current(f.runtime).inputs_current);aether_style_revision_destroy(r);
     ok(aether_style_runtime_add_stylesheet(f.runtime,"#x{height:30px}",0,"new",nullptr,nullptr));CHECK(!current(f.runtime).inputs_current);
     r=f.resolve();CHECK(current(f.runtime).inputs_current);aether_style_revision_destroy(r);
+#if defined(AETHER_TEST_INTERNAL_REGISTRY)
+    // Only usable when linked to the actual core singleton (e.g. a static core build).
     style_property_registry_shutdown();style_property_registry_init();CHECK(!current(f.runtime).inputs_current);
     r=f.resolve();CHECK(current(f.runtime).inputs_current);aether_style_revision_destroy(r);
+#else
+    std::puts("NOT RUN: registry replacement (internal symbols hidden in shared library)");
+#endif
     aether_doc_destroy(f.doc);f.doc=nullptr;CHECK(!current(f.runtime).inputs_current);
     aether_style_revision_destroy(base);
 }

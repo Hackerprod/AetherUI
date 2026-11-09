@@ -19,6 +19,16 @@ public sealed partial class UiDocumentHost
     public void Render()
     {
         ThrowIfDisposed();
+        if (_styleOperationDepth != 0 || _renderDepth != 0) { _renderDeferred = true; return; }
+        _styleRetryBlocked = false; // An explicit call permits one new bounded attempt.
+        ++_renderDepth;
+        try { RenderCore(); }
+        finally { --_renderDepth; }
+    }
+
+    private void RenderCore()
+    {
+        _renderDeferred = false;
         var initialPlan = EvaluateRenderPlan();
         var scrollInvalidated = (initialPlan.NormalizedInvalidation & (uint)VisualInvalidation.Scroll) != 0;
         var scrollOnly = initialPlan.UseScrollComposition != 0;
@@ -45,6 +55,10 @@ public sealed partial class UiDocumentHost
             if (ApplyPendingPointerMove()) scrollOnly = false;
             EnsureVisualTree();
         }
+        DrainDeferredInput();
+        if (_disposed) return;
+        EnsureVisualTree();
+        if (!HasCertifiedStyleSnapshot()) throw new InvalidOperationException("The style snapshot is not current; no frame was presented.");
         var renderPlan = EvaluateRenderPlan();
 
         _pointerRenderPending = false;
@@ -57,6 +71,8 @@ public sealed partial class UiDocumentHost
             return;
         }
 
+        var frameInputSerial = _hostInputSerial;
+        var framePublicationSerial = _hostPublicationSerial;
         if (_imageResolver is not null)
             foreach (var image in _displayList!.Commands.OfType<DrawBackgroundImageCommand>())
                 _imageResolver.Request(image.Source);
@@ -68,6 +84,11 @@ public sealed partial class UiDocumentHost
         // updates and main-thread commits without pretending that a flat command list is a
         // complete property tree.
         _renderer.SetScrollCompositionMode(scrollOnly);
+        if (_disposed || _hostInputSerial != frameInputSerial || _hostPublicationSerial != framePublicationSerial || !HasCertifiedStyleSnapshot())
+        {
+            RejectStyleProjection();
+            throw new InvalidOperationException("Inputs changed during frame notification; the candidate frame was not presented.");
+        }
         var renderStart = Stopwatch.GetTimestamp();
         if (!scrollInvalidated &&
             !scrollOnly &&
@@ -82,6 +103,7 @@ public sealed partial class UiDocumentHost
             _renderer.Render(_displayList!, _options.ClearColor);
         }
         Interlocked.Add(ref _renderTimestampTicks, Stopwatch.GetTimestamp() - renderStart);
+        _renderDeferred = false;
         Interlocked.Increment(ref _renderCallCount);
         if (scrollOnly) Interlocked.Increment(ref _scrollCompositionCount);
         _options.MetricsSink?.Invoke(Metrics);
@@ -130,11 +152,15 @@ public sealed partial class UiDocumentHost
 
     private void InvalidateDisplayList()
     {
-        _invalidation |= VisualInvalidation.DisplayList;
+        ProduceInvalidation(VisualInvalidation.DisplayList);
         RequestRender();
     }
 
-    private void RequestRender() => RenderRequested?.Invoke(this, EventArgs.Empty);
+    private void RequestRender()
+    {
+        if (_styleOperationDepth != 0) { _renderDeferred = true; return; }
+        if (!_disposed && !_styleRetryBlocked) RenderRequested?.Invoke(this, EventArgs.Empty);
+    }
 
     private void OnImageResourceChanged(object? sender, ImageResourceChangedEventArgs e)
     {
@@ -155,7 +181,7 @@ public sealed partial class UiDocumentHost
 
         if (_nativeLayout is null)
         {
-            _invalidation |= VisualInvalidation.Layout;
+            ProduceInvalidation(VisualInvalidation.Layout);
             return true;
         }
 
@@ -167,7 +193,7 @@ public sealed partial class UiDocumentHost
         _displayListContainsPatchedChunks = false;
         Interlocked.Add(ref _displayListBuildTimestampTicks, Stopwatch.GetTimestamp() - displayListStart);
         Interlocked.Increment(ref _displayListBuildCount);
-        _invalidation &= ~VisualInvalidation.DisplayList;
+        AcknowledgeInvalidation(VisualInvalidation.DisplayList);
         return false;
     }
 

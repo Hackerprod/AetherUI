@@ -18,9 +18,17 @@ public sealed partial class UiDocumentHost
     /// Cleared only when the tree itself is rebuilt; repopulated in full from the native style
     /// runtime's resolve result on every visual pass.
     /// </summary>
-    private readonly Dictionary<ElementNode, ComputedStyle> _computedStyles = new();
-    private readonly HashSet<ElementNode> _stateDirtyElements = [];
-    private readonly Dictionary<long, IntPtr> _paintChunkDirtyNodes = [];
+    private Dictionary<ElementNode, ComputedStyle> _computedStyles = new();
+    private HashSet<ElementNode> _stateDirtyElements = [];
+    private HashSet<ElementNode> _stateInputsToSync = [];
+    private RetainedStyleBatch? _retainedStyleBatches;
+    private sealed class RetainedStyleBatch(HashSet<ElementNode> elements)
+    {
+        internal readonly HashSet<ElementNode> Elements = elements;
+        internal RetainedStyleBatch? Next;
+    }
+    private bool _nativeInitialStatesSynchronized;
+    private Dictionary<long, IntPtr> _paintChunkDirtyNodes = [];
 
     private void RefreshProjectedLayoutStyles()
     {
@@ -114,134 +122,164 @@ public sealed partial class UiDocumentHost
 
     private void ResolveStyles()
     {
-        if ((_invalidation & VisualInvalidation.Style) == 0)
+        if ((_invalidation & VisualInvalidation.Style) == 0) return;
+        if (_styleOperationDepth != 0) { _renderDeferred = true; return; }
+        for (var attempt = 0; attempt < 2; ++attempt)
         {
-            return;
+            ThrowIfDisposed();
+            if (_markupDirty) RebuildDocument();
+            SyncNativeRuntimeValues();
+            if (TryPublishStyles()) return;
+            if (_disposed) ThrowIfDisposed();
         }
-
-        var styleResolutionStart = Stopwatch.GetTimestamp();
-        NativeStyleImpact impact;
-        var visibilityChanged = false;
-        var stackingOrderChanged = false;
-        var paintDirtyNodes = new Dictionary<long, IntPtr>();
-        var updatedNativeNodes = new List<IntPtr>();
-        var changedHandles = Array.Empty<IntPtr>();
-        var changedStates = Array.Empty<int>();
-        var incrementalStateResolution = false;
-        var attemptedIncrementalStateResolution = false;
-        if (_stateDirtyElements.Count > 0 && _computedStyles.Count > 0 && _nativeDom is not null)
-        {
-            attemptedIncrementalStateResolution = true;
-            var changedElements = _stateDirtyElements
-                .Where(_computedStyles.ContainsKey)
-                .ToArray();
-            changedHandles = changedElements
-                .Select(element => _nativeDom.GetNativeHandle(element))
-                .ToArray();
-            changedStates = changedElements
-                .Select(static element => (int)element.State)
-                .ToArray();
-        }
-
-        if (changedHandles.Length > 0)
-        {
-            incrementalStateResolution = true;
-            var resolution = _nativeStyleRuntime.ResolveStateChanges(changedHandles, changedStates);
-            impact = resolution.Impact;
-            stackingOrderChanged = resolution.StackingOrderChanged;
-            foreach (var update in resolution.Updates)
-            {
-                updatedNativeNodes.Add(update.Node);
-                TrackPaintChunkDirtyNode(update, paintDirtyNodes);
-                if (_nativeDom!.GetManagedElement(update.Node) is { } managed)
-                {
-                    _computedStyles.TryGetValue(managed, out var previousStyle);
-                    var nextStyle = StyleRuntimeBridge.ToComputedStyle(update.Style, managed);
-                    visibilityChanged |= previousStyle is not null && previousStyle.Visible != nextStyle.Visible;
-                    _computedStyles[managed] = nextStyle;
-                    if (previousStyle is not null)
-                        ObserveTransition(update.Node, previousStyle, nextStyle);
-                }
-            }
-            Interlocked.Add(ref _styleUpdatedElementCount, resolution.Updates.Count);
-        }
-        else if (attemptedIncrementalStateResolution)
-        {
-            impact = NativeStyleImpact.None;
-        }
-        else
-        {
-            var elements = EnumerateElements(_document!).ToArray();
-            var states = elements.Select(static element => (int)element.State).ToArray();
-            var resolution = _nativeStyleRuntime.Resolve(states, _viewport.Width, _viewport.Height, _dpiScale);
-            impact = resolution.Impact;
-            stackingOrderChanged = resolution.StackingOrderChanged;
-            var nativeStyles = resolution.Styles;
-            for (var i = 0; i < elements.Length; i++)
-            {
-                var element = elements[i];
-                _computedStyles.TryGetValue(element, out var previousStyle);
-                if (previousStyle is null)
-                    _previousStyleSnapshot.TryGetValue(ElementIdentityKey(element), out previousStyle);
-                var nextStyle = StyleRuntimeBridge.ToComputedStyle(nativeStyles[i], element);
-                visibilityChanged |= previousStyle is not null && previousStyle.Visible != nextStyle.Visible;
-                _computedStyles[element] = nextStyle;
-                if (previousStyle is not null)
-                    ObserveTransition(_nativeDom!.GetNativeHandle(element), previousStyle, nextStyle);
-            }
-            Interlocked.Add(ref _styleUpdatedElementCount, nativeStyles.Count);
-        }
-
-        _stateDirtyElements.Clear();
-        _paintChunkDirtyNodes.Clear();
-        foreach (var pair in paintDirtyNodes)
-        {
-            _paintChunkDirtyNodes[pair.Key] = pair.Value;
-        }
-        _lastStyleImpact = impact;
-        _styles = new StyleMap(_computedStyles);
-        if (incrementalStateResolution && updatedNativeNodes.Count > 0)
-        {
-            RefreshProjectedLayoutStyles(updatedNativeNodes);
-            if (_nativeVisualStyleMap is not null)
-            {
-                _nativeStyleRuntime.UpdateResolvedStyleMap(_nativeVisualStyleMap, updatedNativeNodes);
-                Interlocked.Increment(ref _visualStyleMapUpdateCount);
-            }
-            else
-            {
-                _nativeVisualStyleMap = _nativeStyleRuntime.CreateResolvedStyleMap(_nativeDom!.Native);
-                Interlocked.Increment(ref _visualStyleMapBuildCount);
-            }
-        }
-        else
-        {
-            RefreshProjectedLayoutStyles();
-            _nativeVisualStyleMap?.Dispose();
-            _nativeVisualStyleMap = _nativeStyleRuntime.CreateResolvedStyleMap(_nativeDom!.Native);
-            Interlocked.Increment(ref _visualStyleMapBuildCount);
-        }
-        Interlocked.Add(ref _styleResolutionTimestampTicks, Stopwatch.GetTimestamp() - styleResolutionStart);
-        Interlocked.Increment(ref _styleResolutionCount);
-        _invalidation &= ~VisualInvalidation.Style;
-        _invalidation |= InvalidationForStyleImpact(impact);
-        if (visibilityChanged || stackingOrderChanged)
-        {
-            // Isolated chunks cannot change sibling order or carry ancestor opacity/clip/transform context.
-            // Rebuild paint only, retaining native layout and its geometry snapshot.
-            _paintChunkDirtyNodes.Clear();
-            _invalidation &= ~VisualInvalidation.PaintChunks;
-            _invalidation |= VisualInvalidation.DisplayList;
-            _pendingPointerTarget = null;
-            _hasPendingPointerTarget = false;
-            if (_hasPointerPosition)
-            {
-                _pendingPointerMove = _lastPointerPosition;
-                _hasPendingPointerMove = true;
-            }
-        }
-        if (_scrollbarDrag is { } drag && !IsCurrentlyVisible(drag.Container))
-            CancelScrollbarDrag();
+        _styleRetryBlocked = true;
+        throw new InvalidOperationException("Style publication did not stabilize after one recovery. Pending inputs were retained; no frame was presented.");
     }
 
+    private bool TryPublishStyles()
+    {
+        if (_document!.Version != _nativeSynchronizedDocumentVersion)
+        {
+            RejectStyleProjection();
+            _styleRetryBlocked = true;
+            throw new InvalidOperationException("Managed DOM synchronization is required before style publication; pending mutations were retained.");
+        }
+        var start = Stopwatch.GetTimestamp();
+        // Allocate Bnext before removing B. Notifications never write into B.
+        var nextBatch = new HashSet<ElementNode>();
+        var batch = new RetainedStyleBatch(_stateDirtyElements);
+        var retainedAtStart = _retainedStyleBatches;
+        var invalidations = (long[])_invalidationProduced.Clone();
+        var publishedInvalidations = new long[_invalidationProduced.Length];
+        var inputSerial = _hostInputSerial;
+        var publicationSerial = _hostPublicationSerial;
+        var document = _document!;
+        var dom = _nativeDom!;
+        var documentVersion = document.Version;
+        var published = false;
+        var transitions = new List<TransitionStyleMarshaler.PreparedObservation>();
+        _stateDirtyElements = nextBatch;
+        ++_styleOperationDepth;
+        try
+        {
+            // Synchronize current input values once, never replay an old batch's state array.
+            // A native R2 published during a callback must survive the recovery attempt.
+            if (_nativeInitialStatesSynchronized)
+            {
+                foreach (var element in _stateInputsToSync)
+                    if (ReferenceEquals(element.OwnerDocument, document))
+                        dom.Native.SetState(dom.GetNativeHandle(element), (int)element.State);
+            }
+            var initialStates = !_nativeInitialStatesSynchronized
+                ? EnumerateElements(document).Select(static element => (int)element.State).ToArray() : null;
+            using var diagnostics = CssDiagnostics.BeginTransaction();
+            using var native = _nativeStyleRuntime.PreparePublication(initialStates, _viewport.Width, _viewport.Height, _dpiScale);
+            _nativeInitialStatesSynchronized = true;
+            _stateInputsToSync.Clear(); // No callbacks have run; Bnext state writes start below.
+            if (_publishedStyleToken.DocumentIdentity == native.Token.DocumentIdentity &&
+                _publishedStyleToken.StructureEpoch != native.Token.StructureEpoch)
+                throw new InvalidOperationException("Native DOM structure changed without a certified managed mapping.");
+            StylePublicationProbe?.Invoke("native-preview");
+            var computed = new Dictionary<ElementNode, ComputedStyle>(native.Styles.Count);
+            var boxes = new List<(LayoutBox Box, ComputedStyle Style)>();
+            var paintDirty = new Dictionary<long, IntPtr>(_paintChunkDirtyNodes);
+            var visibilityChanged = false;
+            foreach (var update in native.Styles)
+            {
+                if (update.Impact != NativeStyleImpact.None) TrackPaintChunkDirtyNode(update, paintDirty);
+                if (dom.GetManagedElement(update.Node) is not { } element) continue;
+                _computedStyles.TryGetValue(element, out var previous);
+                if (previous is null && ElementIdentityKey(element) is { } key) _previousStyleSnapshot.TryGetValue(key, out previous);
+                var style = StyleRuntimeBridge.ToComputedStyle(update.Style, element);
+                computed.Add(element, style);
+                visibilityChanged |= previous is not null && previous.Visible != style.Visible;
+                if (previous is not null) transitions.Add(TransitionStyleMarshaler.Prepare(update.Node, previous, style));
+            }
+            var styles = new StyleMap(computed);
+            if (_layout is not null)
+                foreach (var box in _layout.Root.DescendantsAndSelf())
+                    if (computed.TryGetValue(box.Element, out var style)) boxes.Add((box, style));
+            var reorder = visibilityChanged || native.StackingOrderChanged;
+            if (reorder) paintDirty = new Dictionary<long, IntPtr>();
+            diagnostics.Seal();
+            StylePublicationProbe?.Invoke("managed-staged");
+            // No candidate is installed if staging itself called back and changed inputs.
+            if (!HostInputsMatch()) return Reject();
+            if (!native.Commit() || !HostInputsMatch() || !_nativeStyleRuntime.IsCurrent(native.Token)) return Reject();
+
+            // Certified owner-thread publication. All fallible .NET allocations happened above.
+            var previousMap = _nativeVisualStyleMap;
+            _nativeVisualStyleMap = native.Publish();
+            _computedStyles = computed;
+            _styles = styles;
+            foreach (var (box, style) in boxes) box.Style = style;
+            _paintChunkDirtyNodes = paintDirty;
+            _lastStyleImpact = native.Impact;
+            _publishedStyleToken = native.Token;
+            _publishedDocumentVersion = documentVersion;
+            ++_hostPublicationSerial;
+            _managedProjectionOutOfDate = false;
+            AcknowledgeInvalidation(VisualInvalidation.Style, invalidations);
+            ProduceInvalidation(InvalidationForStyleImpact(native.Impact));
+            if (reorder)
+            {
+                // Do not wipe Bnext; new notifications have not begun yet.
+                AcknowledgeInvalidation(VisualInvalidation.PaintChunks);
+                ProduceInvalidation(VisualInvalidation.DisplayList);
+                _pendingPointerTarget = null;
+                _hasPendingPointerTarget = false;
+                if (_hasPointerPosition)
+                {
+                    _pendingPointerMove = _lastPointerPosition;
+                    _hasPendingPointerMove = true;
+                }
+            }
+            if (ReferenceEquals(_retainedStyleBatches, retainedAtStart)) _retainedStyleBatches = null;
+            published = true;
+            previousMap?.Dispose();
+            Interlocked.Add(ref _styleUpdatedElementCount, native.Styles.Count);
+            Interlocked.Increment(ref _visualStyleMapBuildCount);
+            Interlocked.Increment(ref _styleResolutionCount);
+            Interlocked.Add(ref _styleResolutionTimestampTicks, Stopwatch.GetTimestamp() - start);
+
+            Array.Copy(_invalidationProduced, publishedInvalidations, publishedInvalidations.Length);
+            // Listeners are external effects, not part of rollback. They write Bnext.
+            diagnostics.Replay();
+            if (_disposed || _hostInputSerial != inputSerial || _hostPublicationSerial != publicationSerial + 1 ||
+                !ReferenceEquals(_document, document) || !ReferenceEquals(_nativeDom, dom) ||
+                document.Version != documentVersion || !InvalidationsMatch(publishedInvalidations) || !_nativeStyleRuntime.IsCurrent(native.Token))
+                return Reject();
+            foreach (var transition in transitions) transition.Apply(_transitionRuntime!, Environment.TickCount64);
+            if (_scrollbarDrag is { } drag && !IsCurrentlyVisible(drag.Container)) CancelScrollbarDrag();
+            return true;
+
+            bool HostInputsMatch() => !_disposed && !_markupDirty && _hostInputSerial == inputSerial &&
+                _hostPublicationSerial == publicationSerial && ReferenceEquals(_document, document) &&
+                ReferenceEquals(_nativeDom, dom) && document.Version == documentVersion && InvalidationsMatch(invalidations);
+            bool InvalidationsMatch(long[] serials)
+            {
+                for (var i = 0; i < serials.Length; ++i)
+                    if (_invalidationProduced[i] != serials[i]) return false;
+                return true;
+            }
+            bool Reject() { RejectStyleProjection(); return false; }
+        }
+        catch
+        {
+            // A native commit may already be real. Never claim rollback of it or a listener.
+            RejectStyleProjection();
+            _styleRetryBlocked = true; // OOM/notification faults do not start a retry loop.
+            throw;
+        }
+        finally
+        {
+            if (!published || _managedProjectionOutOfDate)
+            {
+                batch.Next = _retainedStyleBatches;
+                _retainedStyleBatches = batch; // Retain B without a fallible merge during exception unwind.
+            }
+            foreach (var transition in transitions) transition.Dispose();
+            LeaveStyleOperation();
+        }
+    }
 }

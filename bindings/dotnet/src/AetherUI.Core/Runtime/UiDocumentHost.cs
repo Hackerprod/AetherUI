@@ -124,7 +124,7 @@ public sealed partial class UiDocumentHost : IDisposable
     public DocumentNode? Document => _document;
     public LayoutResult? Layout => _layout;
     public ElementNode? FocusedElement => _focused;
-    public bool NeedsRender => _markupDirty || _invalidation != VisualInvalidation.None || _hasPendingPointerMove;
+    public bool NeedsRender => !_disposed && !_styleRetryBlocked && (_markupDirty || _invalidation != VisualInvalidation.None || _hasPendingPointerMove || _deferredInput.Count != 0 || _renderDeferred);
     /// <summary>True while the CSS transition runtime is animating one or more properties.</summary>
     public bool HasActiveTransitions => _transitionRuntime?.HasActive == true;
 
@@ -209,15 +209,19 @@ public sealed partial class UiDocumentHost : IDisposable
             return;
         }
 
+        NoteInputMutation();
         CancelScrollbarDrag();
         _dpiScale = dpiScale;
         _viewport = new SizeF(pixelWidth / dpiScale, pixelHeight / dpiScale);
+        ProduceInvalidation(VisualInvalidation.Style);
         _renderer.Resize(pixelWidth, pixelHeight, dpiScale);
         InvalidateLayout();
     }
 
     private void EnsureVisualTree()
     {
+        if (_styleOperationDepth != 0) { _renderDeferred = true; return; }
+        ThrowIfDisposed();
         if (_markupDirty)
         {
             RebuildDocument();
@@ -258,8 +262,8 @@ public sealed partial class UiDocumentHost : IDisposable
             Interlocked.Increment(ref _layoutBuildCount);
             _layout = _layoutInterop.Project(_nativeLayout, _nativeDom, _styles!, _viewport);
             RebuildScrollBoxIndex();
-            _invalidation &= ~VisualInvalidation.Layout;
-            _invalidation |= VisualInvalidation.DisplayList;
+            AcknowledgeInvalidation(VisualInvalidation.Layout);
+            ProduceInvalidation(VisualInvalidation.DisplayList);
         }
 
         // ResolveStyles has consumed and cleared only the previous state changes.
@@ -275,10 +279,10 @@ public sealed partial class UiDocumentHost : IDisposable
         {
             if ((_invalidation & VisualInvalidation.DisplayList) == 0 && !TryPatchPaintChunks())
             {
-                _invalidation |= VisualInvalidation.DisplayList;
+                ProduceInvalidation(VisualInvalidation.DisplayList);
             }
             _paintChunkDirtyNodes.Clear();
-            _invalidation &= ~VisualInvalidation.PaintChunks;
+            AcknowledgeInvalidation(VisualInvalidation.PaintChunks);
         }
 
         if (BuildDisplayList())
@@ -289,7 +293,7 @@ public sealed partial class UiDocumentHost : IDisposable
 
         // Scroll currently remains backed by layout coordinates. The retained scroll command
         // cut consumes this bit without entering either branch above.
-        _invalidation &= ~VisualInvalidation.Scroll;
+        AcknowledgeInvalidation(VisualInvalidation.Scroll);
     }
 
     private void RebuildDocument()
@@ -321,6 +325,8 @@ public sealed partial class UiDocumentHost : IDisposable
         _previousStyleSnapshot = BuildStyleSnapshot();
         _computedStyles.Clear();
         _stateDirtyElements.Clear();
+        _stateInputsToSync.Clear();
+        _nativeInitialStatesSynchronized = false;
         _hoverChain.Clear();
         _scrollOffsets.Clear();
         _scrollOffsetsByStyleNode.Clear();
@@ -357,8 +363,9 @@ public sealed partial class UiDocumentHost : IDisposable
         _hovered = RestoreElement(hoveredId, ElementState.Hover);
         RestoreHoverChain(_hovered);
         _active = RestoreElement(activeId, ElementState.Active);
+        _nativeSynchronizedDocumentVersion = _document.Version;
         _markupDirty = false;
-        _invalidation |= VisualInvalidation.Style;
+        ProduceInvalidation(VisualInvalidation.Style);
     }
 
     private ElementNode? RestoreElement(string? id, ElementState state)
@@ -403,8 +410,9 @@ public sealed partial class UiDocumentHost : IDisposable
 
     private void OnComponentInvalidated(object? sender, EventArgs e)
     {
+        NoteInputMutation();
         _markupDirty = true;
-        _invalidation |= VisualInvalidation.Style;
+        ProduceInvalidation(VisualInvalidation.Style);
         RequestRender();
     }
 
@@ -476,15 +484,16 @@ public sealed partial class UiDocumentHost : IDisposable
 
     private void InvalidateVisual(bool requestRender = true)
     {
+        NoteInputMutation();
         // Existing callers represent state that can affect selectors, layout, or both.
         // Scroll is deliberately not routed here: retained scroll composition has its own bit.
-        _invalidation |= VisualInvalidation.Style;
+        ProduceInvalidation(VisualInvalidation.Style);
         if (requestRender) RequestRender();
     }
 
     private void InvalidateLayout()
     {
-        _invalidation |= VisualInvalidation.Layout;
+        ProduceInvalidation(VisualInvalidation.Layout);
         RequestRender();
     }
 
@@ -500,10 +509,17 @@ public sealed partial class UiDocumentHost : IDisposable
         _disposed = true;
         _component.Invalidated -= OnComponentInvalidated;
         if (_imageResolver is not null) _imageResolver.Changed -= OnImageResourceChanged;
-        try
-        {
-            _component.Dispose();
-        }
+        NoteInputMutation();
+        _disposeResourcesPending = true;
+        if (_styleOperationDepth == 0) DisposeResources();
+        GC.SuppressFinalize(this);
+    }
+
+    private void DisposeResources()
+    {
+        if (!_disposeResourcesPending) return;
+        _disposeResourcesPending = false;
+        try { _component.Dispose(); }
         finally
         {
             _nativeLayout?.Dispose();
@@ -516,7 +532,5 @@ public sealed partial class UiDocumentHost : IDisposable
             _nativeDom?.Dispose();
             _renderer.Dispose();
         }
-
-        GC.SuppressFinalize(this);
     }
 }

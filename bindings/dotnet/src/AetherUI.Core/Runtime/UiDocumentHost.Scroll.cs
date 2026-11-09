@@ -55,6 +55,7 @@ public sealed partial class UiDocumentHost
     {
         ArgumentNullException.ThrowIfNull(element);
         ThrowIfDisposed();
+        if (DeferInput(() => SetScrollOffset(element, offset))) return;
         EnsureVisualTree();
         if (_layout?.FindPrimaryBox(element) is not { } box || !IsScrollContainer(box)) return;
         var clamped = new ScrollOffset(
@@ -103,12 +104,16 @@ public sealed partial class UiDocumentHost
     /// </summary>
     public void MouseWheelScrolled(PointF point, float notches)
     {
+        ThrowIfDisposed();
+        if (DeferInput(() => MouseWheelScrolled(point, notches))) return;
         ScrollByWheel(point, ScrollAxis.Vertical, -notches * 48f);
     }
 
     /// <summary>Routes a horizontal wheel gesture, including Shift+wheel, through nested overflow.</summary>
     public void MouseHorizontalWheelScrolled(PointF point, float notches)
     {
+        ThrowIfDisposed();
+        if (DeferInput(() => MouseHorizontalWheelScrolled(point, notches))) return;
         // WM_MOUSEHWHEEL reports positive deltas for motion towards the right.
         ScrollByWheel(point, ScrollAxis.Horizontal, notches * 48f);
     }
@@ -302,8 +307,8 @@ public sealed partial class UiDocumentHost
 
     private void InvalidateScroll()
     {
-        _invalidation |= (VisualInvalidation)NativeRenderPlanInterop.VisualInvalidationForScroll(
-            _displayListContainsPatchedChunks);
+        ProduceInvalidation((VisualInvalidation)NativeRenderPlanInterop.VisualInvalidationForScroll(
+            _displayListContainsPatchedChunks));
         RequestRender();
     }
 

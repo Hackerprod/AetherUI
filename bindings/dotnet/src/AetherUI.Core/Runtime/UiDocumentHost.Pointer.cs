@@ -33,6 +33,7 @@ public sealed partial class UiDocumentHost
     public CursorKind PointerMoved(PointF point)
     {
         ThrowIfDisposed();
+        if (DeferInput(() => PointerMoved(point))) return CursorKind.Default;
         if (_options.EnableInputWorkCounters) Interlocked.Increment(ref _pointerMovesReceived);
         _lastPointerPosition = point;
         _hasPointerPosition = true;
@@ -78,6 +79,7 @@ public sealed partial class UiDocumentHost
     }
 
     private bool CanHitTestCurrentVisualTree() =>
+        HasCertifiedStyleSnapshot() &&
         !_markupDirty &&
         (_invalidation & (VisualInvalidation.Style | VisualInvalidation.Layout)) == 0 &&
         _layout is not null &&
@@ -171,6 +173,7 @@ public sealed partial class UiDocumentHost
     public void PointerLeft()
     {
         ThrowIfDisposed();
+        if (DeferInput(() => PointerLeft())) return;
         CountPointerBarrier();
         _hasPointerPosition = false;
         _hasPendingPointerMove = false;
@@ -200,6 +203,7 @@ public sealed partial class UiDocumentHost
     public void PointerPressed(PointF point)
     {
         ThrowIfDisposed();
+        if (DeferInput(() => PointerPressed(point))) return;
         CountPointerBarrier();
         EnsureVisualTree();
         if (TryBeginScrollbarInteraction(point))
@@ -243,6 +247,7 @@ public sealed partial class UiDocumentHost
     public void PointerReleased(PointF point)
     {
         ThrowIfDisposed();
+        if (DeferInput(() => PointerReleased(point))) return;
         CountPointerBarrier();
         EnsureVisualTree();
         if (_scrollbarPointerCaptured)
@@ -282,6 +287,7 @@ public sealed partial class UiDocumentHost
     {
         ThrowIfDisposed();
         if (_options.EnableInputWorkCounters) Interlocked.Increment(ref _cursorQueries);
+        if (_styleOperationDepth != 0) return CursorKind.Default;
         if (_hasPendingPointerMove)
         {
             return _currentCursor;
@@ -444,12 +450,15 @@ public sealed partial class UiDocumentHost
         }
 
         element.State = next;
+        NoteInputMutation();
         _stateDirtyElements.Add(element);
+        _stateInputsToSync.Add(element);
         return true;
     }
 
     private ElementNode? HitTest(PointF point)
     {
+        if (_styleOperationDepth != 0 || !HasCertifiedStyleSnapshot()) return null;
         if (_options.EnableInputWorkCounters) Interlocked.Increment(ref _hitQueries);
         if (_nativeLayout is not null && _nativeDom is not null)
         {

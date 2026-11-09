@@ -28,27 +28,43 @@ internal static class TransitionStyleMarshaler
         AetherUI.Css.ComputedStyle after,
         long nowMs)
     {
-        var size = Marshal.SizeOf<StyleRuntimeInterop.ComputedStyleRaw>();
-        var beforeTransforms = AllocateTransforms(before);
-        var afterTransforms = AllocateTransforms(after);
-        var beforePtr = Marshal.AllocHGlobal(size);
-        var afterPtr = Marshal.AllocHGlobal(size);
-        try
+        using var prepared = Prepare(node, before, after);
+        prepared.Apply(runtime, nowMs);
+    }
+
+    internal static PreparedObservation Prepare(IntPtr node, AetherUI.Css.ComputedStyle before, AetherUI.Css.ComputedStyle after)
+        => new(node, before, after);
+
+    internal sealed class PreparedObservation : IDisposable
+    {
+        private readonly IntPtr _node;
+        private IntPtr _before, _after;
+        private (IntPtr Items, int Count) _beforeTransforms, _afterTransforms;
+        internal PreparedObservation(IntPtr node, AetherUI.Css.ComputedStyle before, AetherUI.Css.ComputedStyle after)
         {
-            var beforeRaw = CreateRaw(before);
-            beforeRaw.Transforms = new StyleRuntimeInterop.TransformListRaw(beforeTransforms.Items, beforeTransforms.Count);
-            var afterRaw = CreateRaw(after);
-            afterRaw.Transforms = new StyleRuntimeInterop.TransformListRaw(afterTransforms.Items, afterTransforms.Count);
-            Marshal.StructureToPtr(beforeRaw, beforePtr, false);
-            Marshal.StructureToPtr(afterRaw, afterPtr, false);
-            runtime.Observe(node, beforePtr, afterPtr, nowMs);
+            _node = node;
+            try
+            {
+                var size = Marshal.SizeOf<StyleRuntimeInterop.ComputedStyleRaw>();
+                _beforeTransforms = AllocateTransforms(before);
+                _afterTransforms = AllocateTransforms(after);
+                _before = Marshal.AllocHGlobal(size);
+                _after = Marshal.AllocHGlobal(size);
+                var beforeRaw = CreateRaw(before);
+                beforeRaw.Transforms = new StyleRuntimeInterop.TransformListRaw(_beforeTransforms.Items, _beforeTransforms.Count);
+                var afterRaw = CreateRaw(after);
+                afterRaw.Transforms = new StyleRuntimeInterop.TransformListRaw(_afterTransforms.Items, _afterTransforms.Count);
+                Marshal.StructureToPtr(beforeRaw, _before, false);
+                Marshal.StructureToPtr(afterRaw, _after, false);
+            }
+            catch { Dispose(); throw; }
         }
-        finally
+        internal void Apply(TransitionRuntimeInterop runtime, long nowMs) => runtime.Observe(_node, _before, _after, nowMs);
+        public void Dispose()
         {
-            Marshal.FreeHGlobal(afterPtr);
-            Marshal.FreeHGlobal(beforePtr);
-            FreeTransforms(beforeTransforms);
-            FreeTransforms(afterTransforms);
+            Marshal.FreeHGlobal(_after); Marshal.FreeHGlobal(_before);
+            FreeTransforms(_afterTransforms); FreeTransforms(_beforeTransforms);
+            _before = _after = IntPtr.Zero; _beforeTransforms = _afterTransforms = default;
         }
     }
 

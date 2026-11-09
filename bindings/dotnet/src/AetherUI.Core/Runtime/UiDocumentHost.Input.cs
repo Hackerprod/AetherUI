@@ -21,6 +21,7 @@ public sealed partial class UiDocumentHost
     public void TextInput(char character)
     {
         ThrowIfDisposed();
+        if (DeferInput(() => TextInput(character))) return;
         EnsureVisualTree();
         if (_focused is not { TagName: "input" } input || input.IsDisabled || char.IsControl(character))
         {
@@ -47,6 +48,7 @@ public sealed partial class UiDocumentHost
     public void KeyPressed(UiKey key)
     {
         ThrowIfDisposed();
+        if (DeferInput(() => KeyPressed(key))) return;
         EnsureVisualTree();
         var target = _focused;
         if (target is not null)
@@ -104,6 +106,7 @@ public sealed partial class UiDocumentHost
 
     private void SetInputValue(ElementNode input, string value)
     {
+        NoteInputMutation();
         input.RuntimeValue = value;
         _runtimeValuesDirty = true;
         if (input.Id is { Length: > 0 } id)
