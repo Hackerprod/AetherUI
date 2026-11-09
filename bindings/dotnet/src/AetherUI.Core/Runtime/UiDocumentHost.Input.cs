@@ -14,7 +14,7 @@ namespace AetherUI.Runtime;
 /// </summary>
 public sealed partial class UiDocumentHost
 {
-    private readonly Dictionary<string, string> _uncontrolledInputValues = new(StringComparer.Ordinal);
+    private Dictionary<string, string> _uncontrolledInputValues = new(StringComparer.Ordinal);
 
     private bool _runtimeValuesDirty;
 
@@ -106,10 +106,11 @@ public sealed partial class UiDocumentHost
 
     private void SetInputValue(ElementNode input, string value)
     {
-        NoteInputMutation();
+        var synchronized = input.BindingCore is NativeDomBinding;
+        if (!synchronized) NoteInputMutation();
         SetKnownRuntimeValue(input, value);
         _runtimeValuesDirty = true;
-        if (input.Id is { Length: > 0 } id)
+        if (!synchronized && input.Id is { Length: > 0 } id)
         {
             _uncontrolledInputValues[id] = value;
         }

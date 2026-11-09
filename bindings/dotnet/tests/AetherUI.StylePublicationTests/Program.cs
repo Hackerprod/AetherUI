@@ -10,6 +10,9 @@ using AetherUI.Runtime;
 
 CssDiagnosticsTransactionTests.Run();
 ComponentRenderCandidateTests.Run();
+DomStyleBindingInteropTests.Run();
+ComponentPublicationTests.Run();
+HostDomSyncTests.Run();
 DomSyncManagedTests.Run();
 DomSyncNativeTests.Run();
 TransitionSyncInteropTests.Run();
@@ -140,12 +143,13 @@ Run("component replacement in replay uses current markup", () =>
     finally{CssDiagnostics.Reported-=listener;}
     Eq(123f,Style(host).Width.Value);Eq(2,r.Frames);True(!host.ManagedProjectionOutOfDate);
 });
-Run("unsupported direct managed DOM mutation fails closed pending DOMsync", () =>
+Run("direct managed DOM mutation recovers current native inputs in place", () =>
 {
     using var r=new Renderer();using var host=New(new Component(),r);host.Render();
     var once=true;host.StylePublicationProbe=p=>{if(p=="managed-staged"&&once){once=false;host.Document!.GetElementById("a")!.SetAttribute("style","width:177px");}};
     State(host,host.Document!.GetElementById("a")!,ElementState.Invalid,true);
-    Throws<InvalidOperationException>(host.Render);Eq(1,r.Frames);True(host.ManagedProjectionOutOfDate);Eq(CursorKind.Default,host.CursorAt(new(10,10)));
+    host.Render();Eq(2,r.Frames);True(!host.ManagedProjectionOutOfDate);Eq(177f,Style(host).Width.Value);
+    Eq("width:177px",host.Document!.GetElementById("a")!.GetAttribute("style"));
 });
 Run("marshalling fault keeps previous projection and pending batch", () =>
 {
@@ -243,22 +247,22 @@ Run("InputVersion tracks real attached state and runtime-value changes only", ()
     element.RuntimeValue=null;Eq(input+3,document.InputVersion);element.RuntimeValue=null;Eq(input+3,document.InputVersion);
     Eq(tree,document.Version);element.SetAttribute("title","new");Eq(input+4,document.InputVersion);Eq(tree+1,document.Version);
 });
-Run("direct managed State fails closed without consuming unknown input", () =>
+Run("direct managed State is published without losing its input", () =>
 {
     using var r=new Renderer();using var host=New(new Component(),r);host.Render();var serial=host.HostInputSerial;
     var known=Field<long>(host,"_knownManagedInputVersion");var element=host.Document!.GetElementById("a")!;
     element.State=ElementState.Invalid;True(host.HostInputSerial>serial);True(host.NeedsRender);
-    Throws<InvalidOperationException>(host.Render);Eq(1,r.Frames);Eq(known,Field<long>(host,"_knownManagedInputVersion"));
-    Eq(CursorKind.Default,host.CursorAt(new(10,10)));True(element.State==ElementState.Invalid);
+    host.Render();Eq(2,r.Frames);True(Field<long>(host,"_knownManagedInputVersion")>known);
+    True(element.State==ElementState.Invalid);Eq(1f,Style(host).BackgroundColor.G);True(!host.ManagedProjectionOutOfDate);
 });
 Run("RuntimeValue to null is visible to serial guard; same null is a no-op", () =>
 {
     using var r=new Renderer();using var host=New(new Component(),r);host.Render();var element=host.Document!.GetElementById("a")!;
     var serial=host.Document.InputVersion;element.RuntimeValue="pending";element.RuntimeValue=null;
     Eq(serial+2,host.Document.InputVersion);var hostSerial=host.HostInputSerial;element.RuntimeValue=null;Eq(hostSerial,host.HostInputSerial);
-    Throws<InvalidOperationException>(host.Render);Eq(1,r.Frames);True(host.ManagedProjectionOutOfDate);
+    host.Render();Eq(2,r.Frames);True(!host.ManagedProjectionOutOfDate);True(element.RuntimeValue is null);
 });
-Run("known write cannot acknowledge a preceding unknown same-node mutation", () =>
+Run("subsequent known write preserves a preceding direct same-node mutation", () =>
 {
     using var r=new Renderer();using var host=New(new Component(),r);host.Render();var element=host.Document!.GetElementById("a")!;
     State(host,element,ElementState.Hover,true);var known=Field<long>(host,"_knownManagedInputVersion");var once=true;
@@ -267,10 +271,11 @@ Run("known write cannot acknowledge a preceding unknown same-node mutation", () 
         if(p!="managed-staged"||!once)return;once=false;
         element.State|=ElementState.Invalid;State(host,element,ElementState.Focus,true);
     };
-    Throws<InvalidOperationException>(host.Render);Eq(1,r.Frames);Eq(known,Field<long>(host,"_knownManagedInputVersion"));
-    True(host.Document.InputVersion>known);True((element.State&ElementState.Invalid)!=0);
+    host.Render();Eq(2,r.Frames);True(Field<long>(host,"_knownManagedInputVersion")>known);
+    True(host.Document.InputVersion>known);True((element.State&ElementState.Invalid)!=0);True((element.State&ElementState.Focus)!=0);
+    Eq(1f,Style(host).BackgroundColor.G);
 });
-Run("mixed managed writes and native R2 require reconciliation without overwriting R2", () =>
+Run("mixed managed writes and native R2 reconcile without overwriting R2", () =>
 {
     using var r=new Renderer();using var host=New(new Component("transform:var(--undefined)"),r);host.Render();var called=false;ulong generation=0;
     var runtime=Runtime(host);var element=host.Document!.GetElementById("a")!;
@@ -281,11 +286,12 @@ Run("mixed managed writes and native R2 require reconciliation without overwriti
         using var inner=runtime.PreparePublication(null,200,200,1);True(inner.Commit());using var map=inner.Publish();generation=inner.Token.Generation;
     };
     Native.SetDiagnostics(Handle(runtime),callback,IntPtr.Zero);State(host,element,ElementState.Hover,true);
-    Throws<InvalidOperationException>(host.Render);GC.KeepAlive(callback);Eq(1,r.Frames);True(called);
-    var token=NativeStylePublicationToken.Empty;Eq(0,NativeMethods.StyleReadPublicationToken(Handle(runtime),ref token));Eq(generation,token.Generation);
-    True(Field<bool>(host,"_inputReconciliationRequired"));True(host.ManagedProjectionOutOfDate);
+    host.Render();GC.KeepAlive(callback);Eq(2,r.Frames);True(called);
+    var token=NativeStylePublicationToken.Empty;Eq(0,NativeMethods.StyleReadPublicationToken(Handle(runtime),ref token));True(token.Generation>generation);
+    True(!Field<bool>(host,"_inputReconciliationRequired"));True(!host.ManagedProjectionOutOfDate);
+    Eq(ElementState.Hover,element.State);Eq(1f,Style(host).BackgroundColor.R);
 });
-Console.WriteLine($"PASS {count} D1 host protocol tests; managed DOM synchronization remains a separate pending gate.");
+Console.WriteLine($"PASS {count} D1 host protocol tests with DOMsync; lifecycle/complete-matrix gates remain pending.");
 void Run(string name,Action action){action();++count;Console.WriteLine("PASS "+name);}
 static UiDocumentHost New(Component c,Renderer r)=>new(c,new ApproximateTextMeasurer(),r,new UiHostOptions{Width=200,Height=200});
 static T Field<T>(object o,string name)=>(T)o.GetType().GetField(name,BindingFlags.Instance|BindingFlags.NonPublic)!.GetValue(o)!;

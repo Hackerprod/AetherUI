@@ -23,7 +23,7 @@ public sealed partial class UiDocumentHost
         _styleRetryBlocked = false; // An explicit call permits one new bounded attempt.
         ++_renderDepth;
         try { RenderCore(); }
-        finally { --_renderDepth; }
+        finally { --_renderDepth; DrainDomNotification(); }
     }
 
     private void RenderCore()

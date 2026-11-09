@@ -92,7 +92,7 @@ public sealed unsafe partial class StyleRuntimeInterop : IDisposable
     private long _author;
     private bool _disposed;
     private Dictionary<IntPtr, NativeComputedStyle> _styles = [];
-    private readonly Dictionary<IntPtr, int> _elementIndex = [];
+    private Dictionary<IntPtr, int> _elementIndex = [];
     private List<IntPtr> _elements = [];
 
     public StyleRuntimeInterop(float width, float height, float dpiScale)
@@ -118,6 +118,7 @@ public sealed unsafe partial class StyleRuntimeInterop : IDisposable
     public void Load(string markup, string defaultsCss, string authorCss)
     {
         ThrowIfDisposed();
+        RejectLoadWithDomBinding();
         _ownedDocument?.Dispose();
         _ownedDocument = NativeDomDocument.Parse(markup);
         Load(_ownedDocument, defaultsCss, authorCss);
@@ -129,6 +130,7 @@ public sealed unsafe partial class StyleRuntimeInterop : IDisposable
     public void Load(NativeDomDocument document, string defaultsCss, string authorCss)
     {
         ThrowIfDisposed();
+        RejectLoadWithDomBinding();
         ArgumentNullException.ThrowIfNull(document);
         _document = document.Handle;
         NativeMethods.StyleRuntimeClearCache(_runtime);
@@ -311,9 +313,12 @@ public sealed unsafe partial class StyleRuntimeInterop : IDisposable
     public void Dispose()
     {
         if (_disposed) return;
+        if (_domStyleBinding != IntPtr.Zero) VerifyDomBindingThread();
         _disposed = true;
         if (_managedPublicationRevision != IntPtr.Zero) NativeMethods.StyleRevisionDestroy(_managedPublicationRevision);
         _managedPublicationRevision = IntPtr.Zero;
+        if (_domStyleBinding != IntPtr.Zero) NativeMethods.DomStyleBindingDestroy(_domStyleBinding);
+        _domStyleBinding = IntPtr.Zero;
         if (_runtime != IntPtr.Zero) NativeMethods.StyleRuntimeDestroy(_runtime);
         _ownedDocument?.Dispose();
         _ownedDocument = null;

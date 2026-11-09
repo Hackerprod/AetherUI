@@ -15,7 +15,7 @@ namespace AetherUI.Runtime;
 public sealed partial class UiDocumentHost
 {
     private ElementNode? _hovered;
-    private readonly HashSet<ElementNode> _hoverChain = [];
+    private HashSet<ElementNode> _hoverChain = [];
     private ElementNode? _active;
     private ElementNode? _focused;
 
@@ -365,6 +365,8 @@ public sealed partial class UiDocumentHost
 
     private UiEvent Dispatch(string type, ElementNode target, PointF point, UiKey key = UiKey.None, char character = '\0')
     {
+        var registry = _componentRegistry;
+        var dispatchDocument = _document;
         var uiEvent = new UiEvent(type, target)
         {
             PointerPosition = point,
@@ -377,12 +379,12 @@ public sealed partial class UiDocumentHost
         {
             uiEvent.CurrentTarget = current;
             var token = current.GetAttribute($"on{type}");
-            if (token is { Length: > 0 } && _component.TryGetEventHandler(token, out var handler))
+            if (token is { Length: > 0 } && registry is not null && registry.TryGetEventHandler(token, out var handler))
             {
                 handler(uiEvent);
             }
 
-            if (uiEvent.IsPropagationStopped)
+            if (_disposed || !ReferenceEquals(dispatchDocument, _document) || uiEvent.IsPropagationStopped)
             {
                 break;
             }
@@ -454,6 +456,12 @@ public sealed partial class UiDocumentHost
         if (next == previous)
         {
             return false;
+        }
+
+        if (element.BindingCore is NativeDomBinding)
+        {
+            SetKnownElementState(element, next);
+            return true;
         }
 
         _stateDirtyElements.EnsureCapacity(_stateDirtyElements.Count + 1);

@@ -15,6 +15,16 @@ internal static class NativeDomSync
         Throw(NativeMethods.DomReadNodeIdentity(node, out var identity));
         return identity;
     }
+    internal static NativeDomToken ReadToken(NativeDomDocument document)
+    {
+        using var borrow = document.Borrow();
+        return ReadToken(borrow.Handle);
+    }
+    internal static ulong ReadIdentity(NativeDomDocument document)
+    {
+        using var borrow = document.Borrow();
+        return ReadIdentity(borrow.Handle);
+    }
     internal static NativeDomToken ReadToken(IntPtr node)
     {
         Throw(NativeMethods.DomReadToken(node, out var token));
@@ -52,6 +62,17 @@ internal sealed class NativeDomLease : SafeHandle
         catch { result.Dispose(); throw; }
     }
     internal IntPtr Node { get { NativeDomSync.Throw(NativeMethods.DomLeaseGet(this, out var node)); return node; } }
+    internal NativeDomToken ReadToken()
+    {
+        var success = false;
+        DangerousAddRef(ref success);
+        try
+        {
+            if (!success) throw new ObjectDisposedException(nameof(NativeDomLease));
+            return NativeDomSync.ReadToken(Node);
+        }
+        finally { if (success) DangerousRelease(); }
+    }
     protected override bool ReleaseHandle() { NativeMethods.DomLeaseDestroy(handle); return true; }
 }
 internal sealed class NativeDomSnapshotHandle : SafeHandle
@@ -81,6 +102,11 @@ internal sealed class NativeDomSnapshot : IDisposable
     internal NativeDomNodeData[] Nodes { get; }
     private NativeDomSnapshot(NativeDomSnapshotHandle handle, NativeDomToken token, NativeDomNodeData[] nodes)
     { _handle = handle; Token = token; Nodes = nodes; }
+    internal static NativeDomSnapshot Acquire(NativeDomDocument document, IReadOnlyList<NativeDomLease>? known = null)
+    {
+        using var borrow = document.Borrow();
+        return Acquire(borrow.Handle, known);
+    }
     internal static unsafe NativeDomSnapshot Acquire(IntPtr document, IReadOnlyList<NativeDomLease>? known = null)
     {
         var handle = new NativeDomSnapshotHandle();

@@ -33,7 +33,7 @@ public sealed partial class UiDocumentHost
 
     private void NoteInputMutation()
     {
-        ++_hostInputSerial;
+        _hostInputSerial = checked(_hostInputSerial + 1);
         _styleRetryBlocked = false;
         _managedProjectionOutOfDate = true;
         _hasPendingPointerTarget = false;
@@ -78,6 +78,9 @@ public sealed partial class UiDocumentHost
 
     private void ProduceInvalidation(VisualInvalidation flags)
     {
+        for (var i = 0; i < _invalidationProduced.Length; ++i)
+            if (((int)flags & (1 << i)) != 0 && _invalidationProduced[i] == long.MaxValue)
+                throw new OverflowException("Host invalidation serial exhausted.");
         for (var i = 0; i < _invalidationProduced.Length; ++i)
             if (((int)flags & (1 << i)) != 0) ++_invalidationProduced[i];
         _invalidation |= flags;
@@ -127,7 +130,7 @@ public sealed partial class UiDocumentHost
          token != _publishedTransitionToken || token != _derivedTransitionToken);
 
     private bool HasCertifiedStyleSnapshot(bool requireDerived = true) => !_disposed && !_managedProjectionOutOfDate &&
-        !_markupDirty && _document is not null && _document.Version == _publishedDocumentVersion &&
+        !_markupDirty && !DomInputsNeedImport() && _document is not null && _document.Version == _publishedDocumentVersion &&
         _document.InputVersion == _publishedDocumentInputVersion &&
         _nativeStyleRuntime.IsCurrent(_publishedStyleToken) &&
         _transitionRuntime is { } runtime && runtime.IsCurrent(_publishedTransitionToken) &&

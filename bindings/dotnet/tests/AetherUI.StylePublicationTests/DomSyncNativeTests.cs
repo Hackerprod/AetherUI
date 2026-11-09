@@ -9,6 +9,7 @@ internal static class DomSyncNativeTests
         TypedNonRoundtripAndDomain();
         AdoptionAndRetirement();
         MaterializeAroundCurrentSubtree();
+        FinalizableOwnerBorrows();
         Console.WriteLine("PASS native DOM adapter R2, typed inputs, ownership and retirement");
     }
     private static void NativeR2AndTypedWrites()
@@ -125,6 +126,39 @@ internal static class DomSyncNativeTests
         detachedTarget.AppendChild(keep);
         Equal(oldDisconnect, keep.NativeRecordCore.DisconnectSerial); // Detached move, same owner.
         True(ReferenceEquals(detachedTarget, keep.Parent));
+    }
+    private static void FinalizableOwnerBorrows()
+    {
+        var retained = CreateOwnerRetainedByNode();
+        using var lease = retained.Lease;
+        GC.Collect(); GC.WaitForPendingFinalizers(); GC.Collect();
+        True(!retained.Owner.IsAlive);
+        True(lease.ReadToken().OwnerIdentity != 0); // GC release is not logical retirement.
+        using var native = NativeDomDocument.CreateEmpty();
+        using var borrowed = native.Borrow();
+        using var rootLease = NativeDomLease.Retain(borrowed.Handle);
+        var wrongThread = Task.Run(() =>
+        {
+            try { native.Dispose(); return false; }
+            catch (InvalidOperationException) { return true; }
+        }).GetAwaiter().GetResult();
+        True(wrongThread); True(NativeDomSync.ReadToken(native).OwnerIdentity != 0);
+        native.Dispose();
+        Throws<InvalidOperationException>(() => rootLease.ReadToken());
+        Throws<ObjectDisposedException>(() => native.GetChildCount(borrowed.Handle));
+        // The outstanding borrow/lease still pins physical storage after explicit retirement.
+    }
+    [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]
+    private static (NativeDomLease Lease, WeakReference Owner) CreateOwnerRetainedByNode()
+    {
+        var native = NativeDomDocument.CreateEmpty();
+        using var borrow = native.Borrow();
+        using var edit = NativeDomEdit.Prepare(NativeDomSync.ReadToken(native), new(
+            NativeDomEditKind.InsertSubtree, borrow.Handle, Nodes:
+            new[] { new NativeDomNodeSpecData((int)NodeType.Element, 0, -1, "retained", "", null, new Dictionary<string, string>()) }));
+        var lease = NativeDomLease.Retain(edit.CreatedNode(0));
+        try { edit.Commit(); return (lease, new WeakReference(native)); }
+        catch { lease.Dispose(); native.Dispose(); throw; }
     }
     private sealed class CustomNode() : Node(NodeType.Element);
     private sealed class Bookkeeping : IDomHostBookkeeping

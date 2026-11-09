@@ -11,6 +11,8 @@ internal sealed class DomInterop : IDisposable
     private NativeDomBinding? _binding;
     private bool _disposed;
     private DomInterop(NativeDomDocument native, DocumentNode document) { Native = native; Document = document; }
+    internal static DomInterop CreateStaged(NativeDomDocument native, DocumentNode document) => new(native, document);
+    internal void PublishStagedBinding(NativeDomBinding binding) => _binding = binding;
     public NativeDomDocument Native { get; }
     public DocumentNode Document { get; }
     internal IReadOnlyDictionary<IntPtr, Node> InitialNodesCore => _nodesByHandle;

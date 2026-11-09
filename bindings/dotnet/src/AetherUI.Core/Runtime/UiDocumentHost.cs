@@ -106,6 +106,7 @@ public sealed partial class UiDocumentHost : IDisposable
         UiHostOptions? options = null)
     {
         _component = component ?? throw new ArgumentNullException(nameof(component));
+        _component.BindRenderOwnerThread();
         ArgumentNullException.ThrowIfNull(textMeasurer);
         _renderer = renderer ?? throw new ArgumentNullException(nameof(renderer));
         _options = options ?? new UiHostOptions();
@@ -127,7 +128,7 @@ public sealed partial class UiDocumentHost : IDisposable
     public DocumentNode? Document => _document;
     public LayoutResult? Layout => _layout;
     public ElementNode? FocusedElement => _focused;
-    public bool NeedsRender => !_disposed && !_styleRetryBlocked && (_markupDirty || _invalidation != VisualInvalidation.None || _hasPendingPointerMove || _deferredInput.Count != 0 || _renderDeferred || TransitionProjectionNeedsRender());
+    public bool NeedsRender => !_disposed && !_styleRetryBlocked && (_markupDirty || _invalidation != VisualInvalidation.None || _hasPendingPointerMove || _deferredInput.Count != 0 || _renderDeferred || TransitionProjectionNeedsRender() || DomInputsNeedImport());
     /// <summary>True while the CSS transition runtime is animating one or more properties.</summary>
     public bool HasActiveTransitions => _transitionRuntime?.HasActive == true;
 
@@ -248,6 +249,7 @@ public sealed partial class UiDocumentHost : IDisposable
             RebuildDocument();
         }
 
+        EnsureDomInputsCurrent();
         if (!HasCertifiedStyleSnapshot(requireDerived: false) && (_invalidation & VisualInvalidation.Style) == 0)
             RejectStyleProjection();
 
@@ -342,85 +344,11 @@ public sealed partial class UiDocumentHost : IDisposable
     {
         ++_styleOperationDepth;
         try { RebuildDocumentCore(); }
+        catch { _styleRetryBlocked = true; throw; }
         finally { LeaveStyleOperation(); }
     }
 
-    private void RebuildDocumentCore()
-    {
-        var markupSerial = _markupInputSerial;
-        CancelScrollbarDrag();
-        var focusedId = _focused?.Id;
-        var hoveredId = _hovered?.Id;
-        var activeId = _active?.Id;
-        var markup = _component.RenderMarkup();
-        var nativeDom = DomInterop.Parse(markup);
-        var previousNativeDom = _nativeDom;
-        if (_document is not null) _document.InputsChanged -= OnManagedInputsChanged;
-        _nativeDom = nativeDom;
-        _document = nativeDom.Document;
-        _knownManagedInputVersion = _document.InputVersion;
-        _inputReconciliationRequired = false;
-        _document.InputsChanged += OnManagedInputsChanged;
-        _styles = null;
-        _nativeLayout?.Dispose();
-        _nativeLayout = null;
-        _nativeLayoutStyleMap?.Dispose();
-        _nativeLayoutStyleMap = null;
-        _nativeVisualStyleMap?.Dispose();
-        _nativeVisualStyleMap = null;
-        _layout = null;
-        _displayList = null;
-        _displayListContainsPatchedChunks = false;
-
-        // The previous tree's ElementNode instances are discarded on every rebuild — this engine
-        // has no cross-render node identity yet. Clearing here drops the now-stale ComputedStyle
-        // entries for nodes that no longer exist. The styles are snapshotted by stable identity
-        // first so state-triggered markup changes can still start CSS transitions.
-        _previousStyleSnapshot = BuildStyleSnapshot();
-        _computedStyles.Clear();
-        _stateDirtyElements.Clear();
-        _stateInputsToSync.Clear();
-        _nativeInitialStatesSynchronized = false;
-        _hoverChain.Clear();
-        _scrollOffsets.Clear();
-        _scrollOffsetsByStyleNode.Clear();
-        _scrollBoxesByStyleNode.Clear();
-
-        var authorCss = string.Join('\n', _document.GetElementsByTagName("style").Select(static element => element.TextContent));
-        // The UA defaults sheet is native-owned: the style runtime applies it at the
-        // engine-defaults layer on creation, so the host passes no defaults text here.
-        _nativeStyleRuntime.Load(nativeDom.Native, string.Empty, authorCss);
-        // The builder borrows its runtime. Rebind before releasing old DOM handles.
-        var previousTransitions = _transitionRuntime;
-        _transitionRuntime = new TransitionRuntimeInterop();
-        _renderingInterop.SetTransitionRuntime(_transitionRuntime.Handle);
-        previousTransitions?.Dispose();
-        previousNativeDom?.Dispose();
-
-        foreach (var input in _document.GetElementsByTagName("input"))
-        {
-            if (input.GetAttribute("value") is { } controlledValue)
-            {
-                SetKnownRuntimeValue(input, controlledValue);
-                if (input.Id is { Length: > 0 } controlledId)
-                {
-                    _uncontrolledInputValues[controlledId] = controlledValue;
-                }
-            }
-            else if (input.Id is { Length: > 0 } id && _uncontrolledInputValues.TryGetValue(id, out var saved))
-            {
-                SetKnownRuntimeValue(input, saved);
-            }
-        }
-
-        _focused = RestoreElement(focusedId, ElementState.Focus);
-        _hovered = RestoreElement(hoveredId, ElementState.Hover);
-        RestoreHoverChain(_hovered);
-        _active = RestoreElement(activeId, ElementState.Active);
-        _nativeSynchronizedDocumentVersion = _document.Version;
-        _markupDirty = _markupInputSerial != markupSerial;
-        ProduceInvalidation(VisualInvalidation.Style);
-    }
+    private void RebuildDocumentCore() => PublishComponentDocument();
 
     private ElementNode? RestoreElement(string? id, ElementState state)
     {

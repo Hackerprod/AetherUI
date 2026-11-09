@@ -18,6 +18,7 @@ struct Domain {
     std::shared_ptr<EditableNodeStorage> root;
     std::shared_ptr<DomOwnerControl> owner;
     aether_dom_token_v1_t token{};
+    uint64_t style_tree_epoch=0;
     std::optional<Registry> registry;
     int64_t next_id=0;
 };
@@ -33,6 +34,7 @@ struct aether_dom_edit_s {
     std::vector<std::pair<aether_node_s*,aether_node_s*>> materialized_parents;
     std::vector<aether_node_s*> disconnect,attach,adopt;
     std::vector<std::shared_ptr<DomNodeOwnerPin>> adopt_relays;
+    std::vector<std::shared_ptr<aether_node_s>> generated_pins;
     aether_node_s* target=nullptr; aether_node_s* child=nullptr;
     aether_node_s* new_parent=nullptr;
     std::optional<decltype(aether_node_s::attributes)> attributes;
@@ -48,7 +50,7 @@ size_t domain(aether_dom_edit_s& edit,aether_node_s* node){
     auto control=node->document_owner.lock();if(!control||aether_dom_access(node)!=AETHER_OK)throw std::invalid_argument("DOM domain");
     for(size_t i=0;i<edit.domains.size();++i)if(edit.domains[i].owner==control)return i;
     Domain d;d.owner=control;d.root=control->document.lock();if(!d.root)throw std::invalid_argument("DOM root expired");
-    if(aether_dom_read_token_v1(node,&d.token)!=AETHER_OK)throw std::invalid_argument("DOM token");d.next_id=static_cast<aether_doc_s*>(d.root->node.get())->next_style_node_id;
+    if(aether_dom_read_token_v1(node,&d.token)!=AETHER_OK)throw std::invalid_argument("DOM token");d.style_tree_epoch=d.root->node->identity->style_tree_epoch;d.next_id=static_cast<aether_doc_s*>(d.root->node.get())->next_style_node_id;
     edit.domains.push_back(std::move(d));return edit.domains.size()-1;
 }
 void pin(aether_dom_edit_s& edit,aether_node_s* node){auto p=aether_editable_lease(node);if(!p)throw std::invalid_argument("DOM noneditable node");edit.pins.push_back(std::move(p));}
@@ -146,6 +148,25 @@ aether_status_t prepare_slots(aether_dom_edit_s& e) {
     }
     return stages.empty()?AETHER_OK:aether_dom_style_finalize_slots(stages,e.style_batch);
 }
+// Staged links and attachment lists may retain generated nodes replaced by a
+// style-only FULL publication. Pin the owning generated allocation separately
+// from the editable host, which does not keep its old generated_storage alive.
+// Only inspect staged structural lists; scalar State remains O(1).
+void pin_generated_path(aether_dom_edit_s& e,aether_node_s* node) {
+    for(auto* current=node;current;current=current->parent) {
+        for(const auto& generated:current->generated_storage)e.generated_pins.push_back(generated);
+        if(aether_editable_lease(current))break;
+    }
+}
+void pin_staged_generated(aether_dom_edit_s& e) {
+    for(const auto& link:e.links) {
+        pin_generated_path(e,link.node);
+        for(auto* child:link.children)pin_generated_path(e,child);
+    }
+    for(auto* node:e.disconnect)pin_generated_path(e,node);
+    for(auto* node:e.attach)pin_generated_path(e,node);
+    for(auto* node:e.adopt)pin_generated_path(e,node);
+}
 void preflight_counters(const aether_dom_edit_s& e){
     for(const auto& d:e.domains){uint64_t n=0;for(const auto& t:e.touches)if(t.node->document_owner.lock()==d.owner)++n;if(d.owner->observation_serial>UINT64_MAX-n)throw std::length_error("DOM observation exhausted");}
     for(const auto& t:e.touches){auto* root=aether_dom_root(t.node);uint64_t n=0,structural=0;for(const auto& t2:e.touches)if(aether_dom_root(t2.node)==root){++n;if(t2.structure)++structural;}if(root->identity->mutation_epoch>UINT64_MAX-n||root->identity->structure_epoch>UINT64_MAX-structural)throw std::length_error("DOM epoch exhausted");}
@@ -203,14 +224,14 @@ AETHER_API aether_status_t aether_dom_prepare_edit_v1(const aether_dom_token_v1_
             }
             add_touch(*e,target,aether::dom::MutationKind::structure,true);
         }else return AETHER_ERROR_INVALID_STATE;
-        for(auto* n:e->disconnect){auto* owner=n;while(owner&&!aether_editable_lease(owner))owner=owner->parent;if(!owner)return AETHER_ERROR_INVALID_STATE;pin(*e,owner);} // Generated descendants are retained through their editable host.
+        for(auto* n:e->disconnect){auto* owner=n;while(owner&&!aether_editable_lease(owner))owner=owner->parent;if(!owner)return AETHER_ERROR_INVALID_STATE;pin(*e,owner);} // Retain editable owners; old generated allocations are pinned separately below.
         e->adopt_relays.reserve(e->adopt.size());for(auto* n:e->adopt)e->adopt_relays.push_back(aether_live_owner_pin(n));
-        preflight_counters(*e);const auto slots=prepare_slots(*e);if(slots!=AETHER_OK)return slots;*out=e.release();return AETHER_OK;
+        pin_staged_generated(*e);preflight_counters(*e);const auto slots=prepare_slots(*e);if(slots!=AETHER_OK)return slots;*out=e.release();return AETHER_OK;
     }catch(const std::bad_alloc&){return AETHER_ERROR_OUT_OF_MEMORY;}catch(...){return AETHER_ERROR_INVALID_STATE;}
 }
 AETHER_API aether_status_t aether_dom_edit_created_node_v1(aether_dom_edit_t e,size_t index,aether_node_t* out){if(out)*out=nullptr;if(!e||!out)return AETHER_ERROR_NULL_ARG;if(index>=e->results.size())return AETHER_ERROR_INVALID_STATE;*out=e->results[index]->node.get();return AETHER_OK;}
 AETHER_API aether_status_t aether_dom_edit_validate_v1(aether_dom_edit_t e){if(!e)return AETHER_ERROR_NULL_ARG;if(e->committed)return AETHER_ERROR_INVALID_STATE;if(e->style_batch&&!aether_dom_style_validate_batch(e->style_batch))return AETHER_ERROR_INVALID_STATE;
-    for(const auto& d:e->domains){aether_dom_token_v1_t now{};if(aether_dom_read_token_v1(d.root->node.get(),&now)!=AETHER_OK||!token_equal(now,d.token))return AETHER_ERROR_INVALID_STATE;}return AETHER_OK;}
+    for(const auto& d:e->domains){aether_dom_token_v1_t now{};if(aether_dom_read_token_v1(d.root->node.get(),&now)!=AETHER_OK||!token_equal(now,d.token)||d.root->node->identity->style_tree_epoch!=d.style_tree_epoch)return AETHER_ERROR_INVALID_STATE;}return AETHER_OK;}
 AETHER_API aether_status_t aether_dom_edit_commit_v1(aether_dom_edit_t e,aether_dom_token_v1_t* out){if(out)*out={};if(!e||!out)return AETHER_ERROR_NULL_ARG;auto status=aether_dom_edit_validate_v1(e);if(status!=AETHER_OK)return status;
     for(auto& n:e->created)n->node->unpublished=false;
     for(const auto& t:e->touches)aether_node_touch_typed(t.node,t.kind,t.structure,t.before,t.after,t.subject);

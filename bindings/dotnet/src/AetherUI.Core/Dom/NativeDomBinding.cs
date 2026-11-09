@@ -8,6 +8,7 @@ namespace AetherUI.Dom;
 internal interface IDomHostBookkeeping
 {
     IDomPreparedBookkeeping Prepare(DomEdit? edit, bool import);
+    IDomPreparedBookkeeping PrepareImport(NativeDomSnapshot snapshot) => Prepare(null, import: true);
     void NotifyMutationCompleted();
 }
 internal interface IDomPreparedBookkeeping : IDisposable
@@ -51,6 +52,19 @@ internal sealed partial class NativeDomBinding : IDomBinding, IDisposable
     private bool _synchronizing;
     private IDomHostBookkeeping[]? _pendingOtherHosts;
     internal NativeDomToken TokenCore => _token;
+    internal bool HasCurrentInputs
+    {
+        get
+        {
+            if (_disposed || _ownerThread != Environment.CurrentManagedThreadId) return false;
+            try
+            {
+                using var borrow = Native.Borrow();
+                return NativeMethods.DomReadToken(borrow.Handle, out var current) == 0 && current.StickyStatus == 0 && current == _token;
+            }
+            catch (ObjectDisposedException) { return false; }
+        }
+    }
     internal DocumentNode Document => _interop.Document;
     internal NativeDomDocument Native => _interop.Native;
 
@@ -59,7 +73,7 @@ internal sealed partial class NativeDomBinding : IDomBinding, IDisposable
         _interop = interop;
         _host = host;
         _registry = _thread ??= new ThreadBindings();
-        var token = NativeDomSync.ReadToken(Native.Handle);
+        var token = NativeDomSync.ReadToken(Native);
         if (_registry.Owners.TryGetValue(token.OwnerIdentity, out var weak) && weak.TryGetTarget(out var existing) && !existing._disposed)
             throw new InvalidOperationException("A managed DOM binding already owns this document.");
         var owners = new Dictionary<ulong, WeakReference<NativeDomBinding>>(_registry.Owners)
@@ -79,13 +93,13 @@ internal sealed partial class NativeDomBinding : IDomBinding, IDisposable
     public void EnsureCurrent()
     {
         CheckOwner();
-        if (NativeDomSync.ReadToken(Native.Handle) == _token) return;
+        if (NativeDomSync.ReadToken(Native) == _token) return;
         // Slow path coordinates changed owners on this thread. This discovers a native
         // adoption whichever end is read first, before publishing reciprocal links.
         var owners = new List<NativeDomBinding> { this };
         foreach (var weak in _registry.Owners.Values)
             if (weak.TryGetTarget(out var owner) && !ReferenceEquals(owner, this) && !owner._disposed &&
-                NativeDomSync.ReadToken(owner.Native.Handle) != owner._token) owners.Add(owner);
+                NativeDomSync.ReadToken(owner.Native) != owner._token) owners.Add(owner);
         Import(owners, null);
     }
 
@@ -126,11 +140,11 @@ internal sealed partial class NativeDomBinding : IDomBinding, IDisposable
                 var known = new List<NativeDomLease>();
                 foreach (var weak in owner._nodes.Values)
                     if (weak.TryGetTarget(out var wrapper) && wrapper.NativeRecordCore is { } record && ReferenceEquals(record.Owner, owner)) known.Add(record.Lease);
-                var snapshot = NativeDomSnapshot.Acquire(owner.Native.Handle, known);
+                var snapshot = NativeDomSnapshot.Acquire(owner.Native, known);
                 IDomPreparedBookkeeping? bookkeeping = null;
                 try
                 {
-                    bookkeeping = owner._host.Prepare(null, import: true);
+                    bookkeeping = owner._host.PrepareImport(snapshot);
                     var version = default(DocumentVersionChange);
                     stages.Add(new(owner, snapshot, bookkeeping, [], [], version));
                     bookkeeping = null;
@@ -193,7 +207,7 @@ internal sealed partial class NativeDomBinding : IDomBinding, IDisposable
                         stage.Snapshot.Token.StructureEpoch != stage.Owner._token.StructureEpoch;
                     stage.Version = stage.Owner.Document.PrepareVersionChange(treeChanged ? 1 : 0, attachedInputsChanged ? 1 : 0);
                 }
-                if (NativeDomSync.ReadToken(stage.Owner.Native.Handle) != stage.Snapshot.Token)
+                if (NativeDomSync.ReadToken(stage.Owner.Native) != stage.Snapshot.Token)
                     throw new InvalidOperationException("Native DOM changed during snapshot preparation.");
                 stage.Bookkeeping.Validate();
             }
@@ -328,9 +342,9 @@ internal sealed partial class NativeDomBinding : IDomBinding, IDisposable
                 if (source is not null)
                 {
                     source.CheckOwner();
-                    if (NativeDomSync.ReadToken(source.Native.Handle) != source._token) throw new InvalidOperationException("Source DOM binding is not current.");
+                    if (NativeDomSync.ReadToken(source.Native) != source._token) throw new InvalidOperationException("Source DOM binding is not current.");
                 }
-                if (NativeDomSync.ReadToken(owner.Native.Handle) != owner._token) throw new InvalidOperationException("Destination DOM binding is not current.");
+                if (NativeDomSync.ReadToken(owner.Native) != owner._token) throw new InvalidOperationException("Destination DOM binding is not current.");
                 owner._synchronizing = true; locked = true;
                 if (source is not null) { source._synchronizing = true; lockedSource = source; }
                 var specs = new List<NativeDomNodeSpecData>(); var wrappers = new List<Node>();
@@ -466,7 +480,7 @@ internal sealed partial class NativeDomBinding : IDomBinding, IDisposable
             if (_source is not null)
             {
                 _source._nodes = _sourceNodes!; _source._handles = _sourceHandles!;
-                _source._token = NativeDomSync.ReadToken(_source.Native.Handle);
+                _source._token = NativeDomSync.ReadToken(_source.Native);
             }
             _bookkeeping.Publish(); _sourceBookkeeping?.Publish();
             _owner._pendingOtherHosts = _otherHosts;

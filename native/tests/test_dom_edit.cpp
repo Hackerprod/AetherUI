@@ -1,4 +1,5 @@
 #include <aether/aether_dom_sync.h>
+#include <aether/aether_contextual_style.h>
 #include "../src/dom/dom_types.h"
 #include <cstdio>
 #include <cstdlib>
@@ -10,7 +11,58 @@ static aether_dom_token_v1_t token(aether_node_t n){aether_dom_token_v1_t t{};CH
 static aether_dom_edit_t prepare(aether_dom_edit_spec_v1_t& s){auto t=token(s.target);aether_dom_edit_t e=nullptr;CHECK(aether_dom_prepare_edit_v1(&t,&s,&e)==AETHER_OK);return e;}
 static void commit(aether_dom_edit_t e){aether_dom_token_v1_t t{};failure=0;auto status=aether_dom_edit_commit_v1(e,&t);failure=-1;CHECK(status==AETHER_OK);aether_dom_edit_destroy_v1(e);}
 static void edit(aether_dom_edit_spec_v1_t s){commit(prepare(s));}
+static void full_style(aether_style_runtime_t runtime,aether_doc_t doc) {
+    aether_style_transaction_t transaction=nullptr;aether_style_revision_t revision=nullptr;
+    CHECK(aether_style_runtime_prepare_revision(runtime,doc,nullptr,&transaction)==AETHER_OK);
+    CHECK(aether_style_runtime_commit_revision(runtime,transaction,&revision)==AETHER_OK);
+    aether_style_revision_destroy(revision);aether_style_transaction_destroy(transaction);
+}
+static void style_replacement_invalidates_edit() {
+    // Links-only, remove-descendants, source-domain adopt and destination-domain
+    // adopt must all reject style-only R2, without dereferencing old generated.
+    for(int mode=0;mode<4;++mode) {
+        aether_doc_t source=nullptr,destination=nullptr;
+        CHECK(aether_doc_create(&source)==AETHER_OK);CHECK(aether_doc_create(&destination)==AETHER_OK);
+        CHECK(aether_doc_parse_html(source,"<body><div id='host'><span>authored</span></div></body>")==AETHER_OK);
+        CHECK(aether_doc_parse_html(destination,"<body><div id='target'></div></body>")==AETHER_OK);
+        aether_style_runtime_t source_runtime=nullptr,destination_runtime=nullptr;
+        CHECK(aether_style_runtime_create(nullptr,nullptr,nullptr,nullptr,&source_runtime)==AETHER_OK);
+        CHECK(aether_style_runtime_create(nullptr,nullptr,nullptr,nullptr,&destination_runtime)==AETHER_OK);
+        int64_t sheet=0;
+        CHECK(aether_style_runtime_add_stylesheet(source_runtime,"div::before,span::after{content:'generated'}",2,"test",&sheet,nullptr)==AETHER_OK);
+        CHECK(aether_style_runtime_add_stylesheet(destination_runtime,"div::before{content:'target'}",2,"test",&sheet,nullptr)==AETHER_OK);
+        full_style(source_runtime,source);full_style(destination_runtime,destination);
+        auto* host=aether_doc_get_element_by_id(source,"host");auto* target=aether_doc_get_element_by_id(destination,"target");
+        CHECK(!host->generated_storage.empty()&&!target->generated_storage.empty());
+        std::weak_ptr<aether_node_s> old=mode==3?target->generated_storage.front():host->generated_storage.front();
+        auto* old_parent=host->parent;
+        aether_dom_node_spec_v1_t text{};text.type=AETHER_NODE_TEXT;text.parent_index=-1;text.text=str("new");
+        aether_dom_edit_spec_v1_t spec{};spec.index=-1;
+        if(mode==0){spec.kind=AETHER_DOM_INSERT_SUBTREE;spec.target=host;spec.nodes=&text;spec.node_count=1;}
+        else if(mode==1){spec.kind=AETHER_DOM_REMOVE_CHILD;spec.target=old_parent;spec.child=host;}
+        else{spec.kind=AETHER_DOM_INSERT_CHILD;spec.target=target;spec.child=host;}
+        auto edit=prepare(spec);auto* changed=mode==3?destination:source;
+        const auto before=token(changed);const auto style_epoch=changed->identity->style_tree_epoch;
+        full_style(mode==3?destination_runtime:source_runtime,changed);
+        const auto after=token(changed);
+        CHECK(before.observation_serial==after.observation_serial&&before.input_epoch==after.input_epoch&&before.structure_epoch==after.structure_epoch);
+        CHECK(changed->identity->style_tree_epoch>style_epoch);
+        // No revision/runtime can accidentally keep the old allocation alive.
+        aether_style_runtime_destroy(source_runtime);aether_style_runtime_destroy(destination_runtime);
+        CHECK(!old.expired());
+        const auto host_children=host->children,target_children=target->children;
+        const auto source_size=source->editable_nodes.size(),destination_size=destination->editable_nodes.size();
+        CHECK(aether_dom_edit_validate_v1(edit)==AETHER_ERROR_INVALID_STATE);
+        aether_dom_token_v1_t output{};failure=0;auto status=aether_dom_edit_commit_v1(edit,&output);failure=-1;
+        CHECK(status==AETHER_ERROR_INVALID_STATE&&host->parent==old_parent&&host->children==host_children&&target->children==target_children);
+        CHECK(source->editable_nodes.size()==source_size&&destination->editable_nodes.size()==destination_size);
+        CHECK(token(changed).observation_serial==after.observation_serial);
+        aether_dom_edit_destroy_v1(edit);CHECK(old.expired());
+        aether_doc_destroy(source);aether_doc_destroy(destination);
+    }
+}
 int main(){
+    style_replacement_invalidates_edit();
     aether_doc_t d=nullptr;CHECK(aether_doc_create(&d)==AETHER_OK);CHECK(aether_doc_parse_html(d,"<body><input id='a' value='base'><p id='b'></p></body>")==AETHER_OK);auto* a=aether_doc_get_element_by_id(d,"a");auto* b=aether_doc_get_element_by_id(d,"b");auto* body=a->parent;
     aether_dom_edit_spec_v1_t s{};s.target=a;s.kind=AETHER_DOM_SET_RUNTIME_VALUE;s.value=str("");s.value_present=1;edit(s);CHECK(a->runtime_value_present&&a->attributes.at("value").empty());s.kind=AETHER_DOM_SET_ATTRIBUTE;s.name=str("VALUE");s.value=str("new base");edit(s);CHECK(a->authored_value=="new base"&&a->attributes.at("value").empty());s.kind=AETHER_DOM_SET_RUNTIME_VALUE;s.value={};s.value_present=0;edit(s);CHECK(!a->runtime_value_present&&a->attributes.at("value")=="new base");
     s.kind=AETHER_DOM_REMOVE_ATTRIBUTE;s.name=str("value");edit(s);CHECK(!a->authored_value_present&&!a->attributes.contains("value"));s.kind=AETHER_DOM_SET_RUNTIME_VALUE;s.value=str("override");s.value_present=1;edit(s);CHECK(aether_element_set_attribute(a,"value","R2")==AETHER_OK);CHECK(!a->runtime_value_present&&a->authored_value=="R2");
