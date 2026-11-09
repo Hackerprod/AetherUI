@@ -16,6 +16,7 @@ public sealed partial class UiDocumentHost
     private InteractionSession? _interactionSession;
     private InteractionClaim? _focusClaim, _activeClaim;
     private bool _drainingInteractionLosses;
+    internal Action<string>? InteractionLossCaptureProbe { get; set; }
     private int _interactionEntryDepth;
     private bool _interactionBatchConsumed;
 
@@ -216,32 +217,34 @@ public sealed partial class UiDocumentHost
         _interactionBatchConsumed = true;
         // An empty snapshot consumes the entry's budget too. A later callback may
         // create a loss, but nested resolution must not extend this entry's batch.
-        // Snapshot before any callback. Decode every borrowed handler while native owns
-        // it, then retain only managed strings, exact record scalars and registry pins.
-        List<LossDelivery>? pending = null;
-        foreach (var claim in session.Claims)
-        {
-            if (!claim.Native.TryReadLoss(out var loss)) continue;
-            if (loss.Claim.HostIdentity != _interactionHostIdentity || loss.Claim.RegistryIdentity != (ulong)claim.Registry.Generation ||
-                loss.Claim.NodeIdentity != claim.Native.Read().NodeIdentity)
-                throw new InvalidOperationException("Interaction loss does not match its pinned registry and target.");
-            var handler = loss.HandlerPresent != 0 ? NativeDomCodec.Decode(loss.Handler) : null;
-            loss.Handler = default; // Never retain/use a native string borrow beyond acknowledgment.
-            (pending ??= []).Add(new(claim, loss, handler, new UiEvent("blur", claim.Element)
-            {
-                CurrentTarget = claim.Element,
-                Value = claim.Element.RuntimeValueCore ?? claim.Element.GetAttributeCore("value"),
-            }));
-        }
-        if (pending is null)
-        {
-            ValidateScrollbarContinuity();
-            return;
-        }
-        var batch = pending.ToArray();
         _drainingInteractionLosses = true;
         try
         {
+            // Snapshot before any callback. Decode every borrowed handler while native owns
+            // it, then retain only managed strings, exact record scalars and registry pins.
+            InteractionLossCaptureProbe?.Invoke("capture-start");
+            List<LossDelivery>? pending = null;
+            foreach (var claim in session.Claims)
+            {
+                if (!claim.Native.TryReadLoss(out var loss)) continue;
+                if (loss.Claim.HostIdentity != _interactionHostIdentity || loss.Claim.RegistryIdentity != (ulong)claim.Registry.Generation ||
+                    loss.Claim.NodeIdentity != claim.Native.Read().NodeIdentity)
+                    throw new InvalidOperationException("Interaction loss does not match its pinned registry and target.");
+                var handler = loss.HandlerPresent != 0 ? NativeDomCodec.Decode(loss.Handler) : null;
+                loss.Handler = default; // Never retain/use a native string borrow beyond acknowledgment.
+                (pending ??= []).Add(new(claim, loss, handler, new UiEvent("blur", claim.Element)
+                {
+                    CurrentTarget = claim.Element,
+                    Value = claim.Element.RuntimeValueCore ?? claim.Element.GetAttributeCore("value"),
+                }));
+            }
+            if (pending is null)
+            {
+                ValidateScrollbarContinuity();
+                return;
+            }
+            InteractionLossCaptureProbe?.Invoke("before-array");
+            var batch = pending.ToArray();
             foreach (var delivery in batch)
             {
                 if (_disposed || session.IsDisposed || !ReferenceEquals(session, _interactionSession)) break;

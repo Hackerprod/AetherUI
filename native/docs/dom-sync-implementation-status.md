@@ -17,7 +17,9 @@ Design approval is not implementation approval. Experimental flags remain off.
 - Isolated component render candidates and pinned handler registries, with prepared host replacement.
 - Host in-place typed mutations/imports, source CSS slots, historical input-value cache and staged runtime element indexes.
 - Native finalizable owner/release API, owner relays across adoption and retained generated/retired storage (global lifetime gate remains open).
-- Native interaction claims, frozen first-disconnect routes and provisional restored claims (managed integration and complete gates remain open).
+- Native and managed interaction claims, frozen first-disconnect routes, provisional restored claims,
+  one lifecycle batch per external host entry, and preserved newer focus/press/hover authority.
+- Implicit Document materialization with staged finalizable ownership and one native adoption transaction.
 
 Chronology, OOM, counter exhaustion and lifetime changes are intentional v6 contracts.
 Old tests requiring unsigned epoch wrap, an exception crossing C ABI, or partial
@@ -26,10 +28,10 @@ journal injection tests retain irreversible poison/gap and overflow coverage.
 
 ## Gates still open
 
-Complete managed interaction claims/safe-point reconciliation and implicit Document materialization,
-all mutation/legacy routes participating in those transactions, full cross-document/lifetime
-coverage, complete allocation-failure matrix, independent implementation review, clean-hover
-work budgets and platform gates. Successful focused runs do not close these gates.
+Independent implementation review, complete allocation-failure and measured no-allocation commit
+coverage, remaining cross-document/lifetime/concurrency audit, all-engine work budgets and
+platform gates. Functional integration and focused tests now exist; they do not themselves close
+those wider gates. Successful focused runs do not close these gates.
 No serializer/rebind recovery or experimental default activation is authorized.
 
 ## Executed evidence
@@ -71,3 +73,38 @@ The former D1 tests that required direct managed input rejection were provisiona
 Version 6 requires successful reconciliation, so those five cases now assert current values,
 retained wrapper/handle identity, valid hit/cursor publication and native R2 preservation. Other
 marshaling, OOM, serial, reentrancy and no-partial-frame failure oracles remain in place.
+
+## Functional integration checkpoint and exact limits
+
+- 585804d Debug native with state-incremental ON: full CTest **247/247 PASS**. Its managed
+  publication/DOM/component/transition runner and 15 interaction cases passed, as did 16 input traces.
+  General managed was **95/100**, including a new redundant render-notification regression. This
+  historical failure is retained; it is not described as the four-failure baseline.
+- 585804d ASan/UBSan passed dom-owner, dom-interaction and state-prepare. The dom-edit harness
+  initially mismatched nothrow allocation families; test-only 4b3b4b1 corrected those families and
+  passed against the byte-identical product. LeakSanitizer also fails when invoked directly without
+  a debugger in this environment, reporting ptrace unsupported. Leak checking remains blocked.
+- 76127f5 introduced bounded lifecycle batches and internal-notification ownership. Native focused
+  tests passed 8/8. Its new two-pending-loss test found automatic stale-focus cleanup could suppress
+  a newer explicit focus request. e2c06e7 fixes that product path without reducing the oracle.
+- e2c06e7 managed publication suite passes, including **21 interaction cases**, 22 D1 protocol cases,
+  implicit-document/GC, R2, source slots, components, native adapter and transitions. Input traces
+  pass **16/16**. General managed returns to **96/100**, with only the four documented baseline
+  failures (flex signed residual, calc line-height, file PNG and composite image loader).
+  Its native source/header manifest is identical to 76127f5; the loaded diagnostic library SHA-256
+  is `5dabefe2dd44a69a945f7122a7e4934c6c7be0cb7d198f7abe07352eb4d97fe3`.
+- Opt-in work diagnostics in that exact run: at 100, 500 and 1000 cards, eight warmed-up State
+  edits each perform 192 token reads and zero full DOM snapshots/imports, managed parse/rebind
+  calls or transition clones/copies. Snapshot/import traversal counters remain zero. This is
+  bounded bridge work, not every traversal of the engine or a CPU result. Commit allocations
+  are explicitly **UNMEASURED** pending a real allocator-observed test.
+- 9a7ea4d fixes a size_t/uint64_t multi-auto test declaration for macOS compilation. cf0f2c9
+  makes snapshot checks and setup execute under NDEBUG. The old snapshot harness was reproduced
+  aborting with -O2 -DNDEBUG; the corrected archived harness succeeds. Full Release validation
+  and remote macOS execution remain separate gates.
+
+The D1 behavior intentionally changes: transition state is published together with styles/maps
+before managed diagnostic replay; typed DOM and source slots follow native write chronology;
+removed/reinserted targets lose old press/focus continuity, and blur uses its frozen old target-only
+route. Cleanups never revoke a newer claim or native bit stamp. These corrections are part of the
+approved v6 contract rather than a claim of exact equivalence to the former partial D1 behavior.

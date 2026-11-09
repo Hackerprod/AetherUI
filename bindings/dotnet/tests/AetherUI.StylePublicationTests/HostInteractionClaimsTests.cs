@@ -30,6 +30,7 @@ internal static class HostInteractionClaimsTests
         CallbackLossesWaitForTheNextHostEntry();
         OneBatchCanDeliverSeveralPriorLosses();
         ThrowingLossCallbackRestoresEntryBudget();
+        LossCaptureFailureBlocksAutomaticRetry();
         InternalHoverDoesNotRequestAnotherFrame();
         InteractionCommitPreservesPriorAndPreparedNotifications();
         LaterCallbackNotificationSurvivesInteractionCommit();
@@ -288,6 +289,32 @@ internal static class HostInteractionClaimsTests
         test.Host.Render();
         Check(test.Component.Trace.Count(x => x == "a:blur") == 1 && test.Component.Trace.Count(x => x == "b:blur") == 1,
             "Explicit next entry failed to deliver its own pending batch or repeated an acknowledged loss.");
+    }
+
+    private static void LossCaptureFailureBlocksAutomaticRetry()
+    {
+        foreach (var phase in new[] { "capture-start", "before-array" })
+        {
+            using var test = new Fixture();
+            var target = test.A;
+            Focus(test.Host, target); test.Left.RemoveChild(target);
+            var token = NativeDomSync.ReadToken(test.Dom.Native);
+            var version = test.Host.Document!.Version;
+            test.Host.InteractionLossCaptureProbe = current =>
+            {
+                if (current == phase) throw new OutOfMemoryException("loss capture allocation");
+            };
+            try { test.Host.Render(); throw new InvalidOperationException("Expected loss capture failure."); }
+            catch (OutOfMemoryException) { }
+            Check(!test.Component.Trace.Any(x => x.EndsWith(":blur", StringComparison.Ordinal)), "Capture failure delivered or acknowledged a loss.");
+            Check(ReferenceEquals(test.Host.FocusedElement, target) && target.State.HasFlag(ElementState.Focus), "Capture failure performed cleanup before staging completed.");
+            Check(NativeDomSync.ReadToken(test.Dom.Native) == token && test.Host.Document.Version == version, "Capture failure changed DOM inputs.");
+            Check((bool)test.Host.GetType().GetMethod("HasPendingInteractionLosses", BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(test.Host, null)!, "Capture failure consumed the pending record.");
+            Check(!test.Host.NeedsRender && Field<int>(test.Host, "_interactionEntryDepth") == 0 && !Field<bool>(test.Host, "_drainingInteractionLosses"), "Capture failure enabled automatic retry or leaked a guard.");
+            test.Host.InteractionLossCaptureProbe = null;
+            test.Host.Render();
+            Check(test.Component.Trace.Count(x => x == "a:blur") == 1 && test.Host.FocusedElement is null, "Explicit retry did not deliver the intact loss exactly once.");
+        }
     }
 
     private static void InternalHoverDoesNotRequestAnotherFrame()
