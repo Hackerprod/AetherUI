@@ -41,7 +41,7 @@ struct aether_dom_edit_s {
     std::optional<std::string> text,authored,runtime;
     std::optional<int32_t> state;
     bool authored_present=false,runtime_present=false,write_authored=false,write_runtime=false;
-    bool reparent=false,committed=false,structural=false,materialize=false;
+    bool reparent=false,committed=false,structural=false,materialize=false,materialize_document=false;
     std::vector<std::pair<aether_node_s*,int64_t>> adopted_ids;
     size_t adopt_domain=0;
 };
@@ -76,14 +76,21 @@ void prepare_create(aether_dom_edit_s& e,const aether_dom_edit_spec_v1_t& s){
     }
 }
 void prepare_materialize(aether_dom_edit_s& e,const aether_dom_edit_spec_v1_t& s) {
-    if(!s.node_count||!s.nodes)throw std::invalid_argument("empty materialization");
-    e.materialize=true;e.structural=true;e.results.reserve(s.node_count);e.created.reserve(s.node_count);
+    if((s.node_count&&!s.nodes)||(!s.node_count&&s.kind!=AETHER_DOM_MATERIALIZE_DOCUMENT))throw std::invalid_argument("empty materialization");
+    e.materialize=true;e.materialize_document=s.kind==AETHER_DOM_MATERIALIZE_DOCUMENT;e.structural=true;
+    if(e.materialize_document) {
+        auto* doc=dynamic_cast<aether_doc_s*>(e.target);
+        if(!doc||!doc->children.empty()||!doc->editable_nodes.empty()||doc->version||doc->owner_control->observation_serial||doc->next_style_node_id!=1)
+            throw std::invalid_argument("materialization requires fresh document");
+        links(e,doc);add_touch(e,doc,aether::dom::MutationKind::structure,true);
+    }
+    e.results.reserve(s.node_count);e.created.reserve(s.node_count);
     std::vector<aether_node_s*> existing_roots;
     for(size_t i=0;i<s.node_count;++i) {
         const auto& spec=s.nodes[i];
         if(spec.parent_index< -1||spec.parent_index>=static_cast<int64_t>(i))throw std::invalid_argument("materialized parent");
         if(spec.parent_index>=0&&s.nodes[spec.parent_index].existing_node)throw std::invalid_argument("existing subtree is opaque");
-        auto* parent=spec.parent_index>=0?e.results[spec.parent_index]->node.get():nullptr;
+        auto* parent=spec.parent_index>=0?e.results[spec.parent_index]->node.get():(e.materialize_document?e.target:nullptr);
         if(auto* node=spec.existing_node) {
             if(spec.type||spec.state||spec.tag.length||spec.text.length||spec.runtime_value.length||spec.runtime_value_present||spec.attribute_count||spec.attributes)
                 throw std::invalid_argument("existing subtree payload");
@@ -107,7 +114,7 @@ void prepare_materialize(aether_dom_edit_s& e,const aether_dom_edit_spec_v1_t& s
             }
             e.materialized_parents.emplace_back(node,parent);
             std::vector<aether_node_s*> all;collect(node,all);e.attach.insert(e.attach.end(),all.begin(),all.end());
-            if(parent)parent->children.push_back(node);
+            if(parent){if(parent==e.target&&e.materialize_document)links(e,parent).children.push_back(node);else parent->children.push_back(node);}
         } else {
             if(spec.type<AETHER_NODE_ELEMENT||spec.type>AETHER_NODE_COMMENT)throw std::invalid_argument("materialized node type");
             if(e.domains[0].next_id==INT64_MAX)throw std::length_error("DOM identity exhausted");
@@ -120,7 +127,7 @@ void prepare_materialize(aether_dom_edit_s& e,const aether_dom_edit_spec_v1_t& s
             if(created->tag_name=="input"&&created->runtime_value_present)created->attributes["value"]=created->runtime_value;
             created->style_node_id=e.domains[0].next_id++;created->identity->attached=false;created->unpublished=true;
             auto storage=std::make_shared<EditableNodeStorage>(std::move(created));auto* raw=storage->node.get();raw->editable_storage=storage;raw->identity->storage=storage;
-            raw->document_owner=e.domains[0].owner;raw->identity->document_owner=e.domains[0].owner;raw->parent=parent;if(parent)parent->children.push_back(raw);
+            raw->document_owner=e.domains[0].owner;raw->identity->document_owner=e.domains[0].owner;raw->parent=parent;if(parent){if(parent==e.target&&e.materialize_document)links(e,parent).children.push_back(raw);else parent->children.push_back(raw);}
             registry(e.domains[0]).emplace(raw,storage);e.results.push_back(storage);e.created.push_back(std::move(storage));e.attach.push_back(raw);
             if(!parent)add_touch(e,raw,aether::dom::MutationKind::structure,true);
         }
@@ -178,7 +185,7 @@ AETHER_API aether_status_t aether_dom_prepare_edit_v1(const aether_dom_token_v1_
     try{
         auto e=std::make_unique<aether_dom_edit_s>();e->target=spec->target;domain(*e,spec->target);pin(*e,spec->target);if(!token_equal(*expected,e->domains[0].token))return AETHER_ERROR_INVALID_STATE;
         auto* target=spec->target;const auto kind=spec->kind;
-        if(kind==AETHER_DOM_MATERIALIZE_FOREST){prepare_materialize(*e,*spec);}
+        if(kind==AETHER_DOM_MATERIALIZE_FOREST||kind==AETHER_DOM_MATERIALIZE_DOCUMENT){prepare_materialize(*e,*spec);}
         else if(kind==AETHER_DOM_SET_ATTRIBUTE||kind==AETHER_DOM_REMOVE_ATTRIBUTE||kind==AETHER_DOM_SET_LEGACY_ATTRIBUTE){
             if(target->type!=AETHER_NODE_ELEMENT)return AETHER_ERROR_INVALID_STATE;auto name=aether::ascii_lowercase(read(spec->name));if(name.empty())return AETHER_ERROR_INVALID_STATE;
             auto attrs=target->attributes;bool existed=attrs.contains(name);
@@ -244,7 +251,7 @@ AETHER_API aether_status_t aether_dom_edit_commit_v1(aether_dom_edit_t e,aether_
     if(e->reparent)e->child->parent=e->new_parent;
     if(!e->materialize)for(auto& node:e->created)if(!node->node->parent)node->node->parent=target;
     for(const auto& [node,parent]:e->materialized_parents)node->parent=parent;
-    for(auto* n:e->attach)n->identity->attached=e->materialize?false:target->identity->attached;
+    for(auto* n:e->attach)n->identity->attached=e->materialize&&!e->materialize_document?false:target->identity->attached;
     for(const auto& relay:e->adopt_relays)if(relay)relay->current_root=e->domains[e->adopt_domain].root;
     for(auto* n:e->adopt){n->document_owner=e->domains[e->adopt_domain].owner;n->identity->document_owner=e->domains[e->adopt_domain].owner;}
     for(const auto& [node,id]:e->adopted_ids)node->style_node_id=id;

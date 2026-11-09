@@ -51,7 +51,8 @@ typedef enum aether_dom_edit_kind_v1_e {
     AETHER_DOM_SET_TEXT=5, AETHER_DOM_INSERT_CHILD=6,
     AETHER_DOM_REMOVE_CHILD=7, AETHER_DOM_CLEAR_CHILDREN=8,
     AETHER_DOM_INSERT_SUBTREE=9, AETHER_DOM_REPLACE_CHILDREN=10,
-    AETHER_DOM_MATERIALIZE_FOREST=11, AETHER_DOM_SET_LEGACY_ATTRIBUTE=12
+    AETHER_DOM_MATERIALIZE_FOREST=11, AETHER_DOM_SET_LEGACY_ATTRIBUTE=12,
+    AETHER_DOM_MATERIALIZE_DOCUMENT=13
 } aether_dom_edit_kind_v1_t;
 typedef struct aether_dom_node_spec_v1_s {
     int32_t type, state;
@@ -60,7 +61,7 @@ typedef struct aether_dom_node_spec_v1_s {
     int32_t runtime_value_present;
     const aether_dom_attribute_v1_t* attributes;
     size_t attribute_count;
-    /* MATERIALIZE only: opaque existing subtree. All payload fields must be
+    /* MATERIALIZE_FOREST/DOCUMENT only: opaque existing subtree. All payload fields must be
        default; parent_index may name only a NEW preceding spec. Existing roots
        must be unique and non-overlapping. Never replays managed input payload. */
     aether_node_t existing_node;
@@ -74,6 +75,8 @@ typedef struct aether_dom_edit_spec_v1_s {
     const aether_dom_node_spec_v1_t* nodes;
     size_t node_count;
 } aether_dom_edit_spec_v1_t;
+/* MATERIALIZE_DOCUMENT targets a freshly created empty Document and publishes
+ * all root specs as connected children in the same commit as any adoptions. */
 AETHER_API aether_status_t aether_dom_prepare_edit_v1(const aether_dom_token_v1_t* expected,
     const aether_dom_edit_spec_v1_t* spec,aether_dom_edit_t* out_edit);
 /* Returns result by spec index, including opaque existing roots. New handles

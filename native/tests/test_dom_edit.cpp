@@ -61,7 +61,40 @@ static void style_replacement_invalidates_edit() {
         aether_doc_destroy(source);aether_doc_destroy(destination);
     }
 }
+static void materialize_document_atomic() {
+    aether_doc_t source=nullptr,destination=nullptr;
+    CHECK(aether_doc_create(&source)==AETHER_OK);CHECK(aether_doc_create(&destination)==AETHER_OK);
+    CHECK(aether_doc_parse_html(source,"<body><button id='live'>current R2</button></body>")==AETHER_OK);
+    auto* live=aether_doc_get_element_by_id(source,"live");auto* old_parent=live->parent;
+    auto identity=live->identity;auto relay=aether_live_owner_pin(live);const auto old_serial=identity->disconnect_serial;
+    aether_dom_node_spec_v1_t nodes[3]{};
+    nodes[0].type=AETHER_NODE_ELEMENT;nodes[0].tag=str("main");nodes[0].parent_index=-1;
+    nodes[1].existing_node=live;nodes[1].parent_index=0;
+    nodes[2].type=AETHER_NODE_TEXT;nodes[2].text=str("sibling");nodes[2].parent_index=-1;
+    aether_dom_edit_spec_v1_t spec{};spec.kind=AETHER_DOM_MATERIALIZE_DOCUMENT;spec.target=destination;spec.nodes=nodes;spec.node_count=3;
+    auto candidate=prepare(spec);aether_node_t new_parent=nullptr;CHECK(aether_dom_edit_created_node_v1(candidate,0,&new_parent)==AETHER_OK);
+    aether_dom_edit_destroy_v1(candidate);CHECK(live->parent==old_parent&&destination->children.empty()&&identity->disconnect_serial==old_serial);
+    bool success=false;
+    for(int n=0;n<200;++n) {
+        auto before=token(destination);const auto source_before=token(source);candidate=nullptr;failure=n;
+        auto status=aether_dom_prepare_edit_v1(&before,&spec,&candidate);failure=-1;
+        if(status==AETHER_OK) {CHECK(aether_dom_edit_created_node_v1(candidate,0,&new_parent)==AETHER_OK);commit(candidate);success=true;break;}
+        CHECK(status==AETHER_ERROR_OUT_OF_MEMORY&&!candidate);CHECK(destination->children.empty()&&live->parent==old_parent);
+        CHECK(token(source).observation_serial==source_before.observation_serial&&token(destination).observation_serial==before.observation_serial);
+    }
+    CHECK(success&&destination->children.size()==2&&destination->children[0]==new_parent);
+    CHECK(new_parent->parent==destination&&live->parent==new_parent&&new_parent->children[0]==live);
+    CHECK(live->identity==identity&&identity->attached&&identity->disconnect_serial==old_serial+1);
+    CHECK(live->document_owner.lock()==destination->owner_control&&relay->current_root==aether_editable_lease(destination));
+    CHECK(!source->editable_nodes.contains(live)&&destination->editable_nodes.contains(live));
+    CHECK(old_parent->children.empty()&&live->children[0]->text=="current R2");
+    CHECK(destination->children[1]->identity->attached&&destination->children[1]->parent==destination);
+    // A nonempty/live owner cannot be silently replaced by materialization.
+    auto current=token(destination);candidate=nullptr;CHECK(aether_dom_prepare_edit_v1(&current,&spec,&candidate)==AETHER_ERROR_INVALID_STATE&&!candidate);
+    aether_doc_destroy(source);aether_doc_destroy(destination);
+}
 int main(){
+    materialize_document_atomic();
     style_replacement_invalidates_edit();
     aether_doc_t d=nullptr;CHECK(aether_doc_create(&d)==AETHER_OK);CHECK(aether_doc_parse_html(d,"<body><input id='a' value='base'><p id='b'></p></body>")==AETHER_OK);auto* a=aether_doc_get_element_by_id(d,"a");auto* b=aether_doc_get_element_by_id(d,"b");auto* body=a->parent;
     aether_dom_edit_spec_v1_t s{};s.target=a;s.kind=AETHER_DOM_SET_RUNTIME_VALUE;s.value=str("");s.value_present=1;edit(s);CHECK(a->runtime_value_present&&a->attributes.at("value").empty());s.kind=AETHER_DOM_SET_ATTRIBUTE;s.name=str("VALUE");s.value=str("new base");edit(s);CHECK(a->authored_value=="new base"&&a->attributes.at("value").empty());s.kind=AETHER_DOM_SET_RUNTIME_VALUE;s.value={};s.value_present=0;edit(s);CHECK(!a->runtime_value_present&&a->attributes.at("value")=="new base");

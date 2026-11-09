@@ -247,6 +247,20 @@ static aether_style_runtime_s* binding_runtime(const DomStyleBindingRef& binding
     if (!owner || !owner->alive || owner->owner_thread != std::this_thread::get_id()) return nullptr;
     return binding->runtime->runtime;
 }
+bool aether_dom_style_binding_current(const DomStyleBindingRef& binding, aether_doc_t document) noexcept {
+    if (!document || !binding_runtime(binding) || !binding->registered) return false;
+    const auto owner = binding->owner.lock();
+    return owner && owner == document->owner_control && owner->binding.lock() == binding &&
+        document->identity->alive;
+}
+aether_status_t aether_dom_style_binding_get_ref(aether_dom_style_binding_t handle,
+    aether_doc_t document, DomStyleBindingRef& out) noexcept {
+    out.reset();
+    if (!handle || !document) return AETHER_ERROR_NULL_ARG;
+    if (!aether_dom_style_binding_current(handle->value, document)) return AETHER_ERROR_INVALID_STATE;
+    out = handle->value;
+    return AETHER_OK;
+}
 static aether_status_t prepare_dom_slot(const DomStyleBindingRef& binding, const std::string& source,
     DomStyleSlotStageRef& out, bool registering) noexcept {
     out.reset();

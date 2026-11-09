@@ -1,5 +1,6 @@
 #pragma once
 #include <aether/aether.h>
+#include <aether/aether_dom_style_binding.h>
 #include <memory>
 #include <string>
 struct DomStyleBinding;
@@ -26,3 +27,10 @@ aether_status_t aether_dom_style_finalize_slots(const std::vector<DomStyleSlotSt
     DomStyleSlotBatchRef& out) noexcept;
 bool aether_dom_style_validate_batch(const DomStyleSlotBatchRef& batch) noexcept;
 void aether_dom_style_commit_batch(DomStyleSlotBatchRef& batch) noexcept;
+
+// Authenticate an external binding once, then validate retained authority without
+// borrowing an external handle that its owner may have destroyed.
+aether_status_t aether_dom_style_binding_get_ref(aether_dom_style_binding_t handle,
+    aether_doc_t document, DomStyleBindingRef& out) noexcept;
+bool aether_dom_style_binding_current(const DomStyleBindingRef& binding,
+    aether_doc_t document) noexcept;
