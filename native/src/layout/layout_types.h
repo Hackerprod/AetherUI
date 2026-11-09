@@ -1,4 +1,5 @@
 #pragma once
+#include "../diagnostics/work_counters.h"
 #include <aether/aether.h>
 #include <aether/aether_contextual_layout.h>
 #include <cassert>
@@ -164,6 +165,7 @@ inline std::vector<aether::stacking::stack_item_t> layout_children_paint_order(
 {
     using namespace aether::stacking;
     const auto classify = [&styles, policy](const aether_layout_box_s* child) {
+        aether::diagnostics::count_work(aether::diagnostics::WorkCounter::paint_order_children_classified);
         return child->kind == LAYOUT_BOX_TEXT || child->is_atomic_control
             ? paint_classification_t{} : classify_element_paint(layout_box_style(child, styles, policy).scalars());
     };
@@ -322,6 +324,7 @@ struct aether_layout_result_s {
     }
     aether_node_s* hit_test(float x, float y, const StyleLookup& styles, BoxStylePolicy policy,
         aether_scroll_offset_fn offsets = nullptr, void* data = nullptr) const {
+        aether::diagnostics::count_work(aether::diagnostics::WorkCounter::hit_queries);
         if (!root || (assets && !assets->structure_valid())) return nullptr;
         return hit_test_recursive(root, x, y, styles, policy, offsets, data);
     }
@@ -332,6 +335,7 @@ private:
     static aether_node_s* hit_test_recursive(aether_layout_box_s* box, float x, float y,
                                               const StyleLookup& styles, BoxStylePolicy policy,
                                               aether_scroll_offset_fn offsets, void* data) {
+        aether::diagnostics::count_work(aether::diagnostics::WorkCounter::hit_boxes_visited);
         if (!layout_box_input_alive(box) || !layout_box_unmap_visual(box, x, y)) return nullptr;
         const auto style_view = layout_box_style(box, styles, policy);
         const auto& style = style_view.scalars();

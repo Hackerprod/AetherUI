@@ -5,6 +5,8 @@ include(CTest)
 include(CMakePackageConfigHelpers)
 include(GNUInstallDirs)
 
+option(AETHERUI_ENABLE_WORK_COUNTERS "Compile opt-in thread-local diagnostic work counters" OFF)
+
 option(AETHERUI_BUILD_TESTS "Build the AetherUI native test executables" "${BUILD_TESTING}")
 
 set(CMAKE_CXX_STANDARD 20)
@@ -12,6 +14,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
 add_library(aether_core SHARED
+    src/diagnostics/work_counters.cpp
     src/abi/aether_abi.cpp
     src/dom/node.cpp
     src/dom/element_node.cpp
@@ -86,6 +89,9 @@ add_library(aether_core SHARED
 )
 
 add_library(AetherUI::Core ALIAS aether_core)
+if(AETHERUI_ENABLE_WORK_COUNTERS)
+    target_compile_definitions(aether_core PUBLIC AETHERUI_ENABLE_WORK_COUNTERS)
+endif()
 
 target_include_directories(aether_core
     PUBLIC
@@ -113,6 +119,14 @@ endif()
 
 if(AETHERUI_BUILD_TESTS)
     enable_testing()
+
+    add_executable(aether_hover_work_bench tests/bench_hover_work.cpp)
+    target_link_libraries(aether_hover_work_bench PRIVATE AetherUI::Core)
+
+    find_package(Threads REQUIRED)
+    add_executable(aether_hover_work_counters_test tests/test_hover_work_counters.cpp)
+    target_link_libraries(aether_hover_work_counters_test PRIVATE AetherUI::Core Threads::Threads)
+    add_test(NAME aether.hover-work-counters COMMAND aether_hover_work_counters_test)
 
     add_executable(aether_smoke_test tests/test_smoke.cpp)
     target_link_libraries(aether_smoke_test PRIVATE AetherUI::Core)

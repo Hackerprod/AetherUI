@@ -1,4 +1,5 @@
 using AetherUI.Runtime;
+using AetherUI.Core.Native;
 
 namespace AetherUI.Validator;
 
@@ -9,6 +10,45 @@ public sealed class PerfReporter
     private DateTime _lastReport = DateTime.UtcNow;
     private UiDocumentHostMetrics _lastMetrics;
     private bool _hasLastMetrics;
+    private readonly bool _workRequested = Environment.GetEnvironmentVariable("AETHERUI_WORK_COUNTERS") == "1";
+    private int _workThreadId;
+    private bool _workAvailable;
+    private NativeWorkCountersSnapshot _lastWork;
+
+    // Call only at the existing reporting cadence. Counters are thread-wide,
+    // not host-specific, and are never reset by this consumer.
+    private void ReportWork()
+    {
+        if (!_workRequested) return;
+        var threadId = Environment.CurrentManagedThreadId;
+        if (_workThreadId != threadId)
+        {
+            _workThreadId = threadId;
+            _workAvailable = NativeWorkCounters.TryEnableForCurrentThread();
+            if (_workAvailable) _lastWork = NativeWorkCounters.ReadForCurrentThread();
+            return;
+        }
+        if (!_workAvailable) return;
+        var work = NativeWorkCounters.ReadForCurrentThread();
+        static ulong Delta(ulong current, ulong previous) => current >= previous ? current - previous : current;
+        Console.WriteLine(
+            "[perf-work-thread:{0}] compute={1} oldStates={2} records={3} manifest={4} prepares={5} publications={6} stateFullFallbacks={7} mapCopies={8} contextEntries={9} contextBuilds={10} hitQueries={11} hitBoxes={12} paintOrderClassifications={13}",
+            threadId,
+            Delta(work.ComputeNodes, _lastWork.ComputeNodes),
+            Delta(work.StateEntriesVisited, _lastWork.StateEntriesVisited),
+            Delta(work.RevisionRecordsCreated, _lastWork.RevisionRecordsCreated),
+            Delta(work.RevisionEntriesCreated, _lastWork.RevisionEntriesCreated),
+            Delta(work.RevisionPrepares, _lastWork.RevisionPrepares),
+            Delta(work.RevisionPublications, _lastWork.RevisionPublications),
+            Delta(work.StateFullFallbacks, _lastWork.StateFullFallbacks),
+            Delta(work.MapEntriesCopied, _lastWork.MapEntriesCopied),
+            Delta(work.TransitionContextEntriesVisited, _lastWork.TransitionContextEntriesVisited),
+            Delta(work.TransitionContextBuilds, _lastWork.TransitionContextBuilds),
+            Delta(work.HitQueries, _lastWork.HitQueries),
+            Delta(work.HitBoxesVisited, _lastWork.HitBoxesVisited),
+            Delta(work.PaintOrderChildrenClassified, _lastWork.PaintOrderChildrenClassified));
+        _lastWork = work;
+    }
 
     public PerfReporter(string label)
     {
@@ -25,6 +65,7 @@ public sealed class PerfReporter
                 _lastMetrics = metrics;
                 _lastReport = now;
                 _hasLastMetrics = true;
+                ReportWork();
                 return;
             }
 
@@ -65,6 +106,7 @@ public sealed class PerfReporter
                 renderCalls > 0 ? renderMs / renderCalls : 0,
                 displayListBuilds > 0 ? displayListMs / displayListBuilds : 0);
 
+            ReportWork();
             _lastMetrics = metrics;
             _lastReport = now;
         }

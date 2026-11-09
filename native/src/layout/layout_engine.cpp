@@ -1,3 +1,6 @@
+#include "../diagnostics/work_counters.h"
+using aether::diagnostics::count_work;
+using aether::diagnostics::WorkCounter;
 /* ── Layout Engine — core box layout, flow, inline, and intrinsic sizing ─ */
 #include "layout_internal.h"
 #include <aether/aether_contextual_transitions.h>
@@ -1411,9 +1414,11 @@ static void validate_used_geometry(const aether_layout_result_s* result) {
 
 static std::unordered_set<aether_node_s*> effective_fixed_containers(
     const StyleLookup* styles, const std::unordered_set<aether_node_s*>& active) {
+    count_work(WorkCounter::transition_context_builds);
     std::unordered_set<aether_node_s*> effective;
     const auto version = styles ? styles->selected_version() : aether::style::MapVersionRef{};
     if (version) for (const auto& entry : version->backing()->entries()) {
+        count_work(WorkCounter::transition_context_entries_visited);
         const auto& record = entry.second;
         auto* node = record->node();
         const auto& identity = record->node_lifetime();

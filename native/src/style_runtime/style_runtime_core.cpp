@@ -1,3 +1,6 @@
+#include "../diagnostics/work_counters.h"
+using aether::diagnostics::count_work;
+using aether::diagnostics::WorkCounter;
 #include <aether/aether.h>
 #include <aether/aether_contextual_style.h>
 #include "../css/computed_style_handle.h"
@@ -457,6 +460,7 @@ static PreparedNodeResult* compute_node(aether_style_runtime_s* runtime, aether_
                                           PreparedNodeResult* parent, uint32_t inherited_parent_impact,
                                           uint32_t& impact, uint32_t& inherited_change_impact,
                                           std::optional<std::string>* generated_content = nullptr) {
+    count_work(WorkCounter::compute_nodes);
     // The legacy subtree entry point starts an isolated inheritance scope.
     // Contextual preparation never installs this compatibility boundary.
     if (node == runtime->legacy_inheritance_root) { parent = nullptr; inherited_parent_impact = 0; }
@@ -1079,6 +1083,7 @@ AETHER_API int32_t aether_style_runtime_resolve_state_changes(
     int32_t changed_count, aether_style_update_t** out_updates) {
     if (out_updates) *out_updates = nullptr;
     if (!changed_nodes || changed_count <= 0) return 0;
+    if (runtime && root && out_updates) count_work(WorkCounter::state_full_fallbacks);
     // Conservatively visit the complete tree: font/viewport and metadata edges
     // cannot be inferred from a visual-only changed-node selection.
     return resolve_legacy_atomic(runtime, root, nullptr, out_updates);
@@ -1149,6 +1154,7 @@ static aether_status_t prepare_revision_impl(
     if (out_transaction) *out_transaction = nullptr;
     if (!runtime || !root || !out_transaction) return AETHER_ERROR_NULL_ARG;
     if (runtime->preparing || runtime->owner_thread != std::this_thread::get_id()) return AETHER_ERROR_INVALID_STATE;
+    count_work(WorkCounter::revision_prepares);
     const auto requested_environment = environment ? *environment : runtime->environment;
     if (!valid_measure_environment(requested_environment)) return AETHER_ERROR_INVALID_STATE;
     struct guard_s { bool& active; explicit guard_s(bool& v) : active(v) { active = true; } ~guard_s() { active = false; } } guard(runtime->preparing);
@@ -1178,6 +1184,7 @@ static aether_status_t prepare_revision_impl(
         // Retain comparable states only while their tokens are still live. Never
         // dereference a pointer from a retired document generation.
         for (const auto& entry : runtime->states) {
+            count_work(WorkCounter::state_entries_visited);
             const auto& token = entry.second->node_lifetime();
             if (!token || (token->alive && token->attached))
                 staged.states.emplace(entry.first, entry.second);
@@ -1212,8 +1219,10 @@ static aether_status_t prepare_revision_impl(
             input.node_lifetime=node->identity;input.document_lifetime=document->identity;
             if(auto it=leaves.find(node);it!=leaves.end())input.generated_leaf=it->second;
             FrozenNodeRef record;require_style_status(freeze_node_record(input,record));
+            count_work(WorkCounter::revision_records_created);
             next_states.emplace(node,record);backing.entries.emplace(node,record);
             revision_input.entries.push_back({node,record,prepared.impact});
+            count_work(WorkCounter::revision_entries_created);
         }
         require_style_status(freeze_backing(backing,revision_input.backing));
         if(runtime->revision)for(const auto& old:runtime->revision->entries())
@@ -1274,6 +1283,7 @@ AETHER_API aether_status_t aether_style_runtime_commit_revision(
     runtime->generation = transaction->revision->generation();
     runtime->revision = transaction->revision;
     transaction->committed = true;
+    count_work(WorkCounter::revision_publications);
     *out_revision = transaction->output.release();
     // Consumer reentrancy may publish another revision. Outputs above remain
     // those prepared by this operation; never read/write runtime after replay.
@@ -1377,7 +1387,10 @@ AETHER_API aether_status_t aether_style_runtime_update_resolved_style_map(aether
     const auto previous=pin_style_map(map);
     if(node_count<0||(previous&&previous->contextual()))return AETHER_ERROR_INVALID_STATE;
     try {
-        BackingBuildInput backing;if(previous)backing.entries=previous->backing()->entries();
+        BackingBuildInput backing;if(previous){
+            backing.entries=previous->backing()->entries();
+            count_work(WorkCounter::map_entries_copied, backing.entries.size());
+        }
         for(int32_t i=0;i<node_count;++i){auto* node=nodes[i];if(!node)continue;
             const auto it=runtime->states.find(node);
             if(it==runtime->states.end())backing.entries.erase(node);
