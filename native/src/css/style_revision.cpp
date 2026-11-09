@@ -39,6 +39,14 @@ style_revision_s::style_revision_s(const StyleRevisionInput& in):
     retired_nodes_(ImmutableArray<FrozenRetiredNode>::generate(in.retired.size(),[&](size_t i){return FrozenRetiredNode(in.retired[i].previous_record);})),
     directory_(import_directory(in)),manifest_(import_manifest(in)),impacts_(){}
 style_revision_s::style_revision_s(const CertifiedRevisionDelta& in,PayloadDirectory directory,PayloadManifest manifest,PersistentIndex<uint32_t> impacts):
+    delta_base_(in.base_?in.base_->publication_identity():RevisionIdentityRef{}),
+    semantic_positions_([&] { std::vector<size_t> result; result.reserve(in.changes_.size()+in.impacts_.size());
+        for(const auto& c:in.changes_)result.push_back(c.position);
+        for(const auto& c:in.impacts_)result.push_back(c.first);
+        std::sort(result.begin(),result.end()); result.erase(std::unique(result.begin(),result.end()),result.end()); return result; }()),
+    compact_projection_(in.stable_order_ && in.base_ && in.retired_.size()==0 &&
+        context_equal(in.base_->document()->values(),in.header_.document->values()) &&
+        std::memcmp(&in.base_->environment(),&in.header_.environment,sizeof(in.header_.environment))==0),
     contextual_(in.header_.contextual),generation_(in.header_.generation),document_identity_(in.header_.document_identity),
     input_epoch_(in.header_.input_epoch),structure_epoch_(in.header_.structure_epoch),style_tree_epoch_(in.header_.style_tree_epoch),
     environment_(in.header_.environment),document_(in.header_.document),document_lifetime_(in.header_.document_lifetime),

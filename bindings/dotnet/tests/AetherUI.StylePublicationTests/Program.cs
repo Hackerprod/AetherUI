@@ -286,7 +286,7 @@ static UiDocumentHost New(Component c,Renderer r)=>new(c,new ApproximateTextMeas
 static T Field<T>(object o,string name)=>(T)o.GetType().GetField(name,BindingFlags.Instance|BindingFlags.NonPublic)!.GetValue(o)!;
 static StyleRuntimeInterop Runtime(UiDocumentHost h)=>Field<StyleRuntimeInterop>(h,"_nativeStyleRuntime");
 static IntPtr Handle(StyleRuntimeInterop r)=>Field<IntPtr>(r,"_runtime");
-static ComputedStyle Style(UiDocumentHost h)=>Field<Dictionary<ElementNode,ComputedStyle>>(h,"_computedStyles")[h.Document!.GetElementById("a")!];
+static ComputedStyle Style(UiDocumentHost h)=>Field<IReadOnlyDictionary<ElementNode,ComputedStyle>>(h,"_computedStyles")[h.Document!.GetElementById("a")!];
 static void State(UiDocumentHost h,ElementNode e,ElementState flag,bool enabled)
 {
     typeof(UiDocumentHost).GetMethod("SetElementState",BindingFlags.Instance|BindingFlags.NonPublic)!.Invoke(h,[e,flag,enabled]);

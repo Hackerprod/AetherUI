@@ -269,7 +269,10 @@ struct aether_layout_result_s {
     aether_layout_box_s* root = nullptr;
     // Immutable effective context for this result, installed before all passes.
     bool effective_context_enabled = false;
-    std::unordered_set<aether_node_s*> effective_fixed_container_nodes;
+    aether::style::ContextOwnersRef effective_context_owners;
+    bool effective_fixed_container(aether_node_s* node) const noexcept {
+        return effective_context_owners && node && effective_context_owners->owners.find(reinterpret_cast<uintptr_t>(node->identity.get()));
+    }
     aether::layout::LayoutAssetsRef assets;
     std::unique_ptr<aether::layout::MutableLayoutOverlay> build_overlay;
     std::unordered_map<aether_node_s*, aether_layout_box_s*> primary_boxes;
@@ -381,7 +384,16 @@ struct aether_layout_engine_s {
     std::shared_ptr<node_identity_s> measure_document;
     // One-shot owned scratch. No runtime/map pointer survives prepare.
     bool transition_context_prepared = false;
-    std::unordered_set<aether_node_s*> prepared_active_nodes;
+    aether::style::ContextOwnersRef prepared_context_owners;
+    aether::style::ContextOwnersRef prepared_active_snapshot;
+    std::unordered_set<aether_node_s*> prepared_active_nodes; // contextual/uncertified legacy fallback only
+    aether::style::MapVersionRef prepared_context_map;
+    struct ContextCache {
+        aether::style::ContextOwnersRef statics, active, effective;
+        aether::style::ContextLineageRef topology;
+        std::shared_ptr<node_identity_s> document;
+        uint64_t structure_epoch=0;
+    } context_cache;
     aether_text_measurer_contextual_fn contextual_text_measurer = nullptr;
     void* contextual_text_measurer_data = nullptr;
     aether_text_measurer_fn text_measurer = nullptr;

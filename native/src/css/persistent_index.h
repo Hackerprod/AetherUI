@@ -18,7 +18,8 @@ namespace aether::style {
 // identity is structural, never encoded by a reserved key. Values are copied
 // only into new const leaves. Nodes retain children, never a prior index/root.
 // Copies of this small owner share the tree; edits copy at most one bounded path.
-template<class T> class PersistentIndex {
+struct PersistentIndexObserver { static void allocated() noexcept {} static void visited() noexcept {} };
+template<class T, class Observer = PersistentIndexObserver> class PersistentIndex {
 public:
     using Entry = std::pair<uintptr_t, T>;
 private:
@@ -29,10 +30,10 @@ private:
         const NodeRef zero, one;
         const std::optional<Entry> value;
         const unsigned bit;
-        explicit Node(const Entry& entry) : value(entry), bit(0) {}
+        explicit Node(const Entry& entry) : value(entry), bit(0) { Observer::allocated(); }
         Node(unsigned selected, NodeRef left, NodeRef right)
             : zero(std::move(left)), one(std::move(right)), bit(selected) {
-            assert(zero && one);
+            assert(zero && one); Observer::allocated();
         }
         bool leaf() const noexcept { return value.has_value(); }
     };
@@ -84,6 +85,41 @@ private:
         if (!next) return node->one;
         return std::make_shared<const Node>(node->bit,std::move(next),node->one);
     }
+    template<class Fn> static void enumerate_diff(const Node* node, bool removed, Fn& fn) {
+        if (!node) return;
+        Observer::visited();
+        if (node->leaf()) { fn(node->value->first, removed ? &node->value->second : nullptr,
+            removed ? nullptr : &node->value->second); return; }
+        enumerate_diff(node->zero.get(), removed, fn); enumerate_diff(node->one.get(), removed, fn);
+    }
+    template<class Fn> static void difference(const Node* before, const Node* after, Fn& fn) {
+        if (before == after) return;
+        Observer::visited();
+        if (!before) { enumerate_diff(after, false, fn); return; }
+        if (!after) { enumerate_diff(before, true, fn); return; }
+        if (before->leaf() && after->leaf()) {
+            if (before->value->first == after->value->first)
+                fn(before->value->first, &before->value->second, &after->value->second);
+            else { enumerate_diff(before, true, fn); enumerate_diff(after, false, fn); }
+            return;
+        }
+        if (!before->leaf() && !after->leaf() && before->bit == after->bit) {
+            difference(before->zero.get(),after->zero.get(),fn); difference(before->one.get(),after->one.get(),fn); return;
+        }
+        // The branch with the higher bit contains at most one overlapping subtree.
+        if (!before->leaf() && (after->leaf() || before->bit > after->bit)) {
+            const auto* leaf=leaf_for(after,0);
+            if (one(leaf->value->first,before->bit)) {
+                enumerate_diff(before->zero.get(),true,fn); difference(before->one.get(),after,fn);
+            } else { difference(before->zero.get(),after,fn); enumerate_diff(before->one.get(),true,fn); }
+        } else {
+            const auto* leaf=leaf_for(before,0);
+            if (one(leaf->value->first,after->bit)) {
+                enumerate_diff(after->zero.get(),false,fn); difference(before,after->one.get(),fn);
+            } else { difference(before,after->zero.get(),fn); enumerate_diff(after->one.get(),false,fn); }
+        }
+    }
+
 public:
     PersistentIndex() noexcept = default;
     // Import is intentionally complete. Sort pointers rather than values so T
@@ -97,6 +133,8 @@ public:
             if (ordered[i-1]->first==ordered[i]->first) throw std::invalid_argument("duplicate persistent index key");
         return {build_sorted(ordered),entries.size()};
     }
+    bool shares_root(const PersistentIndex& other) const noexcept { return root_==other.root_; }
+    template<class Fn> void diff(const PersistentIndex& next, Fn&& fn) const { difference(root_.get(),next.root_.get(),fn); }
     size_t size() const noexcept { return size_; }
     bool empty() const noexcept { return size_==0; }
     const T* find(uintptr_t key) const noexcept {

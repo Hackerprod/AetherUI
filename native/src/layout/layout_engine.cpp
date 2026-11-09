@@ -127,7 +127,7 @@ static void offset_box_descendants(aether_layout_box_s* box, float dx, float dy,
     const bool prepared = result && result->effective_context_enabled;
     local_fixed_container = local_fixed_container ||
         (prepared && box->kind == LAYOUT_BOX_ELEMENT &&
-         result->effective_fixed_container_nodes.count(box->element) != 0);
+         result->effective_fixed_container(box->element));
     for (auto* child : box->children) {
         float child_dx = dx, child_dy = dy;
         if ((prepared || box->style.display == AETHER_DISPLAY_FLEX) &&
@@ -1412,22 +1412,92 @@ static void validate_used_geometry(const aether_layout_result_s* result) {
     }
 }
 
-static std::unordered_set<aether_node_s*> effective_fixed_containers(
+// Complete helper is the fallback and the differential oracle. It intentionally
+// traverses every selected map entry, including zero static-owner fixtures.
+static aether::style::ContextOwnersRef effective_fixed_containers(
     const StyleLookup* styles, const std::unordered_set<aether_node_s*>& active) {
+    using namespace aether::style;
     count_work(WorkCounter::transition_context_builds);
-    std::unordered_set<aether_node_s*> effective;
-    const auto version = styles ? styles->selected_version() : aether::style::MapVersionRef{};
-    if (version) version->for_each_node([&](const aether::style::BoundNodeView& view) {
+    count_work(WorkCounter::context_builds);
+    std::vector<ContextOwnerIndex::Entry> effective;
+    const auto version = styles ? styles->selected_version() : MapVersionRef{};
+    if (version) version->for_each_node([&](const BoundNodeView& view) {
         count_work(WorkCounter::transition_context_entries_visited);
+        count_work(WorkCounter::context_backing_visits);
         const auto& record = view.payload_owner();
         auto* node = record->node();
         const auto& identity = record->node_lifetime();
-        if (identity && (identity->owner != node || !identity->alive || !identity->attached)) return;
+        if (!identity || identity->owner != node || !identity->alive || !identity->attached) return;
         const auto style = record->style_view();
         if (node && node->type == AETHER_NODE_ELEMENT && !node->anonymous_flex_owner &&
             (!style.transforms().empty() || !style.backdrop_filters().empty() || active.count(node)))
-            effective.insert(node);
+            effective.push_back({reinterpret_cast<uintptr_t>(identity.get()),{node,identity,1}});
     });
+    return publish_context_owners({},ContextOwnerIndex::build(std::move(effective)));
+}
+static bool context_membership_equal(const aether::style::ContextOwnersRef& a,
+    const aether::style::ContextOwnersRef& b) {
+    if(a==b) return true;
+    if(!a || !b || a->owners.size()!=b->owners.size()) return false;
+    bool equal=true;
+    a->owners.diff(b->owners,[&](uintptr_t,const auto* before,const auto* after) {
+        if(!before || !after || before->identity!=after->identity || before->node!=after->node) equal=false;
+    });
+    return equal;
+}
+static aether::style::ContextOwnersRef prepare_context_owners(aether_layout_engine_s* engine,
+    aether_transition_runtime_t runtime,const aether::style::MapVersionRef& map) {
+    using namespace aether::style;
+    auto& cache=engine->context_cache;
+    const auto active=aether_active_transform_snapshot(runtime);
+    const auto statics=map && map->backing()?map->backing()->context_owners():ContextOwnersRef{};
+    const auto topology=map && map->backing()?map->backing()->context_topology():ContextLineageRef{};
+    const auto document=map?map->document_lifetime():std::shared_ptr<node_identity_s>{};
+    // 1 first use; 2 unknown map/transition coverage; 3 topology/document; 4 disabled.
+    uint64_t fallback=4;
+#if defined(AETHERUI_ENABLE_CONTEXT_OWNERS)
+    fallback=(!statics || !document || (runtime && !active) || !structure_valid(map.get()) ||
+        document->style_tree_epoch!=map->style_tree_epoch())?2:
+        (!cache.effective?1:cache.document!=document || cache.structure_epoch!=document->structure_epoch ||
+        cache.topology!=topology || cache.statics->lineage!=statics->lineage ||
+        bool(cache.active)!=bool(active) || (active && cache.active->lineage!=active->lineage)?3:0);
+#endif
+    ContextOwnersRef effective;
+    if(fallback) {
+        count_work(WorkCounter::context_fallbacks);
+        count_work(WorkCounter::context_fallback_reason,fallback);
+        const StyleLookup lookup(map,nullptr,{});
+        effective=effective_fixed_containers(&lookup,aether_active_transform_owners(runtime));
+        if(context_membership_equal(cache.effective,effective)) effective=cache.effective;
+    } else if(cache.statics==statics && cache.active==active) {
+        count_work(WorkCounter::context_reuses);
+        return cache.effective;
+    } else {
+        auto index=cache.effective->owners;
+        const auto update=[&](uintptr_t key,const ContextOwnerEntry*,const ContextOwnerEntry*) {
+            const auto* static_entry=statics->owners.find(key);
+            const auto* active_entry=active?active->owners.find(key):nullptr;
+            const auto* entry=static_entry?static_entry:active_entry;
+            bool present=false;
+            if(entry && entry->identity->alive && entry->identity->attached && entry->identity->owner==entry->node) {
+                // Active-only nodes must belong to this exact selected map.
+                const auto view=map->lookup(entry->node);
+                present=view && view.payload_owner()->node_lifetime()==entry->identity &&
+                    entry->node->type==AETHER_NODE_ELEMENT && !entry->node->anonymous_flex_owner;
+            }
+            if(present) index=update_context_owner(std::move(index),{entry->node,entry->identity,1});
+            else index=index.erase(key);
+        };
+        cache.statics->owners.diff(statics->owners,update);
+        if(active) cache.active->owners.diff(active->owners,update);
+        effective=publish_context_owners(cache.effective,std::move(index));
+        count_work(effective==cache.effective?WorkCounter::context_reuses:WorkCounter::context_builds);
+    }
+    // Store cache only when all certificate components are available and current.
+    if(statics && document && (!runtime || active) && structure_valid(map.get()) &&
+        document->style_tree_epoch==map->style_tree_epoch())
+        cache={statics,active,effective,topology,document,document->structure_epoch};
+    else cache={};
     return effective;
 }
 
@@ -1457,12 +1527,16 @@ AETHER_API aether_status_t aether_layout_prepare_transition_context(
     if (out_changed) *out_changed = AETHER_FALSE;
     if (!engine || !current_styles || !out_changed) return AETHER_ERROR_NULL_ARG;
     try {
-        auto active = aether_active_transform_owners(runtime);
-        const StyleLookup lookup(aether::style::pin_style_map(current_styles), nullptr, {});
-        const auto effective = effective_fixed_containers(&lookup, active);
+        count_work(WorkCounter::context_calls);
+        const auto map=aether::style::pin_style_map(current_styles);
+        const auto effective=prepare_context_owners(engine,runtime,map);
         *out_changed = !previous_layout || !previous_layout->effective_context_enabled ||
-            effective != previous_layout->effective_fixed_container_nodes;
-        engine->prepared_active_nodes = std::move(active);
+            !context_membership_equal(effective,previous_layout->effective_context_owners);
+        engine->prepared_context_owners=effective;
+        engine->prepared_active_snapshot=aether_active_transform_snapshot(runtime);
+        engine->prepared_active_nodes.clear();
+        if(runtime && !engine->prepared_active_snapshot) engine->prepared_active_nodes=aether_active_transform_owners(runtime);
+        engine->prepared_context_map=map;
         engine->transition_context_prepared = true;
         return AETHER_OK;
     } catch (const std::bad_alloc&) { return AETHER_ERROR_OUT_OF_MEMORY; }
@@ -1481,6 +1555,9 @@ AETHER_API aether_status_t aether_layout_layout(
     const bool prepared = std::exchange(engine->transition_context_prepared, false);
     auto active = std::move(engine->prepared_active_nodes);
     engine->prepared_active_nodes.clear();
+    auto prepared_active=std::move(engine->prepared_active_snapshot);
+    auto prepared_owners = std::move(engine->prepared_context_owners);
+    auto prepared_map = std::move(engine->prepared_context_map);
     if (!out_result || !doc) return AETHER_ERROR_NULL_ARG;
     const auto version = aether::style::pin_style_map(source_styles);
     if (!aether::style::structure_valid(version.get()) || !aether::style::inputs_current(version.get())) return AETHER_ERROR_INVALID_STATE;
@@ -1524,7 +1601,24 @@ AETHER_API aether_status_t aether_layout_layout(
     };
     result->effective_context_enabled = prepared || (version && version->contextual());
     if (result->effective_context_enabled) {
-        try { result->effective_fixed_container_nodes = effective_fixed_containers(styles, active); }
+        try {
+            const bool same_source=prepared && prepared_map && version &&
+                (prepared_map==version || (prepared_map->projection_source() &&
+                    prepared_map->projection_source()==version->projection_source()));
+            const bool valid_pin=same_source && structure_valid(prepared_map.get()) &&
+                prepared_map->document_lifetime()==document_identity &&
+                prepared_map->style_tree_epoch()==document_identity->style_tree_epoch;
+            if(valid_pin) result->effective_context_owners=std::move(prepared_owners);
+            else {
+                // A one-shot pin for another map is never silently applied.
+                count_work(WorkCounter::context_fallbacks);
+                count_work(WorkCounter::context_fallback_reason,5);
+                if(prepared_active) for(const auto& item:prepared_active->owners.entries()) {
+                    count_work(WorkCounter::context_active_visits); active.insert(item.second.node);
+                }
+                result->effective_context_owners=effective_fixed_containers(styles,active);
+            }
+        }
         catch (const std::bad_alloc&) { delete result; return AETHER_ERROR_OUT_OF_MEMORY; }
     }
 

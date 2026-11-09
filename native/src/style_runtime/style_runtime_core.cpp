@@ -1775,25 +1775,55 @@ AETHER_API aether_status_t aether_style_transaction_preview_legacy_patch(
     const auto base = pin_style_map(base_map);
     if (!publication_base_valid(transaction, base)) return AETHER_ERROR_INVALID_STATE;
     try {
-        std::vector<BackingPatchEntry> patch;
-        const auto& revision = transaction->revision;
-        for (const auto& entry : revision->entries()) {
-            if (publication_record_reusable(entry, base, revision)) continue;
-            FrozenNodeRef record;
-            const auto status = BoundNodeView::find(revision, entry.node()).export_record(record);
-            if (status != AETHER_OK) return status;
-            patch.push_back({entry.node(), std::move(record)});
-        }
-        for (const auto& old : base->backing()->entries())
-            if (!revision->directory().find(reinterpret_cast<uintptr_t>(old.first))) patch.push_back({old.first, {}});
-        MapVersionInput input; input.mode = MapMode::legacy_partial;
-        input.document_lifetime = revision->document_lifetime(); input.document_identity = revision->document_identity();
-        input.input_epoch = revision->input_epoch(); input.structure_epoch = revision->structure_epoch();
-        input.style_tree_epoch = revision->style_tree_epoch();
-        auto status = patch_backing(base->backing(), patch, input.backing); if (status != AETHER_OK) return status;
         auto map = std::make_unique<aether_style_map_s>();
-        status = make_map_version(input, map->current); if (status != AETHER_OK) return status;
+        const auto status=create_publication_map(transaction->revision,base,false,map->current);
+        if(status!=AETHER_OK)return status;
         *out_map = map.release(); return AETHER_OK;
     } catch (const std::bad_alloc&) { return AETHER_ERROR_OUT_OF_MEMORY; }
       catch (...) { return AETHER_ERROR_INVALID_STATE; }
+}
+
+// D2: compact staging with exact private projection-source provenance.
+static bool publication_compact_valid(const aether_style_transaction_s* transaction,const MapVersionRef& base) noexcept {
+    return publication_base_valid(transaction,base) && transaction->base_pin && base->projection_source() &&
+        base->projection_source()==transaction->base_pin && transaction->revision->compact_projection() &&
+        base->projection_source()->publication_identity()==transaction->revision->delta_base_identity();
+}
+extern "C" {
+AETHER_API aether_status_t aether_style_transaction_publication_delta(aether_style_transaction_t transaction,
+    aether_style_map_t base_map,aether_style_publication_delta_t* out_result) {
+    if(!transaction || !out_result)return AETHER_ERROR_NULL_ARG;
+    if(out_result->struct_size!=sizeof(*out_result) || !transaction->owner ||
+        transaction->owner->owner_thread!=std::this_thread::get_id() || !transaction->revision)return AETHER_ERROR_INVALID_STATE;
+    aether_style_publication_delta_t result{};result.struct_size=sizeof(result);
+    const auto base=pin_style_map(base_map);
+    if(publication_compact_valid(transaction,base)) {
+        result.compact=AETHER_TRUE;result.semantic_count=static_cast<int32_t>(transaction->revision->semantic_positions().size());
+        for(auto position:transaction->revision->semantic_positions())result.visual_impact|=transaction->revision->entries()[position].impact();
+    }
+    *out_result=result;return AETHER_OK;
+}
+AETHER_API aether_status_t aether_style_transaction_get_publication_delta(aether_style_transaction_t transaction,
+    aether_style_map_t base_map,int32_t index,aether_node_t* out_node,aether_computed_style_handle_t* out_style,uint32_t* out_impact) {
+    if(out_node)*out_node=nullptr;if(out_style)*out_style=nullptr;if(out_impact)*out_impact=0;
+    if(!transaction || !out_node || !out_style || !out_impact)return AETHER_ERROR_NULL_ARG;
+    const auto base=pin_style_map(base_map);
+    if(!publication_compact_valid(transaction,base) || index<0 || static_cast<size_t>(index)>=transaction->revision->semantic_positions().size())return AETHER_ERROR_INVALID_STATE;
+    const auto entry=transaction->revision->entries()[transaction->revision->semantic_positions()[index]];
+    const auto previous=base->backing()->find_owner(entry.node());
+    if(previous && node_projection_equal(*previous->payload_owner(),*entry.payload())) {
+        *out_node=entry.node();*out_impact=entry.impact();return AETHER_OK;
+    }
+    return aether_style_transaction_get_publication_style(transaction,base_map,
+        static_cast<int32_t>(transaction->revision->semantic_positions()[index]),out_node,out_style,out_impact);
+}
+AETHER_API aether_status_t aether_style_transaction_preview_compact_map(aether_style_transaction_t transaction,
+    aether_style_map_t base_map,aether_style_map_t* out_map) {
+    if(out_map)*out_map=nullptr;if(!transaction || !out_map)return AETHER_ERROR_NULL_ARG;
+    const auto base=pin_style_map(base_map);if(!publication_compact_valid(transaction,base))return AETHER_ERROR_INVALID_STATE;
+    try {auto map=std::make_unique<aether_style_map_s>();
+        const auto status=create_publication_map(transaction->revision,base,true,map->current);
+        if(status!=AETHER_OK)return status;*out_map=map.release();return AETHER_OK;
+    } catch(const std::bad_alloc&){return AETHER_ERROR_OUT_OF_MEMORY;}
+}
 }

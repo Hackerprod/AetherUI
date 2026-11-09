@@ -339,7 +339,7 @@ public sealed partial class UiDocumentHost : IDisposable
         // entries for nodes that no longer exist. The styles are snapshotted by stable identity
         // first so state-triggered markup changes can still start CSS transitions.
         _previousStyleSnapshot = BuildStyleSnapshot();
-        _computedStyles.Clear();
+        _computedStyles = _computedStyles.Clear();
         _stateDirtyElements.Clear();
         _stateInputsToSync.Clear();
         _nativeInitialStatesSynchronized = false;

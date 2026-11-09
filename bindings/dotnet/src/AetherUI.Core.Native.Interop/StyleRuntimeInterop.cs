@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using System.Runtime.InteropServices;
 using System.Text;
 
@@ -91,7 +92,7 @@ public sealed unsafe partial class StyleRuntimeInterop : IDisposable
     private long _defaults;
     private long _author;
     private bool _disposed;
-    private Dictionary<IntPtr, NativeComputedStyle> _styles = [];
+    private ImmutableDictionary<IntPtr, NativeComputedStyle> _styles = ImmutableDictionary<IntPtr, NativeComputedStyle>.Empty;
     private readonly Dictionary<IntPtr, int> _elementIndex = [];
     private List<IntPtr> _elements = [];
 
@@ -132,7 +133,7 @@ public sealed unsafe partial class StyleRuntimeInterop : IDisposable
         ArgumentNullException.ThrowIfNull(document);
         _document = document.Handle;
         NativeMethods.StyleRuntimeClearCache(_runtime);
-        _styles.Clear();
+        _styles = _styles.Clear();
         if (_defaults != 0 && NativeMethods.StyleRuntimeRemoveStyleSheet(_runtime, _defaults) == 0)
             throw new InvalidOperationException("Native defaults stylesheet could not be removed.");
         if (_author != 0 && NativeMethods.StyleRuntimeRemoveStyleSheet(_runtime, _author) == 0)
@@ -258,7 +259,7 @@ public sealed unsafe partial class StyleRuntimeInterop : IDisposable
                 {
                     var publicStyle = ReadStyle(style);
                     stackingOrderChanged |= _styles.TryGetValue(node, out var previous) && previous.ZIndex != publicStyle.ZIndex;
-                    _styles[node] = publicStyle;
+                    _styles = _styles.SetItem(node, publicStyle);
                     records.Add(new NativeStyleUpdate(node, publicStyle, nativeImpact));
                 }
                 finally { NativeMethods.ComputedStyleHandleDestroy(style); }

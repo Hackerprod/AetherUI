@@ -24,6 +24,13 @@ typedef struct aether_work_counters_v1_s {
     uint64_t hit_boxes_visited;
     uint64_t paint_order_children_classified;
 } aether_work_counters_v1_t;
+typedef struct aether_context_work_counters_v1_s {
+    uint64_t calls, backing_entries_visited, active_owner_entries_visited;
+    uint64_t owners_updated, snapshot_builds, snapshot_reuses, fallbacks;
+    uint64_t allocations, index_nodes_visited, static_entries_visited;
+    uint64_t fallback_reason;
+} aether_context_work_counters_v1_t;
+AETHER_API aether_status_t aether_context_work_counters_get_v1(aether_context_work_counters_v1_t* out_counters);
 AETHER_API aether_bool_t aether_work_counters_set_enabled(aether_bool_t enabled);
 AETHER_API void aether_work_counters_reset(void);
 AETHER_API aether_status_t aether_work_counters_get_v1(aether_work_counters_v1_t* out_counters);

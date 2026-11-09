@@ -7,7 +7,7 @@ template<class T> bool same_owner(const std::shared_ptr<T>& a,const std::shared_
     return a==b&&!a.owner_before(b)&&!b.owner_before(a);
 }
 }
-MapVersion::MapVersion(const MapVersionInput& in) :
+MapVersion::MapVersion(const MapVersionInput& in,StyleRevisionRef source) :
     backing_(in.backing),
     mode_(in.mode),
     revision_(in.revision),
@@ -16,7 +16,7 @@ MapVersion::MapVersion(const MapVersionInput& in) :
     generation_(in.generation),
     structure_epoch_(in.structure_epoch),
     input_epoch_(in.input_epoch),
-    style_tree_epoch_(in.style_tree_epoch) {}
+    style_tree_epoch_(in.style_tree_epoch), projection_source_(source?std::move(source):in.revision) {}
 aether_status_t make_map_version(const MapVersionInput& in, MapVersionRef& out) noexcept {
     if(in.revision&&!in.revision->authentic_owner(in.revision))return AETHER_ERROR_INVALID_STATE;
     if (!in.backing && (!in.revision || in.mode!=MapMode::contextual || in.revision->backing())) return AETHER_ERROR_INVALID_STATE;
@@ -59,6 +59,40 @@ aether_status_t materialize_legacy_revision_map(const StyleRevisionRef& revision
         // revision. Each leaf was exported from that exact authentic revision.
         MapVersionRef result(new const MapVersion(input));out=std::move(result);return AETHER_OK;
     }catch(const std::bad_alloc&){return AETHER_ERROR_OUT_OF_MEMORY;}
+}
+// Only this factory can certify a partial legacy map as a projection source.
+// It constructs the patch itself; no caller-provided backing or count is proof.
+aether_status_t create_publication_map(const StyleRevisionRef& revision,const MapVersionRef& base,
+    bool compact,MapVersionRef& out) noexcept {
+    if(!revision || !revision->authentic_owner(revision) || !base || base->contextual() || !base->backing() ||
+        base->document_lifetime()!=revision->document_lifetime() || !structure_valid(base.get()))return AETHER_ERROR_INVALID_STATE;
+    if(compact && (!revision->compact_projection() || !base->projection_source() ||
+        base->projection_source()->publication_identity()!=revision->delta_base_identity())) return AETHER_ERROR_INVALID_STATE;
+    try {
+        std::vector<BackingPatchEntry> patch;
+        const auto add=[&](const FrozenRevisionEntry& entry) {
+            const auto old=base->backing()->find_owner(entry.node());
+            if(old && old->payload_owner()==entry.payload() && old->measures()) {
+                const auto& a=old->measures()->document().values();const auto& b=revision->document()->values();
+                if(a.identity==b.identity && a.viewport_width==b.viewport_width && a.viewport_height==b.viewport_height &&
+                    a.initial_font_size==b.initial_font_size && a.root_font_size==b.root_font_size)return AETHER_OK;
+            }
+            FrozenNodeRef record;const auto status=BoundNodeView::find(revision,entry.node()).export_record(record);
+            if(status!=AETHER_OK)return status;patch.push_back({entry.node(),std::move(record)});return AETHER_OK;
+        };
+        if(compact) {
+            patch.reserve(revision->semantic_positions().size());
+            for(auto position:revision->semantic_positions()) {const auto status=add(revision->entries()[position]);if(status!=AETHER_OK)return status;}
+        } else {
+            for(const auto& entry:revision->entries()) {const auto status=add(entry);if(status!=AETHER_OK)return status;}
+            for(const auto& old:base->backing()->entries()) if(!revision->directory().find(reinterpret_cast<uintptr_t>(old.first)))patch.push_back({old.first,{}});
+        }
+        MapVersionInput input;input.mode=MapMode::legacy_partial;input.document_lifetime=revision->document_lifetime();
+        input.document_identity=revision->document_identity();input.input_epoch=revision->input_epoch();
+        input.structure_epoch=revision->structure_epoch();input.style_tree_epoch=revision->style_tree_epoch();
+        const auto status=patch_backing(base->backing(),patch,input.backing);if(status!=AETHER_OK)return status;
+        MapVersionRef result(new const MapVersion(input,revision));out=std::move(result);return AETHER_OK;
+    } catch(const std::bad_alloc&){return AETHER_ERROR_OUT_OF_MEMORY;}
 }
 bool structure_valid(const MapVersion* v) noexcept {
     return !v || !v->document_lifetime() || (v->document_lifetime()->alive && v->document_lifetime()->structure_epoch==v->structure_epoch());

@@ -85,6 +85,12 @@ AETHER_API void aether_display_list_builder_set_transition_runtime(
 
 #ifdef __cplusplus
 #include <unordered_set>
+#include "../css/context_owners.h"
 // Private value snapshot: active TRANSFORM only, including its delay phase.
 std::unordered_set<aether_node_t> aether_active_transform_owners(aether_transition_runtime_t runtime);
+#endif
+
+#ifdef __cplusplus
+// Null means uncertified after a failed mutation; caller must use complete oracle.
+aether::style::ContextOwnersRef aether_active_transform_snapshot(aether_transition_runtime_t runtime) noexcept;
 #endif

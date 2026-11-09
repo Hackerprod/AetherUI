@@ -159,6 +159,7 @@ StateSemanticDelta compare_node_semantics(const FrozenNodePayload& a,const Froze
     if(!eq(x.border_color,y.border_color)||!eq(x.border_colors,y.border_colors))propagation|=ParentDependencies::border_colors;
     return {true,propagation};
 }
+bool node_projection_equal(const FrozenNodePayload& a,const FrozenNodePayload& b) noexcept { return style_equal(*a.style(),*b.style(),false); }
 bool node_semantically_equal(const FrozenNodePayload& a,const FrozenNodePayload& b) noexcept {
     return !compare_node_semantics(a,b).semantic;
 }

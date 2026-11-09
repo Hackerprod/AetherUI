@@ -17,10 +17,12 @@ struct MapVersionInput {
     uint64_t structure_epoch = 0;
     uint64_t input_epoch = 0;
     uint64_t style_tree_epoch = 0;
+
 };
 class MapVersion;
 using MapVersionRef = std::shared_ptr<const MapVersion>;
 aether_status_t make_map_version(const MapVersionInput&, MapVersionRef&) noexcept;
+aether_status_t create_publication_map(const StyleRevisionRef&,const MapVersionRef&,bool,MapVersionRef&) noexcept;
 aether_status_t materialize_legacy_revision_map(const StyleRevisionRef&, MapVersionRef&) noexcept;
 class MapVersion {
     const BackingRef backing_;
@@ -32,7 +34,9 @@ class MapVersion {
     const uint64_t structure_epoch_;
     const uint64_t input_epoch_;
     const uint64_t style_tree_epoch_;
-    explicit MapVersion(const MapVersionInput&);
+    const StyleRevisionRef projection_source_;
+    explicit MapVersion(const MapVersionInput&,StyleRevisionRef source={});
+    friend aether_status_t create_publication_map(const StyleRevisionRef&,const MapVersionRef&,bool,MapVersionRef&) noexcept;
     friend aether_status_t make_map_version(const MapVersionInput&, MapVersionRef&) noexcept;
     friend aether_status_t materialize_legacy_revision_map(const StyleRevisionRef&, MapVersionRef&) noexcept;
 public:
@@ -45,6 +49,7 @@ public:
     const uint64_t& structure_epoch() const noexcept { return structure_epoch_; }
     const uint64_t& input_epoch() const noexcept { return input_epoch_; }
     const uint64_t& style_tree_epoch() const noexcept { return style_tree_epoch_; }
+    const StyleRevisionRef& projection_source() const noexcept { return projection_source_; }
     size_t size()const noexcept{return backing_?backing_->size():revision_?revision_->directory().size():0;}
     BoundNodeView lookup(const aether_node_s* node) const noexcept {
         if(backing_) {

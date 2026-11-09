@@ -519,6 +519,9 @@ extern "C" {
             for (const auto& e : batch->state->entries) if (e.transform.active && e.lifetime && e.lifetime->alive
                 && e.lifetime->attached && e.document_lifetime && e.document_lifetime->alive) nodes.insert(e.pointer);
             engine->prepared_active_nodes.swap(nodes);
+            engine->prepared_active_snapshot.reset();
+            engine->prepared_context_owners.reset();
+            engine->prepared_context_map.reset();
             engine->transition_context_prepared = true;
             return AETHER_OK;
         }

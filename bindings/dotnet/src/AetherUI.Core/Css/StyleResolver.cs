@@ -4,9 +4,9 @@ namespace AetherUI.Css;
 
 public sealed class StyleMap
 {
-    private readonly Dictionary<ElementNode, ComputedStyle> _styles;
+    private readonly IReadOnlyDictionary<ElementNode, ComputedStyle> _styles;
 
-    internal StyleMap(Dictionary<ElementNode, ComputedStyle> styles)
+    internal StyleMap(IReadOnlyDictionary<ElementNode, ComputedStyle> styles)
     {
         _styles = styles;
     }

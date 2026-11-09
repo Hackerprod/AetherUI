@@ -82,7 +82,7 @@ OverflowBounds clip_descendant(OverflowBounds bounds, const aether_layout_box_s*
 
 bool establishes_fixed_container(const aether_layout_box_s* box) {
     return (box->visual_sample_valid && box->visual_has_transform) ||
-        (box->owner && box->element && box->owner->effective_fixed_container_nodes.count(box->element));
+        (box->owner && box->element && box->owner->effective_fixed_container(box->element));
 }
 
 OverflowBounds subtree_bounds(const aether_layout_box_s* box, bool fixed_container) {

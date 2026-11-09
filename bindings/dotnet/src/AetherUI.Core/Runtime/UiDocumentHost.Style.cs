@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using AetherUI.Css;
 using AetherUI.Core.Native;
 using AetherUI.Dom;
@@ -18,7 +19,9 @@ public sealed partial class UiDocumentHost
     /// Cleared only when the tree itself is rebuilt; repopulated in full from the native style
     /// runtime's resolve result on every visual pass.
     /// </summary>
-    private Dictionary<ElementNode, ComputedStyle> _computedStyles = new();
+    private ImmutableDictionary<ElementNode, ComputedStyle> _computedStyles = ImmutableDictionary<ElementNode, ComputedStyle>.Empty;
+    internal bool ExperimentalStyleDeltas { get; set; } // Default OFF until independent integration gates.
+    internal long ProjectedBoxEntriesVisited { get; private set; }
     private HashSet<ElementNode> _stateDirtyElements = [];
     private HashSet<ElementNode> _stateInputsToSync = [];
     private RetainedStyleBatch? _retainedStyleBatches;
@@ -175,14 +178,14 @@ public sealed partial class UiDocumentHost
             var initialStates = !_nativeInitialStatesSynchronized
                 ? EnumerateElements(document).Select(static element => (int)element.State).ToArray() : null;
             using var diagnostics = CssDiagnostics.BeginTransaction();
-            using var native = _nativeStyleRuntime.PreparePublication(initialStates, _viewport.Width, _viewport.Height, _dpiScale, _nativeVisualStyleMap);
+            using var native = _nativeStyleRuntime.PreparePublication(initialStates, _viewport.Width, _viewport.Height, _dpiScale, _nativeVisualStyleMap, ExperimentalStyleDeltas && !_forceFullProjectionRecovery);
             _nativeInitialStatesSynchronized = true;
             _stateInputsToSync.Clear(); // No callbacks have run; Bnext state writes start below.
             if (_publishedStyleToken.DocumentIdentity == native.Token.DocumentIdentity &&
                 _publishedStyleToken.StructureEpoch != native.Token.StructureEpoch)
                 throw new InvalidOperationException("Native DOM structure changed without a certified managed mapping.");
             StylePublicationProbe?.Invoke("native-preview");
-            var computed = new Dictionary<ElementNode, ComputedStyle>(native.Styles.Count);
+            var computed = native.Compact ? _computedStyles : ImmutableDictionary<ElementNode, ComputedStyle>.Empty;
             var boxes = new List<(LayoutBox Box, ComputedStyle Style)>();
             var paintDirty = new Dictionary<long, IntPtr>(_paintChunkDirtyNodes);
             var visibilityChanged = false;
@@ -194,14 +197,22 @@ public sealed partial class UiDocumentHost
                 if (previous is null && ElementIdentityKey(element) is { } key) _previousStyleSnapshot.TryGetValue(key, out previous);
                 var style = !update.ProjectionChanged && previous is not null
                     ? previous : StyleRuntimeBridge.ToComputedStyle(update.Style, element);
-                computed.Add(element, style);
+                computed = computed.SetItem(element, style);
+                if (native.Compact && !ReferenceEquals(previous, style) && _layout is not null)
+                {
+                    if (_layout.FindPrimaryBox(element) is { } primary) { ++ProjectedBoxEntriesVisited; boxes.Add((primary, style)); }
+                    foreach (var box in _layout.FindPaintBoxes(element)) { ++ProjectedBoxEntriesVisited; boxes.Add((box, style)); }
+                }
                 visibilityChanged |= previous is not null && previous.Visible != style.Visible;
                 if (update.ProjectionChanged && previous is not null) transitions.Add(TransitionStyleMarshaler.Prepare(update.Node, previous, style));
             }
-            var styles = new StyleMap(computed);
-            if (_layout is not null)
+            var styles = ReferenceEquals(computed, _computedStyles) && _styles is not null ? _styles : new StyleMap(computed);
+            if (!native.Compact && _layout is not null)
                 foreach (var box in _layout.Root.DescendantsAndSelf())
+                {
+                    ++ProjectedBoxEntriesVisited;
                     if (computed.TryGetValue(box.Element, out var style) && !ReferenceEquals(style, box.Style)) boxes.Add((box, style));
+                }
             var reorder = visibilityChanged || native.StackingOrderChanged;
             if (reorder) paintDirty = new Dictionary<long, IntPtr>();
             diagnostics.Seal();
@@ -253,8 +264,11 @@ public sealed partial class UiDocumentHost
             published = true;
             previousMap?.Dispose();
             Interlocked.Add(ref _styleUpdatedElementCount, native.ChangedStyleCount);
-            if (native.MapPatched) Interlocked.Increment(ref _visualStyleMapUpdateCount);
-            else Interlocked.Increment(ref _visualStyleMapBuildCount);
+            if (native.MapChanged)
+            {
+                if (native.MapPatched) Interlocked.Increment(ref _visualStyleMapUpdateCount);
+                else Interlocked.Increment(ref _visualStyleMapBuildCount);
+            }
             Interlocked.Increment(ref _styleResolutionCount);
             Interlocked.Add(ref _styleResolutionTimestampTicks, Stopwatch.GetTimestamp() - start);
 

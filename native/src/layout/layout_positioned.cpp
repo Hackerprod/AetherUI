@@ -135,7 +135,7 @@ void layout_positioned_children(
             : positioning_block;
         if (style.position == AETHER_POSITION_FIXED && result->effective_context_enabled) {
             for (auto* ancestor = parent; ancestor; ancestor = ancestor->parent) {
-                if (!result->effective_fixed_container_nodes.count(ancestor)) continue;
+                if (!result->effective_fixed_container(ancestor)) continue;
                 if (ancestor == parent) containing = positioning_block;
                 else if (const auto* owner = result->find_primary_box(ancestor)) containing = owner->padding_box;
                 break;
@@ -236,7 +236,7 @@ bool finalize_fixed_children(const aether_layout_engine_s* engine, const StyleLo
         bool table_owner = false;
         if (child->kind == LAYOUT_BOX_ELEMENT && child->style.position == AETHER_POSITION_FIXED) {
             for (auto* ancestor = child->element->parent; ancestor; ancestor = ancestor->parent) {
-                if (result->effective_fixed_container_nodes.count(ancestor)) {
+                if (result->effective_fixed_container(ancestor)) {
                     has_container = true;
                     if (tables) {
                         const auto* owner = result->find_primary_box(ancestor);

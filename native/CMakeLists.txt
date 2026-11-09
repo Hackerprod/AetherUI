@@ -5,6 +5,7 @@ include(CTest)
 include(CMakePackageConfigHelpers)
 include(GNUInstallDirs)
 
+option(AETHERUI_ENABLE_CONTEXT_OWNERS "Experimental persistent effective context owners" OFF)
 option(AETHERUI_ENABLE_STATE_INCREMENTAL "Experimental native state transaction categories (requires independent gates)" OFF)
 
 option(AETHERUI_ENABLE_WORK_COUNTERS "Compile opt-in thread-local diagnostic work counters" OFF)
@@ -1636,4 +1637,8 @@ if(AETHERUI_BUILD_TESTS AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
     target_link_libraries(aether_style_publication_preview_malloc_test PRIVATE Threads::Threads)
     target_link_options(aether_style_publication_preview_malloc_test PRIVATE -Wl,--wrap=malloc)
     add_test(NAME aether.style-publication-preview-malloc COMMAND aether_style_publication_preview_malloc_test)
+endif()
+
+if(AETHERUI_ENABLE_CONTEXT_OWNERS)
+    target_compile_definitions(aether_core PRIVATE AETHERUI_ENABLE_CONTEXT_OWNERS)
 endif()

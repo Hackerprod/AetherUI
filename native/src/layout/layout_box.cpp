@@ -98,7 +98,7 @@ AETHER_API aether_status_t aether_layout_clone_snapshot(aether_layout_result_t s
         result->assets = source->assets;
         result->has_finalized_table_cells = source->has_finalized_table_cells;
         result->effective_context_enabled = source->effective_context_enabled;
-        result->effective_fixed_container_nodes = source->effective_fixed_container_nodes;
+        result->effective_context_owners = source->effective_context_owners;
         result->viewport = source->viewport; result->root_font_size = source->root_font_size;
         result->viewport_overflow_x = source->viewport_overflow_x;
         result->viewport_overflow_y = source->viewport_overflow_y;

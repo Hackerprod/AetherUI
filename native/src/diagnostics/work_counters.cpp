@@ -4,6 +4,7 @@ namespace {
 #if defined(AETHERUI_ENABLE_WORK_COUNTERS)
 thread_local bool enabled = false;
 thread_local aether_work_counters_v1_t counters{};
+thread_local aether_context_work_counters_v1_t context{};
 #endif
 }
 extern "C" {
@@ -18,8 +19,17 @@ AETHER_API aether_bool_t aether_work_counters_set_enabled(aether_bool_t value) {
 }
 AETHER_API void aether_work_counters_reset(void) {
 #if defined(AETHERUI_ENABLE_WORK_COUNTERS)
-    counters = {};
+    counters = {}; context = {};
 #endif
+}
+AETHER_API aether_status_t aether_context_work_counters_get_v1(aether_context_work_counters_v1_t* out) {
+    if (!out) return AETHER_ERROR_NULL_ARG;
+#if defined(AETHERUI_ENABLE_WORK_COUNTERS)
+    *out = context;
+#else
+    *out = {};
+#endif
+    return AETHER_OK;
 }
 AETHER_API aether_status_t aether_work_counters_get_v1(aether_work_counters_v1_t* out) {
     if (!out) return AETHER_ERROR_NULL_ARG;
@@ -50,6 +60,17 @@ void aether::diagnostics::count_work(WorkCounter counter, uint64_t amount) noexc
     case WorkCounter::hit_boxes_visited: target = &counters.hit_boxes_visited; break;
     case WorkCounter::paint_order_children_classified: target = &counters.paint_order_children_classified; break;
 
+    case WorkCounter::context_calls: target = &context.calls; break;
+    case WorkCounter::context_backing_visits: target = &context.backing_entries_visited; break;
+    case WorkCounter::context_active_visits: target = &context.active_owner_entries_visited; break;
+    case WorkCounter::context_updates: target = &context.owners_updated; break;
+    case WorkCounter::context_builds: target = &context.snapshot_builds; break;
+    case WorkCounter::context_reuses: target = &context.snapshot_reuses; break;
+    case WorkCounter::context_fallbacks: target = &context.fallbacks; break;
+    case WorkCounter::context_allocations: target = &context.allocations; break;
+    case WorkCounter::context_index_visits: target = &context.index_nodes_visited; break;
+    case WorkCounter::context_static_visits: target = &context.static_entries_visited; break;
+    case WorkCounter::context_fallback_reason: context.fallback_reason = amount; return;
     }
     if (!target) return;
     constexpr auto maximum = std::numeric_limits<uint64_t>::max();

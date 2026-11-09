@@ -97,4 +97,31 @@ AETHER_API aether_status_t aether_style_transaction_get_publication_style(
 #ifdef __cplusplus
 }
 #endif
+
+/* D2 experimental compact projection. Coverage is independent of count/impact.
+ * A compact result requires a factory-certified legacy projection of the exact
+ * base revision and an unchanged document measure/environment context. Unknown
+ * lineage/structure/context returns compact=false and must use full staging.
+ * These functions never publish or relax contextual exact-revision checks. */
+#ifdef __cplusplus
+extern "C" {
 #endif
+typedef struct aether_style_publication_delta_s {
+    uint32_t struct_size;
+    aether_bool_t compact;
+    int32_t semantic_count;
+    uint32_t visual_impact;
+} aether_style_publication_delta_t;
+AETHER_API aether_status_t aether_style_transaction_publication_delta(
+    aether_style_transaction_t transaction, aether_style_map_t base_map,
+    aether_style_publication_delta_t* out_result);
+AETHER_API aether_status_t aether_style_transaction_get_publication_delta(
+    aether_style_transaction_t transaction, aether_style_map_t base_map, int32_t index,
+    aether_node_t* out_node, aether_computed_style_handle_t* out_projection, uint32_t* out_impact);
+AETHER_API aether_status_t aether_style_transaction_preview_compact_map(
+    aether_style_transaction_t transaction, aether_style_map_t base_map, aether_style_map_t* out_map);
+#ifdef __cplusplus
+}
+#endif
+
+#endif /* AETHER_STATE_STYLE_H */

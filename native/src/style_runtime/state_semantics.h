@@ -9,5 +9,6 @@ struct StateSemanticDelta {
 };
 // Allocation-free complete comparison, independent of visual impact.
 StateSemanticDelta compare_node_semantics(const FrozenNodePayload&, const FrozenNodePayload&) noexcept;
+bool node_projection_equal(const FrozenNodePayload&, const FrozenNodePayload&) noexcept;
 bool node_semantically_equal(const FrozenNodePayload&, const FrozenNodePayload&) noexcept;
 }

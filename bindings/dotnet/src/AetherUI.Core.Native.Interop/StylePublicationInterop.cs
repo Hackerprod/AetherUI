@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using System.Runtime.InteropServices;
 
 namespace AetherUI.Core.Native;
@@ -11,8 +12,25 @@ public readonly record struct NativeStylePublicationToken(
     internal static NativeStylePublicationToken Empty => new((uint)Marshal.SizeOf<NativeStylePublicationToken>(), 0, 0, 0, 0, 0, 0, 0, 0, 0);
 }
 
+[StructLayout(LayoutKind.Sequential)]
+internal struct NativePublicationDelta
+{
+    internal uint StructSize;
+    internal int Compact;
+    internal int SemanticCount;
+    internal uint Impact;
+}
+
 internal static unsafe partial class NativeMethods
 {
+    [LibraryImport(Lib, EntryPoint = "aether_style_runtime_prepare_state_revision")]
+    internal static partial int StylePrepareStateRevision(IntPtr runtime, IntPtr root, IntPtr baseRevision, IntPtr changes, int count, in StyleRuntimeInterop.RuntimeEnvironment environment, out IntPtr transaction);
+    [LibraryImport(Lib, EntryPoint = "aether_style_transaction_publication_delta")]
+    internal static partial int StylePublicationDelta(IntPtr transaction, IntPtr baseMap, ref NativePublicationDelta result);
+    [LibraryImport(Lib, EntryPoint = "aether_style_transaction_get_publication_delta")]
+    internal static partial int StylePublicationGetDelta(IntPtr transaction, IntPtr baseMap, int index, out IntPtr node, out IntPtr style, out uint impact);
+    [LibraryImport(Lib, EntryPoint = "aether_style_transaction_preview_compact_map")]
+    internal static partial int StylePublicationCompactMap(IntPtr transaction, IntPtr baseMap, out IntPtr map);
     [LibraryImport(Lib, EntryPoint = "aether_style_runtime_prepare_revision")]
     internal static partial int StylePrepareRevision(IntPtr runtime, IntPtr root, in StyleRuntimeInterop.RuntimeEnvironment environment, out IntPtr transaction);
     [LibraryImport(Lib, EntryPoint = "aether_style_runtime_commit_revision")]
@@ -59,7 +77,7 @@ public sealed unsafe partial class StyleRuntimeInterop
     }
 
     /// <summary>Full, fallible staging. Never enables the experimental state resolver.</summary>
-    public PreparedPublication PreparePublication(IReadOnlyList<int>? states, float width, float height, float dpiScale, NativeStyleMap? previousMap = null)
+    public PreparedPublication PreparePublication(IReadOnlyList<int>? states, float width, float height, float dpiScale, NativeStyleMap? previousMap = null, bool experimentalDelta = false)
     {
         ThrowIfDisposed();
         if (states is not null && states.Count != _elements.Count)
@@ -67,8 +85,11 @@ public sealed unsafe partial class StyleRuntimeInterop
         if (states is not null)
             for (var i = 0; i < states.Count; ++i) NativeMethods.ElementSetState(_elements[i], states[i]);
         var environment = new RuntimeEnvironment(width, height, dpiScale, 16, 0, 0, 0);
-        Throw(NativeMethods.StylePrepareRevision(_runtime, _document, in environment, out var transaction));
-        try { return new PreparedPublication(this, transaction, previousMap); }
+        IntPtr transaction;
+        if (experimentalDelta && states is null && _managedPublicationRevision != IntPtr.Zero)
+            Throw(NativeMethods.StylePrepareStateRevision(_runtime, _document, _managedPublicationRevision, IntPtr.Zero, 0, in environment, out transaction));
+        else Throw(NativeMethods.StylePrepareRevision(_runtime, _document, in environment, out transaction));
+        try { return new PreparedPublication(this, transaction, previousMap, experimentalDelta); }
         catch { NativeMethods.StyleTransactionDestroy(transaction); throw; }
     }
 
@@ -80,15 +101,17 @@ public sealed unsafe partial class StyleRuntimeInterop
         private IntPtr _preview;
         private IntPtr _committed;
         private NativeStyleMap? _map;
-        private readonly Dictionary<IntPtr, NativeComputedStyle> _styles;
+        private readonly ImmutableDictionary<IntPtr, NativeComputedStyle> _styles;
         public IReadOnlyList<NativeStyleUpdate> Styles { get; }
         public NativeStyleImpact Impact { get; }
         public bool StackingOrderChanged { get; }
         public NativeStylePublicationToken Token { get; }
         public bool MapPatched { get; }
+        public bool Compact { get; }
+        public bool MapChanged => !Compact || Styles.Count != 0;
         public int ChangedStyleCount { get; }
 
-        internal PreparedPublication(StyleRuntimeInterop owner, IntPtr transaction, NativeStyleMap? previousMap)
+        internal PreparedPublication(StyleRuntimeInterop owner, IntPtr transaction, NativeStyleMap? previousMap, bool experimentalDelta)
         {
             _owner = owner;
             // The caller owns transaction until construction succeeds.
@@ -98,27 +121,33 @@ public sealed unsafe partial class StyleRuntimeInterop
                 Throw(NativeMethods.StyleTransactionReadPublicationToken(transaction, ref token));
                 Token = token;
                 Throw(NativeMethods.StyleTransactionPreviewRevision(transaction, out _preview));
-                var count = NativeMethods.StyleRevisionCount(_preview);
+                var delta = new NativePublicationDelta { StructSize = (uint)Marshal.SizeOf<NativePublicationDelta>() };
+                if (experimentalDelta && previousMap is not null)
+                    Throw(NativeMethods.StylePublicationDelta(transaction, previousMap.Handle, ref delta));
+                Compact = delta.Compact != 0;
+                var count = Compact ? delta.SemanticCount : NativeMethods.StyleRevisionCount(_preview);
                 var updates = new NativeStyleUpdate[count];
-                _styles = new Dictionary<IntPtr, NativeComputedStyle>(count);
-                var aggregate = NativeStyleImpact.None;
+                _styles = Compact ? owner._styles : ImmutableDictionary<IntPtr, NativeComputedStyle>.Empty;
+                var aggregate = Compact ? (NativeStyleImpact)delta.Impact : NativeStyleImpact.None;
                 for (var i = 0; i < count; ++i)
                 {
-                    Throw(NativeMethods.StyleTransactionGetPublicationStyle(transaction, previousMap?.Handle ?? IntPtr.Zero, i, out var node, out var handle, out var impact));
+                    IntPtr node, handle; uint impact;
+                    if (Compact) Throw(NativeMethods.StylePublicationGetDelta(transaction, previousMap!.Handle, i, out node, out handle, out impact));
+                    else Throw(NativeMethods.StyleTransactionGetPublicationStyle(transaction, previousMap?.Handle ?? IntPtr.Zero, i, out node, out handle, out impact));
                     try
                     {
                         var changed = handle != IntPtr.Zero;
                         var style = changed ? ReadStyle(handle) : owner._styles[node];
                         if (changed) ++ChangedStyleCount;
                         updates[i] = new NativeStyleUpdate(node, style, (NativeStyleImpact)impact) { ProjectionChanged = changed };
-                        _styles.Add(node, style);
+                        _styles = _styles.SetItem(node, style);
                         aggregate |= (NativeStyleImpact)impact;
                         StackingOrderChanged |= owner._styles.TryGetValue(node, out var previous) && previous.ZIndex != style.ZIndex;
                     }
                     finally { if (handle != IntPtr.Zero) NativeMethods.ComputedStyleHandleDestroy(handle); }
                 }
                 // Includes retired/generated entries, without projecting them as live nodes.
-                var changes = NativeMethods.StyleRevisionChangeCount(_preview);
+                var changes = Compact ? 0 : NativeMethods.StyleRevisionChangeCount(_preview);
                 for (var i = 0; i < changes; ++i)
                 {
                     Throw(NativeMethods.StyleRevisionGetChangeImpact(_preview, i, IntPtr.Zero, IntPtr.Zero, out var impact));
@@ -126,7 +155,8 @@ public sealed unsafe partial class StyleRuntimeInterop
                 }
                 Styles = updates; Impact = aggregate;
                 IntPtr map;
-                if (previousMap is null) Throw(NativeMethods.StyleTransactionPreviewLegacyMap(transaction, out map));
+                if (Compact) Throw(NativeMethods.StylePublicationCompactMap(transaction, previousMap!.Handle, out map));
+                else if (previousMap is null) Throw(NativeMethods.StyleTransactionPreviewLegacyMap(transaction, out map));
                 else Throw(NativeMethods.StyleTransactionPreviewLegacyPatch(transaction, previousMap.Handle, out map));
                 MapPatched = previousMap is not null;
                 try { _map = new NativeStyleMap(map); }

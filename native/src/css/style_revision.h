@@ -7,6 +7,8 @@
 #include <vector>
 class style_revision_s;
 namespace aether::style {
+struct RevisionIdentity {};
+using RevisionIdentityRef=std::shared_ptr<const RevisionIdentity>;
 using StyleRevisionRef=std::shared_ptr<const style_revision_s>;
 struct RevisionEntryInput { aether_node_s* node=nullptr; FrozenNodeRef record; uint32_t impact=0; };
 struct RetiredEntryInput { FrozenNodeRef previous_record; uint32_t impact=0; };
@@ -124,6 +126,10 @@ public:
 }
 class style_revision_s final {
     mutable std::weak_ptr<const style_revision_s> self_;
+    const aether::style::RevisionIdentityRef identity_=std::make_shared<const aether::style::RevisionIdentity>();
+    const aether::style::RevisionIdentityRef delta_base_;
+    const std::vector<size_t> semantic_positions_;
+    const bool compact_projection_=false;
     const bool contextual_;
     const uint64_t generation_,document_identity_,input_epoch_,structure_epoch_,style_tree_epoch_;
     const aether_style_environment_t environment_;
@@ -147,6 +153,10 @@ public:
     bool authentic_owner(const aether::style::StyleRevisionRef& owner)const noexcept{
         const auto actual=self_.lock();return actual==owner&&!actual.owner_before(owner)&&!owner.owner_before(actual);
     }
+    const auto& publication_identity()const noexcept{return identity_;}
+    const auto& delta_base_identity()const noexcept{return delta_base_;}
+    const auto& semantic_positions()const noexcept{return semantic_positions_;}
+    bool compact_projection()const noexcept{return compact_projection_;}
     bool contextual()const noexcept{return contextual_;}
     uint64_t generation()const noexcept{return generation_;}
     uint64_t document_identity()const noexcept{return document_identity_;}
