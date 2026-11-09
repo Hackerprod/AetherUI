@@ -21,6 +21,7 @@ using UiFontWeight = AetherUI.Css.FontWeight;
 
 const int width = 960;
 const int height = 600;
+VerifyRenderModuleContract();
 var pixels = RenderWindowShadow();
 var hash = Fnv1a64(pixels);
 // aether_os.html .window: 600x400 at (300,100), 12px radii and
@@ -62,6 +63,46 @@ VerifyRoundedAvatarPixelsThroughSwapChain();
 Console.WriteLine("OK: Direct2D WARP avatar-radius swap-chain probe passed");
 VerifyFullKanbanAvatarComposition();
 return 0;
+
+static void VerifyRenderModuleContract()
+{
+    IRenderModule<WindowsRenderTarget> module = new WindowsDirect2DRenderModule();
+    if (module.Id != "windows.direct2d")
+        throw new InvalidOperationException("The Windows module identifier must remain stable.");
+    try
+    {
+        module.Create(default, new RenderViewport(16, 16, 1));
+        throw new InvalidOperationException("A zero HWND must be rejected.");
+    }
+    catch (ArgumentException) { }
+
+    using var window = HiddenWindow.Create(32, 32);
+    using var owned = module.Create(new WindowsRenderTarget(window.Handle), new RenderViewport(0, -1, float.NaN));
+    if (owned is not Direct2DRenderBackend backend || owned is not IIncrementalRenderBackend)
+        throw new InvalidOperationException("The module must return the original incremental Direct2D instance.");
+    var empty = new DisplayList(Array.Empty<PaintCommand>());
+    var initial = backend.RenderAndCaptureBackBufferForDiagnostics(empty, ColorRgba.White);
+    if (initial.Length != 4)
+        throw new InvalidOperationException("Windows construction must clamp nonpositive dimensions to one pixel.");
+    owned.Resize(0, 99, 2);
+    var ignored = backend.RenderAndCaptureBackBufferForDiagnostics(empty, ColorRgba.White);
+    if (!initial.SequenceEqual(ignored))
+        throw new InvalidOperationException("Windows nonpositive resize must retain the previous target.");
+
+    var scene = new DisplayList([new FillRoundedRectangleCommand(new RectF(2, 2, 8, 8), CornerRadii.Zero, ColorRgba.White)]);
+    owned.Resize(32, 32, 1);
+    var baseline = backend.RenderAndCaptureBackBufferForDiagnostics(scene, new ColorRgba(0, 0, 0, 1));
+    foreach (var invalidDpi in new[] { float.NaN, float.PositiveInfinity, float.NegativeInfinity, 0f, -1f })
+    {
+        owned.Resize(32, 32, invalidDpi);
+        var frame = backend.RenderAndCaptureBackBufferForDiagnostics(scene, new ColorRgba(0, 0, 0, 1));
+        if (!baseline.SequenceEqual(frame))
+            throw new InvalidOperationException("Windows invalid DPI must preserve the legacy scale-one fallback.");
+    }
+    owned.Dispose();
+    owned.Dispose();
+    Console.WriteLine("OK: Windows module identity, incremental capability and legacy viewport semantics passed");
+}
 
 static void VerifyRoundedAvatarPixelsThroughSwapChain()
 {

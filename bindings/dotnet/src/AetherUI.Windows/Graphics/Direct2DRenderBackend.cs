@@ -25,7 +25,7 @@ namespace AetherUI.Windows.Graphics;
 /// Direct2D/DirectWrite implementation of AetherUI's retained display-list backend.
 /// A single D3D11/DXGI/Direct2D device-context pipeline owns every GPU resource.
 /// </summary>
-public sealed partial class Direct2DRenderBackend : IRenderBackend, IIncrementalRenderBackend, ITextMeasurer
+public sealed partial class Direct2DRenderBackend : IRenderBackendWithText, IIncrementalRenderBackend
 {
     private readonly nint _windowHandle;
     private readonly DriverType? _forcedDriverType;

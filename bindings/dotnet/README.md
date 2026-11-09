@@ -5,7 +5,37 @@ the one every ABI change is validated against before it ships, and today the onl
 working rendering backend. It does not reimplement HTML parsing, CSS, layout, or display-list
 generation in managed code; every one of those responsibilities lives in `native/` and is reached
 through P/Invoke. What lives here is strictly what's genuinely host-specific: how a .NET app boots the
-engine, how it authors components, how it puts pixels on a Windows screen.
+engine, how it authors components, how it puts pixels on a Windows screen or a Linux software offscreen surface.
+
+## Drawing modules
+
+Windows hosting uses `WindowsDirect2DRenderModule`, which returns the existing
+Direct2D/DirectWrite renderer without changing its public constructor or optional
+incremental interface. `IRenderModule<TTarget>` in Core lets an embedding host
+select a renderer explicitly.
+
+`AetherUI.Linux` adds a Cairo/Pango software renderer for **offscreen/embedding**
+use on Linux glibc x64. It does not create a Linux window or provide an input/event
+loop. System Cairo/Pango libraries and fonts are required; Vortice and
+System.Drawing are not Linux dependencies.
+
+```csharp
+using AetherUI.Linux;
+using AetherUI.Primitives;
+using AetherUI.Rendering;
+
+var presenter = new MemoryFramePresenter();
+using var renderer = new LinuxCairoRenderModule().Create(
+    new LinuxSoftwareRenderTarget(presenter), new RenderViewport(320, 180, 1f));
+renderer.Render(new DisplayList([
+    new FillRoundedRectangleCommand(new RectF(16, 16, 80, 48),
+        CornerRadii.Uniform(8), new ColorRgba(.2f, .5f, .9f, 1f))
+]), ColorRgba.White);
+// presenter.CurrentFrame owns a copy of the complete BGRA8 premultiplied frame.
+```
+
+See [drawing module contracts and conformance](docs/render-modules.md) for lifetime,
+DIP/pixel units, dependencies, presentation failures, and platform-specific limits.
 
 ## Visibility and input
 

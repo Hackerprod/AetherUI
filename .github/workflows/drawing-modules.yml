@@ -1,0 +1,63 @@
+name: Drawing modules
+
+on:
+  push:
+    branches:
+      - main
+      - 'validation/drawing-*'
+    paths:
+      - 'bindings/dotnet/src/**'
+      - 'bindings/dotnet/tests/AetherUI.Linux.RegressionTests/**'
+      - 'bindings/dotnet/tests/AetherUI.Windows.RegressionTests/**'
+      - 'bindings/dotnet/Directory.*.props'
+      - 'global.json'
+      - 'native/**'
+      - '.github/workflows/drawing-modules.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  linux-software:
+    name: Linux Cairo/Pango offscreen
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.302
+      - name: Install distribution rendering libraries and fonts
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libcairo2 libpango-1.0-0 libpangocairo-1.0-0 libglib2.0-0t64 fonts-dejavu-core fonts-noto-core fonts-noto-cjk fonts-noto-color-emoji
+          dpkg-query -W libcairo2 libpango-1.0-0 libpangocairo-1.0-0 libglib2.0-0t64 fonts-dejavu-core fonts-noto-core fonts-noto-cjk fonts-noto-color-emoji
+          fc-list | sort
+      - name: Build isolated offscreen tests
+        run: dotnet build bindings/dotnet/tests/AetherUI.Linux.RegressionTests/AetherUI.Linux.RegressionTests.csproj -c Release -p:AetherSkipNativeLibraryValidation=true
+      - name: Run without a display server
+        run: env -u DISPLAY -u WAYLAND_DISPLAY dotnet run --project bindings/dotnet/tests/AetherUI.Linux.RegressionTests/AetherUI.Linux.RegressionTests.csproj -c Release --no-build -p:AetherSkipNativeLibraryValidation=true
+      - name: Verify Linux packaging
+        run: dotnet pack bindings/dotnet/src/AetherUI.Linux/AetherUI.Linux.csproj -c Release --no-build -p:AetherSkipNativeLibraryValidation=true -o artifacts/packages
+
+  windows-warp:
+    name: Windows Direct2D WARP drawing regression
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.302
+      - name: Configure clean native runtime (no native integration tests)
+        run: cmake -S native -B artifacts/build/native/win-x64 -A x64 -DAETHERUI_BUILD_TESTS=OFF -DCMAKE_INSTALL_PREFIX=${{ github.workspace }}/artifacts/native/win-x64
+      - name: Build native runtime
+        run: cmake --build artifacts/build/native/win-x64 --config Release --parallel 3
+      - name: Install native runtime
+        run: cmake --install artifacts/build/native/win-x64 --config Release
+      - name: Build existing drawing suite
+        run: dotnet build bindings/dotnet/tests/AetherUI.Windows.RegressionTests/AetherUI.Windows.RegressionTests.csproj -c Release -p:AetherNativeRuntimeIdentifier=win-x64
+      # Existing scroll fixtures exercise UiDocumentHost/MouseWheelScrolled. This
+      # is the base drawing suite, not the separate blocked event-integration tree.
+      - name: Run existing WARP suite and module lifecycle checks
+        run: dotnet run --project bindings/dotnet/tests/AetherUI.Windows.RegressionTests/AetherUI.Windows.RegressionTests.csproj -c Release --no-build -p:AetherNativeRuntimeIdentifier=win-x64

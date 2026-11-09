@@ -3,6 +3,7 @@ using System.Runtime.InteropServices;
 using AetherUI.Css;
 using AetherUI.Events;
 using AetherUI.Primitives;
+using AetherUI.Rendering;
 using AetherUI.Runtime;
 using AetherUI.Windows.Graphics;
 using AetherUI.Windows.Interop;
@@ -117,15 +118,13 @@ internal sealed class NativeWindow : IDisposable
         }
 
         NativeMethods.GetClientRect(_windowHandle, out var client);
-        Direct2DRenderBackend? renderer = null;
+        IRenderBackendWithText? renderer = null;
         UiDocumentHost? host = null;
         try
         {
-            renderer = new Direct2DRenderBackend(
-                _windowHandle,
-                Math.Max(1, client.Width),
-                Math.Max(1, client.Height),
-                _dpiScale);
+            renderer = new WindowsDirect2DRenderModule().Create(
+                new WindowsRenderTarget(_windowHandle),
+                new RenderViewport(Math.Max(1, client.Width), Math.Max(1, client.Height), _dpiScale));
             host = new UiDocumentHost(component, renderer, renderer, _options);
             host.RenderRequested += OnRenderRequested;
             _host = host;
