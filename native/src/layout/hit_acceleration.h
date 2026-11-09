@@ -77,13 +77,7 @@ class HitAcceleration {
         diagnostics::count_work(Counter::hit_build_boxes);
         const size_t index = boxes_.size();
         reserve(boxes_, index + 1); boxes_.push_back({box, Bounds::own(box->border_box), none});
-        const auto order = layout_children_paint_order(box, styles, policy_);
-        // Paint order helper allocation/classification is also build work. Its
-        // vector capacity is reported, without claiming allocator metadata bytes.
-        if (order.capacity()) {
-            diagnostics::count_work(Counter::hit_allocations);
-            diagnostics::count_work(Counter::hit_bytes, order.capacity() * sizeof(order[0]));
-        }
+        const auto order = layout_children_paint_order(box, styles, policy_, true);
         if (!box->children.empty()) {
             const auto children = build_range(box, order, 0, box->children.size(), styles);
             boxes_[index].children = children;
@@ -150,8 +144,13 @@ public:
         build_box(layout.root, styles);
     }
     static bool has_provenance(const StyleLookup& styles) noexcept {
-        return styles.document_lifetime() && styles.base_version() && styles.base_version()->document_lifetime() &&
-            styles.selected_version() && styles.selected_version()->document_lifetime();
+        const auto geometry = styles.document_lifetime();
+        const auto base = styles.base_version() ? styles.base_version()->document_lifetime() : nullptr;
+        const auto selected = styles.selected_version() ? styles.selected_version()->document_lifetime() : nullptr;
+        // Legacy override APIs can accept a retained foreign/dead map and use
+        // snapshot fallback styles. Preserve that oracle behavior, never turn
+        // inability to certify acceleration into a new rejected hit.
+        return geometry && geometry->alive && base && base->alive && selected && selected->alive;
     }
     bool matches(const aether_layout_result_s& layout, const StyleLookup& styles, BoxStylePolicy policy) const noexcept {
         return !layout.hit_acceleration_disabled && presentation_ == layout.hit_presentation_serial &&

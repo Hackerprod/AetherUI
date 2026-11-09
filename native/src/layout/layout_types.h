@@ -164,7 +164,7 @@ inline aether::style::ComputedStyleReadView layout_box_style(
 // Empty means exact DOM order. Classification is shared by paint and hit testing,
 // including children later omitted for visibility, display or pointer events.
 inline std::vector<aether::stacking::stack_item_t> layout_children_paint_order(
-    const aether_layout_box_s* box, const StyleLookup& styles, BoxStylePolicy policy)
+    const aether_layout_box_s* box, const StyleLookup& styles, BoxStylePolicy policy, bool hit_index_build = false)
 {
     using namespace aether::stacking;
     const auto classify = [&styles, policy](const aether_layout_box_s* child) {
@@ -178,6 +178,10 @@ inline std::vector<aether::stacking::stack_item_t> layout_children_paint_order(
     }
     if (!needs_order) return {};
     std::vector<stack_item_t> items;
+    if (hit_index_build) {
+        aether::diagnostics::count_work(aether::diagnostics::WorkCounter::hit_allocations);
+        aether::diagnostics::count_work(aether::diagnostics::WorkCounter::hit_bytes, box->children.size() * sizeof(stack_item_t));
+    }
     items.reserve(box->children.size());
     for (size_t index = 0; index < box->children.size(); ++index) {
         auto* child = box->children[index];

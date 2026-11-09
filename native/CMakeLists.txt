@@ -1702,3 +1702,13 @@ if(AETHERUI_BUILD_TESTS)
     target_link_libraries(aether_generated_context_staging_test PRIVATE AetherUI::Core)
     add_test(NAME aether.generated-context-staging COMMAND aether_generated_context_staging_test)
 endif()
+
+if(AETHERUI_BUILD_TESTS AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    add_executable(aether_hit_acceleration_test
+        tests/test_hit_acceleration.cpp $<TARGET_OBJECTS:aether_publication_test_core>)
+    target_include_directories(aether_hit_acceleration_test PRIVATE include src)
+    target_compile_definitions(aether_hit_acceleration_test PRIVATE $<TARGET_PROPERTY:aether_core,COMPILE_DEFINITIONS>)
+    target_compile_options(aether_hit_acceleration_test PRIVATE -ffp-contract=off)
+    target_link_libraries(aether_hit_acceleration_test PRIVATE Threads::Threads)
+    add_test(NAME aether.hit-acceleration COMMAND aether_hit_acceleration_test)
+endif()

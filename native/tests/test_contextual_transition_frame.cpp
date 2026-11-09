@@ -1,6 +1,7 @@
 #include <aether/aether.h>
 #include <aether/aether_contextual_style.h>
 #include <aether/aether_contextual_transitions.h>
+#include "../src/layout/layout_types.h"
 #include <cassert>
 #include <cmath>
 #include <cstdio>
@@ -19,8 +20,9 @@ static void require_test(bool condition, int line) {
 
 
 static int fail_allocation_after = -1;
+static unsigned failed_allocation_attempts = 0;
 void* operator new(std::size_t size) {
-    if (fail_allocation_after == 0) throw std::bad_alloc();
+    if (fail_allocation_after == 0) { ++failed_allocation_attempts; throw std::bad_alloc(); }
     if (fail_allocation_after > 0) --fail_allocation_after;
     if (void* result = std::malloc(size ? size : 1)) return result;
     throw std::bad_alloc();
@@ -120,15 +122,37 @@ int main() {
     fail_allocation_after = -1;
     REQUIRE(input_failure == AETHER_ERROR_OUT_OF_MEMORY);
     REQUIRE(part == AETHER_INPUT_HIT_NONE && owner == nullptr);
+#if defined(AETHERUI_ENABLE_HIT_ACCELERATION)
+    REQUIRE(aether_layout_result_hit_test(layout, 90, 10) == child);
+    const auto failed_before_hot = failed_allocation_attempts;
+    fail_allocation_after = 0;
+    const auto hot_hit = aether_layout_result_hit_test(layout, 90, 10);
+    fail_allocation_after = -1;
+    REQUIRE(hot_hit == child && failed_allocation_attempts == failed_before_hot);
+    fail_allocation_after = 0;
+    const auto indexed_hit = aether_layout_result_hit_test(layout, 85, 10);
+    fail_allocation_after = -1;
+    REQUIRE(indexed_hit == child && failed_allocation_attempts == failed_before_hot);
+#endif
+
+    // Force a cold ordinary query: a certified hot hit intentionally performs
+    // no allocation and cannot exercise an allocation-failure ABI boundary.
+    layout->invalidate_hit_acceleration();
+    const auto failed_before_raw = failed_allocation_attempts;
     fail_allocation_after = 0;
     const auto raw_failure = aether_layout_result_hit_test(layout, 90, 10);
     fail_allocation_after = -1;
-    REQUIRE(raw_failure == nullptr);
+    REQUIRE(raw_failure == nullptr && failed_allocation_attempts > failed_before_raw);
+    REQUIRE(aether_layout_result_hit_test(layout, 90, 10) == child); // OOM was not cached as miss.
+    layout->invalidate_hit_acceleration();
+    const auto failed_before_styled = failed_allocation_attempts;
     fail_allocation_after = 0;
     const auto styled_failure = aether_layout_result_hit_test_with_styles_and_scroll_offsets(
         layout, after_map, 90, 10, nullptr, nullptr);
     fail_allocation_after = -1;
-    REQUIRE(styled_failure == nullptr);
+    REQUIRE(styled_failure == nullptr && failed_allocation_attempts > failed_before_styled);
+    REQUIRE(aether_layout_result_hit_test_with_styles_and_scroll_offsets(
+        layout, after_map, 90, 10, nullptr, nullptr) == child); // Same point recovers.
 
     aether_display_list_builder_t builder{};
     REQUIRE(aether_display_list_builder_create(nullptr, nullptr, &builder) == AETHER_OK);
