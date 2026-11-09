@@ -1,6 +1,6 @@
 # C3 journal acknowledgment proposal
 
-Status: proposal only, awaiting independent review. No journal acknowledgment is implemented.
+Status: revision 2 of this protocol received independent design PASS. C3a implements FULL-only acknowledgment in b5297b3; implementation review is pending. Incremental acknowledgment is not enabled.
 Base: integration commit 45c9647. Approved design reference: DESIGN.md sections 4 and 8.
 
 ## Purpose
