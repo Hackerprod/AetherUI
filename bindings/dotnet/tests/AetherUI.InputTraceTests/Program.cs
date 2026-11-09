@@ -7,6 +7,12 @@ using AetherUI.Events;
 using AetherUI.Layout;
 using System.Reflection;
 
+if (args.Contains("--baseline", StringComparer.Ordinal))
+{
+    InputBaseline.Run();
+    return;
+}
+
 var passed = 0;
 foreach (var enabled in new[] { false, true })
 {

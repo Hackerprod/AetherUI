@@ -46,3 +46,11 @@ Inspected pinned Chromium revision `2d4034e6c4e0a2881aa4539c4ba4604e9b45ecc9`:
 - `third_party/blink/renderer/platform/widget/input/main_thread_event_queue.cc`, `MainThreadEventQueue::ShouldFlushQueue` and `MainThreadEventQueue::IsRafAlignedEvent`: discrete events versus frame-aligned moves, with low-latency/unbuffered exceptions.
 
 These references motivate later work; this phase does not import Chromium semantics or claim browser parity or a CPU improvement. Linux traces do not certify Windows input-to-present latency, full existing .NET Windows tests, or the Validator Windows host build/runtime.
+
+## Optional full-pipeline baseline
+
+Build Release and run the executable with `--baseline`. It requires a native library built with work counters enabled and emits CSV for 100/500/1000 cards, with no owner and with static identity-transform/backdrop owners. Every measured sample calls PointerMoved then Render, traversing EnsureVisualTree and PrepareTransitionContext. Four warmup moves precede ten samples per case. There are no hover-dependent declarations. It checks zero style updates/layout builds and that the current full native compute/context scans actually occurred; this is deliberately a baseline gate to revise when a reviewed optimization lands.
+
+Output includes total native work, total managed thread allocations and process-wide GC deltas, plus observational wall p50/p95 and process CPU milliseconds. Ten samples are a small diagnostic sample, not a stable latency benchmark. Managed allocation bytes exclude native allocations; process CPU/GC may include runtime background work. There is no hard timing threshold.
+
+Linux/.NET 10.0.201 observation on the phase-A implementation: all three owner modes had 1020/5020/10020 compute nodes and transition-context entries for ten moves at 100/500/1000 cards, respectively. Style updates and layout builds were zero in every case. The corresponding managed allocation totals were 90240/378240/738240 bytes; no GC collections occurred in those short samples. This measures existing linear work despite no visual effect, not an improvement.
