@@ -35,6 +35,10 @@ internal static unsafe partial class NativeMethods
     internal static partial int StyleTransactionReadPublicationToken(IntPtr transaction, ref NativeStylePublicationToken token);
     [LibraryImport(Lib, EntryPoint = "aether_style_transaction_preview_revision")]
     internal static partial int StyleTransactionPreviewRevision(IntPtr transaction, out IntPtr revision);
+    [LibraryImport(Lib, EntryPoint = "aether_style_transaction_preview_legacy_patch")]
+    internal static partial int StyleTransactionPreviewLegacyPatch(IntPtr transaction, IntPtr baseMap, out IntPtr map);
+    [LibraryImport(Lib, EntryPoint = "aether_style_transaction_get_publication_style")]
+    internal static partial int StyleTransactionGetPublicationStyle(IntPtr transaction, IntPtr baseMap, int index, out IntPtr node, out IntPtr style, out uint impact);
     [LibraryImport(Lib, EntryPoint = "aether_style_transaction_preview_legacy_map")]
     internal static partial int StyleTransactionPreviewLegacyMap(IntPtr transaction, out IntPtr map);
 }
@@ -53,7 +57,7 @@ public sealed unsafe partial class StyleRuntimeInterop
     }
 
     /// <summary>Full, fallible staging. Never enables the experimental state resolver.</summary>
-    public PreparedPublication PreparePublication(IReadOnlyList<int>? states, float width, float height, float dpiScale)
+    public PreparedPublication PreparePublication(IReadOnlyList<int>? states, float width, float height, float dpiScale, NativeStyleMap? previousMap = null)
     {
         ThrowIfDisposed();
         if (states is not null && states.Count != _elements.Count)
@@ -62,7 +66,7 @@ public sealed unsafe partial class StyleRuntimeInterop
             for (var i = 0; i < states.Count; ++i) NativeMethods.ElementSetState(_elements[i], states[i]);
         var environment = new RuntimeEnvironment(width, height, dpiScale, 16, 0, 0, 0);
         Throw(NativeMethods.StylePrepareRevision(_runtime, _document, in environment, out var transaction));
-        try { return new PreparedPublication(this, transaction); }
+        try { return new PreparedPublication(this, transaction, previousMap); }
         catch { NativeMethods.StyleTransactionDestroy(transaction); throw; }
     }
 
@@ -79,8 +83,10 @@ public sealed unsafe partial class StyleRuntimeInterop
         public NativeStyleImpact Impact { get; }
         public bool StackingOrderChanged { get; }
         public NativeStylePublicationToken Token { get; }
+        public bool MapPatched { get; }
+        public int ChangedStyleCount { get; }
 
-        internal PreparedPublication(StyleRuntimeInterop owner, IntPtr transaction)
+        internal PreparedPublication(StyleRuntimeInterop owner, IntPtr transaction, NativeStyleMap? previousMap)
         {
             _owner = owner;
             // The caller owns transaction until construction succeeds.
@@ -96,16 +102,18 @@ public sealed unsafe partial class StyleRuntimeInterop
                 var aggregate = NativeStyleImpact.None;
                 for (var i = 0; i < count; ++i)
                 {
-                    Throw(NativeMethods.StyleRevisionGetStyle(_preview, i, out var node, out var handle, out var impact));
+                    Throw(NativeMethods.StyleTransactionGetPublicationStyle(transaction, previousMap?.Handle ?? IntPtr.Zero, i, out var node, out var handle, out var impact));
                     try
                     {
-                        var style = ReadStyle(handle);
-                        updates[i] = new NativeStyleUpdate(node, style, (NativeStyleImpact)impact);
+                        var changed = handle != IntPtr.Zero;
+                        var style = changed ? ReadStyle(handle) : owner._styles[node];
+                        if (changed) ++ChangedStyleCount;
+                        updates[i] = new NativeStyleUpdate(node, style, (NativeStyleImpact)impact) { ProjectionChanged = changed };
                         _styles.Add(node, style);
                         aggregate |= (NativeStyleImpact)impact;
                         StackingOrderChanged |= owner._styles.TryGetValue(node, out var previous) && previous.ZIndex != style.ZIndex;
                     }
-                    finally { NativeMethods.ComputedStyleHandleDestroy(handle); }
+                    finally { if (handle != IntPtr.Zero) NativeMethods.ComputedStyleHandleDestroy(handle); }
                 }
                 // Includes retired/generated entries, without projecting them as live nodes.
                 var changes = NativeMethods.StyleRevisionChangeCount(_preview);
@@ -116,7 +124,10 @@ public sealed unsafe partial class StyleRuntimeInterop
                     if (handle != IntPtr.Zero) NativeMethods.ComputedStyleHandleDestroy(handle);
                 }
                 Styles = updates; Impact = aggregate;
-                Throw(NativeMethods.StyleTransactionPreviewLegacyMap(transaction, out var map));
+                IntPtr map;
+                if (previousMap is null) Throw(NativeMethods.StyleTransactionPreviewLegacyMap(transaction, out map));
+                else Throw(NativeMethods.StyleTransactionPreviewLegacyPatch(transaction, previousMap.Handle, out map));
+                MapPatched = previousMap is not null;
                 _map = new NativeStyleMap(map);
                 _transaction = transaction;
             }
@@ -135,6 +146,7 @@ public sealed unsafe partial class StyleRuntimeInterop
         public NativeStyleMap Publish()
         {
             if (_committed == IntPtr.Zero || _map is null) throw new InvalidOperationException("Style publication is not committed.");
+            if (!_owner.IsCurrent(Token)) throw new InvalidOperationException("A newer native revision or input superseded this publication.");
             _owner._styles = _styles;
             var oldRevision = _owner._managedPublicationRevision;
             _owner._managedPublicationRevision = _committed; _committed = IntPtr.Zero;

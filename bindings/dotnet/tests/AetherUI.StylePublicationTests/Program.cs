@@ -141,6 +141,59 @@ Run("unsupported direct managed DOM mutation fails closed pending DOMsync", () =
     State(host,host.Document!.GetElementById("a")!,ElementState.Invalid,true);
     Throws<InvalidOperationException>(host.Render);Eq(1,r.Frames);True(host.ManagedProjectionOutOfDate);Eq(CursorKind.Default,host.CursorAt(new(10,10)));
 });
+Run("marshalling fault keeps previous projection and pending batch", () =>
+{
+    using var r=new Renderer();using var host=New(new Component(),r);host.Render();
+    var beforeStyles=Field<object>(host,"_computedStyles");var beforeMap=Field<object>(host,"_nativeVisualStyleMap");
+    var before=Field<NativeStylePublicationToken>(host,"_publishedStyleToken");
+    State(host,host.Document!.GetElementById("a")!,ElementState.Invalid,true);
+    StyleRuntimeInterop.StyleReadProbe=()=>throw new InvalidDataException("injected marshaling failure");
+    try{Throws<InvalidDataException>(host.Render);}finally{StyleRuntimeInterop.StyleReadProbe=null;}
+    True(ReferenceEquals(beforeStyles,Field<object>(host,"_computedStyles")));True(ReferenceEquals(beforeMap,Field<object>(host,"_nativeVisualStyleMap")));
+    var current=NativeStylePublicationToken.Empty;Eq(0,NativeMethods.StyleReadPublicationToken(Handle(Runtime(host)),ref current));
+    Eq(before.Generation,current.Generation);Eq(1,r.Frames);True(host.ManagedProjectionOutOfDate);
+    host.Render();Eq(1f,Style(host).BackgroundColor.G);Eq(2,r.Frames);
+});
+Run("same invalidation category is not acknowledged past captured serial", () =>
+{
+    using var r=new Renderer();using var host=New(new Component("transform:var(--undefined)"),r);host.Render();
+    var called=false;var publications=host.HostPublicationSerial;
+    StyleDiagnosticCallback callback=(_,_,_,_,_)=>
+    {
+        if(called)return;called=true;
+        var method=typeof(UiDocumentHost).GetMethod("ProduceInvalidation",BindingFlags.NonPublic|BindingFlags.Instance)!;
+        method.Invoke(host,[Enum.ToObject(method.GetParameters()[0].ParameterType,1)]);
+    };
+    Native.SetDiagnostics(Handle(Runtime(host)),callback,IntPtr.Zero);
+    State(host,host.Document!.GetElementById("a")!,ElementState.Invalid,true);host.Render();GC.KeepAlive(callback);
+    True(called);Eq(publications+1,host.HostPublicationSerial);Eq(2,r.Frames);True(!host.NeedsRender);
+});
+Run("paint dirty same node and pending pointer survive native replay", () =>
+{
+    using var r=new Renderer();using var host=New(new Component("transform:var(--undefined)"),r);host.Render();
+    var node=host.Document!.GetElementById("a")!;var dom=Field<DomInterop>(host,"_nativeDom");
+    var id=dom.GetStyleNodeId(node);var handle=dom.GetNativeHandle(node);var called=false;
+    StyleDiagnosticCallback callback=(_,_,_,_,_)=>
+    {
+        if(called)return;called=true;
+        Field<Dictionary<long,IntPtr>>(host,"_paintChunkDirtyNodes")[id]=handle;
+        var method=typeof(UiDocumentHost).GetMethod("ProduceInvalidation",BindingFlags.NonPublic|BindingFlags.Instance)!;
+        method.Invoke(host,[Enum.ToObject(method.GetParameters()[0].ParameterType,8)]);
+        host.PointerMoved(new(10,10));
+    };
+    Native.SetDiagnostics(Handle(Runtime(host)),callback,IntPtr.Zero);
+    State(host,node,ElementState.Invalid,true);host.Render();GC.KeepAlive(callback);
+    True(called);True((node.State&ElementState.Hover)!=0);Eq(2,r.Frames);True(!host.NeedsRender);
+});
+Run("dispose during managed notification never presents published candidate", () =>
+{
+    using var r=new Renderer();var host=New(new Component(),r);var key=Guid.NewGuid().ToString();var retained=false;
+    host.StylePublicationProbe=p=>{if(p=="native-preview")CssDiagnostics.ReportUnknownProperty(key,key);};
+    Action<CssStyleDiagnostic> listener=d=>{if(d.Property==key){host.Dispose();retained=!r.Disposed;}};
+    CssDiagnostics.Reported+=listener;
+    try{Throws<ObjectDisposedException>(host.Render);}finally{CssDiagnostics.Reported-=listener;host.Dispose();}
+    True(retained);True(r.Disposed);Eq(0,r.Frames);
+});
 Console.WriteLine($"PASS {count} D1 host protocol tests; managed DOM synchronization remains a separate pending gate.");
 void Run(string name,Action action){action();++count;Console.WriteLine("PASS "+name);}
 static UiDocumentHost New(Component c,Renderer r)=>new(c,new ApproximateTextMeasurer(),r,new UiHostOptions{Width=200,Height=200});

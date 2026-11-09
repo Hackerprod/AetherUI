@@ -1,6 +1,7 @@
 #include <aether/aether_state_style.h>
 #include "../src/css/computed_style_handle.h"
 #include "../src/css/style_map_types.h"
+#include "../src/css/measure_state.h"
 #include "../src/dom/dom_types.h"
 #if defined(AETHER_TEST_INTERNAL_REGISTRY)
 #include "../src/style_runtime/style_property_registry_internal.h"
@@ -8,6 +9,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <thread>
+#include <new>
 
 static unsigned checks=0;
 #define CHECK(x) do { ++checks; if (!(x)) { std::fprintf(stderr,"FAIL %d: %s\n",__LINE__,#x); std::abort(); } } while(0)
@@ -139,4 +141,89 @@ static void guards() {
     });other.join();
     CHECK(current(f.runtime).inputs_current);aether_style_transaction_destroy(tx);aether_style_revision_destroy(r);
 }
-int main(){preview_and_retention();reentrant_commit();invalid_inputs();guards();std::printf("style publication preview: PASS (%u checks)\n",checks);}
+
+static int candidate_index(aether_style_transaction_t tx,aether_node_t target) {
+    aether_style_revision_t revision{};ok(aether_style_transaction_preview_revision(tx,&revision));
+    int found=-1;
+    for(int i=0;i<aether_style_revision_style_count(revision);++i) {
+        aether_node_t node{};ok(aether_style_revision_get_style(revision,i,&node,nullptr,nullptr));
+        if(node==target){found=i;break;}
+    }
+    aether_style_revision_destroy(revision);CHECK(found>=0);return found;
+}
+static void publication_patch() {
+    Fixture f;auto base=f.resolve();aether_style_map_t map{};
+    ok(aether_style_runtime_create_resolved_style_map(f.runtime,f.doc,&map));
+    const auto old_backing=map->current;
+    auto old=aether_style_map_get(map,f.node);CHECK(old);
+    auto noop=f.prepare();auto index=candidate_index(noop,f.node);
+    aether_node_t node{};aether_computed_style_handle_t style{};uint32_t impact{};
+    ok(aether_style_transaction_get_publication_style(noop,nullptr,index,&node,&style,&impact));CHECK(style && node==f.node);
+    auto candidate_payload=style->record->payload_owner();
+    aether_computed_style_handle_destroy(style);
+    ok(aether_style_transaction_get_publication_style(noop,map,index,&node,&style,&impact));
+    if(!style) { CHECK(impact==0);CHECK(candidate_payload==old->record->payload_owner()); }
+    else { CHECK(candidate_payload!=old->record->payload_owner() || impact!=0);aether_computed_style_handle_destroy(style); }
+    aether_style_map_t patch{};ok(aether_style_transaction_preview_legacy_patch(noop,map,&patch));
+    CHECK(patch!=map && map->current==old_backing);CHECK(patch->current->mode()==aether::style::MapMode::legacy_partial);
+    aether_style_transaction_destroy(noop);CHECK(map->current==old_backing);aether_style_map_destroy(patch);
+
+    // Same 16px projection, different root-font dependency: metadata must not disappear.
+    ok(aether_element_set_attribute(f.node,"style","width:1rem"));auto metadata=f.prepare();index=candidate_index(metadata,f.node);
+    ok(aether_style_transaction_get_publication_style(metadata,map,index,&node,&style,&impact));
+    CHECK(style && style->style.width.value==16);CHECK(impact==0);
+    CHECK(style->measures->scalars().dependencies & MEASURE_ROOT_FONT);
+    CHECK(style->record->payload_owner()!=old->record->payload_owner());
+    ok(aether_style_transaction_preview_legacy_patch(metadata,map,&patch));
+    auto updated=aether_style_map_get(patch,f.node);CHECK(updated && updated->style.width.value==16);
+    CHECK(updated->measures->scalars().dependencies & MEASURE_ROOT_FONT);
+    CHECK(map->current==old_backing && !(old->measures->scalars().dependencies & MEASURE_ROOT_FONT));
+    auto committed=f.commit(metadata);aether_style_transaction_destroy(metadata);
+    CHECK(map->current==old_backing);auto still_old=aether_style_map_get(map,f.node);
+    CHECK(still_old && !(still_old->measures->scalars().dependencies & MEASURE_ROOT_FONT));
+    aether_computed_style_handle_destroy(still_old);aether_computed_style_handle_destroy(updated);aether_computed_style_handle_destroy(style);
+    auto metadata_map=patch;
+
+    // Environment changes require fresh context even when the property's pixels are equal.
+    aether_style_environment_t env{1000,600,1,16,0,0,0};aether_style_transaction_t context{};
+    ok(aether_style_runtime_prepare_revision(f.runtime,f.doc,&env,&context));index=candidate_index(context,f.node);
+    ok(aether_style_transaction_get_publication_style(context,metadata_map,index,&node,&style,&impact));CHECK(style);
+    CHECK(style->measures->document().values().viewport_width==1000);aether_computed_style_handle_destroy(style);
+    ok(aether_style_transaction_preview_legacy_patch(context,metadata_map,&patch));
+    updated=aether_style_map_get(patch,f.node);CHECK(updated && updated->measures->document().values().viewport_width==1000);
+    CHECK(old->measures->document().values().viewport_width==800);
+    aether_computed_style_handle_destroy(updated);aether_style_map_destroy(patch);aether_style_map_destroy(metadata_map);aether_style_transaction_destroy(context);
+
+    auto tx=f.prepare();index=candidate_index(tx,f.node);aether_style_map_t contextual{};
+    ok(aether_style_revision_create_map(committed,&contextual));
+    patch=reinterpret_cast<aether_style_map_t>(1);
+    CHECK(aether_style_transaction_preview_legacy_patch(tx,contextual,&patch)==AETHER_ERROR_INVALID_STATE && !patch);
+    style=reinterpret_cast<aether_computed_style_handle_t>(1);node=f.node;impact=99;
+    CHECK(aether_style_transaction_get_publication_style(tx,contextual,index,&node,&style,&impact)==AETHER_ERROR_INVALID_STATE);
+    CHECK(!node && !style && !impact);aether_style_map_destroy(contextual);
+    Fixture other;auto foreign_revision=other.resolve();aether_style_map_t foreign{};
+    ok(aether_style_runtime_create_resolved_style_map(other.runtime,other.doc,&foreign));
+    CHECK(aether_style_transaction_preview_legacy_patch(tx,foreign,&patch)==AETHER_ERROR_INVALID_STATE && !patch);
+    CHECK(aether_style_transaction_get_publication_style(tx,foreign,index,&node,&style,&impact)==AETHER_ERROR_INVALID_STATE);
+    aether_style_map_destroy(foreign);aether_style_revision_destroy(foreign_revision);
+    CHECK(aether_style_transaction_preview_legacy_patch(tx,nullptr,&patch)==AETHER_ERROR_NULL_ARG && !patch);
+    CHECK(aether_style_transaction_preview_legacy_patch(nullptr,map,&patch)==AETHER_ERROR_NULL_ARG && !patch);
+    CHECK(aether_style_transaction_preview_legacy_patch(tx,map,nullptr)==AETHER_ERROR_NULL_ARG);
+    CHECK(aether_style_transaction_get_publication_style(tx,map,-1,&node,&style,&impact)==AETHER_ERROR_INVALID_STATE);
+    CHECK(aether_style_transaction_get_publication_style(tx,map,index,nullptr,&style,&impact)==AETHER_ERROR_NULL_ARG);
+    CHECK(aether_style_transaction_get_publication_style(tx,map,index,&node,nullptr,&impact)==AETHER_ERROR_NULL_ARG);
+    CHECK(aether_style_transaction_get_publication_style(tx,map,index,&node,&style,nullptr)==AETHER_ERROR_NULL_ARG);
+    std::thread thread([&] {
+        CHECK(aether_style_transaction_preview_legacy_patch(tx,map,&patch)==AETHER_ERROR_INVALID_STATE && !patch);
+        CHECK(aether_style_transaction_get_publication_style(tx,map,index,&node,&style,&impact)==AETHER_ERROR_INVALID_STATE);
+    });thread.join();
+    // An actual DOM structure change invalidates the old base even for a newly prepared candidate.
+    aether_style_transaction_destroy(tx);
+    ok(aether_doc_parse_html(f.doc,"<html><body><div id='x'></div><div></div></body></html>"));
+    tx=f.prepare();CHECK(aether_style_transaction_preview_legacy_patch(tx,map,&patch)==AETHER_ERROR_INVALID_STATE && !patch);
+    CHECK(aether_style_transaction_get_publication_style(tx,map,0,&node,&style,&impact)==AETHER_ERROR_INVALID_STATE);
+    aether_style_transaction_destroy(tx);aether_computed_style_handle_destroy(old);aether_style_map_destroy(map);
+    aether_style_revision_destroy(base);aether_style_revision_destroy(committed);
+}
+
+int main(){preview_and_retention();reentrant_commit();invalid_inputs();guards();publication_patch();std::printf("style publication preview: PASS (%u checks)\n",checks);}

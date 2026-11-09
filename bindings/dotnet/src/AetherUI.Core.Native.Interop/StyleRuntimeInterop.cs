@@ -67,7 +67,10 @@ public sealed record NativeStyleResolution(
 public sealed record NativeStyleUpdate(
     IntPtr Node,
     NativeComputedStyle Style,
-    NativeStyleImpact Impact);
+    NativeStyleImpact Impact)
+{
+    public bool ProjectionChanged { get; init; } = true;
+}
 
 public sealed record NativeStyleChangeResolution(
     IReadOnlyList<NativeStyleUpdate> Updates,
@@ -265,8 +268,11 @@ public sealed unsafe partial class StyleRuntimeInterop : IDisposable
         return new NativeStyleChangeResolution(records, aggregate) { StackingOrderChanged = stackingOrderChanged };
     }
 
+    internal static Action? StyleReadProbe { get; set; }
+
     internal static NativeComputedStyle ReadStyle(IntPtr handle)
     {
+        StyleReadProbe?.Invoke();
         var buffer = Marshal.AllocHGlobal(sizeof(ComputedStyleRaw));
         var copied = false;
         try

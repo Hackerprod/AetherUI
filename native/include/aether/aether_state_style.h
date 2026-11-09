@@ -81,6 +81,19 @@ AETHER_API aether_status_t aether_style_transaction_preview_revision(
     aether_style_transaction_t transaction, aether_style_revision_t* out_revision);
 AETHER_API aether_status_t aether_style_transaction_preview_legacy_map(
     aether_style_transaction_t transaction, aether_style_map_t* out_map);
+/* Staging-only legacy patch. Base must be authentic, non-contextual and belong
+ * to this document. Never mutates base. Semantic metadata and measure-context
+ * changes are included even when their visual impact is zero. Full enumeration
+ * is permitted here; this capability makes no incremental complexity promise. */
+AETHER_API aether_status_t aether_style_transaction_preview_legacy_patch(
+    aether_style_transaction_t transaction, aether_style_map_t base_map, aether_style_map_t* out_map);
+/* Complete candidate index, but out_style is null for a provably reusable
+ * legacy projection. out_impact remains the candidate's original impact.
+ * Null base_map requests all styles. Callers keep their prior projection when
+ * out_style is null; this is not an absent/removed node. */
+AETHER_API aether_status_t aether_style_transaction_get_publication_style(
+    aether_style_transaction_t transaction, aether_style_map_t base_map, int32_t index,
+    aether_node_t* out_node, aether_computed_style_handle_t* out_style, uint32_t* out_impact);
 #ifdef __cplusplus
 }
 #endif

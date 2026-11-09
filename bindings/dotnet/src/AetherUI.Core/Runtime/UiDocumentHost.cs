@@ -227,6 +227,9 @@ public sealed partial class UiDocumentHost : IDisposable
             RebuildDocument();
         }
 
+        if (!HasCertifiedStyleSnapshot() && (_invalidation & VisualInvalidation.Style) == 0)
+            RejectStyleProjection();
+
         if (_invalidation == VisualInvalidation.None && _displayList is not null)
         {
             return;

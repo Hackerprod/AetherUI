@@ -1726,3 +1726,72 @@ AETHER_API aether_status_t aether_style_transaction_preview_legacy_map(
     aether_style_revision_handle_s handle{transaction->revision};
     return create_revision_map(&handle, out_map, true);
 }
+
+// D1: prepare the legacy projection patch without changing any published map.
+static bool publication_base_valid(const aether_style_transaction_s* transaction, const MapVersionRef& base) noexcept {
+    return transaction && transaction->owner && transaction->owner->owner_thread == std::this_thread::get_id() &&
+        transaction->revision && transaction->revision->authentic_owner(transaction->revision) && base &&
+        !base->contextual() && base->backing() && base->document_lifetime() == transaction->revision->document_lifetime() &&
+        base->document_identity() == transaction->revision->document_identity() && structure_valid(base.get());
+}
+static bool publication_record_reusable(const FrozenRevisionEntry& entry, const MapVersionRef& base,
+    const StyleRevisionRef& revision) noexcept {
+    if (!base || !entry.payload() || entry.impact()) return false;
+    const auto old = base->backing()->find_owner(entry.node());
+    if (!old || old->payload_owner() != entry.payload() || !old->measures()) return false;
+    const auto& before = old->measures()->document().values();
+    const auto& after = revision->document()->values();
+    // Legacy partial maps intentionally permit authentic records from distinct
+    // generations. Reuse requires the entire measure context to be equivalent,
+    // not merely equality of the flat pixel projection.
+    return before.identity == after.identity && before.viewport_width == after.viewport_width &&
+        before.viewport_height == after.viewport_height && before.initial_font_size == after.initial_font_size &&
+        before.root_font_size == after.root_font_size;
+}
+AETHER_API aether_status_t aether_style_transaction_get_publication_style(
+    aether_style_transaction_t transaction, aether_style_map_t base_map, int32_t index,
+    aether_node_t* out_node, aether_computed_style_handle_t* out_style, uint32_t* out_impact) {
+    if (out_node) *out_node = nullptr; if (out_style) *out_style = nullptr; if (out_impact) *out_impact = 0;
+    if (!transaction || !out_node || !out_style || !out_impact) return AETHER_ERROR_NULL_ARG;
+    if (!transaction->owner || transaction->owner->owner_thread != std::this_thread::get_id() ||
+        !transaction->revision || !transaction->revision->authentic_owner(transaction->revision)) return AETHER_ERROR_INVALID_STATE;
+    const auto base = pin_style_map(base_map);
+    if (base_map && !publication_base_valid(transaction, base)) return AETHER_ERROR_INVALID_STATE;
+    const auto entries = transaction->revision->entries();
+    if (index < 0 || static_cast<size_t>(index) >= entries.size()) return AETHER_ERROR_INVALID_STATE;
+    const auto entry = entries[static_cast<size_t>(index)];
+    if (publication_record_reusable(entry, base, transaction->revision)) {
+        *out_node = entry.node(); *out_impact = entry.impact(); return AETHER_OK;
+    }
+    aether_style_revision_handle_s handle{transaction->revision};
+    return revision_get_entry(&handle, entries, index, out_node, out_style, out_impact);
+}
+AETHER_API aether_status_t aether_style_transaction_preview_legacy_patch(
+    aether_style_transaction_t transaction, aether_style_map_t base_map, aether_style_map_t* out_map) {
+    if (out_map) *out_map = nullptr;
+    if (!transaction || !base_map || !out_map) return AETHER_ERROR_NULL_ARG;
+    const auto base = pin_style_map(base_map);
+    if (!publication_base_valid(transaction, base)) return AETHER_ERROR_INVALID_STATE;
+    try {
+        std::vector<BackingPatchEntry> patch;
+        const auto& revision = transaction->revision;
+        for (const auto& entry : revision->entries()) {
+            if (publication_record_reusable(entry, base, revision)) continue;
+            FrozenNodeRef record;
+            const auto status = BoundNodeView::find(revision, entry.node()).export_record(record);
+            if (status != AETHER_OK) return status;
+            patch.push_back({entry.node(), std::move(record)});
+        }
+        for (const auto& old : base->backing()->entries())
+            if (!revision->directory().find(reinterpret_cast<uintptr_t>(old.first))) patch.push_back({old.first, {}});
+        MapVersionInput input; input.mode = MapMode::legacy_partial;
+        input.document_lifetime = revision->document_lifetime(); input.document_identity = revision->document_identity();
+        input.input_epoch = revision->input_epoch(); input.structure_epoch = revision->structure_epoch();
+        input.style_tree_epoch = revision->style_tree_epoch();
+        auto status = patch_backing(base->backing(), patch, input.backing); if (status != AETHER_OK) return status;
+        auto map = std::make_unique<aether_style_map_s>();
+        status = make_map_version(input, map->current); if (status != AETHER_OK) return status;
+        *out_map = map.release(); return AETHER_OK;
+    } catch (const std::bad_alloc&) { return AETHER_ERROR_OUT_OF_MEMORY; }
+      catch (...) { return AETHER_ERROR_INVALID_STATE; }
+}

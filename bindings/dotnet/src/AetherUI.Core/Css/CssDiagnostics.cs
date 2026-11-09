@@ -105,12 +105,17 @@ public static class CssDiagnostics
             _staging = null; // Reentrant reports belong to notifications, not another host's staging.
             try
             {
+                Exception? firstFailure = null;
                 foreach (var diagnostic in _diagnostics)
-                    Emit(diagnostic);
-            }
-            catch (Exception error)
-            {
-                throw new NotificationException(error);
+                {
+                    try { Emit(diagnostic); }
+                    catch (Exception error) { firstFailure ??= error; }
+                }
+                // Every message belongs to an already published candidate. A failed
+                // listener must not discard unrelated messages that may never be
+                // converted again. Preserve the first failure without allocating a list.
+                if (firstFailure is not null)
+                    throw new NotificationException(firstFailure);
             }
             finally
             {

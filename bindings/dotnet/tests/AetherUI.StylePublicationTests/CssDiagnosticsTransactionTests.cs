@@ -71,6 +71,7 @@ internal static class CssDiagnosticsTransactionTests
             {
                 using var transaction = CssDiagnostics.BeginTransaction();
                 CssDiagnostics.ReportUnsupportedValue(prefix, "throw");
+                CssDiagnostics.ReportUnsupportedValue(prefix, "after-throw-in-same-buffer");
                 transaction.Seal();
                 try { transaction.Replay(); throw new Exception("Replay hid listener failure."); }
                 catch (CssDiagnostics.NotificationException error)
@@ -80,9 +81,10 @@ internal static class CssDiagnosticsTransactionTests
             }
             finally { CssDiagnostics.Reported -= fail; }
             CssDiagnostics.ReportUnsupportedValue(prefix, "throw");
-            Check(received.Count == 9, "Failed notification rolled back Seen.");
+            Check(received.Count == 10, "Failed notification rolled back Seen or discarded later messages.");
+            Check(received[^1].Value == "after-throw-in-same-buffer", "A failed listener discarded a later message.");
             CssDiagnostics.ReportUnsupportedValue(prefix, "after-failure");
-            Check(received.Count == 10, "Failed replay leaked staging.");
+            Check(received.Count == 11, "Failed replay leaked staging.");
         }
         finally { CssDiagnostics.Reported -= collect; }
     }

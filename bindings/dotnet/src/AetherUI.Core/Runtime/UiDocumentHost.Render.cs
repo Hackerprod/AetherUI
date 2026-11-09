@@ -37,6 +37,9 @@ public sealed partial class UiDocumentHost
         var displayListBuildsBefore = Interlocked.Read(ref _displayListBuildCount);
         var paintChunkBuildsBefore = Interlocked.Read(ref _paintChunkBuildCount);
         EnsureVisualTree();
+        DrainDeferredInput();
+        if (_disposed) return;
+        EnsureVisualTree();
         // Visibility can change again when hover selectors resolve. Settle those
         // queued targets before publishing the frame, not on a hypothetical move.
         const int maxHoverPasses = 8;
@@ -55,7 +58,6 @@ public sealed partial class UiDocumentHost
             if (ApplyPendingPointerMove()) scrollOnly = false;
             EnsureVisualTree();
         }
-        DrainDeferredInput();
         if (_disposed) return;
         EnsureVisualTree();
         if (!HasCertifiedStyleSnapshot()) throw new InvalidOperationException("The style snapshot is not current; no frame was presented.");

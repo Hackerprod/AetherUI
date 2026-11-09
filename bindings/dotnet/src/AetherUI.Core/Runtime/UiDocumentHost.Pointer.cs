@@ -27,12 +27,15 @@ public sealed partial class UiDocumentHost
     private bool _hasPendingPointerMove;
     private bool _hasPendingPointerTarget;
     private bool _pointerRenderPending;
+    private long _pointerRequestSerial;
+    private long _pointerAcknowledgedSerial;
 
     private CursorKind _currentCursor = CursorKind.Default;
 
     public CursorKind PointerMoved(PointF point)
     {
         ThrowIfDisposed();
+        ++_pointerRequestSerial;
         if (DeferInput(() => PointerMoved(point))) return CursorKind.Default;
         if (_options.EnableInputWorkCounters) Interlocked.Increment(ref _pointerMovesReceived);
         _lastPointerPosition = point;
@@ -93,11 +96,13 @@ public sealed partial class UiDocumentHost
         }
 
         if (_options.EnableInputWorkCounters) Interlocked.Increment(ref _pendingMovesProcessed);
+        var pointerSerial = _pointerRequestSerial;
         var point = _pendingPointerMove;
         var target = _hasPendingPointerTarget ? _pendingPointerTarget : HitTest(point);
         _hasPendingPointerMove = false;
         _hasPendingPointerTarget = false;
         _pendingPointerTarget = null;
+        _pointerAcknowledgedSerial = pointerSerial;
         _currentCursor = CursorFor(target);
         return UpdateHoverTarget(target, point, requestRender: false);
     }
@@ -173,6 +178,7 @@ public sealed partial class UiDocumentHost
     public void PointerLeft()
     {
         ThrowIfDisposed();
+        ++_pointerRequestSerial;
         if (DeferInput(() => PointerLeft())) return;
         CountPointerBarrier();
         _hasPointerPosition = false;
@@ -471,6 +477,7 @@ public sealed partial class UiDocumentHost
 
     private void ResetUnstableHover()
     {
+        var pointerSerial = _pointerRequestSerial;
         var previous = _hovered;
         _hovered = null;
         foreach (var element in _hoverChain)
@@ -480,10 +487,14 @@ public sealed partial class UiDocumentHost
         if (previous is not null) Dispatch("mouseout", previous, _lastPointerPosition);
         EnsureVisualTree();
         // The final resolve may have queued a visibility-driven move. Deliberately
-        // discard it: an unchanged physical pointer must not cause endless frames.
-        _hasPendingPointerMove = false;
-        _hasPendingPointerTarget = false;
-        _pendingPointerTarget = null;
+        // discard it only if no new input arrived through the callbacks.
+        if (_pointerRequestSerial == pointerSerial)
+        {
+            _hasPendingPointerMove = false;
+            _hasPendingPointerTarget = false;
+            _pendingPointerTarget = null;
+            _pointerAcknowledgedSerial = pointerSerial;
+        }
         _currentCursor = CursorFor(HitTest(_lastPointerPosition));
     }
 
