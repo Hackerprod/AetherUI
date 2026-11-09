@@ -294,9 +294,12 @@ static void preserved_height_regressions() {
         preserved_height_case("whitespace only", mode, "  ", preserved ? 20 : 5, 5);
         preserved_height_case("explicit zero minimum", mode, "  aa bb", 20, 20, true);
     }
-    // Preserved whitespace remains non-wrapping: it must not start a fresh line
-    // merely because its width takes the current line beyond the available width.
-    preserved_height_case("overflowing spaces", "pre-wrap", "aa    bb", 40);
+    // Intrinsic-minimum regression only: preserved spaces do not trigger a
+    // wrap before themselves in this measurement path. These assertions do
+    // not establish final-layout conformance. Final layout already wraps the
+    // spaces in "aa    bb" onto a separate line (60px extent versus this 40px
+    // minimum); keep that pre-existing hanging-space defect for a separate fix.
+    preserved_height_case("overflowing spaces intrinsic minimum only", "pre-wrap", "aa    bb", 40);
     preserved_height_case("leading overflow", "pre-wrap", "      aa", 40);
     baseline_height_case("leading preserved baseline", "<span style='font-size:38px;white-space:pre'> </span>A", 36,
                          {{" ",0,16},{"A",10,0}});
