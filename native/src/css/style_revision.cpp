@@ -20,6 +20,23 @@ PayloadManifest import_manifest(const StyleRevisionInput& in){
     for(size_t i=0;i<in.entries.size();++i)entries.push_back({i,{in.entries[i].node,in.entries[i].record->payload_owner()}});
     return PayloadManifest::build(std::move(entries));
 }
+ContextOwnerEntry declared_context_cause(const FrozenNodePayloadRef& payload) {
+    aether::diagnostics::count_work(aether::diagnostics::WorkCounter::context_static_visits);
+    ContextOwnerEntry entry{payload->node(),payload->node_lifetime(),0};
+    // Generated candidates are detached until commit. This is a declared cause
+    // index; liveness/attachment is checked when it forms effective membership.
+    if(!entry.identity || !entry.identity->alive || entry.identity->owner!=entry.node ||
+        entry.node->type!=AETHER_NODE_ELEMENT || entry.node->anonymous_flex_owner)return entry;
+    const auto& style=*payload->style()->payload_owner();
+    entry.causes=(!style.transforms().empty()?StaticTransform:0)|(!style.backdrop_filters().empty()?StaticBackdrop:0);
+    return entry;
+}
+ContextOwnersRef import_context_causes(const StyleRevisionInput& in) {
+    std::vector<ContextOwnerIndex::Entry> entries;
+    for(const auto& item:in.entries){auto cause=declared_context_cause(item.record->payload_owner());
+        if(cause.causes)entries.emplace_back(reinterpret_cast<uintptr_t>(cause.identity.get()),std::move(cause));}
+    return publish_context_owners({},ContextOwnerIndex::build(std::move(entries)));
+}
 bool payload_equivalent(const FrozenNodePayload& a,const FrozenNodePayload& b)noexcept {
     return node_semantically_equal(a,b);
 }
@@ -29,6 +46,7 @@ bool context_equal(const DocumentMeasureValues& a,const DocumentMeasureValues& b
 }
 }
 style_revision_s::style_revision_s(const StyleRevisionInput& in):
+    static_context_owners_(import_context_causes(in)),context_topology_(make_context_lineage()),
     contextual_(in.contextual),generation_(in.generation),document_identity_(in.document_identity),input_epoch_(in.input_epoch),
     structure_epoch_(in.structure_epoch),style_tree_epoch_(in.style_tree_epoch),environment_(in.environment),document_(in.document),
     document_lifetime_(in.document_lifetime),backing_(in.backing),
@@ -47,6 +65,18 @@ style_revision_s::style_revision_s(const CertifiedRevisionDelta& in,PayloadDirec
     compact_projection_(in.stable_order_ && in.base_ && in.retired_.size()==0 &&
         context_equal(in.base_->document()->values(),in.header_.document->values()) &&
         std::memcmp(&in.base_->environment(),&in.header_.environment,sizeof(in.header_.environment))==0),
+    static_context_owners_([&] {
+        const auto base=in.stable_order_?in.base_->static_context_owners():ContextOwnersRef{};
+        if(base) {
+            auto index=base->owners;
+            for(const auto& item:in.changes_)index=update_context_owner(std::move(index),declared_context_cause(item.payload));
+            return publish_context_owners(base,std::move(index));
+        }
+        std::vector<ContextOwnerIndex::Entry> entries;
+        for(const auto& item:in.changes_){auto cause=declared_context_cause(item.payload);
+            if(cause.causes)entries.emplace_back(reinterpret_cast<uintptr_t>(cause.identity.get()),std::move(cause));}
+        return publish_context_owners({},ContextOwnerIndex::build(std::move(entries)));
+    }()),context_topology_(in.stable_order_?in.base_->context_topology():make_context_lineage()),
     contextual_(in.header_.contextual),generation_(in.header_.generation),document_identity_(in.header_.document_identity),
     input_epoch_(in.header_.input_epoch),structure_epoch_(in.header_.structure_epoch),style_tree_epoch_(in.header_.style_tree_epoch),
     environment_(in.header_.environment),document_(in.header_.document),document_lifetime_(in.header_.document_lifetime),

@@ -36,6 +36,7 @@ internal static class D2ContextTests
         }
         TransitionLifecycle();
         SemanticAndVisualDeltas();
+        ReplacedDocumentRetainsOldSnapshot();
     }
     private static ComputedStyle Transform(float x, float delay=.2f) => new()
     {
@@ -87,6 +88,19 @@ internal static class D2ContextTests
             Console.WriteLine("PASS D2 managed semantic/visual causes: "+css);
         }
     }
+    private static void ReplacedDocumentRetainsOldSnapshot()
+    {
+        var cards=new Cards(100,1);using var renderer=new PaintCounter();using var host=new UiDocumentHost(cards,new ApproximateTextMeasurer(),renderer,new UiHostOptions{Width=400,Height=400});
+        host.ExperimentalStyleDeltas=true;host.Render();Check(Snapshot(host).Size==1,"old static owner");
+        Check(Native.Clone(Field<NativeLayoutResult>(host,"_nativeLayout").Handle,out var retained)==0,"retain old native frame");
+        try
+        {
+            cards.RemoveFirst();host.Render();Check(Snapshot(host).Size==0,"destroyed document owner absent");Oracle(host);
+            Check(Native.Info(retained,out _,out var count)==0 && count==1,"old frame retains immutable membership");
+        }
+        finally {Native.Destroy(retained);}
+        Console.WriteLine("PASS D2 managed document replacement destroys owner and preserves retained native frame");
+    }
     internal static T Field<T>(object value,string name)=>(T)value.GetType().GetField(name,BindingFlags.Instance|BindingFlags.NonPublic)!.GetValue(value)!;
     private static void Oracle(UiDocumentHost host)
     {
@@ -96,10 +110,12 @@ internal static class D2ContextTests
     private static void Check(bool value,string message) {if(!value)throw new InvalidOperationException(message);}
     private sealed class Cards(int count,int owners,string extra=""):UiComponent
     {
+        private int _start;
+        internal void RemoveFirst() { _start=1; StateHasChanged(); }
         protected override void BuildRenderTree(MarkupWriter writer)
         {
             writer.WriteLiteral("<style>html,body{margin:0}.card{height:20px;width:120px}.owner{transform:translateX(0px)}"+extra+"</style><body>");
-            for(var i=0;i<count;++i)writer.WriteLiteral($"<div id='c{i}' class='card{(i<owners?" owner":"")}'></div>");
+            for(var i=_start;i<count;++i)writer.WriteLiteral($"<div id='c{i}' class='card{(i<owners?" owner":"")}'></div>");
             writer.WriteLiteral("</body>");
         }
     }
@@ -121,6 +137,8 @@ internal static class D2ContextTests
         [DllImport("aether_core",EntryPoint="aether_work_counters_set_enabled")] internal static extern int Enable(int enabled);
         [DllImport("aether_core",EntryPoint="aether_work_counters_reset")] internal static extern void Reset();
         [DllImport("aether_core",EntryPoint="aether_context_work_counters_get_v1")] internal static extern int Read(out Counts counts);
+        [DllImport("aether_core",EntryPoint="aether_layout_clone_snapshot")] internal static extern int Clone(IntPtr layout,out IntPtr clone);
+        [DllImport("aether_core",EntryPoint="aether_layout_result_destroy")] internal static extern void Destroy(IntPtr layout);
         [DllImport("aether_core",EntryPoint="aether_layout_context_snapshot_info")] internal static extern int Info(IntPtr layout,out ulong serial,out ulong size);
         [DllImport("aether_core",EntryPoint="aether_layout_context_validate_full")] internal static extern int Oracle(IntPtr runtime,IntPtr map,IntPtr layout,out int equal);
     }

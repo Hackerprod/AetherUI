@@ -130,6 +130,8 @@ class style_revision_s final {
     const aether::style::RevisionIdentityRef delta_base_;
     const std::vector<size_t> semantic_positions_;
     const bool compact_projection_=false;
+    const aether::style::ContextOwnersRef static_context_owners_;
+    const aether::style::ContextLineageRef context_topology_;
     const bool contextual_;
     const uint64_t generation_,document_identity_,input_epoch_,structure_epoch_,style_tree_epoch_;
     const aether_style_environment_t environment_;
@@ -157,6 +159,8 @@ public:
     const auto& delta_base_identity()const noexcept{return delta_base_;}
     const auto& semantic_positions()const noexcept{return semantic_positions_;}
     bool compact_projection()const noexcept{return compact_projection_;}
+    const auto& static_context_owners()const noexcept{return static_context_owners_;}
+    const auto& context_topology()const noexcept{return context_topology_;}
     bool contextual()const noexcept{return contextual_;}
     uint64_t generation()const noexcept{return generation_;}
     uint64_t document_identity()const noexcept{return document_identity_;}

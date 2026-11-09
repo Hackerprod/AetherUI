@@ -1449,8 +1449,8 @@ static aether::style::ContextOwnersRef prepare_context_owners(aether_layout_engi
     using namespace aether::style;
     auto& cache=engine->context_cache;
     const auto active=aether_active_transform_snapshot(runtime);
-    const auto statics=map && map->backing()?map->backing()->context_owners():ContextOwnersRef{};
-    const auto topology=map && map->backing()?map->backing()->context_topology():ContextLineageRef{};
+    const auto statics=map?map->static_context_owners():ContextOwnersRef{};
+    const auto topology=map?map->context_topology():ContextLineageRef{};
     const auto document=map?map->document_lifetime():std::shared_ptr<node_identity_s>{};
     // 1 first use; 2 unknown map/transition coverage; 3 topology/document; 4 disabled.
     uint64_t fallback=4;

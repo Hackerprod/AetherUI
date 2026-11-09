@@ -1659,3 +1659,11 @@ if(AETHERUI_BUILD_TESTS AND AETHERUI_DOTNET_EXECUTABLE AND AETHERUI_ENABLE_CONTE
         "${AETHERUI_DOTNET_EXECUTABLE}" "$<TARGET_FILE:aether_core>")
     set_tests_properties(aether.effective-context-managed PROPERTIES RUN_SERIAL TRUE)
 endif()
+
+if(AETHERUI_BUILD_TESTS AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    add_executable(aether_effective_context_owners_oom_test
+        tests/test_effective_context_owners_oom.cpp $<TARGET_OBJECTS:aether_publication_test_core>)
+    target_include_directories(aether_effective_context_owners_oom_test PRIVATE include src)
+    target_link_libraries(aether_effective_context_owners_oom_test PRIVATE Threads::Threads)
+    add_test(NAME aether.effective-context-owners-oom COMMAND aether_effective_context_owners_oom_test)
+endif()

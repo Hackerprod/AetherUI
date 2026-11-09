@@ -1,0 +1,15 @@
+# Chromium comparison actually inspected for D2
+
+Pinned revision: `2d4034e6c4e0a2881aa4539c4ba4604e9b45ecc9`. No Chromium benchmark was run; this is code comparison, not a performance-equivalence claim.
+
+Sources inspected from the earlier verified research checkout:
+- `core/dom/element.cc`, `Element::SetHovered`, lines 13552–13572: unchanged state returns early, but changed hover still calls pseudo-state invalidation. D2 keeps the existing event/state protocol and only skips downstream projection when the native certificate proves no semantic/visual delta.
+- `core/css/style_engine.cc`, `StyleEngine::PseudoStateChangedForElement`, lines 2059 onward: local/relational invalidation remain distinct. D2 consumes the resolver's certified result, not a target-only style comparison.
+- `core/layout/hit_test_cache.cc`, `HitTestCache::AddCachedResult`, lines 38–68: query reuse is guarded by validity/version, not a rectangle coincidence. D2 preserves existing hit/visibility/stacking invalidation; it does not introduce a hit cache.
+
+Additional files fetched directly from the official Chromium repository at the same pinned commit, inspected for the containing-block question:
+- [layout_object.cc](https://chromium.googlesource.com/chromium/src/+/2d4034e6c4e0a2881aa4539c4ba4604e9b45ecc9/third_party/blink/renderer/core/layout/layout_object.cc), `LayoutObject::ComputeIsFixedContainer`, around lines 2020–2076. Multiple independent causes establish a fixed-position container; box/anonymous/containment rules are explicit. D2 therefore combines causes, preserves AetherUI's own eligibility rules, and does not remove an owner when only one cause disappears.
+- [computed_style.h](https://chromium.googlesource.com/chromium/src/+/2d4034e6c4e0a2881aa4539c4ba4604e9b45ecc9/third_party/blink/renderer/core/style/computed_style.h), `HasTransform` (2117), `HasTransformOperations` (2122), `HasNonInitialBackdropFilter` (2192), `HasTransformRelatedProperty` (2269): transform membership differs from a sampled identity matrix, and animation/backdrop causes have separate roles. AetherUI keeps its existing narrower semantics: nonempty static transform/backdrop and active transform, including delay but excluding finished. No Blink-only will-change/3D/containment behavior is imported.
+- [computed_style.cc](https://chromium.googlesource.com/chromium/src/+/2d4034e6c4e0a2881aa4539c4ba4604e9b45ecc9/third_party/blink/renderer/core/style/computed_style.cc), style difference classification around lines 835–853: transform-data, transform-presence and visibility changes are distinguished. D2 similarly separates semantic publication, effective membership and visual invalidation instead of treating equal pixels as equal semantics.
+
+The downloaded files and their exact SHA-256 values are recorded in the sibling implementation artifact directory's chromium/sources.json. The snapshot tree/persistent union representation is the approved AetherUI design, not a claim that Blink uses this data structure. Generated staging attachment comes from AetherUI's own prepare/commit lifecycle (`style_runtime_core.cpp`), not an inferred Chromium rule.
