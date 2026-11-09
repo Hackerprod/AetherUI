@@ -16,12 +16,21 @@ public sealed unsafe class NativeDomDocument : IDisposable
     internal static NativeDomDocument CreateEmpty()
     {
         NativeAbiContract.EnsureCompatible();
+#if AETHER_DOM_FAULT_TESTING
+        ManagedDomFault.Before("interop.document.owner-wrapper");
+#endif
         var owner = new NativeDomOwnerHandle();
         try
         {
             NativeDomSync.Throw(NativeMethods.DomOwnerCreate(out var value, out var document));
             owner.Initialize(value);
-            try { return new NativeDomDocument(document, owner); }
+            try
+            {
+#if AETHER_DOM_FAULT_TESTING
+                ManagedDomFault.Before("interop.document.owner-adoption-wrapper");
+#endif
+                return new NativeDomDocument(document, owner);
+            }
             catch { NativeDomSync.Throw(NativeMethods.DomOwnerRetire(owner)); throw; }
         }
         catch { owner.Dispose(); throw; }
@@ -52,7 +61,13 @@ public sealed unsafe class NativeDomDocument : IDisposable
         NativeAbiContract.EnsureCompatible();
         Throw(NativeMethods.DocCreate(out var handle));
         NativeDomDocument document;
-        try { document = new NativeDomDocument(handle); }
+        try
+        {
+#if AETHER_DOM_FAULT_TESTING
+            ManagedDomFault.Before("interop.document.legacy-wrapper");
+#endif
+            document = new NativeDomDocument(handle);
+        }
         catch { NativeMethods.DocDestroy(handle); throw; }
         try
         {
@@ -70,6 +85,9 @@ public sealed unsafe class NativeDomDocument : IDisposable
     {
         ArgumentNullException.ThrowIfNull(markup);
         using var borrow = Borrow();
+#if AETHER_DOM_FAULT_TESTING
+        ManagedDomFault.Before("interop.document.reparse-utf8");
+#endif
         var utf8 = System.Text.Encoding.UTF8.GetBytes(markup + '\0');
         fixed (byte* source = utf8)
         {

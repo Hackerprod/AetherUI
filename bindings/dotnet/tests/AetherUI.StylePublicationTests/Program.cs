@@ -12,7 +12,7 @@ using AetherUI.Runtime;
 if (args.Contains("--commit-allocations"))
 {
     DomCommitAllocationTests.Run();
-    NativePublicationPreparationTests.Run();
+    NativePublicationPreparationTests.Run(requireCommitCounter: true);
     return;
 }
 #else

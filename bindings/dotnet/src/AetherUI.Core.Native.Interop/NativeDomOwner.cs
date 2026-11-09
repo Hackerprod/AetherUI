@@ -18,8 +18,21 @@ internal sealed class NativeDomOwnerHandle : SafeHandle
 {
     internal NativeDomOwnerHandle() : base(IntPtr.Zero, true) { }
     public override bool IsInvalid => handle == IntPtr.Zero;
-    internal void Initialize(IntPtr owner) => SetHandle(owner);
-    protected override bool ReleaseHandle() { NativeMethods.DomOwnerRelease(handle); return true; }
+    internal void Initialize(IntPtr owner)
+    {
+        SetHandle(owner);
+#if AETHER_DOM_FAULT_TESTING
+        if (owner != IntPtr.Zero) ManagedDomFault.ResourceAcquired(ManagedDomFault.Resource.Owner);
+#endif
+    }
+    protected override bool ReleaseHandle()
+    {
+        NativeMethods.DomOwnerRelease(handle);
+#if AETHER_DOM_FAULT_TESTING
+        ManagedDomFault.ResourceReleased(ManagedDomFault.Resource.Owner);
+#endif
+        return true;
+    }
 }
 
 /// <summary>Scoped borrow, never copied or retained after Dispose. No allocation.</summary>

@@ -22,6 +22,9 @@ internal static class NativePublicationImports
         var complete = false;
         try
         {
+#if AETHER_DOM_FAULT_TESTING
+            ManagedDomFault.Before("interop.publication.import-metadata");
+#endif
             var methods = group.GetMethods(BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic);
             var count = 0;
             foreach (var method in methods)
@@ -29,7 +32,13 @@ internal static class NativePublicationImports
             if (expectedImports <= 0 || count != expectedImports)
                 throw new InvalidOperationException("Publication import metadata is unavailable or does not match its declared group.");
             foreach (var method in methods)
-                if ((method.Attributes & MethodAttributes.PinvokeImpl) != 0) Marshal.Prelink(method);
+                if ((method.Attributes & MethodAttributes.PinvokeImpl) != 0)
+                {
+#if AETHER_DOM_FAULT_TESTING
+                    ManagedDomFault.Before("interop.publication.import-prelink");
+#endif
+                    Marshal.Prelink(method);
+                }
             Volatile.Write(ref state, 2);
             complete = true;
         }

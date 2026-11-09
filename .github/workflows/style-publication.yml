@@ -29,9 +29,9 @@ jobs:
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: 10.0.201
-      - name: Build allocator oracle and unchanged default-off runtime
+      - name: Build allocator oracle with opt-in diagnostic counters
         run: |
-          cmake -S native -B artifacts/build/dom-allocations -DCMAKE_BUILD_TYPE=Release -DAETHERUI_BUILD_TESTS=ON -DAETHERUI_ENABLE_STATE_INCREMENTAL=OFF -DCMAKE_INSTALL_PREFIX="$PWD/artifacts/native/linux-x64"
+          cmake -S native -B artifacts/build/dom-allocations -DCMAKE_BUILD_TYPE=Release -DAETHERUI_BUILD_TESTS=ON -DAETHERUI_ENABLE_WORK_COUNTERS=ON -DAETHERUI_ENABLE_STATE_INCREMENTAL=OFF -DCMAKE_INSTALL_PREFIX="$PWD/artifacts/native/linux-x64"
           cmake --build artifacts/build/dom-allocations --target aether_core aether_dom_commit_allocations_test --parallel 2
           cmake --install artifacts/build/dom-allocations
       - name: Require measured native allocation gate, never a skipped zero

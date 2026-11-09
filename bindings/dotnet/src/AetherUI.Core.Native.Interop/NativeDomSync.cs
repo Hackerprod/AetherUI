@@ -46,11 +46,21 @@ internal static class NativeDomCodec
         if (value.Contains('\0')) throw new ArgumentException("Bound DOM strings cannot contain U+0000.", nameof(value));
         _ = Strict.GetByteCount(value);
     }
-    internal static byte[] Encode(string value) { Validate(value); return Strict.GetBytes(value); }
+    internal static byte[] Encode(string value)
+    {
+        Validate(value);
+#if AETHER_DOM_FAULT_TESTING
+        ManagedDomFault.Before("interop.utf8.encode");
+#endif
+        return Strict.GetBytes(value);
+    }
     internal static unsafe string Decode(NativeDomString value)
     {
         if (value.Length > int.MaxValue || value.Data == IntPtr.Zero)
             throw new InvalidOperationException("Invalid native DOM string buffer.");
+#if AETHER_DOM_FAULT_TESTING
+        ManagedDomFault.Before("interop.utf8.decode");
+#endif
         var result = Strict.GetString(new ReadOnlySpan<byte>((void*)value.Data, (int)value.Length));
         Validate(result);
         return result;
@@ -63,8 +73,18 @@ internal sealed class NativeDomLease : SafeHandle
     public override bool IsInvalid => handle == IntPtr.Zero;
     internal static NativeDomLease Retain(IntPtr node)
     {
+#if AETHER_DOM_FAULT_TESTING
+        ManagedDomFault.Before("interop.lease.wrapper");
+#endif
         var result = new NativeDomLease();
-        try { NativeDomSync.Throw(NativeMethods.DomRetainNode(node, out var value)); result.SetHandle(value); return result; }
+        try
+        {
+            NativeDomSync.Throw(NativeMethods.DomRetainNode(node, out var value)); result.SetHandle(value);
+#if AETHER_DOM_FAULT_TESTING
+            if (value != IntPtr.Zero) ManagedDomFault.ResourceAcquired(ManagedDomFault.Resource.NodeLease);
+#endif
+            return result;
+        }
         catch { result.Dispose(); throw; }
     }
     internal IntPtr Node { get { NativeDomSync.Throw(NativeMethods.DomLeaseGet(this, out var node)); return node; } }
@@ -79,21 +99,54 @@ internal sealed class NativeDomLease : SafeHandle
         }
         finally { if (success) DangerousRelease(); }
     }
-    protected override bool ReleaseHandle() { NativeMethods.DomLeaseDestroy(handle); return true; }
+    protected override bool ReleaseHandle()
+    {
+        NativeMethods.DomLeaseDestroy(handle);
+#if AETHER_DOM_FAULT_TESTING
+        ManagedDomFault.ResourceReleased(ManagedDomFault.Resource.NodeLease);
+#endif
+        return true;
+    }
 }
 internal sealed class NativeDomSnapshotHandle : SafeHandle
 {
     internal NativeDomSnapshotHandle() : base(IntPtr.Zero, true) { }
     public override bool IsInvalid => handle == IntPtr.Zero;
-    internal void Initialize(IntPtr value) => SetHandle(value);
-    protected override bool ReleaseHandle() { NativeMethods.DomSnapshotDestroy(handle); return true; }
+    internal void Initialize(IntPtr value)
+    {
+        SetHandle(value);
+#if AETHER_DOM_FAULT_TESTING
+        if (value != IntPtr.Zero) ManagedDomFault.ResourceAcquired(ManagedDomFault.Resource.Snapshot);
+#endif
+    }
+    protected override bool ReleaseHandle()
+    {
+        NativeMethods.DomSnapshotDestroy(handle);
+#if AETHER_DOM_FAULT_TESTING
+        ManagedDomFault.ResourceReleased(ManagedDomFault.Resource.Snapshot);
+#endif
+        return true;
+    }
 }
 internal sealed class NativeDomEditHandle : SafeHandle
 {
     internal NativeDomEditHandle() : base(IntPtr.Zero, true) { }
     public override bool IsInvalid => handle == IntPtr.Zero;
-    internal void Initialize(IntPtr value) => SetHandle(value);
-    protected override bool ReleaseHandle() { NativeMethods.DomEditDestroy(handle); return true; }
+    internal void Initialize(IntPtr value)
+    {
+        SetHandle(value);
+#if AETHER_DOM_FAULT_TESTING
+        if (value != IntPtr.Zero) ManagedDomFault.ResourceAcquired(ManagedDomFault.Resource.Edit);
+#endif
+    }
+    protected override bool ReleaseHandle()
+    {
+        NativeMethods.DomEditDestroy(handle);
+#if AETHER_DOM_FAULT_TESTING
+        ManagedDomFault.ResourceReleased(ManagedDomFault.Resource.Edit);
+#endif
+        return true;
+    }
 }
 
 internal sealed record NativeDomNodeData(IntPtr Handle, ulong Identity, ulong OwnerIdentity,
@@ -115,7 +168,13 @@ internal sealed class NativeDomSnapshot : IDisposable
     }
     internal static unsafe NativeDomSnapshot Acquire(IntPtr document, IReadOnlyList<NativeDomLease>? known = null)
     {
+#if AETHER_DOM_FAULT_TESTING
+        ManagedDomFault.Before("interop.snapshot.handle");
+#endif
         var handle = new NativeDomSnapshotHandle();
+#if AETHER_DOM_FAULT_TESTING
+        ManagedDomFault.Before("interop.snapshot.known-array");
+#endif
         var raw = new IntPtr[known?.Count ?? 0];
         var acquired = 0;
         try
@@ -136,18 +195,27 @@ internal sealed class NativeDomSnapshot : IDisposable
             NativeDomSync.Throw(NativeMethods.DomSnapshotToken(handle, out var token));
             NativeDomSync.Throw(NativeMethods.DomSnapshotCount(handle, out var count));
             if (count > int.MaxValue) throw new OverflowException("Native DOM snapshot is too large.");
+#if AETHER_DOM_FAULT_TESTING
+            ManagedDomFault.Before("interop.snapshot.nodes-array");
+#endif
             var nodes = new NativeDomNodeData[(int)count];
             for (var i = 0; i < nodes.Length; i++)
             {
                 NativeDomSync.Throw(NativeMethods.DomSnapshotNode(handle, (nuint)i, out var node));
                 if (node.AttributeCount > int.MaxValue || node.ChildCount > int.MaxValue || node.ParentIndex >= nodes.Length || node.ParentIndex < -1)
                     throw new InvalidOperationException("Invalid native DOM snapshot indices.");
+#if AETHER_DOM_FAULT_TESTING
+                ManagedDomFault.Before("interop.snapshot.attributes");
+#endif
                 var attributes = new Dictionary<string, string>((int)node.AttributeCount, StringComparer.Ordinal);
                 for (nuint a = 0; a < node.AttributeCount; a++)
                 {
                     NativeDomSync.Throw(NativeMethods.DomSnapshotAttribute(handle, (nuint)i, a, out var attribute));
                     attributes.Add(NativeDomCodec.Decode(attribute.Name), NativeDomCodec.Decode(attribute.Value));
                 }
+#if AETHER_DOM_FAULT_TESTING
+                ManagedDomFault.Before("interop.snapshot.children-array");
+#endif
                 var children = new int[(int)node.ChildCount];
                 for (var c = 0; c < children.Length; c++)
                 {
@@ -155,13 +223,22 @@ internal sealed class NativeDomSnapshot : IDisposable
                     if (index >= count) throw new InvalidOperationException("Invalid native DOM child index.");
                     children[c] = (int)index;
                 }
+#if AETHER_DOM_FAULT_TESTING
+                ManagedDomFault.Before("interop.snapshot.stamps-array");
+#endif
                 var stamps = new ulong[32];
                 for (var bit = 0; bit < stamps.Length; bit++) stamps[bit] = node.StateBitWriteSerial[bit];
+#if AETHER_DOM_FAULT_TESTING
+                ManagedDomFault.Before("interop.snapshot.node-record");
+#endif
                 nodes[i] = new(node.Node, node.Identity, node.OwnerIdentity, node.DisconnectSerial, node.Type, node.State,
                     node.Alive != 0, node.Attached != 0, node.ParentIndex, node.StyleNodeId, NativeDomCodec.Decode(node.Tag),
                     NativeDomCodec.Decode(node.Text), node.AuthoredValuePresent != 0 ? NativeDomCodec.Decode(node.AuthoredValue) : null,
                     node.RuntimeValuePresent != 0 ? NativeDomCodec.Decode(node.RuntimeValue) : null, attributes, children, stamps);
             }
+#if AETHER_DOM_FAULT_TESTING
+            ManagedDomFault.Before("interop.snapshot.wrapper");
+#endif
             return new(handle, token, nodes);
         }
         catch { handle.Dispose(); throw; }
@@ -184,9 +261,15 @@ internal sealed class NativeDomEdit : IDisposable
     internal static NativeDomEdit Prepare(NativeDomToken expected, NativeDomEditRequest request)
     {
         NativeMethods.DomEditPublication.EnsurePrepared();
+#if AETHER_DOM_FAULT_TESTING
+        ManagedDomFault.Before("interop.edit.handle");
+#endif
         var handle = new NativeDomEditHandle();
         try
         {
+#if AETHER_DOM_FAULT_TESTING
+            ManagedDomFault.Before("interop.edit.arena-wrapper");
+#endif
             using var arena = new NativeDomArena();
             var spec = new NativeDomEditSpec
             {
@@ -196,10 +279,16 @@ internal sealed class NativeDomEdit : IDisposable
             };
             if (request.Nodes is { } nodes)
             {
+#if AETHER_DOM_FAULT_TESTING
+                ManagedDomFault.Before("interop.edit.specs-array");
+#endif
                 var specs = new NativeDomNodeSpec[nodes.Count];
                 for (var i = 0; i < nodes.Count; i++)
                 {
                     var node = nodes[i];
+#if AETHER_DOM_FAULT_TESTING
+                    ManagedDomFault.Before("interop.edit.attributes-array");
+#endif
                     var attributes = new NativeDomAttribute[node.Attributes.Count];
                     var a = 0;
                     foreach (var pair in node.Attributes) attributes[a++] = new() { Name = arena.String(pair.Key), Value = arena.String(pair.Value) };
@@ -215,6 +304,9 @@ internal sealed class NativeDomEdit : IDisposable
             }
             NativeDomSync.Throw(NativeMethods.DomPrepareEdit(in expected, in spec, out var value));
             handle.Initialize(value);
+#if AETHER_DOM_FAULT_TESTING
+            ManagedDomFault.Before("interop.edit.wrapper");
+#endif
             return new(handle);
         }
         catch { handle.Dispose(); throw; }
@@ -230,9 +322,18 @@ internal sealed class NativeDomArena : IDisposable
     private readonly List<IntPtr> _allocations = [];
     private IntPtr Allocate(int length)
     {
+#if AETHER_DOM_FAULT_TESTING
+        ManagedDomFault.Before("interop.arena.ensure-capacity");
+#endif
         _allocations.EnsureCapacity(_allocations.Count + 1);
+#if AETHER_DOM_FAULT_TESTING
+        ManagedDomFault.Before("interop.arena.native-buffer");
+#endif
         var pointer = Marshal.AllocHGlobal(length);
         _allocations.Add(pointer);
+#if AETHER_DOM_FAULT_TESTING
+        ManagedDomFault.ResourceAcquired(ManagedDomFault.Resource.NativeBuffer);
+#endif
         return pointer;
     }
     internal NativeDomString String(string text)
@@ -250,5 +351,15 @@ internal sealed class NativeDomArena : IDisposable
         values.CopyTo(new Span<T>((void*)pointer, values.Length));
         return pointer;
     }
-    public void Dispose() { foreach (var pointer in _allocations) Marshal.FreeHGlobal(pointer); _allocations.Clear(); }
+    public void Dispose()
+    {
+        foreach (var pointer in _allocations)
+        {
+            Marshal.FreeHGlobal(pointer);
+#if AETHER_DOM_FAULT_TESTING
+            ManagedDomFault.ResourceReleased(ManagedDomFault.Resource.NativeBuffer);
+#endif
+        }
+        _allocations.Clear();
+    }
 }

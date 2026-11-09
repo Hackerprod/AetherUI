@@ -11,17 +11,27 @@ internal sealed class NativeInteractionOwner : SafeHandle
     internal static NativeInteractionOwner Prepare(NativeDomDocument document, ulong host)
     {
         NativeMethods.InteractionEditPublication.EnsurePrepared();
+#if AETHER_DOM_FAULT_TESTING
+        ManagedDomFault.Before("interop.interaction.owner-wrapper");
+#endif
         var result = new NativeInteractionOwner();
         try
         {
             using var borrow = document.Borrow();
             NativeDomSync.Throw(NativeMethods.InteractionOwnerPrepare(borrow.Handle, host, out var value));
-            result.SetHandle(value); return result;
+            result.SetHandle(value);
+#if AETHER_DOM_FAULT_TESTING
+            if (value != IntPtr.Zero) ManagedDomFault.ResourceAcquired(ManagedDomFault.Resource.InteractionOwner);
+#endif
+            return result;
         }
         catch { result.Dispose(); throw; }
     }
     internal NativeInteractionClaim PrepareClaim(IntPtr node, int bit, ulong registry)
     {
+#if AETHER_DOM_FAULT_TESTING
+        ManagedDomFault.Before("interop.interaction.claim-wrapper");
+#endif
         var claim = new NativeInteractionClaim();
         try
         {
@@ -33,13 +43,26 @@ internal sealed class NativeInteractionOwner : SafeHandle
     internal void ValidatePrepared() => NativeDomSync.Throw(NativeMethods.InteractionOwnerValidatePrepared(this));
     internal void Activate(IntPtr binding) => NativeDomSync.Throw(NativeMethods.InteractionOwnerActivate(this, binding));
     internal void Retire() => NativeDomSync.Throw(NativeMethods.InteractionOwnerDispose(this));
-    protected override bool ReleaseHandle() { NativeMethods.InteractionOwnerRelease(handle); return true; }
+    protected override bool ReleaseHandle()
+    {
+        NativeMethods.InteractionOwnerRelease(handle);
+#if AETHER_DOM_FAULT_TESTING
+        ManagedDomFault.ResourceReleased(ManagedDomFault.Resource.InteractionOwner);
+#endif
+        return true;
+    }
 }
 internal sealed class NativeInteractionClaim : SafeHandle
 {
     internal NativeInteractionClaim() : base(IntPtr.Zero, true) { }
     public override bool IsInvalid => handle == IntPtr.Zero;
-    internal void Initialize(IntPtr value) => SetHandle(value);
+    internal void Initialize(IntPtr value)
+    {
+        SetHandle(value);
+#if AETHER_DOM_FAULT_TESTING
+        if (value != IntPtr.Zero) ManagedDomFault.ResourceAcquired(ManagedDomFault.Resource.InteractionClaim);
+#endif
+    }
     internal NativeInteractionClaimInfo Read()
     { NativeDomSync.Throw(NativeMethods.InteractionClaimRead(this, out var info)); return info; }
     internal bool IsCurrent => !IsClosed && !IsInvalid && NativeMethods.InteractionClaimRead(this, out var info) == 0 && info.Current != 0;
@@ -55,14 +78,34 @@ internal sealed class NativeInteractionClaim : SafeHandle
     internal void Acknowledge(in NativeInteractionLoss loss) =>
         NativeDomSync.Throw(NativeMethods.InteractionClaimAck(this, loss.Claim.Generation, loss.RecordId, loss.RecordSerial));
     internal void Retire() => NativeDomSync.Throw(NativeMethods.InteractionClaimDispose(this));
-    protected override bool ReleaseHandle() { NativeMethods.InteractionClaimRelease(handle); return true; }
+    protected override bool ReleaseHandle()
+    {
+        NativeMethods.InteractionClaimRelease(handle);
+#if AETHER_DOM_FAULT_TESTING
+        ManagedDomFault.ResourceReleased(ManagedDomFault.Resource.InteractionClaim);
+#endif
+        return true;
+    }
 }
 internal sealed class NativeInteractionEditHandle : SafeHandle
 {
     internal NativeInteractionEditHandle() : base(IntPtr.Zero, true) { }
     public override bool IsInvalid => handle == IntPtr.Zero;
-    internal void Initialize(IntPtr value) => SetHandle(value);
-    protected override bool ReleaseHandle() { NativeMethods.InteractionEditRelease(handle); return true; }
+    internal void Initialize(IntPtr value)
+    {
+        SetHandle(value);
+#if AETHER_DOM_FAULT_TESTING
+        if (value != IntPtr.Zero) ManagedDomFault.ResourceAcquired(ManagedDomFault.Resource.InteractionEdit);
+#endif
+    }
+    protected override bool ReleaseHandle()
+    {
+        NativeMethods.InteractionEditRelease(handle);
+#if AETHER_DOM_FAULT_TESTING
+        ManagedDomFault.ResourceReleased(ManagedDomFault.Resource.InteractionEdit);
+#endif
+        return true;
+    }
 }
 internal sealed class NativeInteractionEdit : IDisposable
 {
@@ -75,6 +118,9 @@ internal sealed class NativeInteractionEdit : IDisposable
     internal static NativeInteractionEdit Acquire(NativeInteractionOwner owner, NativeDomToken token, IntPtr node, int bit, ulong registry)
     {
         NativeMethods.InteractionEditPublication.EnsurePrepared();
+#if AETHER_DOM_FAULT_TESTING
+        ManagedDomFault.Before("interop.interaction.edit-acquire-wrapper");
+#endif
         var edit = new NativeInteractionEdit();
         try
         {
@@ -86,6 +132,9 @@ internal sealed class NativeInteractionEdit : IDisposable
     internal static NativeInteractionEdit Cleanup(NativeInteractionClaim claim, ulong generation, ulong recordId, ulong recordSerial)
     {
         NativeMethods.InteractionEditPublication.EnsurePrepared();
+#if AETHER_DOM_FAULT_TESTING
+        ManagedDomFault.Before("interop.interaction.edit-cleanup-wrapper");
+#endif
         var edit = new NativeInteractionEdit();
         try
         {

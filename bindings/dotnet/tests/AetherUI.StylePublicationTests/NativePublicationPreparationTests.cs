@@ -10,15 +10,16 @@ internal static class NativePublicationPreparationTests
     private static readonly OutOfMemoryException Failure = new("prelink resolver failure between imports");
     private static readonly ManualResetEventSlim Entered = new(false), Release = new(false);
 
-    internal static void Run()
+    internal static void Run(bool requireCommitCounter = false)
     {
         _library = NativeLibrary.Load("aether_core", typeof(NativeDomDocument).Assembly, null);
         // This resolver belongs only to this test assembly, never the product.
         NativeLibrary.SetDllImportResolver(typeof(NativePublicationPreparationTests).Assembly, Resolve);
         using var document = NativeDomDocument.Parse("<div></div>");
         var token = NativeDomSync.ReadToken(document);
-        Check(NativeDomWorkCounters.TryEnableForCurrentThread(), "work counter unavailable");
-        NativeDomWorkCounters.ResetForCurrentThread();
+        var countersAvailable = NativeDomWorkCounters.TryEnableForCurrentThread();
+        Check(!requireCommitCounter || countersAvailable, "required commit counter unavailable");
+        if (countersAvailable) NativeDomWorkCounters.ResetForCurrentThread();
         try
         {
             _mode = 1; _resolutions = 0;
@@ -67,10 +68,11 @@ internal static class NativePublicationPreparationTests
             catch (EntryPointNotFoundException) { unavailable = true; }
             Check(unavailable && missing == 0, "unavailable export reported ready");
             Check(NativeDomSync.ReadToken(document) == token, "prelink modified native inputs");
-            Check(NativeDomWorkCounters.ReadForCurrentThread().DomEditsCommitted == 0, "prelink invoked a dummy commit");
+            if (countersAvailable)
+                Check(NativeDomWorkCounters.ReadForCurrentThread().DomEditsCommitted == 0, "prelink invoked a dummy commit");
         }
-        finally { NativeDomWorkCounters.DisableForCurrentThread(); }
-        Console.WriteLine("PASS publication import preparation: partial failure/retry, reentrant/concurrent busy, single readiness, missing metadata/export; no native commit");
+        finally { if (countersAvailable) NativeDomWorkCounters.DisableForCurrentThread(); }
+        Console.WriteLine("PASS publication import preparation: partial failure/retry, reentrant/concurrent busy, single readiness, missing metadata/export; native commit counter " + (countersAvailable ? "measured zero" : "UNAVAILABLE"));
     }
     private static IntPtr Resolve(string name, Assembly assembly, DllImportSearchPath? search)
     {
