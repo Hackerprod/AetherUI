@@ -75,6 +75,7 @@ add_library(aether_core SHARED
     src/style_runtime/transition_properties.cpp
     src/style_runtime/cascade.cpp
     src/style_runtime/selector_matcher.cpp
+    src/style_runtime/state_invalidation.cpp
     src/style_runtime/selector_parser.cpp
     src/style_runtime/rule_index.cpp
     src/style_runtime/css_variable_tokens.cpp
@@ -1565,4 +1566,12 @@ if(AETHERUI_BUILD_TESTS)
     target_compile_definitions(aether_dom_mutation_journal_test PRIVATE AETHER_EXPORTS)
     target_link_libraries(aether_dom_mutation_journal_test PRIVATE AetherUI::Core)
     add_test(NAME aether.dom-mutation-journal COMMAND aether_dom_mutation_journal_test)
+endif()
+
+if(AETHERUI_BUILD_TESTS)
+    add_executable(aether_state_invalidation_test tests/test_state_invalidation.cpp
+        src/style_runtime/state_invalidation.cpp src/style_runtime/selector_parser.cpp
+        src/style_runtime/selector_matcher.cpp)
+    target_include_directories(aether_state_invalidation_test PRIVATE include src/style_runtime)
+    add_test(NAME aether.state-invalidation COMMAND aether_state_invalidation_test)
 endif()
