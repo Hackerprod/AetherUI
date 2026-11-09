@@ -1,0 +1,207 @@
+name: Temporary native Windows link comparison
+on:
+  push:
+    branches: [diagnostics/windows-core-link-20261109-4a9e390]
+permissions:
+  contents: read
+jobs:
+  compare:
+    runs-on: windows-2022
+    timeout-minutes: 20
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ede346c27be03e518fa036c440e86fc9a37ce72d
+          path: baseline
+          fetch-depth: 2
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          ref: 62e72203bf0a27a0f803d2dcea9ef9c53c0325e9
+          path: fixed
+          fetch-depth: 2
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          path: orchestration
+          fetch-depth: 2
+          persist-credentials: false
+      - name: Verify identities and compare native DLL builds
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $false
+          New-Item evidence -ItemType Directory | Out-Null
+          $baseline = 'ede346c27be03e518fa036c440e86fc9a37ce72d'
+          $fixed = '62e72203bf0a27a0f803d2dcea9ef9c53c0325e9'
+          $baseTree = 'b0ed4828d5f8703b91ebd28c5b0517b77de1be1e'
+          $fixTree = 'd342a062c31a4353370e7674f365da8751043d20'
+          function Git([string]$repo, [string[]]$argv) {
+            $result = & git.exe -C $repo @argv 2>&1
+            $code = $LASTEXITCODE
+            "git repo=$repo argv=$($argv -join ' ') exit=$code" | Add-Content evidence/git-exits.txt
+            if ($code -ne 0) { throw 'Git identity operation failed' }
+            return ($result -join "`n")
+          }
+          foreach ($label in @('baseline','fixed','orchestration')) {
+            if ((Git $label @('status','--porcelain')) -ne '') { throw 'Dirty source checkout' }
+          }
+          if ((Git baseline @('rev-parse','HEAD')) -cne $baseline) { throw 'Baseline HEAD' }
+          if ((Git baseline @('rev-parse','HEAD^{tree}')) -cne $baseTree) { throw 'Baseline tree' }
+          if ((Git fixed @('rev-parse','HEAD')) -cne $fixed) { throw 'Fixed HEAD' }
+          if ((Git fixed @('rev-parse','HEAD^{tree}')) -cne $fixTree) { throw 'Fixed tree' }
+          if ((Git fixed @('show','-s','--format=%P','HEAD')) -cne $baseline) { throw 'Fixed parent' }
+          if ((Git orchestration @('rev-parse','HEAD')) -cne $env:GITHUB_SHA) { throw 'D HEAD' }
+          if ((Git orchestration @('show','-s','--format=%P','HEAD')) -cne $fixed) { throw 'D parent' }
+          $dDelta = Git orchestration @('diff','--name-status','--no-renames','HEAD^','HEAD')
+          if ($dDelta -cne "A`t.github/workflows/windows-core-link-diagnostics.yml") { throw 'D delta' }
+          $expectedRaw = @'
+          :100644 100644 430b8a0a5fcc6422c16aa58673da5af3d52d8d38 2c32c5808a053e5d0d4c91ec8b32d226ffa88c25 M	native/src/css/computed_style_handle.h
+          :100644 100644 c8cc791ffbcac07a5401608d74bb8b6f222ae76a 5b73495348b1cef343cfd0fa44015ae2519bccb7 M	native/src/css/style_map_version.h
+          :100644 100644 5ea06d0c003d74a440a4b70b00e40c707f688e94 4a57e7df7530997e673d0ab55421faaf1ac571a4 M	native/src/style_runtime/style_runtime_core.cpp
+          '@
+          if ((Git fixed @('diff','--raw','--no-abbrev','--no-renames','HEAD^','HEAD')) -cne $expectedRaw.Replace("`r","").TrimEnd()) { throw 'Exact F blob/mode delta' }
+          $changes = @(
+            @('native/src/css/computed_style_handle.h','struct style_revision_s;','class style_revision_s;'),
+            @('native/src/css/style_map_version.h','struct style_revision_s;','class style_revision_s;'),
+            @('native/src/style_runtime/style_runtime_core.cpp','std::shared_ptr<const struct style_revision_s> revision;','std::shared_ptr<const style_revision_s> revision;')
+          )
+          foreach ($change in $changes) {
+            $before = [IO.File]::ReadAllText((Join-Path baseline $change[0]))
+            $after = [IO.File]::ReadAllText((Join-Path fixed $change[0]))
+            if ([regex]::Matches($before,[regex]::Escape($change[1])).Count -ne 1) { throw 'Substitution count' }
+            if ($before.Replace($change[1],$change[2]) -cne $after) { throw 'Unexpected replacement' }
+          }
+          @{baseline=$baseline; baseline_tree=$baseTree; fixed=$fixed; fixed_tree=$fixTree; orchestration=$env:GITHUB_SHA; orchestration_tree=(Git orchestration @('rev-parse','HEAD^{tree}')); run=$env:GITHUB_RUN_ID; attempt=$env:GITHUB_RUN_ATTEMPT; image=$env:ImageVersion} | ConvertTo-Json | Set-Content evidence/identity.json
+          Get-FileHash orchestration/.github/workflows/windows-core-link-diagnostics.yml | Select-Object Path,Hash | ConvertTo-Json | Set-Content evidence/workflow-hash.json
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          if (!(Test-Path $vswhere)) { throw 'Missing vswhere' }
+          $vsJson = & $vswhere -latest -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -version '[17.0,18.0)' -format json
+          $vsExit = $LASTEXITCODE
+          "vswhere exit=$vsExit" | Set-Content evidence/tool-exits.txt
+          if ($vsExit -ne 0) { throw 'vswhere failed' }
+          $instances = @($vsJson | ConvertFrom-Json)
+          if ($instances.Count -ne 1) { throw 'Expected one VS2022 instance' }
+          $vsJson | Set-Content evidence/vs.json
+          $vs = $instances[0].installationPath
+          $vcVersion = (Get-Content "$vs/VC/Auxiliary/Build/Microsoft.VCToolsVersion.default.txt" -Raw).Trim()
+          $dumpbin = "$vs/VC/Tools/MSVC/$vcVersion/bin/Hostx64/x64/dumpbin.exe"
+          $undname = "$vs/VC/Tools/MSVC/$vcVersion/bin/Hostx64/x64/undname.exe"
+          foreach ($tool in @($dumpbin,$undname)) {
+            if (!(Test-Path $tool)) { throw 'Required symbol tool missing' }
+            Get-FileHash $tool | Select-Object Path,Hash | ConvertTo-Json -Compress | Add-Content evidence/tools.jsonl
+          }
+          $rows = @()
+          foreach ($label in @('baseline','fixed')) {
+            $src = Join-Path $env:GITHUB_WORKSPACE $label
+            $build = Join-Path $env:GITHUB_WORKSPACE "build-$label"
+            $out = Join-Path $env:GITHUB_WORKSPACE "evidence/$label"
+            if (Test-Path $build) { throw 'Build directory already exists' }
+            New-Item $out -ItemType Directory | Out-Null
+            # No Tee: raw compiler output is screened before artifact publication.
+            & cmake -S "$src/native" -B $build -G 'Visual Studio 17 2022' -A x64 "-DCMAKE_GENERATOR_INSTANCE=$vs" -T "version=$vcVersion" -DBUILD_TESTING=OFF -DAETHERUI_BUILD_TESTS=OFF *> "$out/configure.log"
+            $configureExit = $LASTEXITCODE
+            $buildExit = $null
+            if ($configureExit -eq 0) {
+              & cmake --build $build --config Release --target aether_core --parallel 2 -- /v:normal /fl "/flp:logfile=$out/msbuild.log;verbosity=normal" *> "$out/build.log"
+              $buildExit = $LASTEXITCODE
+            }
+            $complete = $true
+            foreach ($name in @('style_revision','style_runtime_core')) {
+              $objects = @(Get-ChildItem $build -Recurse -File -Filter "$name.obj" -ErrorAction SilentlyContinue | Where-Object { $_.FullName -match '[\\/]aether_core.dir[\\/]Release[\\/]' })
+              @{name=$name; count=$objects.Count; paths=@($objects.FullName)} | ConvertTo-Json -Compress | Add-Content "$out/objects.jsonl"
+              if ($objects.Count -ne 1) { $complete=$false; continue }
+              $obj = $objects[0]
+              Get-FileHash $obj.FullName | Select-Object Path,Hash | ConvertTo-Json -Compress | Add-Content "$out/object-hashes.jsonl"
+              & $dumpbin /symbols $obj.FullName *> "$out/$name-symbols.txt"
+              $dumpExit = $LASTEXITCODE
+              "dumpbin /symbols $name exit=$dumpExit" | Add-Content "$out/symbol-exits.txt"
+              if ($dumpExit -ne 0) { $complete=$false; continue }
+              $symbols = @([regex]::Matches((Get-Content "$out/$name-symbols.txt" -Raw),'\?freeze_style_revision[^\s()]+') | ForEach-Object Value | Sort-Object -Unique)
+              @{object=$name; symbol_count=$symbols.Count; symbols=$symbols} | ConvertTo-Json -Depth 4 | Set-Content "$out/$name-decorated.json"
+              if ($symbols.Count -eq 0) { $complete=$false }
+              $i=0
+              foreach ($symbol in $symbols) {
+                & $undname $symbol *> "$out/$name-undname-$i.txt"
+                $undExit=$LASTEXITCODE
+                "undname $name symbol=$i exit=$undExit" | Add-Content "$out/symbol-exits.txt"
+                if ($undExit -ne 0) { $complete=$false }
+                $i++
+              }
+            }
+            $dlls = @(Get-ChildItem $build -Recurse -File -Filter aether_core.dll -ErrorAction SilentlyContinue | Where-Object { $_.FullName -match '[\\/]Release[\\/]' })
+            @{count=$dlls.Count; paths=@($dlls.FullName)} | ConvertTo-Json | Set-Content "$out/dlls.json"
+            if ($dlls.Count -eq 1) {
+              Get-FileHash $dlls[0].FullName | Select-Object Path,Hash | ConvertTo-Json | Set-Content "$out/dll-hash.json"
+              & $dumpbin /exports $dlls[0].FullName *> "$out/exports.txt"
+              $exportExit=$LASTEXITCODE
+              "dumpbin /exports exit=$exportExit" | Add-Content "$out/symbol-exits.txt"
+              if ($exportExit -ne 0) { $complete=$false }
+            } elseif ($buildExit -eq 0) { $complete=$false }
+            else { 'DLL absent: exports not applicable after failed build' | Add-Content "$out/symbol-exits.txt" }
+            foreach ($file in @('CMakeCache.txt','CMakeFiles/CMakeConfigureLog.yaml')) {
+              if (Test-Path "$build/$file") { Copy-Item "$build/$file" $out }
+            }
+            $row=[pscustomobject]@{label=$label; configure_exit=$configureExit; build_exit=$buildExit; collection_complete=$complete}
+            $row | ConvertTo-Json | Set-Content "$out/result.json"
+            $rows += $row
+          }
+          $rows | ConvertTo-Json | Set-Content evidence/comparison.json
+          # This is not a causal PASS. Both zero means non-reproduction pending symbol review.
+          if (@($rows | Where-Object { !$_.collection_complete }).Count) { exit 2 }
+          if (@($rows | Where-Object { $_.configure_exit -ne 0 -or $_.build_exit -ne 0 }).Count) { exit 1 }
+          exit 0
+      - name: Review evidence before upload
+        id: review
+        if: always()
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if (!(Test-Path evidence -PathType Container)) { throw 'No evidence to review' }
+          # Inspect sensitive environment values in memory only; never print names or values.
+          $needles = @()
+          foreach ($entry in [Environment]::GetEnvironmentVariables().GetEnumerator()) {
+            if ($entry.Key -match '(?i)token|secret|password|credential|private.key|access.key|connection.string') {
+              $value = [string]$entry.Value
+              if ($value.Length -ge 8) {
+                $needles += $value
+                $needles += [Uri]::EscapeDataString($value)
+                $needles += [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($value))
+              }
+            }
+          }
+          $patterns = @(
+            'gh[pousr]_[A-Za-z0-9]{20,}',
+            'github_pat_[A-Za-z0-9_]{20,}',
+            '-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----',
+            '(?i)authorization\s*[:=]\s*(?:bearer|basic)\s+\S+',
+            '(?i)(?:password|secret|access_token|refresh_token|api_key|client_secret)\s*[:=]\s*["'']?[^\s"'']{8,}',
+            'AKIA[0-9A-Z]{16}',
+            '(?i)[?&]sig=[A-Za-z0-9%+/=]{12,}'
+          )
+          $files = @(Get-ChildItem evidence -Recurse -File)
+          if ($files.Count -eq 0) { throw 'Empty evidence' }
+          foreach ($file in $files) {
+            if ($file.LinkType -or $file.Extension -notin @('.txt','.log','.json','.jsonl','.yaml')) { throw 'Unexpected evidence type; upload withheld' }
+            $text = [IO.File]::ReadAllText($file.FullName)
+            foreach ($needle in $needles) {
+              if ($text.Contains($needle)) { throw 'Potential sensitive value detected; upload withheld, raw logs unchanged on runner' }
+            }
+            foreach ($pattern in $patterns) {
+              if ([regex]::IsMatch($text,$pattern)) { throw 'Potential credential pattern detected; upload withheld, raw logs unchanged on runner' }
+            }
+          }
+          # Do not redact compiler errors or upload originals on a failed review.
+          $files | Get-FileHash -Algorithm SHA256 | Select-Object Path,Hash | ConvertTo-Json | Set-Content evidence/sha256-manifest.json
+          "reviewed=true" | Add-Content $env:GITHUB_OUTPUT
+          exit 0
+      - name: Preserve reviewed evidence
+        if: always() && steps.review.outputs.reviewed == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-windows-link-${{ github.run_id }}-${{ github.run_attempt }}
+          path: evidence/
+          if-no-files-found: error
+          retention-days: 14
