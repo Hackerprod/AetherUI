@@ -71,6 +71,8 @@ public sealed partial class UiDocumentHost : IDisposable
     /// <see cref="TickTransitions"/> while <see cref="HasActiveTransitions"/> is true.
     /// </summary>
     private TransitionRuntimeInterop? _transitionRuntime;
+    private NativeTransitionToken _publishedTransitionToken;
+    private NativeTransitionToken _derivedTransitionToken;
 
     /// <summary>
     /// Pre-rebuild computed styles keyed by stable element identity. RebuildDocument clears
@@ -125,7 +127,7 @@ public sealed partial class UiDocumentHost : IDisposable
     public DocumentNode? Document => _document;
     public LayoutResult? Layout => _layout;
     public ElementNode? FocusedElement => _focused;
-    public bool NeedsRender => !_disposed && !_styleRetryBlocked && (_markupDirty || _invalidation != VisualInvalidation.None || _hasPendingPointerMove || _deferredInput.Count != 0 || _renderDeferred);
+    public bool NeedsRender => !_disposed && !_styleRetryBlocked && (_markupDirty || _invalidation != VisualInvalidation.None || _hasPendingPointerMove || _deferredInput.Count != 0 || _renderDeferred || TransitionProjectionNeedsRender());
     /// <summary>True while the CSS transition runtime is animating one or more properties.</summary>
     public bool HasActiveTransitions => _transitionRuntime?.HasActive == true;
 
@@ -137,14 +139,32 @@ public sealed partial class UiDocumentHost : IDisposable
     /// </summary>
     public bool TickTransitions(long nowMs)
     {
-        if (_transitionRuntime is null || !_transitionRuntime.HasActive)
+        ThrowIfDisposed();
+        var runtime = _transitionRuntime;
+        if (runtime is null) return false;
+        var beforeStatus = runtime.TryReadToken(out var before);
+        var status = runtime.TryTick(nowMs, out var active);
+        if (status != 0)
         {
-            return false;
+            RejectStyleProjection();
+            _styleRetryBlocked = true;
+            ThrowTransitionStatus(status);
         }
-
-        _transitionRuntime.Tick(nowMs);
-        InvalidateDisplayList();
-        return _transitionRuntime.HasActive;
+        var current = runtime.ReadToken();
+        // Explicit sampling may advance the transition portion of an otherwise
+        // current style certificate. Derived layout/display remain uncertified
+        // until rebuilt. A replay caller is also checked against its local R1.
+        if (beforeStatus == 0 && before == _publishedTransitionToken)
+            _publishedTransitionToken = current;
+        // Sampling acknowledges only TickError. An unrelated host staging or
+        // notification failure remains blocked until an explicit Render attempt.
+        if (current != before || before.TickError != 0)
+        {
+            _hasPendingPointerTarget = false;
+            _pendingPointerTarget = null;
+            InvalidateDisplayList(); // RequestRender respects the operation guard.
+        }
+        return active;
     }
     public float DpiScale => _dpiScale;
     /// <summary>Pipeline counters for deterministic performance regression tests.</summary>
@@ -228,7 +248,7 @@ public sealed partial class UiDocumentHost : IDisposable
             RebuildDocument();
         }
 
-        if (!HasCertifiedStyleSnapshot() && (_invalidation & VisualInvalidation.Style) == 0)
+        if (!HasCertifiedStyleSnapshot(requireDerived: false) && (_invalidation & VisualInvalidation.Style) == 0)
             RejectStyleProjection();
 
         if (_invalidation == VisualInvalidation.None && _displayList is not null)
@@ -240,35 +260,50 @@ public sealed partial class UiDocumentHost : IDisposable
 
         ResolveStyles();
 
-        if (_layoutInterop.PrepareTransitionContext(_transitionRuntime, _nativeVisualStyleMap!, _nativeLayout))
+        var derivedRuntime = _transitionRuntime!;
+        var derivedTransitionToken = _publishedTransitionToken;
+        ++_styleOperationDepth;
+        try
         {
-            InvalidateLayout();
-            _pendingPointerTarget = null;
-            _hasPendingPointerTarget = false;
-            if (_hasPointerPosition)
+            if (_layoutInterop.PrepareTransitionContext(_transitionRuntime, _nativeVisualStyleMap!, _nativeLayout))
             {
-                _pendingPointerMove = _lastPointerPosition;
-                _hasPendingPointerMove = true;
+                InvalidateLayout();
+                _pendingPointerTarget = null;
+                _hasPendingPointerTarget = false;
+                if (_hasPointerPosition)
+                {
+                    _pendingPointerMove = _lastPointerPosition;
+                    _hasPendingPointerMove = true;
+                }
             }
-        }
 
-        if ((_invalidation & VisualInvalidation.Layout) != 0)
-        {
-            // Native layout results borrow their resolved style map for layout-only
-            // nodes such as anonymous flex items. Destroy the dependent layout
-            // before replacing the style map; reversing this order leaves the
-            // layout destructor holding a dangling native style-map pointer.
-            _nativeLayout?.Dispose();
-            _nativeLayout = null;
-            _nativeLayoutStyleMap?.Dispose();
-            _nativeLayoutStyleMap = _nativeStyleRuntime.CreateResolvedStyleMap(_nativeDom!.Native);
-            _nativeLayout = _layoutInterop.CreateNativeLayout(_nativeDom, _nativeLayoutStyleMap, _viewport);
-            Interlocked.Increment(ref _layoutBuildCount);
-            _layout = _layoutInterop.Project(_nativeLayout, _nativeDom, _styles!, _viewport);
-            RebuildScrollBoxIndex();
-            AcknowledgeInvalidation(VisualInvalidation.Layout);
-            ProduceInvalidation(VisualInvalidation.DisplayList);
+            if ((_invalidation & VisualInvalidation.Layout) != 0)
+            {
+                // Native layout results borrow their resolved style map for layout-only
+                // nodes such as anonymous flex items. Destroy the dependent layout
+                // before replacing the style map; reversing this order leaves the
+                // layout destructor holding a dangling native style-map pointer.
+                _nativeLayout?.Dispose();
+                _nativeLayout = null;
+                _nativeLayoutStyleMap?.Dispose();
+                _nativeLayoutStyleMap = _nativeStyleRuntime.CreateResolvedStyleMap(_nativeDom!.Native);
+                _nativeLayout = _layoutInterop.CreateNativeLayout(_nativeDom, _nativeLayoutStyleMap, _viewport);
+                ValidateDerivedTransition(derivedRuntime, derivedTransitionToken);
+                Interlocked.Increment(ref _layoutBuildCount);
+                _layout = _layoutInterop.Project(_nativeLayout, _nativeDom, _styles!, _viewport);
+                RebuildScrollBoxIndex();
+                AcknowledgeInvalidation(VisualInvalidation.Layout);
+                ProduceInvalidation(VisualInvalidation.DisplayList);
+            }
+            ValidateDerivedTransition(derivedRuntime, derivedTransitionToken);
         }
+        catch
+        {
+            RejectStyleProjection();
+            _styleRetryBlocked = true;
+            throw;
+        }
+        finally { LeaveStyleOperation(); }
 
         // ResolveStyles has consumed and cleared only the previous state changes.
         // Blur can now enqueue :focus changes without losing them to that cleanup.
@@ -294,6 +329,9 @@ public sealed partial class UiDocumentHost : IDisposable
             EnsureVisualTree();
             return;
         }
+
+        ValidateDerivedTransition(derivedRuntime, derivedTransitionToken);
+        _derivedTransitionToken = derivedTransitionToken;
 
         // Scroll currently remains backed by layout coordinates. The retained scroll command
         // cut consumes this bit without entering either branch above.

@@ -1,6 +1,7 @@
 #pragma once
 #include "frozen_style.h"
 #include "../dom/node_identity.h"
+#include <vector>
 struct aether_node_s;
 namespace aether::style {
 class FrozenCustomPropertyScope;

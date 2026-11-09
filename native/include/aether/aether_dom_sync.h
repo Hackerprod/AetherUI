@@ -25,6 +25,7 @@ typedef struct aether_dom_snapshot_node_v1_s {
     uint64_t state_bit_write_serial[32];
 } aether_dom_snapshot_node_v1_t;
 AETHER_API uint32_t aether_dom_sync_version(void);
+AETHER_API aether_status_t aether_dom_read_node_identity_v1(aether_node_t node,uint64_t* out_identity);
 AETHER_API aether_status_t aether_dom_retain_node_v1(aether_node_t node,aether_dom_node_lease_t* out_lease);
 AETHER_API void aether_dom_node_lease_destroy_v1(aether_dom_node_lease_t lease);
 AETHER_API aether_status_t aether_dom_node_lease_get_v1(aether_dom_node_lease_t lease,aether_node_t* out_node);
@@ -40,6 +41,40 @@ AETHER_API aether_status_t aether_dom_snapshot_count_v1(aether_dom_snapshot_t sn
 AETHER_API aether_status_t aether_dom_snapshot_node_v1(aether_dom_snapshot_t snapshot,size_t index,aether_dom_snapshot_node_v1_t* out_node);
 AETHER_API aether_status_t aether_dom_snapshot_attribute_v1(aether_dom_snapshot_t snapshot,size_t node,size_t attribute,aether_dom_attribute_v1_t* out_attribute);
 AETHER_API aether_status_t aether_dom_snapshot_child_v1(aether_dom_snapshot_t snapshot,size_t node,size_t child,size_t* out_index);
+
+/* Typed operation data is borrowed for prepare only. Scalars have an O(1)
+ * clean token barrier; only the touched payload/links are staged. */
+typedef struct aether_dom_edit_s* aether_dom_edit_t;
+typedef enum aether_dom_edit_kind_v1_e {
+    AETHER_DOM_SET_ATTRIBUTE=1, AETHER_DOM_REMOVE_ATTRIBUTE=2,
+    AETHER_DOM_SET_STATE=3, AETHER_DOM_SET_RUNTIME_VALUE=4,
+    AETHER_DOM_SET_TEXT=5, AETHER_DOM_INSERT_CHILD=6,
+    AETHER_DOM_REMOVE_CHILD=7, AETHER_DOM_CLEAR_CHILDREN=8,
+    AETHER_DOM_INSERT_SUBTREE=9, AETHER_DOM_REPLACE_CHILDREN=10
+} aether_dom_edit_kind_v1_t;
+typedef struct aether_dom_node_spec_v1_s {
+    int32_t type, state;
+    int64_t parent_index; /* -1 denotes a root; otherwise preceding spec index. */
+    aether_dom_string_v1_t tag, text, runtime_value;
+    int32_t runtime_value_present;
+    const aether_dom_attribute_v1_t* attributes;
+    size_t attribute_count;
+} aether_dom_node_spec_v1_t;
+typedef struct aether_dom_edit_spec_v1_s {
+    int32_t kind;
+    aether_node_t target, child;
+    int64_t index; /* -1 = append; otherwise final authored index after extraction. */
+    aether_dom_string_v1_t name, value;
+    int32_t state, value_present;
+    const aether_dom_node_spec_v1_t* nodes;
+    size_t node_count;
+} aether_dom_edit_spec_v1_t;
+AETHER_API aether_status_t aether_dom_prepare_edit_v1(const aether_dom_token_v1_t* expected,
+    const aether_dom_edit_spec_v1_t* spec,aether_dom_edit_t* out_edit);
+AETHER_API aether_status_t aether_dom_edit_created_node_v1(aether_dom_edit_t edit,size_t index,aether_node_t* out_node);
+AETHER_API aether_status_t aether_dom_edit_validate_v1(aether_dom_edit_t edit);
+AETHER_API aether_status_t aether_dom_edit_commit_v1(aether_dom_edit_t edit,aether_dom_token_v1_t* out_token);
+AETHER_API void aether_dom_edit_destroy_v1(aether_dom_edit_t edit);
 #ifdef __cplusplus
 }
 #endif

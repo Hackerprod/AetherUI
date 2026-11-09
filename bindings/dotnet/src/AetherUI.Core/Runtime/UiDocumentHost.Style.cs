@@ -83,28 +83,42 @@ public sealed partial class UiDocumentHost
             return false;
         }
 
-        var replacements = new Dictionary<long, DisplayList>(_paintChunkDirtyNodes.Count);
-        foreach (var (styleNodeId, node) in _paintChunkDirtyNodes)
+        var runtime = _transitionRuntime!;
+        var transitionToken = _publishedTransitionToken;
+        ++_styleOperationDepth;
+        try
         {
-            if (!_displayList.PaintChunks.Any(chunk => chunk.StyleNodeId == styleNodeId))
+            var replacements = new Dictionary<long, DisplayList>(_paintChunkDirtyNodes.Count);
+            foreach (var (styleNodeId, node) in _paintChunkDirtyNodes)
+            {
+                if (!_displayList.PaintChunks.Any(chunk => chunk.StyleNodeId == styleNodeId))
+                {
+                    return false;
+                }
+
+                var partial = AttachResolvedImages(_renderingInterop.BuildNode(_nativeLayout, _nativeVisualStyleMap,
+                    node, _focused is null ? IntPtr.Zero : _nativeDom.GetNativeHandle(_focused)));
+                replacements[styleNodeId] = partial;
+            }
+
+            if (!_displayList.TryReplaceChunks(_paintChunkDirtyNodes.Keys.ToArray(), replacements, out var patched))
             {
                 return false;
             }
 
-            var partial = AttachResolvedImages(_renderingInterop.BuildNode(_nativeLayout, _nativeVisualStyleMap,
-                node, _focused is null ? IntPtr.Zero : _nativeDom.GetNativeHandle(_focused)));
-            replacements[styleNodeId] = partial;
+            ValidateDerivedTransition(runtime, transitionToken);
+            _displayList = patched;
+            _displayListContainsPatchedChunks = true;
+            Interlocked.Add(ref _paintChunkBuildCount, replacements.Count);
+            return true;
         }
-
-        if (!_displayList.TryReplaceChunks(_paintChunkDirtyNodes.Keys.ToArray(), replacements, out var patched))
+        catch
         {
-            return false;
+            RejectStyleProjection();
+            _styleRetryBlocked = true;
+            throw;
         }
-
-        _displayList = patched;
-        _displayListContainsPatchedChunks = true;
-        Interlocked.Add(ref _paintChunkBuildCount, replacements.Count);
-        return true;
+        finally { LeaveStyleOperation(); }
     }
 
     private static VisualInvalidation InvalidationForStyleImpact(NativeStyleImpact impact)
@@ -145,6 +159,9 @@ public sealed partial class UiDocumentHost
             _styleRetryBlocked = true;
             throw new InvalidOperationException("Managed DOM synchronization is required before style publication; pending mutations were retained.");
         }
+        var transitionRuntime = _transitionRuntime ?? throw new InvalidOperationException("Transition runtime is unavailable.");
+        RequireHealthyTransitions(transitionRuntime);
+        var transitionNowMs = Environment.TickCount64;
         var start = Stopwatch.GetTimestamp();
         // Allocate Bnext before removing B. Notifications never write into B.
         var nextBatch = new HashSet<ElementNode>();
@@ -204,6 +221,7 @@ public sealed partial class UiDocumentHost
                     if (computed.TryGetValue(box.Element, out var style) && !ReferenceEquals(style, box.Style)) boxes.Add((box, style));
             var reorder = visibilityChanged || native.StackingOrderChanged;
             if (reorder) paintDirty = new Dictionary<long, IntPtr>();
+            using var transitionCandidate = TransitionStyleMarshaler.PrepareBatch(transitionRuntime, transitions, [], transitionNowMs);
             diagnostics.Seal();
             StylePublicationProbe?.Invoke("managed-staged");
             // No candidate is installed if staging itself called back and changed inputs.
@@ -212,8 +230,11 @@ public sealed partial class UiDocumentHost
             if (!nativeCurrent && _hostInputSerial != inputSerial)
                 _inputReconciliationRequired = true; // Mixed native/managed chronology needs DOMsync, never blind replay.
             if (!nativeCurrent || !HostInputsMatch() || !_nativeStyleRuntime.IsCurrent(native.Token)) return Reject();
+            RequireHealthyTransitions(transitionRuntime);
+            if (transitionCandidate.Validate() != 0) return Reject();
 
             // Certified owner-thread publication. All fallible .NET allocations happened above.
+            if (transitionCandidate.TryCommit(out var transitionPublishedToken) != 0) return Reject();
             var previousMap = _nativeVisualStyleMap;
             _nativeVisualStyleMap = native.Publish();
             _computedStyles = computed;
@@ -222,6 +243,7 @@ public sealed partial class UiDocumentHost
             _paintChunkDirtyNodes = paintDirty;
             _lastStyleImpact = native.Impact;
             _publishedStyleToken = native.Token;
+            _publishedTransitionToken = transitionPublishedToken;
             _publishedDocumentVersion = documentVersion;
             _publishedDocumentInputVersion = documentInputVersion;
             ++_hostPublicationSerial;
@@ -261,18 +283,19 @@ public sealed partial class UiDocumentHost
             Array.Copy(_invalidationProduced, publishedInvalidations, publishedInvalidations.Length);
             // Listeners are external effects, not part of rollback. They write Bnext.
             diagnostics.Replay();
+            if (!_disposed) RequireHealthyTransitions(transitionRuntime);
             var replayNativeCurrent = _nativeStyleRuntime.IsCurrent(native.Token);
             if (!replayNativeCurrent && _hostInputSerial != inputSerial) _inputReconciliationRequired = true;
             if (_disposed || _hostInputSerial != inputSerial || _hostPublicationSerial != publicationSerial + 1 ||
                 !ReferenceEquals(_document, document) || !ReferenceEquals(_nativeDom, dom) ||
-                document.Version != documentVersion || document.InputVersion != documentInputVersion || !InvalidationsMatch(publishedInvalidations) || !replayNativeCurrent)
+                document.Version != documentVersion || document.InputVersion != documentInputVersion || !InvalidationsMatch(publishedInvalidations) || !replayNativeCurrent ||
+                !ReferenceEquals(_transitionRuntime, transitionRuntime) || !transitionRuntime.IsCurrent(transitionPublishedToken))
                 return Reject();
-            foreach (var transition in transitions) transition.Apply(_transitionRuntime!, Environment.TickCount64);
             if (_scrollbarDrag is { } drag && !IsCurrentlyVisible(drag.Container)) CancelScrollbarDrag();
             return true;
 
             bool HostInputsMatch() => !_disposed && !_markupDirty && _hostInputSerial == inputSerial &&
-                _hostPublicationSerial == publicationSerial && ReferenceEquals(_document, document) &&
+                _hostPublicationSerial == publicationSerial && ReferenceEquals(_transitionRuntime, transitionRuntime) && ReferenceEquals(_document, document) &&
                 ReferenceEquals(_nativeDom, dom) && document.Version == documentVersion &&
                 document.InputVersion == documentInputVersion && InvalidationsMatch(invalidations);
             bool InvalidationsMatch(long[] serials)

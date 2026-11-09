@@ -18,6 +18,7 @@ bool same(const aether_dom_token_v1_t& a,const aether_dom_token_v1_t& b) noexcep
 }
 }
 AETHER_API uint32_t aether_dom_sync_version(){return AETHER_DOM_SYNC_VERSION;}
+AETHER_API aether_status_t aether_dom_read_node_identity_v1(aether_node_t node,uint64_t* out){if(out)*out=0;if(!node||!out)return AETHER_ERROR_NULL_ARG;auto status=aether_dom_access(node);if(status!=AETHER_OK)return status;*out=aether_node_identity(node);return AETHER_OK;}
 AETHER_API aether_status_t aether_dom_retain_node_v1(aether_node_t node,aether_dom_node_lease_t* out) {
     if(out)*out=nullptr;if(!node||!out)return AETHER_ERROR_NULL_ARG;
     if(aether_dom_access(node)!=AETHER_OK)return AETHER_ERROR_INVALID_STATE;

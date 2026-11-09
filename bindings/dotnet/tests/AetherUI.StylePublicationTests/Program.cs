@@ -9,6 +9,10 @@ using AetherUI.Rendering;
 using AetherUI.Runtime;
 
 CssDiagnosticsTransactionTests.Run();
+ComponentRenderCandidateTests.Run();
+DomSyncManagedTests.Run();
+TransitionSyncInteropTests.Run();
+TransitionHostPublicationTests.Run();
 var count = 0;
 Run("aborted inset staging does not consume diagnostic; same-node replay recovers", () =>
 {
