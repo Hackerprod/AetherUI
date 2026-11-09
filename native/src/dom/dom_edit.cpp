@@ -220,6 +220,7 @@ AETHER_API aether_status_t aether_dom_prepare_edit_v1(const aether_dom_token_v1_
                 for(auto* a=target;a;a=a->parent)if(a==child)return AETHER_ERROR_INVALID_STATE;
                 if(old){auto& previous=links(*e,old).children;auto found=std::find(previous.begin(),previous.end(),child);if(found==previous.end())return AETHER_ERROR_INVALID_STATE;previous.erase(found);add_touch(*e,old,aether::dom::MutationKind::structure,true,child);}
                 auto& next=links(*e,target).children;next.insert(next.begin()+insertion_position(next,spec->index),child);e->new_parent=target;collect(child,e->attach);add_touch(*e,target,aether::dom::MutationKind::structure,true,child);
+                if(source==0&&child->identity->attached&&!target->identity->attached)add_disconnect(*e,child);
                 if(source!=0){add_disconnect(*e,child);e->adopt=e->attach;e->adopt_domain=0;
                     auto& src=registry(e->domains[source]);auto& dst=registry(e->domains[0]);for(auto* node:e->adopt)if(auto lease=aether_editable_lease(node)){if(e->domains[0].next_id==INT64_MAX)return AETHER_ERROR_INVALID_STATE;e->adopted_ids.emplace_back(node,e->domains[0].next_id++);src.erase(node);dst.emplace(node,std::move(lease));}
                     if(!old)add_touch(*e,child,aether::dom::MutationKind::structure,true,child);

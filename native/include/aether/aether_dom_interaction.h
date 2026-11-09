@@ -34,6 +34,12 @@ typedef struct aether_dom_interaction_candidate_v1_s {
  * under those preconditions; expose neither candidate before activation. */
 AETHER_API aether_status_t aether_dom_interaction_owner_prepare_v1(aether_doc_t document,
     uint64_t host_identity, aether_dom_interaction_owner_t* out_owner);
+/* Restored State bits must already be true on the private candidate document.
+ * The first claim pins one exact DOM token: finish ALL restoration first.
+ * Handles are inactive until owner activation; preparation changes no live
+ * node authority, registry, generation or State. Duplicate node/bit is rejected. */
+AETHER_API aether_status_t aether_dom_interaction_owner_prepare_claim_v1(aether_dom_interaction_owner_t owner,
+    aether_node_t node, int32_t bit, uint64_t registry_identity, aether_dom_interaction_claim_t* out_claim);
 AETHER_API aether_status_t aether_dom_interaction_owner_validate_prepared_v1(aether_dom_interaction_owner_t owner);
 AETHER_API aether_status_t aether_dom_interaction_owner_activate_v1(aether_dom_interaction_owner_t owner,
     aether_dom_style_binding_t binding);

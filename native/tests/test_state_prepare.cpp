@@ -7,6 +7,7 @@
 #include <cstdlib>
 #include <new>
 #include <thread>
+#include <atomic>
 static long fail_after=-1;
 static bool fault_delivered=false;
 void* operator new(std::size_t n) {
@@ -94,6 +95,19 @@ static void contract_and_ledger() {
     aether_style_state_result_t short_result{};
     tx=f.prepare();CHECK(aether_style_transaction_state_result(tx,&short_result)==AETHER_ERROR_INVALID_STATE);
     aether_style_transaction_destroy(tx);
+}
+// A journal-only identity is not a live-node ownership pin. Reject a foreign
+// control block before reading liveness, even if its immutable pointer aliases
+// an authentic base key. Under TSan the writer makes an accidental read visible.
+static void journal_membership_before_liveness() {
+    Fixture f;f.full();auto foreign=std::make_shared<node_identity_s>();foreign->owner=f.a;
+    ++f.doc->identity->mutation_epoch;
+    f.doc->mutation_journal.append(foreign,aether::dom::MutationKind::state,
+        f.doc->identity->mutation_epoch,f.doc->identity->structure_epoch,0,1);
+    std::atomic<bool> stop=false;
+    std::thread finalizer([&]{while(!stop.load(std::memory_order_relaxed)){foreign->alive=false;foreign->attached=false;foreign->alive=true;foreign->attached=true;}});
+    for(int i=0;i<100;++i){auto tx=f.prepare();CHECK(result(tx).fallback==AETHER_STATE_FALLBACK_IDENTITY);aether_style_transaction_destroy(tx);}
+    stop.store(true,std::memory_order_relaxed);finalizer.join();
 }
 // The compact semantic API must not report previous-operation bookkeeping.
 // Retain all three public snapshot forms across a real inherited change and a
@@ -259,4 +273,4 @@ static void oom_and_thread(bool noop=false) {
     CHECK(wrong_thread==AETHER_ERROR_INVALID_STATE);
     auto tx=f.prepare();f.commit(tx);aether_style_transaction_destroy(tx);
 }
-int main(){contract_and_ledger();inherited_noop_contract();failed_commit_keeps_journal();overflow_and_poison();multiple_runtimes();callback_after_ack();oom_and_thread();oom_and_thread(true);std::printf("state prepare foundation: %zu checks passed\n",checks);}
+int main(){contract_and_ledger();journal_membership_before_liveness();inherited_noop_contract();failed_commit_keeps_journal();overflow_and_poison();multiple_runtimes();callback_after_ack();oom_and_thread();oom_and_thread(true);std::printf("state prepare foundation: %zu checks passed\n",checks);}

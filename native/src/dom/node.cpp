@@ -77,6 +77,7 @@ AETHER_API aether_status_t aether_node_append_child(aether_node_t parent, aether
     auto target_owner=parent->document_owner.lock(), source_owner=child->document_owner.lock();
     const bool legacy_attach=target_owner && !source_owner && !aether_editable_lease(child);
     const bool adopt=target_owner!=source_owner && !legacy_attach;
+    const bool disconnecting=adopt||(child->identity->attached&&!parent->identity->attached);
     // Factory owned nodes may not escape into an unowned legacy tree.
     if(adopt && (!target_owner || !source_owner)) return AETHER_ERROR_INVALID_STATE;
     auto* old_parent=child->parent;
@@ -98,7 +99,8 @@ AETHER_API aether_status_t aether_node_append_child(aether_node_t parent, aether
         std::shared_ptr<EditableNodeStorage> source_pin,target_pin;
         aether_doc_s* source_doc=nullptr; aether_doc_s* target_doc=nullptr;
         int64_t next_id=0;
-        if(legacy_attach) collect_subtree(child,moving);
+        if(legacy_attach||(!adopt&&disconnecting)) collect_subtree(child,moving);
+        if(!adopt&&disconnecting&&!can_disconnect(moving))return AETHER_ERROR_INVALID_STATE;
         if(adopt) {
             collect_subtree(child,moving); if(!can_disconnect(moving)) return AETHER_ERROR_INVALID_STATE;
             source_pin=source_owner->document.lock(); target_pin=target_owner->document.lock();
@@ -117,8 +119,8 @@ AETHER_API aether_status_t aether_node_append_child(aether_node_t parent, aether
         aether_node_touch_typed(parent,aether::dom::MutationKind::structure,true,0,0,child);
         if(old_parent && old_parent!=parent) old_parent->children.swap(source_children);
         parent->children.swap(target_children); child->parent=parent;
+        if(disconnecting)disconnect(moving);
         if(adopt) {
-            disconnect(moving);
             for(const auto& relay:moving_relays)if(relay)relay->current_root=target_pin;
             int64_t id=target_doc->next_style_node_id;
             for(auto* node:moving) {

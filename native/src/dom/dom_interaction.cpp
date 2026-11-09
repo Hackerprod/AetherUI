@@ -9,7 +9,9 @@ struct DomInteractionRegistry {
     DomStyleBindingRef binding;
     uint64_t host_identity=0;
     bool active=false,prepared=true;
-    uint64_t prepared_serial=0;
+    uint64_t prepared_serial=0,prepared_generation=0;
+    bool prepared_token_present=false;
+    aether_dom_token_v1_t prepared_token{};
     std::vector<std::shared_ptr<DomInteractionClaim>> claims;
 };
 struct DomInteractionClaim {
@@ -49,6 +51,9 @@ struct aether_dom_interaction_edit_s {
     ~aether_dom_interaction_edit_s(){aether_dom_edit_destroy_v1(state_edit);}
 };
 namespace {
+bool same_token(const aether_dom_token_v1_t& a,const aether_dom_token_v1_t& b) noexcept {
+    return a.owner_identity==b.owner_identity&&a.observation_serial==b.observation_serial&&a.input_epoch==b.input_epoch&&a.structure_epoch==b.structure_epoch&&a.sticky_status==b.sticky_status;
+}
 unsigned bit_index(int32_t bit) noexcept {return bit==AETHER_STATE_HOVER?0:bit==AETHER_STATE_ACTIVE?1:2;}
 bool valid_bit(int32_t bit) noexcept {return bit==AETHER_STATE_HOVER||bit==AETHER_STATE_ACTIVE||bit==AETHER_STATE_FOCUS;}
 aether_doc_s* document(const std::shared_ptr<DomInteractionRegistry>& r) noexcept {return static_cast<aether_doc_s*>(r->document->node.get());}
@@ -143,19 +148,55 @@ AETHER_API aether_status_t aether_dom_interaction_owner_prepare_v1(aether_doc_t 
     try {
         auto handle=std::make_unique<aether_dom_interaction_owner_s>();auto r=std::make_shared<DomInteractionRegistry>();
         r->document=aether_editable_lease(doc);if(!r->document)return AETHER_ERROR_INVALID_STATE;
-        r->owner=doc->owner_control;r->host_identity=host;r->prepared_serial=r->owner->interaction_serial;handle->value=r;
+        r->owner=doc->owner_control;r->host_identity=host;r->prepared_serial=r->owner->interaction_serial;r->prepared_generation=r->owner->next_interaction_generation;handle->value=r;
         *out=handle.release();return AETHER_OK;
     }catch(const std::bad_alloc&){return AETHER_ERROR_OUT_OF_MEMORY;}catch(...){return AETHER_ERROR_INVALID_STATE;}
 }
 AETHER_API aether_status_t aether_dom_interaction_owner_validate_prepared_v1(aether_dom_interaction_owner_t owner) {
     if(!owner)return AETHER_ERROR_NULL_ARG;auto r=owner->value;
-    return thread(r)&&r->prepared&&!r->active&&aether_dom_access(document(r))==AETHER_OK&&r->owner->interaction.expired()&&
-        r->owner->interaction_serial==r->prepared_serial&&can_advance(r)?AETHER_OK:AETHER_ERROR_INVALID_STATE;
+    if(!thread(r)||!r->prepared||r->active||aether_dom_access(document(r))!=AETHER_OK||!r->owner->interaction.expired()||
+        r->owner->interaction_serial!=r->prepared_serial||!can_advance(r)||r->owner->next_interaction_generation!=r->prepared_generation||
+        r->claims.size()>UINT64_MAX-r->prepared_generation)return AETHER_ERROR_INVALID_STATE;
+    if(r->prepared_token_present) {
+        aether_dom_token_v1_t now{};if(aether_dom_read_token_v1(document(r),&now)!=AETHER_OK||!same_token(now,r->prepared_token))return AETHER_ERROR_INVALID_STATE;
+        for(const auto& c:r->claims) {
+            const auto* n=c->node->node.get();
+            if(!n->identity->alive||!n->identity->attached||n->document_owner.lock()!=r->owner||!(n->state&c->info.bit)||
+                n->identity->disconnect_serial!=c->info.disconnect_serial||n->identity->state_bit_write_serial[bit_index(c->info.bit)]!=c->info.state_bit_write_serial)return AETHER_ERROR_INVALID_STATE;
+        }
+    }
+    return AETHER_OK;
+}
+AETHER_API aether_status_t aether_dom_interaction_owner_prepare_claim_v1(aether_dom_interaction_owner_t owner,
+    aether_node_t node,int32_t bit,uint64_t registry,aether_dom_interaction_claim_t* out) {
+    if(out)*out=nullptr;if(!owner||!node||!out)return AETHER_ERROR_NULL_ARG;
+    auto status=aether_dom_interaction_owner_validate_prepared_v1(owner);if(status!=AETHER_OK)return status;auto r=owner->value;
+    if(!valid_bit(bit)||!registry||aether_dom_access(node)!=AETHER_OK||node->type!=AETHER_NODE_ELEMENT||node->is_generated||!node->identity->attached||
+        node->document_owner.lock()!=r->owner||!(node->state&bit)||r->claims.size()>=UINT64_MAX-r->prepared_generation)return AETHER_ERROR_INVALID_STATE;
+    for(const auto& c:r->claims)if(c->node->node.get()==node&&c->info.bit==bit)return AETHER_ERROR_INVALID_STATE;
+    try {
+        aether_dom_token_v1_t base{};status=aether_dom_read_token_v1(node,&base);if(status!=AETHER_OK)return status;
+        auto c=std::make_shared<DomInteractionClaim>();c->registry=r;c->node=aether_editable_lease(node);if(!c->node)return AETHER_ERROR_INVALID_STATE;c->live_owner=aether_live_owner_pin(node);
+        c->info.node=node;c->info.host_identity=r->host_identity;c->info.owner_identity=aether_node_identity(document(r));
+        c->info.generation=r->prepared_generation+r->claims.size();c->info.node_identity=aether_node_identity(node);c->info.disconnect_serial=node->identity->disconnect_serial;
+        c->info.state_bit_write_serial=node->identity->state_bit_write_serial[bit_index(bit)];c->info.registry_identity=registry;c->info.bit=bit;
+        if(bit==AETHER_STATE_FOCUS)if(auto route=node->attributes.find("onblur");route!=node->attributes.end()) {
+            if(!aether_dom_valid_string(route->second))return AETHER_ERROR_INVALID_STATE;c->route_present=true;c->route=route->second;
+        }
+        auto result=std::make_unique<aether_dom_interaction_claim_s>();result->value=c;
+        // Last allocation precedes publishing even the private candidate list.
+        r->claims.push_back(c);r->prepared_token=base;r->prepared_token_present=true;*out=result.release();return AETHER_OK;
+    }catch(const std::bad_alloc&){return AETHER_ERROR_OUT_OF_MEMORY;}catch(...){return AETHER_ERROR_INVALID_STATE;}
 }
 AETHER_API aether_status_t aether_dom_interaction_owner_activate_v1(aether_dom_interaction_owner_t owner,aether_dom_style_binding_t binding) {
     if(!owner||!binding)return AETHER_ERROR_NULL_ARG;auto status=aether_dom_interaction_owner_validate_prepared_v1(owner);if(status!=AETHER_OK)return status;
     auto r=owner->value;DomStyleBindingRef ref;status=aether_dom_style_binding_get_ref(binding,document(r),ref);if(status!=AETHER_OK)return status;
     r->binding=std::move(ref);r->active=true;r->prepared=false;
+    for(const auto& c:r->claims) {
+        c->info.binding_identity=static_cast<uint64_t>(reinterpret_cast<uintptr_t>(r->binding.get()));c->active=true;
+        c->node->node->identity->interaction_claims[bit_index(c->info.bit)]=c;
+    }
+    r->owner->next_interaction_generation=r->prepared_generation+r->claims.size();
     r->owner->interaction_retire=aether_dom_interaction_retire_node;r->owner->interaction=r;advance(r);return AETHER_OK;
 }
 AETHER_API aether_status_t aether_dom_interaction_owner_create_v1(aether_doc_t doc,aether_dom_style_binding_t binding,uint64_t host,aether_dom_interaction_owner_t* out) {
