@@ -80,6 +80,72 @@ struct Fixture {
         for(const char* id:{"a","b","c"}) {auto r=rect(id);near(r.x-host.x,0,"line x");near(r.y-host.y,40*i++,"line y");}
     }
 };
+
+// The automatic main-axis minimum of a column flex child must use the
+// same per-run white-space wrapping policy as its final inline fragments.
+static void inline_height_case(const std::string& mode, const std::string& text,
+                               float height, float last_y, bool zero_min = false,
+                               const std::string& extra = "") {
+    scenario = "inline height " + mode + "/" + text + (zero_min ? "/min0" : "");
+    Fixture f("#outer{flex-direction:column;width:50px;height:20px;align-items:stretch}"
+              "#inner{display:block;width:auto;height:60px;flex:0 1 auto;white-space:" +
+              mode + ";line-height:20px}" + (zero_min ? "#inner{min-height:0}" : "") + extra, text);
+    const auto host = f.rect();
+    near(f.rect("outer").width, 50, "column width");
+    near(f.rect("outer").height, 20, "column height");
+    near(host.width, 50, "child width");
+    near(host.height, height, "automatic minimum height");
+    int words = 0;
+    float final_y = 0;
+    const auto box = f.box("inner");
+    for (int i = 0; i < aether_layout_box_get_child_count(box); ++i) {
+        const auto fragment = aether_layout_box_get_child(box, i);
+        char* value = aether_layout_box_get_text(fragment);
+        if (value && std::strcmp(value, "aaaa") == 0) {
+            const auto r = aether_layout_box_get_border_box(fragment);
+            near(r.width, 40, "word fragment width");
+            near(r.height, 20, "word fragment height");
+            if (words == 0) near(r.y - host.y, 0, "first fragment y");
+            final_y = r.y - host.y;
+            ++words;
+        }
+        aether_string_free(value);
+    }
+    near(float(words), 2, "two word fragments");
+    near(final_y, last_y, "last fragment y");
+}
+static void inline_height_regressions() {
+    for (const char* raw : {"normal", "nowrap", "pre", "pre-wrap", "pre-line"}) {
+        const std::string mode(raw);
+        const bool wraps = mode != "nowrap" && mode != "pre";
+        for (bool zero_min : {false, true}) {
+            inline_height_case(mode, "aaaa aaaa", zero_min ? 20 : wraps ? 40 : 20,
+                               wraps ? 20 : 0, zero_min);
+            for (const char* sep : {"\n", "\r\n", "<br>"}) {
+                const bool forced = std::string(sep) == "<br>" ||
+                    mode == "pre" || mode == "pre-wrap" || mode == "pre-line";
+                const bool two_lines = forced || wraps;
+                inline_height_case(mode, "aaaa" + std::string(sep) + "aaaa",
+                                   zero_min ? 20 : two_lines ? 40 : 20,
+                                   two_lines ? 20 : 0, zero_min);
+            }
+        }
+    }
+    inline_height_case("normal", "<span style='white-space:nowrap'>aaaa aaaa</span>", 20, 0);
+    inline_height_case("nowrap", "<span style='white-space:normal'>aaaa aaaa</span>", 40, 20);
+    inline_height_case("normal", "aaaa <span style='white-space:nowrap'>aaaa</span>", 20, 0);
+    inline_height_case("nowrap", "aaaa <span style='white-space:normal'>aaaa</span>", 40, 20);
+    // Atomic placement retains its existing independent wrapping behavior.
+    for (const char* mode : {"normal", "nowrap", "pre"}) {
+        scenario = std::string("atomic height ") + mode;
+        Fixture f(std::string("#outer{flex-direction:column;width:50px;height:20px;align-items:stretch}") +
+                  "#inner{display:block;height:60px;flex:0 1 auto;white-space:" + mode +
+                  ";line-height:20px}#inner span{display:inline-block;width:40px;height:20px}",
+                  "<span id='first'></span><span id='last'></span>");
+        near(f.rect().height, 40, "atomic minimum height unchanged");
+        near(f.rect("last").y-f.rect("first").y, 20, "atomic line unchanged");
+    }
+}
 int main(int argc,char**argv) {
 #if defined(__unix__)
     Dl_info info{}; require(dladdr(reinterpret_cast<void*>(&aether_layout_layout),&info)!=0,"dladdr");
@@ -95,6 +161,7 @@ int main(int argc,char**argv) {
     if(group=="all"||group=="nowrap") {scenario="nowrap control";Fixture f("#inner{flex-wrap:nowrap}");f.row();}
     if(group=="all"||group=="atomic") {scenario="atomic inline consumer";Fixture f("",cards,true);f.row();near(f.rect("atomic").width,300,"atomic width");}
     if(group=="all") {
+        inline_height_regressions();
         {scenario="explicit width";Fixture f("#inner{width:300px}");f.row();}
         for(int outer:{150,80}) {scenario="automatic minimum "+std::to_string(outer);Fixture f("#outer{width:"+std::to_string(outer)+"px}#inner{flex:0 1 auto}");f.lines(outer==80?100:150);}
         {scenario="empty";Fixture f("","");f.width(0);}

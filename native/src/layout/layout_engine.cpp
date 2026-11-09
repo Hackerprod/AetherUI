@@ -1287,9 +1287,9 @@ static float measure_inline_items_height(
         line_height = line_minimum;
         has_line_content = false;
     };
-    auto append_fragment = [&](float width, float height, bool whitespace) {
+    auto append_fragment = [&](float width, float height, bool whitespace, bool allow_wrap) {
         if (whitespace && !has_line_content) return;
-        if (!whitespace && has_line_content && cursor_x + width > available_width) finish_line(false);
+        if (allow_wrap && !whitespace && has_line_content && cursor_x + width > available_width) finish_line(false);
         cursor_x += width;
         line_height = std::max(line_height, height);
         has_line_content = true;
@@ -1308,7 +1308,7 @@ static float measure_inline_items_height(
                 engine, styles, item.element, available_width, result, aether_intrinsic_size_mode_e::max_content);
             const float height = measure_intrinsic_height(
                 engine, styles, result, item.element, style, padding, border, available_width);
-            append_fragment(width, height, false);
+            append_fragment(width, height, false, true);
             continue;
         }
         for (const auto& token : aether_tokenize_inline_text(item.text, item.style.white_space)) {
@@ -1318,7 +1318,10 @@ static float measure_inline_items_height(
             }
             const bool whitespace = token.kind != aether_inline_text_token_kind_e::word;
             const auto metrics = engine_measure_text(engine, token.text.c_str(), &item.style, 0.f, item.element);
-            append_fragment(metrics.width, metrics.height, whitespace);
+            // Match final inline layout: forced breaks remain unconditional, but
+            // soft wrapping belongs to the text run rather than its parent.
+            append_fragment(metrics.width, metrics.height, whitespace,
+                            aether_white_space_allows_soft_wrap(item.style.white_space));
         }
     }
     finish_line(false);
