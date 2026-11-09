@@ -58,10 +58,17 @@ internal static unsafe partial class NativeMethods
     }
     [LibraryImport(Lib, EntryPoint = "aether_dom_interaction_edit_release_v1")]
     internal static partial void InteractionEditRelease(IntPtr edit);
-    [LibraryImport(Lib, EntryPoint = "aether_dom_interaction_claim_read_v1")]
-    internal static partial int InteractionClaimRead(NativeInteractionClaim claim, out NativeInteractionClaimInfo info);
-    [LibraryImport(Lib, EntryPoint = "aether_dom_interaction_claim_read_loss_v1")]
-    internal static partial int InteractionClaimReadLoss(NativeInteractionClaim claim, out int present, out NativeInteractionLoss loss);
+    // Pure queries must never be the first callback-capable loader operation.
+    // Prepare this exact group before exposing an interaction owner or claim.
+    internal static partial class InteractionQueryImports
+    {
+        private static int _preparation;
+        internal static void EnsurePrepared() => NativePublicationImports.EnsurePrepared(ref _preparation, typeof(InteractionQueryImports), 2);
+        [LibraryImport(Lib, EntryPoint = "aether_dom_interaction_claim_read_v1")]
+        internal static partial int InteractionClaimRead(NativeInteractionClaim claim, out NativeInteractionClaimInfo info);
+        [LibraryImport(Lib, EntryPoint = "aether_dom_interaction_claim_read_loss_v1")]
+        internal static partial int InteractionClaimReadLoss(NativeInteractionClaim claim, out int present, out NativeInteractionLoss loss);
+    }
     [LibraryImport(Lib, EntryPoint = "aether_dom_interaction_claim_ack_v1")]
     internal static partial int InteractionClaimAck(NativeInteractionClaim claim, ulong generation, ulong recordId, ulong recordSerial);
     [LibraryImport(Lib, EntryPoint = "aether_dom_interaction_claim_dispose_v1")]

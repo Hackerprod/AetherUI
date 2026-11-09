@@ -12,6 +12,7 @@ internal sealed class NativeInteractionOwner : SafeHandle
     {
         NativeMethods.InteractionOwnerPublication.EnsurePrepared();
         NativeMethods.InteractionEditPublication.EnsurePrepared();
+        NativeMethods.InteractionQueryImports.EnsurePrepared();
 #if AETHER_DOM_FAULT_TESTING
         ManagedDomFault.Before("interop.interaction.owner-wrapper");
 #endif
@@ -65,15 +66,16 @@ internal sealed class NativeInteractionClaim : SafeHandle
 #endif
     }
     internal NativeInteractionClaimInfo Read()
-    { NativeDomSync.Throw(NativeMethods.InteractionClaimRead(this, out var info)); return info; }
-    internal bool IsCurrent => !IsClosed && !IsInvalid && NativeMethods.InteractionClaimRead(this, out var info) == 0 && info.Current != 0;
-    // Pure availability query: no import, decoding, acknowledgment or delivery. An
+    { NativeDomSync.Throw(NativeMethods.InteractionQueryImports.InteractionClaimRead(this, out var info)); return info; }
+    internal bool IsCurrent => !IsClosed && !IsInvalid && NativeMethods.InteractionQueryImports.InteractionClaimRead(this, out var info) == 0 && info.Current != 0;
+    // Pure availability query: imports were linked before owner preparation; no
+    // DOM import, decoding, acknowledgment or delivery occurs here. An
     // unexpected native status keeps work pending so the safe point reports it.
     internal bool HasPendingLoss => !IsClosed && !IsInvalid &&
-        (NativeMethods.InteractionClaimReadLoss(this, out var present, out _) != 0 || present != 0);
+        (NativeMethods.InteractionQueryImports.InteractionClaimReadLoss(this, out var present, out _) != 0 || present != 0);
     internal bool TryReadLoss(out NativeInteractionLoss loss)
     {
-        NativeDomSync.Throw(NativeMethods.InteractionClaimReadLoss(this, out var present, out loss));
+        NativeDomSync.Throw(NativeMethods.InteractionQueryImports.InteractionClaimReadLoss(this, out var present, out loss));
         return present != 0;
     }
     internal void Acknowledge(in NativeInteractionLoss loss) =>

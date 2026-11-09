@@ -9,12 +9,14 @@ internal static class NativeDomSync
     {
         NativeMethods.DomEditPublication.EnsurePrepared();
         NativeMethods.InteractionEditPublication.EnsurePrepared();
+        NativeMethods.InteractionQueryImports.EnsurePrepared();
     }
 
     internal static void PrepareComponentPublicationImports()
     {
         NativeMethods.BindingPublication.EnsurePrepared();
         NativeMethods.InteractionOwnerPublication.EnsurePrepared();
+        NativeMethods.InteractionQueryImports.EnsurePrepared();
         NativeMethods.TransitionPublication.EnsurePrepared();
     }
     internal static void PrepareStylePublicationImports() => NativeMethods.TransitionPublication.EnsurePrepared();
