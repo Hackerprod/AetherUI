@@ -25,5 +25,7 @@ public sealed class UiHostOptions
     public WindowBounds? InitialWindowBounds { get; init; }
     public ColorRgba ClearColor { get; init; } = ColorRgba.White;
     public IImageResourceResolver? ImageResolver { get; init; }
+    /// <summary>Opt-in aggregate input work counters; no event positions or callbacks are recorded.</summary>
+    public bool EnableInputWorkCounters { get; init; }
     public Action<UiDocumentHostMetrics>? MetricsSink { get; init; }
 }

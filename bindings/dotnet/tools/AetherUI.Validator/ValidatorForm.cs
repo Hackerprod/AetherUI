@@ -117,6 +117,7 @@ public sealed class ValidatorForm : Form
                 // way instead of white-on-white or black-on-black hiding it.
                 ClearColor = new ColorRgba(0.5f, 0.5f, 0.5f, 1f),
                 ImageResolver = imageResolver,
+                EnableInputWorkCounters = Environment.GetEnvironmentVariable("AETHERUI_WORK_COUNTERS") == "1",
                 MetricsSink = _perfReporter is null ? null : _perfReporter.Report,
             };
             WindowsUiApplication.Run(() => _component, options);

@@ -106,6 +106,19 @@ public sealed class PerfReporter
                 renderCalls > 0 ? renderMs / renderCalls : 0,
                 displayListBuilds > 0 ? displayListMs / displayListBuilds : 0);
 
+            if (_workRequested)
+                Console.WriteLine(
+                    "[perf-input:{0}] moves={1} processedPending={2} coalescedPending={3} sameTarget={4} barriers={5} pendingBarriers={6} cursorQueries={7} cursorResolutions={8} hitQueries={9}",
+                    _label,
+                    metrics.PointerMovesReceived - _lastMetrics.PointerMovesReceived,
+                    metrics.PendingMovesProcessed - _lastMetrics.PendingMovesProcessed,
+                    metrics.PendingMovesCoalesced - _lastMetrics.PendingMovesCoalesced,
+                    metrics.SameTargetMoves - _lastMetrics.SameTargetMoves,
+                    metrics.PointerBarriers - _lastMetrics.PointerBarriers,
+                    metrics.PointerBarriersWithPendingMove - _lastMetrics.PointerBarriersWithPendingMove,
+                    metrics.CursorQueries - _lastMetrics.CursorQueries,
+                    metrics.CursorResolutions - _lastMetrics.CursorResolutions,
+                    metrics.HitQueries - _lastMetrics.HitQueries);
             ReportWork();
             _lastMetrics = metrics;
             _lastReport = now;

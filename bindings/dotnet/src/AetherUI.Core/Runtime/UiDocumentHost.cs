@@ -54,6 +54,15 @@ public sealed partial class UiDocumentHost : IDisposable
     private long _displayListBuildTimestampTicks;
     private long _renderTimestampTicks;
     private NativeStyleImpact _lastStyleImpact;
+    private long _pointerMovesReceived;
+    private long _pendingMovesProcessed;
+    private long _pendingMovesCoalesced;
+    private long _sameTargetMoves;
+    private long _pointerBarriers;
+    private long _pointerBarriersWithPendingMove;
+    private long _cursorQueries;
+    private long _cursorResolutions;
+    private long _hitQueries;
     private bool _disposed;
 
     /// <summary>
@@ -152,7 +161,18 @@ public sealed partial class UiDocumentHost : IDisposable
         Interlocked.Read(ref _styleResolutionTimestampTicks),
         Interlocked.Read(ref _displayListBuildTimestampTicks),
         Interlocked.Read(ref _renderTimestampTicks),
-        _lastStyleImpact);
+        _lastStyleImpact)
+    {
+        PointerMovesReceived = Interlocked.Read(ref _pointerMovesReceived),
+        PendingMovesProcessed = Interlocked.Read(ref _pendingMovesProcessed),
+        PendingMovesCoalesced = Interlocked.Read(ref _pendingMovesCoalesced),
+        SameTargetMoves = Interlocked.Read(ref _sameTargetMoves),
+        PointerBarriers = Interlocked.Read(ref _pointerBarriers),
+        PointerBarriersWithPendingMove = Interlocked.Read(ref _pointerBarriersWithPendingMove),
+        CursorQueries = Interlocked.Read(ref _cursorQueries),
+        CursorResolutions = Interlocked.Read(ref _cursorResolutions),
+        HitQueries = Interlocked.Read(ref _hitQueries),
+    };
 
     public void ResetMetrics()
     {
@@ -169,6 +189,15 @@ public sealed partial class UiDocumentHost : IDisposable
         Interlocked.Exchange(ref _styleResolutionTimestampTicks, 0);
         Interlocked.Exchange(ref _displayListBuildTimestampTicks, 0);
         Interlocked.Exchange(ref _renderTimestampTicks, 0);
+        Interlocked.Exchange(ref _pointerMovesReceived, 0);
+        Interlocked.Exchange(ref _pendingMovesProcessed, 0);
+        Interlocked.Exchange(ref _pendingMovesCoalesced, 0);
+        Interlocked.Exchange(ref _sameTargetMoves, 0);
+        Interlocked.Exchange(ref _pointerBarriers, 0);
+        Interlocked.Exchange(ref _pointerBarriersWithPendingMove, 0);
+        Interlocked.Exchange(ref _cursorQueries, 0);
+        Interlocked.Exchange(ref _cursorResolutions, 0);
+        Interlocked.Exchange(ref _hitQueries, 0);
         _lastStyleImpact = NativeStyleImpact.None;
     }
 

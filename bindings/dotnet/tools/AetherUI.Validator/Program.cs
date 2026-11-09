@@ -25,6 +25,7 @@ internal static class Program
                     Width = 800,
                     Height = 640,
                     ClearColor = new ColorRgba(0.09f, 0.10f, 0.14f, 1f),
+                    EnableInputWorkCounters = Environment.GetEnvironmentVariable("AETHERUI_WORK_COUNTERS") == "1",
                     MetricsSink = perfReporter is null ? null : perfReporter.Report,
                 });
             return;
@@ -41,6 +42,7 @@ internal static class Program
                     Width = 920,
                     Height = 760,
                     ClearColor = new ColorRgba(0.035f, 0.063f, 0.114f, 1f),
+                    EnableInputWorkCounters = Environment.GetEnvironmentVariable("AETHERUI_WORK_COUNTERS") == "1",
                     MetricsSink = perfReporter is null ? null : perfReporter.Report,
                 });
             return;

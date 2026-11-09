@@ -33,6 +33,7 @@ public sealed partial class UiDocumentHost
     public CursorKind PointerMoved(PointF point)
     {
         ThrowIfDisposed();
+        if (_options.EnableInputWorkCounters) Interlocked.Increment(ref _pointerMovesReceived);
         _lastPointerPosition = point;
         _hasPointerPosition = true;
         if (_scrollbarPointerCaptured)
@@ -48,6 +49,11 @@ public sealed partial class UiDocumentHost
             _currentCursor = CursorFor(target);
             if (ReferenceEquals(target, _hovered))
             {
+                if (_options.EnableInputWorkCounters)
+                {
+                    Interlocked.Increment(ref _sameTargetMoves);
+                    if (_hasPendingPointerMove) Interlocked.Increment(ref _pendingMovesCoalesced);
+                }
                 _hasPendingPointerMove = false;
                 _hasPendingPointerTarget = false;
                 _pendingPointerTarget = null;
@@ -63,6 +69,8 @@ public sealed partial class UiDocumentHost
             _hasPendingPointerTarget = false;
         }
 
+        if (_options.EnableInputWorkCounters && _hasPendingPointerMove)
+            Interlocked.Increment(ref _pendingMovesCoalesced);
         _pendingPointerMove = point;
         _hasPendingPointerMove = true;
         RequestPointerRender();
@@ -82,6 +90,7 @@ public sealed partial class UiDocumentHost
             return false;
         }
 
+        if (_options.EnableInputWorkCounters) Interlocked.Increment(ref _pendingMovesProcessed);
         var point = _pendingPointerMove;
         var target = _hasPendingPointerTarget ? _pendingPointerTarget : HitTest(point);
         _hasPendingPointerMove = false;
@@ -162,6 +171,7 @@ public sealed partial class UiDocumentHost
     public void PointerLeft()
     {
         ThrowIfDisposed();
+        CountPointerBarrier();
         _hasPointerPosition = false;
         _hasPendingPointerMove = false;
         _hasPendingPointerTarget = false;
@@ -190,6 +200,7 @@ public sealed partial class UiDocumentHost
     public void PointerPressed(PointF point)
     {
         ThrowIfDisposed();
+        CountPointerBarrier();
         EnsureVisualTree();
         if (TryBeginScrollbarInteraction(point))
         {
@@ -232,6 +243,7 @@ public sealed partial class UiDocumentHost
     public void PointerReleased(PointF point)
     {
         ThrowIfDisposed();
+        CountPointerBarrier();
         EnsureVisualTree();
         if (_scrollbarPointerCaptured)
         {
@@ -269,6 +281,7 @@ public sealed partial class UiDocumentHost
     public CursorKind CursorAt(PointF point)
     {
         ThrowIfDisposed();
+        if (_options.EnableInputWorkCounters) Interlocked.Increment(ref _cursorQueries);
         if (_hasPendingPointerMove)
         {
             return _currentCursor;
@@ -282,10 +295,21 @@ public sealed partial class UiDocumentHost
         return CursorFor(HitTest(point));
     }
 
-    private CursorKind CursorFor(ElementNode? target) =>
-        target is not null && _styles is not null && _styles.TryGetValue(target, out var style)
+    private CursorKind CursorFor(ElementNode? target)
+    {
+        if (_options.EnableInputWorkCounters) Interlocked.Increment(ref _cursorResolutions);
+        return target is not null && _styles is not null && _styles.TryGetValue(target, out var style)
             ? style.Cursor
             : CursorKind.Default;
+    }
+
+    // Observation only: the baseline does not flush pending hover at these boundaries.
+    private void CountPointerBarrier()
+    {
+        if (!_options.EnableInputWorkCounters) return;
+        Interlocked.Increment(ref _pointerBarriers);
+        if (_hasPendingPointerMove) Interlocked.Increment(ref _pointerBarriersWithPendingMove);
+    }
 
     private void SubmitClosestForm(ElementNode source)
     {
@@ -426,6 +450,7 @@ public sealed partial class UiDocumentHost
 
     private ElementNode? HitTest(PointF point)
     {
+        if (_options.EnableInputWorkCounters) Interlocked.Increment(ref _hitQueries);
         if (_nativeLayout is not null && _nativeDom is not null)
         {
             // A native miss is authoritative, including a rejection by an ancestor clip.
