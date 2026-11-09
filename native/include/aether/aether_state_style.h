@@ -61,6 +61,26 @@ AETHER_API aether_status_t aether_style_transaction_state_result(
 AETHER_API aether_status_t aether_style_transaction_get_state_delta(
     aether_style_transaction_t transaction, int32_t index, aether_node_t* out_node,
     aether_computed_style_handle_t* out_style, uint32_t* out_visual_impact);
+/* Managed publication support, independent of the incremental capability.
+ * Opaque identities are equality-only and must be protected by a retained
+ * transaction/revision. Transaction inspection requires its runtime alive.
+ * All operations require the runtime owner thread.
+ * Preview artifacts never authorize layout, hit-test or presentation. */
+typedef struct aether_style_publication_token_s {
+    uint32_t struct_size;
+    aether_bool_t inputs_current;
+    uint64_t revision_identity, generation, document_identity;
+    uint64_t input_epoch, structure_epoch, style_tree_epoch;
+    uint64_t sheet_epoch, registry_identity;
+} aether_style_publication_token_t;
+AETHER_API aether_status_t aether_style_runtime_read_publication_token(
+    aether_style_runtime_t runtime, aether_style_publication_token_t* out_token);
+AETHER_API aether_status_t aether_style_transaction_read_publication_token(
+    aether_style_transaction_t transaction, aether_style_publication_token_t* out_token);
+AETHER_API aether_status_t aether_style_transaction_preview_revision(
+    aether_style_transaction_t transaction, aether_style_revision_t* out_revision);
+AETHER_API aether_status_t aether_style_transaction_preview_legacy_map(
+    aether_style_transaction_t transaction, aether_style_map_t* out_map);
 #ifdef __cplusplus
 }
 #endif

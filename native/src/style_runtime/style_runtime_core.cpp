@@ -1659,3 +1659,70 @@ AETHER_API aether_status_t aether_style_runtime_update_resolved_style_map(aether
     }catch(const std::bad_alloc&){return AETHER_ERROR_OUT_OF_MEMORY;}catch(...){return AETHER_ERROR_INVALID_STATE;}
 }
 AETHER_API void aether_style_runtime_clear_cache(aether_style_runtime_t runtime) { if (runtime) { runtime->states.clear(); ++runtime->sheet_epoch; } }
+
+// D1: callback-free publication inspection and fallible pre-commit artifacts.
+static void fill_publication_token(const StyleRevisionRef& revision, uint64_t sheet_epoch,
+    const std::shared_ptr<const style_property_registry_s>& registry,
+    aether_style_publication_token_t& token) noexcept {
+    token = {}; token.struct_size = sizeof(token);
+    token.revision_identity = reinterpret_cast<uintptr_t>(revision.get());
+    token.generation = revision->generation(); token.document_identity = revision->document_identity();
+    token.input_epoch = revision->input_epoch(); token.structure_epoch = revision->structure_epoch();
+    token.style_tree_epoch = revision->style_tree_epoch(); token.sheet_epoch = sheet_epoch;
+    token.registry_identity = reinterpret_cast<uintptr_t>(registry.get());
+}
+AETHER_API aether_status_t aether_style_runtime_read_publication_token(
+    aether_style_runtime_t runtime, aether_style_publication_token_t* out_token) {
+    if (!out_token) return AETHER_ERROR_NULL_ARG;
+    const auto size = out_token->struct_size; *out_token = {};
+    if (!runtime) return AETHER_ERROR_NULL_ARG;
+    if (size != sizeof(*out_token) || runtime->owner_thread != std::this_thread::get_id() ||
+        !runtime->revision || !runtime->revision->authentic_owner(runtime->revision))
+        return AETHER_ERROR_INVALID_STATE;
+    const auto& revision = runtime->revision;
+    fill_publication_token(revision, runtime->revision_sheet_epoch, runtime->revision_registry, *out_token);
+    const auto& document = revision->document_lifetime();
+    out_token->inputs_current = document && document->alive && document->attached &&
+        document->mutation_epoch == revision->input_epoch() &&
+        document->structure_epoch == revision->structure_epoch() &&
+        document->style_tree_epoch == revision->style_tree_epoch() &&
+        runtime->generation == revision->generation() && runtime->sheet_epoch == runtime->revision_sheet_epoch &&
+        runtime->compiled == runtime->revision_compiled && runtime->registry == runtime->revision_registry &&
+        runtime->revision_registry == style_property_registry_pin() &&
+        equal_environment(runtime->environment, revision->environment());
+    return AETHER_OK;
+}
+AETHER_API aether_status_t aether_style_transaction_read_publication_token(
+    aether_style_transaction_t transaction, aether_style_publication_token_t* out_token) {
+    if (!out_token) return AETHER_ERROR_NULL_ARG;
+    const auto size = out_token->struct_size; *out_token = {};
+    if (!transaction) return AETHER_ERROR_NULL_ARG;
+    if (size != sizeof(*out_token) || !transaction->owner ||
+        transaction->owner->owner_thread != std::this_thread::get_id() || !transaction->revision ||
+        !transaction->revision->authentic_owner(transaction->revision)) return AETHER_ERROR_INVALID_STATE;
+    fill_publication_token(transaction->revision, transaction->base_sheet_epoch,
+        transaction->candidate->registry, *out_token);
+    // Expected output, not evidence that the candidate is already published.
+    out_token->inputs_current = 1;
+    return AETHER_OK;
+}
+AETHER_API aether_status_t aether_style_transaction_preview_revision(
+    aether_style_transaction_t transaction, aether_style_revision_t* out_revision) {
+    if (out_revision) *out_revision = nullptr;
+    if (!transaction || !out_revision) return AETHER_ERROR_NULL_ARG;
+    if (!transaction->owner || transaction->owner->owner_thread != std::this_thread::get_id() ||
+        !transaction->revision || !transaction->revision->authentic_owner(transaction->revision))
+        return AETHER_ERROR_INVALID_STATE;
+    aether_style_revision_handle_s handle{transaction->revision};
+    return aether_style_revision_clone(&handle, out_revision);
+}
+AETHER_API aether_status_t aether_style_transaction_preview_legacy_map(
+    aether_style_transaction_t transaction, aether_style_map_t* out_map) {
+    if (out_map) *out_map = nullptr;
+    if (!transaction || !out_map) return AETHER_ERROR_NULL_ARG;
+    if (!transaction->owner || transaction->owner->owner_thread != std::this_thread::get_id() ||
+        !transaction->revision || !transaction->revision->authentic_owner(transaction->revision))
+        return AETHER_ERROR_INVALID_STATE;
+    aether_style_revision_handle_s handle{transaction->revision};
+    return create_revision_map(&handle, out_map, true);
+}
