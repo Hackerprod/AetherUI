@@ -2,6 +2,7 @@
 #include "../src/dom/dom_types.h"
 #include "../src/css/computed_style_handle.h"
 #include "../src/css/style_revision.h"
+#include "../src/style_runtime/frozen_runtime_metadata.h"
 #include <cstdio>
 #include <cstdlib>
 #include <new>
@@ -70,7 +71,6 @@ static void contract_and_ledger() {
     aether_style_revision_t invalid=nullptr;
     CHECK(aether_style_runtime_commit_revision(f.runtime,tx,&invalid)==AETHER_ERROR_INVALID_STATE&&!invalid);
     aether_style_transaction_destroy(tx);
-    f.full(); // Stable payload metadata after first-resolution historical impacts.
     aether_element_set_state(f.a,AETHER_STATE_HOVER);
     aether_style_state_change_t declared{f.a,aether_node_identity(f.a),0,AETHER_STATE_HOVER};
     tx=f.prepare(&declared,1);info=result(tx);
@@ -94,6 +94,73 @@ static void contract_and_ledger() {
     aether_style_state_result_t short_result{};
     tx=f.prepare();CHECK(aether_style_transaction_state_result(tx,&short_result)==AETHER_ERROR_INVALID_STATE);
     aether_style_transaction_destroy(tx);
+}
+// The compact semantic API must not report previous-operation bookkeeping.
+// Retain all three public snapshot forms across a real inherited change and a
+// forced FULL no-op. No pseudo regeneration or structural mutation is involved.
+static void inherited_noop_contract() {
+    Fixture f("span { background-color:currentColor; width:2em; line-height:1.5 }");
+    f.full();
+    const int32_t count=aether_style_revision_style_count(f.base);
+    aether_style_revision_t old_revision=nullptr;
+    ok(aether_style_revision_clone(f.base,&old_revision));
+    aether_style_map_t old_map=nullptr;ok(aether_style_revision_create_map(f.base,&old_map));
+    const auto child=f.a->children.front();
+    auto old_handle=aether_style_map_get(old_map,child);CHECK(old_handle);
+    const auto old_record=old_handle->record;const auto old_measures=old_handle->measures;
+    const auto old_generation=aether_style_revision_generation(old_revision);
+    const auto old_color=old_handle->style.color;const auto old_font=old_handle->style.font_size;
+    ok(aether_style_runtime_add_stylesheet(f.runtime,"body { color:red; font-size:20px; --tone:red }",2,"inherited",nullptr,nullptr));
+    auto tx=f.prepare();const auto changed=result(tx);
+    CHECK(!changed.incremental&&changed.semantic_delta_count>0&&changed.visual_delta_count>0&&changed.visual_impact);
+    bool child_delta=false;
+    for(int32_t i=0;i<changed.semantic_delta_count;++i) {
+        aether_node_t node=nullptr;aether_computed_style_handle_t handle=nullptr;uint32_t impact=0;
+        ok(aether_style_transaction_get_state_delta(tx,i,&node,&handle,&impact));
+        if(node==child){CHECK(handle&&impact);child_delta=true;}
+        aether_computed_style_handle_destroy(handle);
+    }
+    CHECK(child_delta);f.commit(tx);aether_style_transaction_destroy(tx);
+    aether_style_revision_t changed_revision=nullptr;ok(aether_style_revision_clone(f.base,&changed_revision));
+    aether_style_map_t changed_map=nullptr;ok(aether_style_revision_create_map(f.base,&changed_map));
+    auto changed_handle=aether_style_map_get(changed_map,child);CHECK(changed_handle);
+    const auto changed_record=changed_handle->record;const auto changed_measures=changed_handle->measures;
+    CHECK(changed_handle->style.font_size==20&&changed_handle->style.color.r==1&&changed_handle->style.color.g==0);
+    CHECK(changed_record->color_references()->background());
+    const auto changed_generation=aether_style_revision_generation(changed_revision);
+    std::vector<aether_node_t> membership;
+    for(int32_t i=0;i<count;++i){aether_node_t node=nullptr;ok(aether_style_revision_get_style(f.base,i,&node,nullptr,nullptr));membership.push_back(node);}
+    // A null caller base forces authentic FULL without changing the environment.
+    tx=nullptr;ok(aether_style_runtime_prepare_state_revision(f.runtime,f.doc,nullptr,nullptr,0,nullptr,&tx));
+    const auto unchanged=result(tx);
+    CHECK(!unchanged.incremental&&unchanged.fallback==AETHER_STATE_FALLBACK_BASE_REVISION);
+    CHECK(unchanged.semantic_delta_count==0&&unchanged.visual_delta_count==0&&unchanged.visual_impact==0);
+    aether_node_t absent=nullptr;aether_computed_style_handle_t absent_style=nullptr;
+    CHECK(aether_style_transaction_get_state_delta(tx,0,&absent,&absent_style,nullptr)==AETHER_ERROR_INVALID_STATE);
+    CHECK(!absent&&!absent_style);
+    f.commit(tx);aether_style_transaction_destroy(tx);
+    CHECK(aether_style_revision_style_count(f.base)==count&&aether_style_revision_change_count(f.base)==count);
+    for(int32_t i=0;i<count;++i) {
+        aether_node_t style_node=nullptr,change_node=nullptr;uint32_t style_impact=~0u,change_impact=~0u;
+        ok(aether_style_revision_get_style(f.base,i,&style_node,nullptr,&style_impact));
+        ok(aether_style_revision_get_change(f.base,i,&change_node,nullptr,&change_impact));
+        CHECK(style_node==membership[i]&&change_node==membership[i]&&!style_impact&&!change_impact);
+    }
+    CHECK(old_handle->record==old_record&&old_handle->measures==old_measures);
+    CHECK(old_handle->style.color.r==old_color.r&&old_handle->style.color.g==old_color.g&&old_handle->style.font_size==old_font);
+    CHECK(aether_style_revision_generation(old_revision)==old_generation&&old_handle->revision->generation()==old_generation);
+    CHECK(old_measures->document().values().generation==old_generation);
+    CHECK(changed_handle->record==changed_record&&changed_handle->measures==changed_measures);
+    CHECK(changed_handle->style.font_size==20&&changed_handle->style.color.r==1&&changed_handle->style.color.g==0);
+    CHECK(aether_style_revision_generation(changed_revision)==changed_generation&&changed_handle->revision->generation()==changed_generation);
+    CHECK(changed_measures->document().values().generation==changed_generation);
+    aether_style_map_t current_map=nullptr;ok(aether_style_revision_create_map(f.base,&current_map));
+    auto current_handle=aether_style_map_get(current_map,child);CHECK(current_handle);
+    CHECK(current_handle->record->payload_owner()==changed_record->payload_owner());
+    CHECK(current_handle->measures->document().values().generation==changed_generation+1);
+    aether_computed_style_handle_destroy(current_handle);aether_style_map_destroy(current_map);
+    aether_computed_style_handle_destroy(changed_handle);aether_style_map_destroy(changed_map);aether_style_revision_destroy(changed_revision);
+    aether_computed_style_handle_destroy(old_handle);aether_style_map_destroy(old_map);aether_style_revision_destroy(old_revision);
 }
 static void failed_commit_keeps_journal() {
     Fixture f;f.full();
@@ -189,4 +256,4 @@ static void oom_and_thread(bool noop=false) {
     CHECK(wrong_thread==AETHER_ERROR_INVALID_STATE);
     auto tx=f.prepare();f.commit(tx);aether_style_transaction_destroy(tx);
 }
-int main(){contract_and_ledger();failed_commit_keeps_journal();overflow_and_poison();multiple_runtimes();callback_after_ack();oom_and_thread();oom_and_thread(true);std::printf("state prepare foundation: %zu checks passed\n",checks);}
+int main(){contract_and_ledger();inherited_noop_contract();failed_commit_keeps_journal();overflow_and_poison();multiple_runtimes();callback_after_ack();oom_and_thread();oom_and_thread(true);std::printf("state prepare foundation: %zu checks passed\n",checks);}

@@ -1280,7 +1280,10 @@ static aether_status_t prepare_revision_impl(
             input.custom_properties=prepared.custom_properties;input.color_references=prepared.color_references;
             input.backdrop_custom_properties=prepared.backdrop_custom_properties;
             input.declared_impact=prepared.declared_impact;input.declared_inherited_impact=prepared.declared_inherited_impact;
-            input.inherited_change_impact=prepared.inherited_change_impact;
+            // Propagation for this operation already completed in prepare_tree.
+            // Do not persist its transient output as a future semantic input.
+            // PreparedNodeResult and private import factories retain real values.
+            input.inherited_change_impact=0;
             input.document_identity=d.identity;input.node_identity=aether_node_identity(node);
             input.node_lifetime=node->identity;input.document_lifetime=document->identity;
             if(auto it=leaves.find(node);it!=leaves.end())input.generated_leaf=it->second;

@@ -72,5 +72,16 @@ int main(){
     need(node_semantically_equal(*first,*freeze(in)),"structurally equal backdrop scopes");
     in.backdrop_custom_properties=scope3;
     need(compare_node_semantics(*first,*freeze(in)).propagation==ParentDependencies::all,"backdrop scope status differs");
+    // Canonicalization belongs only to resolver output, never import factories
+    // or the comparator. Same runtime identity/context, only bookkeeping differs.
+    aether_doc_s document;
+    auto imported=in;imported.origin=RecordOrigin::runtime;
+    imported.node_lifetime=node.identity;imported.node_identity=aether_node_identity(&node);
+    imported.document_lifetime=document.identity;imported.document_identity=aether_node_identity(&document);
+    imported.inherited_change_impact=43;auto imported43=freeze(imported);
+    imported.inherited_change_impact=91;auto imported91=freeze(imported);
+    need(imported43->inherited_change_impact()==43&&imported91->inherited_change_impact()==91,"runtime imports preserve noncanonical values");
+    const auto imported_delta=compare_node_semantics(*imported43,*imported91);
+    need(imported_delta.semantic&&imported_delta.propagation==0,"same-context imports distinguish only inherited impact");
     std::puts("state semantics passed");
 }
