@@ -15,7 +15,7 @@ internal static class HostFailureBoundaryTests
     internal static void Run()
     {
         var rows = new List<string> { "family\tsite\toccurrence\tboundary\treached" };
-        foreach (var family in new[] { "component", "style" })
+        foreach (var family in new[] { "component", "style", "style-reorder" })
         {
             Collect(); var resources = ManagedDomFault.Resources;
             var trace = SweepCase(family, null, 0);
@@ -26,7 +26,7 @@ internal static class HostFailureBoundaryTests
                 counts.TryGetValue(site, out var occurrence); counts[site] = ++occurrence;
                 SweepCase(family, site, occurrence);
                 Collect(); Equal(resources, ManagedDomFault.Resources, site + " resource teardown");
-                rows.Add($"{family}\t{site}\t{occurrence}\t{(family == "style" ? "13.4" : "13.3")}\ttrue");
+                rows.Add($"{family}\t{site}\t{occurrence}\t{(family != "component" ? "13.4" : "13.3")}\ttrue");
             }
             Check(trace.Length > 0, "No source hooks reached: " + family);
             Console.WriteLine($"PASS host {family}: {trace.Length} reached occurrences / {counts.Count} source operations");
@@ -42,6 +42,7 @@ internal static class HostFailureBoundaryTests
         }
         Check(recoverySites.Length > 0, "No recovery source sites reached.");
         Console.WriteLine($"PASS recovery: {recoverySites.Length} reached source occurrences after native R2");
+        ReorderRetainsBnext();
         TransformSizeOverflow();
         RecoveryFailurePreservesR2();
         AfterJointPublishFailure("diagnostic");
@@ -61,7 +62,15 @@ internal static class HostFailureBoundaryTests
             fixture.Host.PointerPressed(new(10, 10)); fixture.Host.Render();
             fixture.Component.Version = "B"; fixture.Component.Invalidate();
         }
-        else fixture.ConfirmNativeR2();
+        else
+        {
+            fixture.ConfirmNativeR2();
+            if (family == "style-reorder")
+            {
+                fixture.A.SetAttribute("style", fixture.A.GetAttribute("style") + ";position:relative;z-index:4");
+                fixture.A.State |= ElementState.Invalid;
+            }
+        }
         var host = fixture.Host;
         var document = host.Document!;
         var registry = Field<UiComponent.EventRegistry>(host, "_componentRegistry");
@@ -107,9 +116,11 @@ internal static class HostFailureBoundaryTests
         Check(registry.TryGetEventHandler("aether:0", out var handler), "Missing pinned A handler.");
         handler(new("click", document.GetElementById("a")!));
         Check(fixture.Component.Trace.Last() == "A", "B reused token zero and rerouted failed publication.");
-        if (family == "style") fixture.AssertR2Mirror();
+        if (family != "component") fixture.AssertR2Mirror();
+        if (family == "style-reorder")
+            Check(HasPendingElement(host, fixture.A), "Rejected reorder consumed pending same-node batch.");
         host.Render(); // An explicit attempt, after disarming, recovers from current inputs.
-        if (family == "style") fixture.AssertFullOracle();
+        if (family != "component") fixture.AssertFullOracle();
         else Check(!ReferenceEquals(document, host.Document), "Explicit component retry failed.");
         return trace;
     }
@@ -182,6 +193,34 @@ internal static class HostFailureBoundaryTests
         f.Host.Render();
         f.AssertFullOracle();
         return sites.ToArray();
+    }
+
+    private static void ReorderRetainsBnext()
+    {
+        using var f = new Fixture();
+        f.ConfirmNativeR2();
+        f.A.SetAttribute("style", f.A.GetAttribute("style") + ";position:relative;z-index:4");
+        var publication = f.Host.HostPublicationSerial;
+        var frames = f.Renderer.Frames;
+        string? newest = null;
+        f.Host.StylePublicationProbe = phase =>
+        {
+            if (phase != "native-preview") return;
+            f.A.State |= ElementState.Invalid;
+            newest = NativeImage(f.Dom);
+        };
+        var session = ManagedDomFault.ArmSite("host.style.paint-reset", 1);
+        Exception? error = null;
+        try { f.Host.Render(); } catch (Exception caught) { error = caught; }
+        finally { f.Host.StylePublicationProbe = null; session.Dispose(); }
+        Check(session.Fired && ReferenceEquals(error, session.Failure), "Reorder Bnext site missed sentinel.");
+        Check(newest is not null, "Reorder Bnext callback not reached.");
+        Equal(newest, NativeImage(f.Dom), "Reorder rejection rolled back newer Bnext inputs");
+        Equal(publication, f.Host.HostPublicationSerial, "Reorder failure published a projection");
+        Check(Field<HashSet<ElementNode>>(f.Host, "_stateDirtyElements").Contains(f.A), "Reorder consumed callback Bnext.");
+        AssertClosed(f.Host, f.Renderer, frames);
+        f.Host.Render(); f.AssertFullOracle();
+        Console.WriteLine("PASS paint-reset rejection retains callback Bnext without rollback");
     }
 
     private sealed class OversizedTransforms : IReadOnlyList<CssTransformOperation>
@@ -383,6 +422,13 @@ internal static class HostFailureBoundaryTests
             image.Append('/').AppendJoin(',', node.Children).Append('/').AppendJoin(',', node.StateBitWriteSerial);
         }
         return image.ToString();
+    }
+    private static bool HasPendingElement(UiDocumentHost host, ElementNode element)
+    {
+        if (Field<HashSet<ElementNode>>(host, "_stateDirtyElements").Contains(element)) return true;
+        for (var batch = Field<object?>(host, "_retainedStyleBatches"); batch is not null; batch = Field<object?>(batch, "Next"))
+            if (Field<HashSet<ElementNode>>(batch, "Elements").Contains(element)) return true;
+        return false;
     }
     private static void AssertClosed(UiDocumentHost host, TestRenderer renderer, int frames)
     {

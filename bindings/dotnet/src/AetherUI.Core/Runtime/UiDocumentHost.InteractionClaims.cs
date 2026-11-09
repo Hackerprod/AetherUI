@@ -90,8 +90,17 @@ public sealed partial class UiDocumentHost
         InteractionSession? session = null;
         try
         {
+#if AETHER_DOM_FAULT_TESTING
+            ManagedDomFault.Before("host.claims.session-aggregate");
+#endif
             session = new(dom, registry, owner);
+#if AETHER_DOM_FAULT_TESTING
+            if (hoverChain.Count + 2 > session.Claims.Capacity) ManagedDomFault.Before("host.claims.restore-list-capacity");
+#endif
             session.Claims.EnsureCapacity(hoverChain.Count + 2);
+#if AETHER_DOM_FAULT_TESTING
+            if (hoverChain.Count > session.Hover.EnsureCapacity(0)) ManagedDomFault.Before("host.claims.restore-hover-capacity");
+#endif
             session.Hover.EnsureCapacity(hoverChain.Count);
             if (focused is not null) session.Focus = Prepare(focused, ElementState.Focus);
             if (active is not null) session.Active = Prepare(active, ElementState.Active);
@@ -105,6 +114,9 @@ public sealed partial class UiDocumentHost
                 var native = owner.PrepareClaim(dom.BindingCore!.GetHandleCore(element), (int)bit, (ulong)registry.Generation);
                 try
                 {
+#if AETHER_DOM_FAULT_TESTING
+                    ManagedDomFault.Before("host.claims.restore-wrapper");
+#endif
                     var claim = new InteractionClaim(session!, element, bit, native);
                     session!.Claims.Add(claim); return claim;
                 }
@@ -141,9 +153,21 @@ public sealed partial class UiDocumentHost
     {
         var session = _interactionSession ?? throw new InvalidOperationException("The host has no interaction owner.");
         var binding = session.Dom.BindingCore!;
+#if AETHER_DOM_FAULT_TESTING
+        if (session.Claims.Count == session.Claims.Capacity) ManagedDomFault.Before("host.claims.acquire-list-capacity");
+#endif
         session.Claims.EnsureCapacity(session.Claims.Count + 1);
-        if (bit == ElementState.Hover) session.Hover.EnsureCapacity(session.Hover.Count + 1);
+        if (bit == ElementState.Hover)
+        {
+#if AETHER_DOM_FAULT_TESTING
+            if (session.Hover.Count == session.Hover.EnsureCapacity(0)) ManagedDomFault.Before("host.claims.acquire-hover-capacity");
+#endif
+            session.Hover.EnsureCapacity(session.Hover.Count + 1);
+        }
         using var edit = binding.PrepareInteractionAcquire(session.Owner, element, bit, (ulong)session.Registry.Generation);
+#if AETHER_DOM_FAULT_TESTING
+        ManagedDomFault.Before("host.claims.acquire-wrapper");
+#endif
         var claim = new InteractionClaim(session, element, bit, edit.Claim);
         CommitInteractionInputs(edit);
         session.Claims.Add(claim); // Capacity and absence were prepared before commit.
@@ -232,11 +256,29 @@ public sealed partial class UiDocumentHost
                     throw new InvalidOperationException("Interaction loss does not match its pinned registry and target.");
                 var handler = loss.HandlerPresent != 0 ? NativeDomCodec.Decode(loss.Handler) : null;
                 loss.Handler = default; // Never retain/use a native string borrow beyond acknowledgment.
-                (pending ??= []).Add(new(claim, loss, handler, new UiEvent("blur", claim.Element)
+                if (pending is null)
+                {
+#if AETHER_DOM_FAULT_TESTING
+                    ManagedDomFault.Before("host.losses.pending-list");
+#endif
+                    pending = [];
+                }
+#if AETHER_DOM_FAULT_TESTING
+                ManagedDomFault.Before("host.losses.event");
+#endif
+                var uiEvent = new UiEvent("blur", claim.Element)
                 {
                     CurrentTarget = claim.Element,
                     Value = claim.Element.RuntimeValueCore ?? claim.Element.GetAttributeCore("value"),
-                }));
+                };
+#if AETHER_DOM_FAULT_TESTING
+                ManagedDomFault.Before("host.losses.delivery");
+#endif
+                var delivery = new LossDelivery(claim, loss, handler, uiEvent);
+#if AETHER_DOM_FAULT_TESTING
+                ManagedDomFault.BeforeListAdd(pending, "host.losses.pending-growth");
+#endif
+                pending.Add(delivery);
             }
             if (pending is null)
             {
@@ -244,6 +286,9 @@ public sealed partial class UiDocumentHost
                 return;
             }
             InteractionLossCaptureProbe?.Invoke("before-array");
+#if AETHER_DOM_FAULT_TESTING
+            ManagedDomFault.Before("host.losses.batch-array");
+#endif
             var batch = pending.ToArray();
             foreach (var delivery in batch)
             {

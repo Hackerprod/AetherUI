@@ -9,6 +9,7 @@ using AetherUI.Rendering;
 using AetherUI.Runtime;
 
 #if AETHER_DOM_FAULT_TESTING
+if (args.Contains("--claims-faults")) { ClaimsFaultSiteTests.Run(); return; }
 if (args.Contains("--dom-fault-cold")) { DomFaultSiteTests.RunCold(args[^1]); return; }
 if (args.Contains("--host-boundaries")) { HostFailureBoundaryTests.Run(); return; }
 if (args.Contains("--component-faults")) { ComponentFaultSiteTests.Run(); return; }
