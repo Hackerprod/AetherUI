@@ -9,10 +9,6 @@ bool same_record_owner(const FrozenNodeRef& a, const FrozenNodeRef& b) noexcept 
     return a==b && !a.owner_before(b) && !b.owner_before(a);
 }
 }
-const ImmutableStyleBacking::Node* ImmutableStyleBacking::find_leaf(const Node* node, uintptr_t key) noexcept {
-    while (node && !node->leaf()) node=(one(key,node->bit) ? node->one : node->zero).get();
-    return node;
-}
 ImmutableStyleBacking::NodeRef ImmutableStyleBacking::build_sorted(std::span<const Entry> entries) {
     if (entries.empty()) return {};
     if (entries.size()==1) return std::make_shared<const Node>(entries.front());

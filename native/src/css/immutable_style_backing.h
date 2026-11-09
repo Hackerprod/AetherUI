@@ -38,7 +38,10 @@ class ImmutableStyleBacking {
     const size_t size_;
     explicit ImmutableStyleBacking(NodeRef root, size_t size) : root_(std::move(root)), size_(size) {}
     static bool one(uintptr_t key, unsigned bit) noexcept { return ((key >> bit) & 1) != 0; }
-    static const Node* find_leaf(const Node* node, uintptr_t key) noexcept;
+    static const Node* find_leaf(const Node* node, uintptr_t key) noexcept {
+        while (node && !node->leaf()) node=(one(key,node->bit) ? node->one : node->zero).get();
+        return node;
+    }
     static NodeRef build_sorted(std::span<const Entry>);
     static NodeRef replace(const NodeRef&, uintptr_t, const FrozenNodeRef&);
     static NodeRef insert_at(const NodeRef&, uintptr_t, unsigned, const NodeRef&);
