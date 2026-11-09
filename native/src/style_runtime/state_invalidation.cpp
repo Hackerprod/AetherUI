@@ -140,13 +140,13 @@ Program compile(int32_t rule_id, const compiled_selector_s& selector) {
                     result.state_mask |= mask;
                     result.occurrences.push_back({mask, pseudo.kind == PSEUDO_FORBIDDEN_STATE,
                         item.negated, reason == Fallback::none ? Coverage::proven_superset : Coverage::document_fallback,
-                        reason, route});
+                        reason, filter(steps[i].compound), route});
                 } else if (!logical(pseudo.kind) && !fixed(pseudo.kind)) {
                     // Future AST kinds cannot silently claim coverage. This one
                     // occurrence alone conservatively depends on every state bit.
                     result.state_mask = UINT32_MAX;
                     result.occurrences.push_back({UINT32_MAX, false, item.negated,
-                        Coverage::document_fallback, Fallback::unsupported_ast, {}});
+                        Coverage::document_fallback, Fallback::unsupported_ast, {}, {}});
                 }
                 if (!pseudo.nested) continue;
                 auto continuation = route;
@@ -182,7 +182,8 @@ std::vector<Candidate> plan(aether_node_s* root, const std::vector<Program>& pro
         for (const auto& program : programs) {
             if (!(program.state_mask & change.changed_bits)) continue;
             for (const auto& occurrence : program.occurrences) {
-                if (!(occurrence.state_mask & change.changed_bits)) continue;
+                if (!(occurrence.state_mask & change.changed_bits) ||
+                    !accepts(occurrence.source_filter, change.node)) continue;
                 std::vector<aether_node_s*> candidates;
                 const bool fallback = occurrence.coverage == Coverage::document_fallback;
                 if (fallback) {

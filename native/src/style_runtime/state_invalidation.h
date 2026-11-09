@@ -24,6 +24,7 @@ struct Occurrence {
     bool under_negation = false;
     Coverage coverage = Coverage::proven_superset;
     Fallback fallback = Fallback::none;
+    StaticFilter source_filter; // necessary at the state occurrence, even on fallback
     std::vector<Hop> route; // changed element -> possible selector subject/host
 };
 struct Program {
