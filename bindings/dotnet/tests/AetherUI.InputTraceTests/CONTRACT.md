@@ -54,3 +54,18 @@ Build Release and run the executable with `--baseline`. It requires a native lib
 Output includes total native work, total managed thread allocations and process-wide GC deltas, plus observational wall p50/p95 and process CPU milliseconds. Ten samples are a small diagnostic sample, not a stable latency benchmark. Managed allocation bytes exclude native allocations; process CPU/GC may include runtime background work. There is no hard timing threshold.
 
 Linux/.NET 10.0.201 observation on the phase-A implementation: all three owner modes had 1020/5020/10020 compute nodes and transition-context entries for ten moves at 100/500/1000 cards, respectively. Style updates and layout builds were zero in every case. The corresponding managed allocation totals were 90240/378240/738240 bytes; no GC collections occurred in those short samples. This measures existing linear work despite no visual effect, not an improvement.
+
+## Integrated checkpoint validation limits
+
+The A2 trace harness was also rebuilt and run with the B1/B2 persistent-backing
+native library: all 16 traces passed. The nine baseline scenarios still report
+N compute and transition-context visits despite zero style updates/layout.
+
+The existing `AetherUI.Tests` suite was cross-built for its declared Windows
+framework and executed on Linux using .NET 10.0.201. Both the baseline before A2
+and the A2+B1/B2 integration passed 96/100 tests, with the same four failures:
+flex G8 cross-offset expectations (35 versus 30), calc(2) line-height (2 versus 7),
+and two file-image tests using Windows-style paths in Linux. No assertions were
+removed and no tests were skipped. This result is a differential regression
+check, not a full managed-suite PASS or Windows execution. These failures must
+remain visible rather than becoming automatic exclusions.
