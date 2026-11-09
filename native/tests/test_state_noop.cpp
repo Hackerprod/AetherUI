@@ -106,30 +106,33 @@ static void batches_and_fallbacks() {
     aether_style_revision_t rejected{};CHECK(aether_style_runtime_commit_revision(f.runtime,tx,&rejected)==AETHER_ERROR_INVALID_STATE&&!rejected);
     CHECK(f.doc->mutation_journal.floor_epoch()==floor&&f.doc->mutation_journal.size()==2);aether_style_transaction_destroy(tx);
 }
-static void retained_history_and_bounded_journal() {
+static void retained_history_and_bounded_journal(bool local=false) {
     Fixture f(20);
     std::vector<aether_style_revision_t> history;history.reserve(10000);
     unsigned full_fallbacks=0;
+    const auto subject=local?f.card:f.child;
     const auto first_generation=aether_style_revision_generation(f.base)+1;
     for(unsigned i=0;i<10000;++i) {
-        aether_element_set_state(f.child,(i&1)?0:AETHER_STATE_HOVER);
+        aether_element_set_state(subject,(i&1)?0:AETHER_STATE_HOVER);
         auto tx=f.prepare();const auto info=result(tx);
         if(!info.incremental){CHECK(info.fallback==AETHER_STATE_FALLBACK_JOURNAL_INCOMPLETE);++full_fallbacks;}
-        CHECK(info.semantic_delta_count==0&&info.visual_delta_count==0);
+        if(local)CHECK(info.semantic_delta_count>0&&info.visual_delta_count>0);
+        else CHECK(info.semantic_delta_count==0&&info.visual_delta_count==0);
         f.publish(tx);aether_style_transaction_destroy(tx);
         aether_style_revision_t retained=nullptr;ok(aether_style_revision_clone(f.base,&retained));history.push_back(retained);
-        CHECK(f.doc->mutation_journal.size()<=aether::dom::MutationJournal::capacity);
+        CHECK(f.doc->mutation_journal.size()==0&&f.doc->mutation_journal.floor_epoch()==f.doc->identity->mutation_epoch);
     }
-    CHECK(full_fallbacks>0); // Incremental ACK is intentionally still prohibited.
+    CHECK(full_fallbacks==0); // Exact certified publication recognizes the bounded journal.
     for(size_t i=0;i<history.size();++i) {
         CHECK(aether_style_revision_generation(history[i])==first_generation+i);
         aether_computed_style_handle_t style=nullptr;aether_node_t node=nullptr;
-        ok(aether_style_revision_get_style(history[i],3,&node,&style,nullptr));CHECK(node==f.child);
-        const auto* ledger=style->revision->directory().find(reinterpret_cast<uintptr_t>(f.child));
+        ok(aether_style_revision_get_style(history[i],local?2:3,&node,&style,nullptr));CHECK(node==subject);
+        const auto* ledger=style->revision->directory().find(reinterpret_cast<uintptr_t>(subject));
         CHECK(ledger&&ledger->committed_state==((i&1)?0:AETHER_STATE_HOVER));
         CHECK(style->revision->generation()==first_generation+i);
+        if(local)CHECK(style->style.background_color.r==((i&1)?0.0f:1.0f));
         aether_computed_style_handle_destroy(style);aether_style_revision_destroy(history[i]);
     }
-    std::printf("10000 retained no-op revisions preserve generations/ledgers; %u explicit FULL journal fallbacks\n",full_fallbacks);
+    std::printf("10000 retained %s revisions preserve generations/ledgers; %u FULL journal fallbacks with certified ACK\n",local?"local":"no-op",full_fallbacks);
 }
-int main(){noop_counts(100);noop_counts(500);noop_counts(1000);inherited_first_full_shadow();batches_and_fallbacks();retained_history_and_bounded_journal();}
+int main(){noop_counts(100);noop_counts(500);noop_counts(1000);inherited_first_full_shadow();batches_and_fallbacks();retained_history_and_bounded_journal();retained_history_and_bounded_journal(true);}

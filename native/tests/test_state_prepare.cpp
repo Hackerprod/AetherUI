@@ -242,10 +242,10 @@ static void local_reentrant(const char*,const char*,const char*,const char*,void
 }
 static void local_callback_preserves_newer_input() {
     Fixture f(".card:hover { width:var(--missing); background-color:red }");f.full();
-    const auto floor=f.doc->mutation_journal.floor_epoch();aether_element_set_state(f.a,1);
+    aether_element_set_state(f.a,1);
     LocalCallbackState callback{&f};aether_style_runtime_set_diagnostics_callback(f.runtime,local_reentrant,&callback);
     auto tx=f.prepare();const auto staged=result(tx);CHECK(!callback.fired);
-    callback.expected_floor=staged.incremental?floor:f.doc->identity->mutation_epoch;
+    callback.expected_floor=f.doc->identity->mutation_epoch;
     CHECK(staged.incremental||staged.fallback==AETHER_STATE_FALLBACK_DISABLED);
     aether_style_revision_t outer=nullptr;ok(aether_style_runtime_commit_revision(f.runtime,tx,&outer));
     CHECK(callback.fired&&callback.inner_generation==staged.generation+1);
