@@ -127,7 +127,9 @@ if(AETHERUI_BUILD_TESTS)
     add_test(NAME aether.abi-c COMMAND aether_abi_c_smoke_test)
 
     add_executable(aether_shadow_values_test tests/test_shadow_values.cpp
-        src/style_runtime/shadow_values.cpp src/style_runtime/css_variable_tokens.cpp)
+        src/style_runtime/shadow_values.cpp src/style_runtime/css_variable_tokens.cpp
+        src/css/css_length.cpp)
+    target_compile_definitions(aether_shadow_values_test PRIVATE AETHER_CSS_NUMERIC_ONLY)
     target_link_libraries(aether_shadow_values_test PRIVATE AetherUI::Core)
     add_test(NAME aether.shadow-values COMMAND aether_shadow_values_test)
 

@@ -37,9 +37,11 @@ static bool bi_try_keyword(const char* src, const char* const* keywords, int cou
 static bool bi_css_length(const std::string& text, aether_css_length& length,
                           bool nonnegative = false, bool percentage = true) {
     aether::css::calc_value_s result;
+    double original_number = 0.0;
     const bool calc = (text.size() >= 5 && str_iequals(text.substr(0, 5), "calc("));
     if (!(calc ? aether::css::try_parse_calc(text, result) :
-                 aether::css::try_parse_numeric_literal(text, result))) return false;
+                 aether::css::try_parse_numeric_literal(text, result, &original_number))) return false;
+    if (nonnegative && !calc && original_number < 0.0) return false;
     if (result.kind == aether::css::calc_value_kind_e::number) {
         if (result.number != 0 || calc) return false;
         length = aether_css_length_zero(); return true;
@@ -304,9 +306,11 @@ static bool bi_try_font_family(const char* src, std::string& out) {
 // Line-height preserves the existing zero-valued NUMBER calc compatibility.
 // Both validation and application use the same typed evaluation policy.
 static bool bi_read_line_height(const std::string& source, aether::css::calc_value_s& result) {
+    double original_number = 0.0;
     const bool calc = (source.size() >= 5 && str_iequals(source.substr(0, 5), "calc("));
     if (!(calc ? aether::css::try_parse_calc(source, result) :
-                 aether::css::try_parse_numeric_literal(source, result))) return false;
+                 aether::css::try_parse_numeric_literal(source, result, &original_number))) return false;
+    if (!calc && original_number < 0.0) return false;
     if (result.kind == aether::css::calc_value_kind_e::number &&
         (!std::isfinite(result.number) || std::abs(result.number) > std::numeric_limits<float>::max())) return false;
     return calc || (result.kind == aether::css::calc_value_kind_e::number ? result.number >= 0 : result.length.value >= 0);

@@ -55,6 +55,13 @@ static shadow_value_error parse_component(const std::string& source,
             length.unit == AETHER_CSS_UNIT_AUTO || length.unit == AETHER_CSS_UNIT_PERCENT ||
             length_count == 4) return shadow_value_error::invalid;
         if (!allow_spread && length_count == 3) return shadow_value_error::spread_not_allowed;
+        const bool calc = token.size() >= 5 && str_iequals(token.substr(0,5), "calc(");
+        if (length_count == 2 && !calc) {
+            aether::css::calc_value_s literal;
+            double original_number = 0.0;
+            if (!aether::css::try_parse_numeric_literal(token, literal, &original_number) ||
+                original_number < 0.0) return shadow_value_error::invalid;
+        }
         // A contextual runtime never borrows parser compatibility defaults.
         float pixels = 0;
         if (measures) {
@@ -62,7 +69,6 @@ static shadow_value_error parse_component(const std::string& source,
             if (used.kind != measure_used_kind_e::resolved) return shadow_value_error::invalid;
             pixels = used.px;
         } else pixels = aether_css_length_resolve(length, 0, 16, 16, 1920, 1080);
-        const bool calc = token.size() >= 5 && str_iequals(token.substr(0,5), "calc(");
         if (!std::isfinite(pixels) || (length_count == 2 && pixels < 0 && !calc)) return shadow_value_error::invalid;
         if (length_count == 2) pixels = std::max(0.f, pixels);
         if (length_count == 0) shadow.offset_x = pixels;
