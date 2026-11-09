@@ -322,5 +322,6 @@ struct style_property_registry_s {
 // ═══ Registry API ══════════════════════════════════════════════
 
 style_property_registry_s* style_property_registry_get_global();
+std::shared_ptr<const style_property_registry_s> style_property_registry_pin();
 void style_property_registry_init();
 void style_property_registry_shutdown();

@@ -544,7 +544,7 @@ bool style_source_compile_shorthand(
     const std::string& source,
     bool important,
     int32_t declaration_order,
-    style_property_registry_s* registry,
+    const style_property_registry_s* registry,
     std::vector<compiled_property_declaration_s>& output,
     aether_style_diagnostic_fn diagnostics_callback,
     void* diagnostics_user_data);

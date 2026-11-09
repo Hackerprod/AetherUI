@@ -137,6 +137,8 @@ struct aether_style_runtime_s {
     std::shared_ptr<document_measure_context_s> document_measures;
     std::shared_ptr<const style_revision_s> revision;
     std::shared_ptr<const CompiledStyleInputs> revision_compiled;
+    std::shared_ptr<const style_property_registry_s> registry;
+    std::shared_ptr<const style_property_registry_s> revision_registry;
     uint64_t generation = 0;
     uint64_t sheet_epoch = 0;
     uint64_t revision_sheet_epoch = 0;
@@ -507,7 +509,7 @@ static PreparedNodeResult* compute_node(aether_style_runtime_s* runtime, aether_
     // The legacy subtree entry point starts an isolated inheritance scope.
     // Contextual preparation never installs this compatibility boundary.
     if (node == runtime->legacy_inheritance_root) { parent = nullptr; inherited_parent_impact = 0; }
-    auto* registry = style_property_registry_get_global();
+    const auto* registry = runtime->registry.get();
     const auto parent_view=parent ? std::optional<ComputedStyleReadView>(parent->style->view()) : std::nullopt;
     MutableStyleBuilder next_builder;
     auto& next=next_builder.value;
@@ -1044,6 +1046,7 @@ AETHER_API aether_status_t aether_style_runtime_create(
     style_property_registry_init();
     auto* runtime = new (std::nothrow) aether_style_runtime_s();
     if (!runtime) return AETHER_ERROR_OUT_OF_MEMORY;
+    runtime->registry=style_property_registry_pin();
     runtime->options = options ? *options : aether_style_runtime_options_t{};
     if (runtime->options.max_variable_depth <= 0) runtime->options.max_variable_depth = 32;
     if (runtime->options.max_variable_expansion_length <= 0)
@@ -1183,6 +1186,8 @@ AETHER_API int32_t aether_style_runtime_set_environment(
 struct aether_style_transaction_s {
     aether_style_runtime_s* owner = nullptr;
     StyleRevisionRef base_pin;
+    std::shared_ptr<const style_property_registry_s> base_registry_pin;
+    std::shared_ptr<const CompiledStyleInputs> base_compiled_pin;
     uint64_t base_generation = 0, base_sheet_epoch = 0, input_epoch = 0, base_style_tree_epoch = 0;
     std::shared_ptr<node_identity_s> document_lifetime;
     std::unique_ptr<aether_style_runtime_s> candidate;
@@ -1225,7 +1230,7 @@ static aether_status_t prepare_revision_impl(
     struct guard_s { bool& active; explicit guard_s(bool& v) : active(v) { active = true; } ~guard_s() { active = false; } } guard(runtime->preparing);
     try {
         auto transaction = std::make_unique<aether_style_transaction_s>();
-        transaction->owner = runtime; transaction->base_pin = runtime->revision; transaction->base_generation = runtime->generation;
+        transaction->owner = runtime; transaction->base_pin = runtime->revision; transaction->base_registry_pin=runtime->registry; transaction->base_compiled_pin=runtime->revision_compiled; transaction->base_generation = runtime->generation;
         transaction->base_sheet_epoch = runtime->sheet_epoch;
         auto* document = aether_dom_root(root);
         transaction->document_lifetime = document->identity;
@@ -1234,6 +1239,7 @@ static aether_status_t prepare_revision_impl(
         transaction->candidate = std::make_unique<aether_style_runtime_s>();
         auto& staged = *transaction->candidate;
         staged.options = runtime->options; staged.environment = requested_environment;
+        staged.registry=style_property_registry_pin();if(!staged.registry||!staged.registry->sealed)return AETHER_ERROR_INVALID_STATE;
         if (isolate_legacy_root && root != document && root->parent && root->parent->type != AETHER_NODE_DOCUMENT)
             staged.legacy_inheritance_root = root;
         staged.compiled = runtime->compiled;
@@ -1310,7 +1316,7 @@ static aether_status_t prepare_revision_impl(
         transaction->output = std::make_unique<aether_style_revision_handle_s>(); transaction->output->value = revision;
         if (!document->identity->alive || document->identity->mutation_epoch != transaction->input_epoch ||
             runtime->generation != transaction->base_generation || runtime->sheet_epoch != transaction->base_sheet_epoch ||
-            document->identity->style_tree_epoch != transaction->base_style_tree_epoch)
+            document->identity->style_tree_epoch != transaction->base_style_tree_epoch||staged.registry!=style_property_registry_pin())
             return AETHER_ERROR_INVALID_STATE;
         *out_transaction = transaction.release();
         return AETHER_OK;
@@ -1333,7 +1339,8 @@ public:
         *output=nullptr;
         const auto base=runtime->revision;
         if(!base||!base->authentic_owner(base)||base->document_lifetime()!=document->identity||
-            base->backing()||runtime->revision_compiled!=runtime->compiled)
+            base->backing()||runtime->revision_compiled!=runtime->compiled||
+            runtime->revision_registry!=style_property_registry_pin())
             return AETHER_ERROR_INVALID_STATE;
         if(runtime->generation!=base->generation()||runtime->sheet_epoch!=runtime->revision_sheet_epoch||
             document->identity->structure_epoch!=base->structure_epoch()||
@@ -1367,13 +1374,13 @@ public:
         if(runtime->generation==UINT64_MAX||document->identity->style_tree_epoch==UINT64_MAX)
             return AETHER_ERROR_INVALID_STATE;
         auto transaction=std::make_unique<aether_style_transaction_s>();
-        transaction->owner=runtime;transaction->base_pin=base;
+        transaction->owner=runtime;transaction->base_pin=base;transaction->base_registry_pin=runtime->registry;transaction->base_compiled_pin=runtime->revision_compiled;
         transaction->base_generation=runtime->generation;transaction->base_sheet_epoch=runtime->sheet_epoch;
         transaction->document_lifetime=document->identity;transaction->input_epoch=document->identity->mutation_epoch;
         transaction->base_style_tree_epoch=document->identity->style_tree_epoch;
         transaction->candidate=std::make_unique<aether_style_runtime_s>();
         auto& staged=*transaction->candidate;staged.options=runtime->options;staged.environment=runtime->environment;
-        staged.compiled=runtime->compiled;
+        staged.compiled=runtime->compiled;staged.registry=runtime->revision_registry;
         staged.document_measures=std::make_shared<document_measure_context_s>(*runtime->document_measures);
         staged.document_measures->generation=runtime->generation+1;
         transaction->diagnostics=std::make_unique<stylesheet_diagnostics_s>(runtime->diag_cb,runtime->diag_user_data);
@@ -1424,6 +1431,7 @@ AETHER_API aether_status_t aether_style_runtime_prepare_state_revision(
         if(!base)fallback=AETHER_STATE_FALLBACK_FIRST_REVISION;
         else if(!base_revision||base_revision->value!=base||!base->authentic_owner(base_revision->value)||
             !base->contextual()||base->document_lifetime()!=document->identity)fallback=AETHER_STATE_FALLBACK_BASE_REVISION;
+        else if(runtime->revision_registry!=style_property_registry_pin())fallback=AETHER_STATE_FALLBACK_REGISTRY;
         else if(runtime->compiled!=runtime->revision_compiled||runtime->sheet_epoch!=runtime->revision_sheet_epoch)fallback=AETHER_STATE_FALLBACK_SHEET;
         else if(!equal_environment(requested,base->environment()))fallback=AETHER_STATE_FALLBACK_ENVIRONMENT;
         else if(base->structure_epoch()!=document->identity->structure_epoch||
@@ -1480,7 +1488,8 @@ AETHER_API aether_status_t aether_style_runtime_commit_revision(
     aether_style_runtime_t runtime, aether_style_transaction_t transaction, aether_style_revision_t* out_revision) {
     if (out_revision) *out_revision = nullptr;
     if (!runtime || !transaction || !out_revision) return AETHER_ERROR_NULL_ARG;
-    if (transaction->owner != runtime || transaction->base_pin!=runtime->revision || transaction->committed || runtime->preparing ||
+    if (transaction->owner != runtime || transaction->base_pin!=runtime->revision ||
+        transaction->candidate->registry!=style_property_registry_pin() || transaction->committed || runtime->preparing ||
         runtime->owner_thread != std::this_thread::get_id() || runtime->generation != transaction->base_generation ||
         runtime->sheet_epoch != transaction->base_sheet_epoch || !transaction->document_lifetime->alive ||
         transaction->document_lifetime->mutation_epoch != transaction->input_epoch ||
@@ -1498,6 +1507,7 @@ AETHER_API aether_status_t aether_style_runtime_commit_revision(
     runtime->environment = transaction->revision->environment();
     runtime->generation = transaction->revision->generation();
     runtime->revision = transaction->revision;
+    runtime->registry=transaction->candidate->registry;runtime->revision_registry=runtime->registry;
     runtime->revision_compiled = transaction->candidate->compiled;
     runtime->revision_sheet_epoch = transaction->base_sheet_epoch;
     transaction->committed = true;

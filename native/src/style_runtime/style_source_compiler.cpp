@@ -146,7 +146,7 @@ static bool try_compile_longhand(
     const std::string& value,
     bool important,
     int32_t declaration_order,
-    style_property_registry_s* registry,
+    const style_property_registry_s* registry,
     compiled_property_declaration_s& output,
     aether_style_diagnostic_fn diagnostics_callback,
     void* diagnostics_user_data)
@@ -204,7 +204,7 @@ bool style_source_compile_shorthand(
     const std::string& source,
     bool important,
     int32_t declaration_order,
-    style_property_registry_s* registry,
+    const style_property_registry_s* registry,
     std::vector<compiled_property_declaration_s>& output,
     aether_style_diagnostic_fn diagnostics_callback,
     void* diagnostics_user_data)
@@ -236,7 +236,7 @@ bool style_source_compile_shorthand(
 static declaration_compilation_result compile_declarations(
     const std::string& source,
     const std::string& original,
-    style_property_registry_s* registry,
+    const style_property_registry_s* registry,
     aether_style_diagnostic_fn diagnostics_callback,
     void* diagnostics_user_data)
 {
@@ -324,7 +324,7 @@ static aether_status_t compile_range(
     media_condition_s* inherited_condition,
     int64_t sheet_handle,
     style_sheet_layer layer,
-    style_property_registry_s* registry,
+    const style_property_registry_s* registry,
     int32_t& rule_id_counter,
     std::vector<compiled_rule_s>& out_rules,
     aether_style_diagnostic_fn diagnostics_callback,

@@ -492,8 +492,25 @@ static void retained_compiled_inputs() {
     check(rule->rule_id==id && pinned->sheets[0]->rules[0].rule_id==id,"removed AST stays alive under old pin");
     check(pinned->state_programs[0].state_mask&AETHER_STATE_HOVER,"pinned dependency program survives removal");
 }
+static void retained_registry_inputs() {
+    fixture f;f.add(".a { opacity: .4 }");f.resolve();
+    const auto pinned=f.runtime->registry;
+    aether_style_transaction_t transaction=nullptr;
+    check(aether_style_runtime_prepare_revision(f.runtime,f.doc,nullptr,&transaction)==AETHER_OK,"prepare with registry pin");
+    style_property_registry_shutdown();style_property_registry_init();
+    check(pinned&&pinned!=style_property_registry_pin()&&pinned->sealed,"old sealed registry remains alive under pin");
+    aether_style_revision_t output=nullptr;
+    check(aether_style_runtime_commit_revision(f.runtime,transaction,&output)==AETHER_ERROR_INVALID_STATE&&!output,"registry replacement rejects prepared candidate");
+    aether_style_transaction_destroy(transaction);
+    aether_style_revision_t base=nullptr;check(aether_style_runtime_retain_revision(f.runtime,&base)==AETHER_OK,"retain old registry revision");
+    check(aether_style_runtime_prepare_state_revision(f.runtime,f.doc,base,nullptr,0,nullptr,&transaction)==AETHER_OK,"prepare FULL registry fallback");
+    aether_style_state_result_t result{};result.struct_size=sizeof(result);
+    check(aether_style_transaction_state_result(transaction,&result)==AETHER_OK&&result.fallback==AETHER_STATE_FALLBACK_REGISTRY&&!result.incremental,"registry replacement never certifies incremental");
+    aether_style_transaction_destroy(transaction);aether_style_revision_destroy(base);
+}
 int main() {
     retained_compiled_inputs();
+    retained_registry_inputs();
     counter_transaction(); handle_transaction(); source_and_inline_rejection();
     reentrant_metadata_and_cache();
     reentrant_capacity_abort(false); reentrant_capacity_abort(true);
