@@ -6,6 +6,8 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <limits>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -330,6 +332,134 @@ void count_guards() {
         check(output.items.empty() && output.uses_current_color.empty(), "zero capacity none clears output");
     }
 }
+
+void rejected_blur(const std::string& source, bool box, const measure_inputs_s* measures) {
+    const std::string label = std::string(box ? "box blur: " : "text blur: ") + source;
+    parsed_shadow_list output{{sentinel(21), sentinel(22)}, {false, true}};
+    output.items.reserve(9); output.uses_current_color.reserve(131);
+    ParsedSnapshot before(output);
+    check(shadow_list_parse(source, box, output, {}, measures) == shadow_value_error::invalid, label);
+    before.unchanged(output, label);
+    Destination destination;
+    check(shadow_list_apply(source, box, destination.list, destination.references,
+                            destination.policy(), measures) == shadow_value_error::invalid, label + " apply");
+    destination.unchanged(label);
+    check(destination.events.allocations == 0 && destination.events.requested == 0,
+          label + " rejects before allocation");
+}
+
+void literal_blur_sign() {
+    const measure_inputs_s zero{0, 0, 0, 0, 0};
+    const measure_inputs_s font23{23, 800, 600, 17, 31};
+    const measure_inputs_s negative_font{-23, 800, 600, 17, 31};
+    struct Rejected { const char* source; const measure_inputs_s* measures; };
+    // Representative units and contexts, not their Cartesian product. A valid
+    // first shadow must not publish when the second blur fails.
+    const Rejected rejected[] = {
+        {"1px 2px -1e-46px currentColor", nullptr},
+        {"1px 2px -1e-46 currentColor", nullptr},
+        {"1px 2px -1e-46em", &zero},
+        {"1px 2px -1e-46rem", &font23},
+        {"1px 2px -1e-46vw", &zero},
+        {"1px 2px -1e-46vh", &font23},
+        {"1px 2px red, 3px 4px -1e-46px currentColor", nullptr},
+        {"1px 2px currentColor, 3px 4px -1e-46em red", &zero},
+        {"1px 2px -1e-400px", nullptr},
+        {"1px 2px 1e400px", nullptr},
+        {"1px 2px -1e-46pxjunk", &font23},
+        {"1px 2px 2em", &negative_font},
+        {"1px 2px 3e38em", nullptr},
+        {"1px 2px calc(0)", nullptr},
+        {"1px 2px calc(2)", &font23},
+        {"1px 2px calc(1 - 1)", &zero}
+    };
+    struct Accepted {
+        const char* source;
+        const measure_inputs_s* measures;
+        float x, y, blur, spread;
+    };
+    const Accepted accepted[] = {
+        {"1px 2px -0px currentColor", nullptr, 1, 2, 0, 0},
+        {"1px 2px 1e-46px currentColor", nullptr, 1, 2, 0, 0},
+        {"1px 2px -0em currentColor", &font23, 1, 2, 0, 0},
+        {"1px 2px 1e-46rem currentColor", &font23, 1, 2, 0, 0},
+        {"1px 2px 2em currentColor", &font23, 1, 2, 46, 0},
+        {"1px 2px 2em currentColor", &zero, 1, 2, 0, 0},
+        // The private parser intentionally retains legacy Number-as-px.
+        {"1 2 2 currentColor", nullptr, 1, 2, 2, 0},
+        {"1 2 1e-46 currentColor", &font23, 1, 2, 0, 0},
+        {"1 2 -0 currentColor", nullptr, 1, 2, 0, 0},
+        {"-2px -1e-46px 2px currentColor", nullptr, -2, 0, 2, 0},
+        {"-1e-46em -2px 2px currentColor", &font23, 0, -2, 2, 0},
+        {"1px 2px calc(2px - 5px) currentColor", nullptr, 1, 2, 0, 0},
+        {"1px 2px calc(2px - 5px) currentColor", &font23, 1, 2, 0, 0},
+        {"1px 2px calc(2em) currentColor", &negative_font, 1, 2, 0, 0}
+    };
+    for (bool box : {false, true}) {
+        for (const auto& item : rejected) rejected_blur(item.source, box, item.measures);
+        for (const auto& item : accepted) {
+            parsed_shadow_list output;
+            require(shadow_list_parse(item.source, box, output, {}, item.measures) == shadow_value_error::none,
+                    "accepted blur parse");
+            require(output.items.size() == 1, "accepted blur parse count");
+            const auto fields = [&](const aether_shadow& s) {
+                return s.offset_x == item.x && s.offset_y == item.y && s.blur_radius == item.blur &&
+                       s.spread_radius == item.spread && !s.inset;
+            };
+            check(fields(output.items[0]), std::string(item.source) + " exact parsed fields");
+            check(output.uses_current_color == std::vector<bool>{true}, "accepted blur parsed currentColor");
+            Destination destination;
+            require(shadow_list_apply(item.source, box, destination.list, destination.references,
+                                      destination.policy(), item.measures) == shadow_value_error::none,
+                    "accepted blur apply");
+            require(destination.list.items && destination.list.count == 1, "accepted blur apply count");
+            check(fields(destination.list.items[0]), std::string(item.source) + " exact applied fields");
+            check(destination.references == std::vector<bool>{true}, "accepted blur applied currentColor");
+            check(destination.events.allocations == 1 && destination.events.requested == sizeof(aether_shadow) &&
+                  destination.events.releases == 1 && destination.events.old_releases == 1,
+                  "accepted blur replacement storage");
+        }
+        // Contextual conversion already throws on a non-finite result. Preserve
+        // that contract rather than pretending it is the literal invalid code.
+        const measure_inputs_s nonfinite{std::numeric_limits<float>::infinity(), 800, 600, 17, 31};
+        parsed_shadow_list output{{sentinel(21), sentinel(22)}, {true, false}};
+        ParsedSnapshot before(output);
+        bool parse_threw = false;
+        try {
+            const auto result = shadow_list_parse("1px 2px 2em", box, output, {}, &nonfinite);
+            check(false, "non-finite parse must throw, returned " + std::to_string(int(result)));
+        } catch (const std::overflow_error&) { parse_threw = true; }
+        check(parse_threw, "non-finite contextual parse guard");
+        before.unchanged(output, "non-finite contextual parse");
+        Destination destination;
+        bool apply_threw = false;
+        try {
+            const auto result = shadow_list_apply("1px 2px 2em", box, destination.list, destination.references,
+                                                  destination.policy(), &nonfinite);
+            check(false, "non-finite apply must throw, returned " + std::to_string(int(result)));
+        } catch (const std::overflow_error&) { apply_threw = true; }
+        check(apply_threw, "non-finite contextual apply guard");
+        destination.unchanged("non-finite contextual apply");
+        check(destination.events.allocations == 0, "non-finite context before allocation");
+    }
+    for (const auto* spread : {"-2px", "-1e-46px"}) {
+        const std::string source = std::string("-2px 3px 4px ") + spread + " currentColor";
+        parsed_shadow_list output;
+        require(shadow_list_parse(source, true, output, {}, &font23) == shadow_value_error::none,
+                "negative spread parse");
+        require(output.items.size() == 1, "negative spread count");
+        check(output.items[0].offset_x == -2 && output.items[0].spread_radius ==
+              (std::strcmp(spread, "-2px") == 0 ? -2 : 0), "negative spread exact fields");
+        Destination destination;
+        require(shadow_list_apply(source, true, destination.list, destination.references,
+                                  destination.policy(), &font23) == shadow_value_error::none,
+                "negative spread apply");
+        require(destination.list.items && destination.list.count == 1, "negative spread applied count");
+        check(destination.list.items[0].offset_x == -2 && destination.list.items[0].spread_radius ==
+              (std::strcmp(spread, "-2px") == 0 ? -2 : 0), "negative spread applied exact fields");
+        check(destination.references == std::vector<bool>{true}, "negative spread keeps currentColor");
+    }
+}
 }
 
 int main() {
@@ -338,6 +468,7 @@ int main() {
     ordered_groups();
     apply_transactions();
     count_guards();
+    literal_blur_sign();
     check(std::strcmp(shadow_value_diagnostic_code(true), "AETHER-CSS-BOX-SHADOW") == 0, "box diagnostic code");
     check(std::strcmp(shadow_value_diagnostic_code(false), "AETHER-CSS-TEXT-SHADOW") == 0, "text diagnostic code");
     std::printf("Shadow values: %d checks, %d failures\n", checks, failures);

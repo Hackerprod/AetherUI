@@ -41,7 +41,8 @@ std::vector<float> signature(const aether_shadow_list& list) {
 void run(const std::string& prop, const std::string& rules, const std::string& inlined,
          const std::string& expected, const std::string& label, bool dedicated = false,
          bool root = false, const std::string& diagnostic_value = "",
-         const std::string& sibling_expected = "") {
+         const std::string& sibling_expected = "", bool exact_fields = false,
+         const std::string& diagnostic_message = "") {
     std::vector<Diagnostic> diagnostics;
     aether_doc_t doc{};
     aether_style_runtime_t rt{};
@@ -110,7 +111,8 @@ void run(const std::string& prop, const std::string& rules, const std::string& i
     auto b = signature(expected_list);
     bool equal = a.size() == b.size();
     for (size_t i = 0; i < a.size() && i < b.size(); ++i)
-        equal = equal && std::isfinite(a[i]) && std::fabs(a[i] - b[i]) < .0001f;
+        equal = equal && std::isfinite(a[i]) &&
+                (exact_fields ? a[i] == b[i] : std::fabs(a[i] - b[i]) < .0001f);
     check(equal, prop + " / " + label);
     if (!sibling_expected.empty()) {
         need(found_sibling && found_sibling_want, "sibling updates");
@@ -141,18 +143,57 @@ void run(const std::string& prop, const std::string& rules, const std::string& i
                     (prop == "text-shadow" ? "AETHER-CSS-TEXT-SHADOW" : "AETHER-CSS-BOX-SHADOW") &&
                 d.property == prop) {
                 ++count;
-                if (d.value == diagnostic_value)
+                if (d.value == diagnostic_value &&
+                    (diagnostic_message.empty() || d.message == diagnostic_message))
                     ++exact;
             }
         check(count == 1, prop + " / exactly one dedicated owned diagnostic / " + label);
         if (!diagnostic_value.empty())
             check(exact == 1, prop + " / exact owned diagnostic property and value / " + label);
     }
+    if (exact_fields)
+        check(diagnostics.size() == (dedicated ? 1u : 0u),
+              prop + " / exact total diagnostic count / " + label);
 }
 } // namespace
 int main() {
     const std::string lower = "2px 3px 4px #e13c72";
     for (const std::string p : {"box-shadow", "text-shadow"}) {
+        const std::string invalid_message = p == "box-shadow"
+            ? "Each box shadow requires two to four lengths and an optional color or inset keyword."
+            : "Each text shadow requires two or three lengths and an optional color.";
+        const std::string tiny_unset = p == "text-shadow" ? "7px 8px #2468ac" : "none";
+        // Exact nonempty literal fallback versus computed-value unset. The
+        // parent text shadow is deliberately distinct from the previous rule.
+        for (const std::string v : {"1px 2px -1e-46px currentColor",
+                                    "1px 2px red, 3px 4px -1e-46em currentColor"}) {
+            run(p, "#actual{" + p + ":" + lower + ";" + p + ":" + v + "}", "", lower,
+                "tiny negative literal retains complete fallback", true, false, v, "", true,
+                invalid_message);
+            run(p, "#actual{--blur:" + v + ";" + p + ":" + lower + ";" + p +
+                ":var(--blur,9px 10px blue)}", "", tiny_unset,
+                "tiny negative defined variable computes unset", true, false, v, "", true,
+                invalid_message);
+        }
+        run(p, "#actual{font-size:0px;" + p + ":" + lower + ";" + p +
+            ":1px 2px -1e-46em}", "", lower, "zero context cannot hide negative literal",
+            true, false, "1px 2px -1e-46em", "", true, invalid_message);
+        for (const std::string token : {"-0px", "1e-46px"}) {
+            const auto value = "1px 2px " + token + " currentColor";
+            run(p, "#actual{" + p + ":" + lower + ";" + p + ":" + value + "}", "",
+                "1px 2px 0px #2468ac", "accepted literal blur " + token,
+                false, false, "", "", true);
+            run(p, "#actual{--blur:" + value + ";" + p + ":" + lower + ";" + p +
+                ":var(--blur,9px 10px blue)}", "", "1px 2px 0px #2468ac",
+                "accepted defined variable blur " + token, false, false, "", "", true);
+        }
+        run(p, "#actual{" + p + ":" + lower + ";" + p +
+            ":var(--absent,1px 2px 1e-46px currentColor)}", "", "1px 2px 0px #2468ac",
+            "absent variable uses valid tiny positive fallback", false, false, "", "", true);
+        run(p, "#actual{font-size:23px;" + p + ":1px 2px 2em currentColor}", "",
+            "1px 2px 46px #2468ac", "positive contextual blur", false, false, "", "", true);
+        run(p, "#actual{" + p + ":1px 2px calc(2px - 5px) currentColor}", "",
+            "1px 2px 0px #2468ac", "calc negative blur still clamps", false, false, "", "", true);
         std::vector<std::string> bad = {"1px",
                                         "1px 2px -3px red",
                                         "1px 2px red blue",
