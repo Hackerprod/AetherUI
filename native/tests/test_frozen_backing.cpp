@@ -43,6 +43,11 @@ int main() {
     invalid=in;invalid.measures.reset();reject_record(invalid);invalid=in;invalid.custom_properties.reset();reject_record(invalid);invalid=in;invalid.color_references.reset();reject_record(invalid);
     invalid=in;invalid.node_lifetime=other.identity;reject_record(invalid);invalid=in;invalid.document_identity++;reject_record(invalid);
     invalid=in;invalid.document_lifetime=std::make_shared<node_identity_s>();invalid.document_lifetime->owner=&doc;invalid.document_identity=reinterpret_cast<uintptr_t>(invalid.document_lifetime.get());reject_record(invalid);
+    auto same_context=in;same_context.inherited_change_impact=91;
+    FrozenNodeRef same_context_record;ok(freeze_node_record(same_context,same_context_record));
+    need(runtime->inherited_change_impact()==43&&same_context_record->inherited_change_impact()==91&&
+        runtime->measures()==same_context_record->measures()&&runtime->node_identity()==same_context_record->node_identity()&&
+        runtime->document_identity()==same_context_record->document_identity(),"same-context runtime record imports retain 43 and 91");
     // A new record can share the exact old style yet carry a different document.
     auto newer=in;auto nextdoc=std::make_shared<const FrozenDocumentMeasureContext>(DocumentMeasureValues{1440,900,17,21,10,in.document_identity});
     newer.measures=std::make_shared<const FrozenMeasures>(MeasureScalarValues{},nextdoc,ImmutableArray<MeasureBackgroundPosition>{},ImmutableArray<MeasureBackgroundSize>{},ImmutableArray<FrozenPropertyDependency>{});

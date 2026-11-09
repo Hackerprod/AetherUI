@@ -1187,6 +1187,7 @@ struct aether_style_transaction_s {
     aether_style_runtime_s* owner = nullptr;
     StyleRevisionRef base_pin;
     std::shared_ptr<const style_property_registry_s> base_registry_pin;
+    std::shared_ptr<const CompiledStyleInputs> base_compiled_pin;
     uint64_t base_generation = 0, base_sheet_epoch = 0, input_epoch = 0, base_style_tree_epoch = 0;
     std::shared_ptr<node_identity_s> document_lifetime;
     std::unique_ptr<aether_style_runtime_s> candidate;
@@ -1229,7 +1230,7 @@ static aether_status_t prepare_revision_impl(
     struct guard_s { bool& active; explicit guard_s(bool& v) : active(v) { active = true; } ~guard_s() { active = false; } } guard(runtime->preparing);
     try {
         auto transaction = std::make_unique<aether_style_transaction_s>();
-        transaction->owner = runtime; transaction->base_pin = runtime->revision; transaction->base_registry_pin=runtime->registry; transaction->base_generation = runtime->generation;
+        transaction->owner = runtime; transaction->base_pin = runtime->revision; transaction->base_registry_pin=runtime->registry; transaction->base_compiled_pin=runtime->revision_compiled; transaction->base_generation = runtime->generation;
         transaction->base_sheet_epoch = runtime->sheet_epoch;
         auto* document = aether_dom_root(root);
         transaction->document_lifetime = document->identity;
@@ -1279,7 +1280,10 @@ static aether_status_t prepare_revision_impl(
             input.custom_properties=prepared.custom_properties;input.color_references=prepared.color_references;
             input.backdrop_custom_properties=prepared.backdrop_custom_properties;
             input.declared_impact=prepared.declared_impact;input.declared_inherited_impact=prepared.declared_inherited_impact;
-            input.inherited_change_impact=prepared.inherited_change_impact;
+            // Propagation for this operation already completed in prepare_tree.
+            // Do not persist its transient output as a future semantic input.
+            // PreparedNodeResult and private import factories retain real values.
+            input.inherited_change_impact=0;
             input.document_identity=d.identity;input.node_identity=aether_node_identity(node);
             input.node_lifetime=node->identity;input.document_lifetime=document->identity;
             if(auto it=leaves.find(node);it!=leaves.end())input.generated_leaf=it->second;
@@ -1351,7 +1355,9 @@ static FrozenNodePayloadRef freeze_prepared_state(aether_node_s* node,const Prep
     require_style_status(freeze_runtime_measure_payload(*prepared.measures,input.measures));
     input.custom_properties=prepared.custom_properties;input.backdrop_custom_properties=prepared.backdrop_custom_properties;
     input.color_references=prepared.color_references;input.declared_impact=prepared.declared_impact;
-    input.declared_inherited_impact=prepared.declared_inherited_impact;input.inherited_change_impact=prepared.inherited_change_impact;
+    input.declared_inherited_impact=prepared.declared_inherited_impact;
+    // Match the canonical FULL payload; current Prepared propagation stays real.
+    input.inherited_change_impact=0;
     input.document_lifetime=document;input.document_identity=reinterpret_cast<uintptr_t>(document.get());
     input.node_lifetime=node->identity;input.node_identity=aether_node_identity(node);
     FrozenNodePayloadRef result;require_style_status(freeze_node_payload(input,result));return result;
@@ -1405,7 +1411,7 @@ public:
         if(runtime->generation==UINT64_MAX||document->identity->style_tree_epoch==UINT64_MAX)
             return AETHER_ERROR_INVALID_STATE;
         auto transaction=std::make_unique<aether_style_transaction_s>();
-        transaction->owner=runtime;transaction->base_pin=base;transaction->base_registry_pin=runtime->registry;
+        transaction->owner=runtime;transaction->base_pin=base;transaction->base_registry_pin=runtime->registry;transaction->base_compiled_pin=runtime->revision_compiled;
         transaction->base_generation=runtime->generation;transaction->base_sheet_epoch=runtime->sheet_epoch;
         transaction->document_lifetime=document->identity;transaction->input_epoch=document->identity->mutation_epoch;
         transaction->base_style_tree_epoch=document->identity->style_tree_epoch;
