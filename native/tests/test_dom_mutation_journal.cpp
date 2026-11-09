@@ -142,5 +142,23 @@ int main() {
     CHECK(doc->mutation_journal.end()[-1].kind == MutationKind::structure);
     CHECK(!token->alive && !token->attached);
     aether_doc_destroy(doc);
+    // Reusing the exact node address cannot reuse the retained authentic token.
+    doc = document(); body = aether_doc_get_body(doc);
+    alignas(aether_node_s) unsigned char storage[sizeof(aether_node_s)];
+    auto* reused = new (storage) aether_node_s();
+    reused->type = AETHER_NODE_ELEMENT;
+    CHECK(aether_node_append_child(body, reused) == AETHER_OK);
+    std::weak_ptr<node_identity_s> old_identity = reused->identity;
+    CHECK(aether_node_remove_child(body, reused) == AETHER_OK);
+    reused->~aether_node_s();
+    CHECK(!old_identity.expired() && !old_identity.lock()->alive);
+    reused = new (storage) aether_node_s();
+    reused->type = AETHER_NODE_ELEMENT;
+    CHECK(reused->identity != old_identity.lock());
+    CHECK(aether_node_append_child(body, reused) == AETHER_OK);
+    CHECK(aether_node_remove_child(body, reused) == AETHER_OK);
+    reused->~aether_node_s();
+    aether_doc_destroy(doc);
+    CHECK(old_identity.expired()); // Bounded journal owns no historical node chain.
     std::puts("DOM mutation journal: PASS");
 }
