@@ -1,6 +1,6 @@
 #pragma once
 #include "immutable_style_backing.h"
-struct style_revision_s;
+class style_revision_s;
 namespace aether::style {
 enum class MapMode { legacy_partial, legacy_complete, contextual };
 // Complete versions validate exact backing/provenance against the final revision owner.

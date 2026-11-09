@@ -4,7 +4,7 @@
 #include "frozen_node_record.h"
 #include <cstdint>
 struct measure_state_s;
-struct style_revision_s;
+class style_revision_s;
 struct node_identity_s;
 /* One private definition for every producer, clone and destroy translation unit.
  * The flat style owns its buffers only for heap/public handles and state owners;
