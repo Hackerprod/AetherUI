@@ -5,10 +5,12 @@
 #include <cstdint>
 #include <memory>
 
+struct aether_style_transaction_s;
+
 namespace aether::dom {
 
 // Internal input observations, not a style revision, state ledger, or stability
-// certificate. C1 has no consumer in the resolver and cannot authorize reuse.
+// certificate. Journal coverage alone never authorizes reuse.
 enum class MutationKind : uint8_t { unknown, attribute, text, structure, state };
 enum class JournalLoss : uint8_t { none, unknown_mutation, overflow, epoch_gap };
 
@@ -31,7 +33,10 @@ public:
     void append(const std::shared_ptr<node_identity_s>& subject, MutationKind kind,
                 uint64_t epoch, uint64_t structure_epoch,
                 int32_t old_state, int32_t new_state) noexcept {
-        if (epoch == 0 || epoch != last_epoch_ + 1) lose(JournalLoss::epoch_gap);
+        if (epoch == 0 || last_epoch_ == UINT64_MAX || epoch != last_epoch_ + 1) {
+            monotonicity_lost_ = true; // Independent of an earlier overflow/unknown loss.
+            lose(JournalLoss::epoch_gap);
+        }
         last_epoch_ = epoch;
         if (kind == MutationKind::unknown) lose(JournalLoss::unknown_mutation);
         if (size_ == capacity) {
@@ -46,20 +51,33 @@ public:
     const MutationRecord* end() const noexcept { return begin() + size_; }
     uint64_t last_epoch() const noexcept { return last_epoch_; }
     JournalLoss loss() const noexcept { return loss_; }
+    uint64_t floor_epoch() const noexcept { return floor_epoch_; }
+    bool monotonicity_lost() const noexcept { return monotonicity_lost_; }
     // This is only recording coverage. False never certifies a style fast path:
     // first resolve, tree/environment/sheet changes and non-state records still
     // require the existing full path. No public reset can hide undeclared input.
     bool coverage_lost(uint64_t current_epoch) const noexcept {
-        return loss_ != JournalLoss::none || current_epoch != last_epoch_;
+        return monotonicity_lost_ || loss_ != JournalLoss::none || current_epoch != last_epoch_;
     }
 
 private:
+    friend struct ::aether_style_transaction_s;
+    // Only an already-published authentic FULL transaction currently calls this.
+    // No allocation, callback or DOM input mutation. Old runtimes below floor
+    // lose incremental eligibility, never the readability of their snapshots.
+    void acknowledge_full_publication(uint64_t input_epoch) noexcept {
+        if(monotonicity_lost_ || input_epoch < floor_epoch_ || input_epoch != last_epoch_)return;
+        for(size_t i=0;i<size_;++i)records_[i]={};
+        size_=0;floor_epoch_=input_epoch;loss_=JournalLoss::none;
+    }
     void lose(JournalLoss loss) noexcept {
         if (loss_ == JournalLoss::none) loss_ = loss;
     }
     std::array<MutationRecord, capacity> records_{};
     size_t size_ = 0;
     uint64_t last_epoch_ = 0;
+    uint64_t floor_epoch_ = 0;
+    bool monotonicity_lost_ = false;
     JournalLoss loss_ = JournalLoss::none;
 };
 

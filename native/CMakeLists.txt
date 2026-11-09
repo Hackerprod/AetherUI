@@ -76,6 +76,7 @@ add_library(aether_core SHARED
     src/style_runtime/cascade.cpp
     src/style_runtime/selector_matcher.cpp
     src/style_runtime/state_invalidation.cpp
+    src/style_runtime/state_reconciliation.cpp
     src/style_runtime/selector_parser.cpp
     src/style_runtime/rule_index.cpp
     src/style_runtime/css_variable_tokens.cpp
@@ -1574,4 +1575,10 @@ if(AETHERUI_BUILD_TESTS)
         src/style_runtime/selector_matcher.cpp)
     target_include_directories(aether_state_invalidation_test PRIVATE include src/style_runtime)
     add_test(NAME aether.state-invalidation COMMAND aether_state_invalidation_test)
+endif()
+
+if(AETHERUI_BUILD_TESTS)
+    add_executable(aether_state_prepare_test tests/test_state_prepare.cpp)
+    target_link_libraries(aether_state_prepare_test PRIVATE AetherUI::Core Threads::Threads)
+    add_test(NAME aether.state-prepare COMMAND aether_state_prepare_test)
 endif()
