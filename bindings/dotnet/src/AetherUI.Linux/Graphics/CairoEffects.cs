@@ -15,16 +15,18 @@ public sealed partial class CairoRenderBackend
     {
         var shadow = command.Shadow;
         ValidateEffectShadow(shadow);
-        if (shadow.Color.A <= 0 || command.BorderBoxRectangle.IsEmpty) return;
+        if (shadow.Color.A <= 0 || command.BorderBoxRectangle.IsEmpty)
+            return;
         var sigma = shadow.BlurRadius * .5f;
         var padding = MathF.Ceiling(3 * sigma + 2 / _dpi);
         var shape = command.BorderBoxRectangle.Inflate(shadow.Inset ? -shadow.SpreadRadius : shadow.SpreadRadius)
             .Offset(shadow.OffsetX, shadow.OffsetY);
         var bounds = shadow.Inset ? command.BorderBoxRectangle.Inflate(padding)
             : shape.Inflate(padding);
-        if (bounds.IsEmpty) return;
+        if (bounds.IsEmpty)
+            return;
         var (width, height) = EffectSize(bounds);
-        using var mask = new CairoSurface(width, height);
+        using var mask = CreateSurface(width, height);
         using (var context = mask.CreateContext())
         {
             var mc = context.Pointer;
@@ -73,30 +75,45 @@ public sealed partial class CairoRenderBackend
     private void DrawTextShadow(IntPtr cr, DrawTextShadowCommand command)
     {
         ValidateEffectShadow(command.Shadow);
-        if (command.Shadow.Color.A <= 0 || string.IsNullOrEmpty(command.Text)) return;
+        if (command.Shadow.Color.A <= 0 || string.IsNullOrEmpty(command.Text))
+            return;
         var shadow = command.Shadow;
         var sigma = shadow.BlurRadius * .5f;
-        // Include glyph overhang as well as the convolution halo. Text layout itself is not clipped.
+        // Include room for the convolution halo. As on Windows, glyph ink is clipped to
+        // the text rectangle before blur; the resulting halo may extend beyond it.
         var padding = MathF.Ceiling(3 * sigma + command.FontSize * 2 + 2 / _dpi);
         var rect = command.Rectangle.Offset(shadow.OffsetX, shadow.OffsetY);
         var bounds = rect.Inflate(padding);
         var (width, height) = EffectSize(bounds);
-        using var mask = new CairoSurface(width, height);
+        using var mask = CreateSurface(width, height);
         using (var context = mask.CreateContext())
         {
             var mc = context.Pointer;
             FxScale(mc, _dpi, _dpi);
             FxTranslate(mc, -bounds.X, -bounds.Y);
-            Color(mc, shadow.Color);
+            // Color glyph fonts can ignore the Cairo source RGB. Render full glyph coverage,
+            // then use only alpha to construct a uniformly tinted premultiplied shadow.
+            Color(mc, ColorRgba.White);
             _text.Draw(mc, command.Text, rect, command.FontFamily, command.FontSize,
                 command.FontWeight, command.Alignment, command.Wrap);
             CairoNative.Check(CairoNative.cairo_status(mc));
         }
         var pixels = mask.ReadPixels();
+        for (var index = 0; index < pixels.Length; index += 4)
+        {
+            var alpha = pixels[index + 3] * Math.Clamp(shadow.Color.A, 0, 1);
+            pixels[index] = (byte)MathF.Round(alpha * Math.Clamp(shadow.Color.B, 0, 1));
+            pixels[index + 1] = (byte)MathF.Round(alpha * Math.Clamp(shadow.Color.G, 0, 1));
+            pixels[index + 2] = (byte)MathF.Round(alpha * Math.Clamp(shadow.Color.R, 0, 1));
+            pixels[index + 3] = (byte)MathF.Round(alpha);
+        }
         Gaussian(pixels, width, height, sigma * _dpi, 1, 0, 0, 1);
         mask.WritePixels(pixels);
         FxSave(cr);
-        try { CompositeLocalMask(cr, mask, bounds); }
+        try
+        {
+            CompositeLocalMask(cr, mask, bounds);
+        }
         finally { FxRestore(cr); }
     }
 
@@ -111,12 +128,14 @@ public sealed partial class CairoRenderBackend
     private void ApplyBackdrop(IntPtr cr, ApplyBackdropFilterCommand command)
     {
         ArgumentNullException.ThrowIfNull(command.Filters);
-        if (command.Filters.Count == 0 || command.Rectangle.IsEmpty) return;
+        if (command.Filters.Count == 0 || command.Rectangle.IsEmpty)
+            return;
         CheckEffectBudget(_width, _height);
         var target = FxGetTarget(cr);
         FxSurfaceFlush(target);
         var stride = FxGetStride(target);
-        if (stride != checked(_width * 4)) throw new InvalidOperationException("Unexpected Cairo image stride.");
+        if (stride != checked(_width * 4))
+            throw new InvalidOperationException("Unexpected Cairo image stride.");
         var pixels = new byte[checked(stride * _height)];
         Marshal.Copy(FxGetData(target), pixels, 0, pixels.Length);
         FxGetMatrix(cr, out var matrix);
@@ -126,7 +145,8 @@ public sealed partial class CairoRenderBackend
             {
                 case BackdropFilterKind.Blur:
                     var amount = filter.LengthAmount.Resolve(0, 16, 16, _width / _dpi, _height / _dpi);
-                    if (!float.IsFinite(amount) || amount < 0) throw new ArgumentException("Invalid backdrop blur.");
+                    if (!float.IsFinite(amount) || amount < 0)
+                        throw new ArgumentException("Invalid backdrop blur.");
                     // Sample along the transformed local axes: the backdrop stays in device space,
                     // while an affine transform rotates/scales the two separable blur directions.
                     Gaussian(pixels, _width, _height, amount * .5,
@@ -139,7 +159,8 @@ public sealed partial class CairoRenderBackend
                         throw new ArgumentException("Invalid backdrop filter amount.");
                     FilterColors(pixels, filter.Kind, filter.ScalarAmount);
                     break;
-                default: throw new NotSupportedException($"Unknown backdrop filter {filter.Kind}.");
+                default:
+                    throw new NotSupportedException($"Unknown backdrop filter {filter.Kind}.");
             }
         }
         FxSave(cr);
@@ -187,14 +208,19 @@ public sealed partial class CairoRenderBackend
     private static void RoundPathAppend(IntPtr cr, RectF rect, CornerRadii radii)
     {
         var preceding = FxCopyPath(cr);
-        try { RoundPath(cr, rect, radii); FxAppendPath(cr, preceding); }
+        try
+        {
+            RoundPath(cr, rect, radii);
+            FxAppendPath(cr, preceding);
+        }
         finally { FxDestroyPath(preceding); }
     }
 
     private static void Gaussian(byte[] pixels, int width, int height, double sigma,
         double xx, double yx, double xy, double yy)
     {
-        if (sigma <= 0) return;
+        if (sigma <= 0)
+            return;
         var lengthX = Math.Sqrt(xx * xx + yx * yx);
         var lengthY = Math.Sqrt(xy * xy + yy * yy);
         var sigmaX = sigma * lengthX;
@@ -203,12 +229,15 @@ public sealed partial class CairoRenderBackend
         {
             if (!double.IsFinite(deviation) || deviation * 3 > MaximumKernelRadius)
                 throw new ArgumentOutOfRangeException(nameof(deviation), "Software blur kernel exceeds the 256 pixel-radius limit.");
-            if (deviation <= .0001) return (new[] { 1d }, 0);
+            if (deviation <= .0001)
+                return (new[] { 1d }, 0);
             var radius = Math.Max(1, (int)Math.Ceiling(deviation * 3));
             var weights = new double[radius * 2 + 1];
             double sum = 0;
-            for (var k = -radius; k <= radius; k++) sum += weights[k + radius] = Math.Exp(-k * k / (2 * deviation * deviation));
-            for (var k = 0; k < weights.Length; k++) weights[k] /= sum;
+            for (var k = -radius; k <= radius; k++)
+                sum += weights[k + radius] = Math.Exp(-k * k / (2 * deviation * deviation));
+            for (var k = 0; k < weights.Length; k++)
+                weights[k] /= sum;
             return (weights, radius);
         }
         var xKernel = Kernel(sigmaX);
@@ -228,21 +257,24 @@ public sealed partial class CairoRenderBackend
         double[] kernel, int radius, double dx, double dy)
     {
         for (var y = 0; y < height; y++)
-        for (var x = 0; x < width; x++)
-        for (var channel = 0; channel < 4; channel++)
-        {
-            double value = 0;
-            for (var k = -radius; k <= radius; k++)
-                value += Sample(input, width, height, x + k * dx, y + k * dy, channel) * kernel[k + radius];
-            output[(y * width + x) * 4 + channel] = (byte)Math.Clamp(Math.Round(value), 0, 255);
-        }
+            for (var x = 0; x < width; x++)
+                for (var channel = 0; channel < 4; channel++)
+                {
+                    double value = 0;
+                    for (var k = -radius; k <= radius; k++)
+                        value += Sample(input, width, height, x + k * dx, y + k * dy, channel) * kernel[k + radius];
+                    output[(y * width + x) * 4 + channel] = (byte)Math.Clamp(Math.Round(value), 0, 255);
+                }
     }
 
     private static double Sample(byte[] pixels, int width, int height, double x, double y, int channel)
     {
-        if (x <= -1 || y <= -1 || x >= width || y >= height) return 0;
-        var ix = (int)Math.Floor(x); var iy = (int)Math.Floor(y);
-        var fx = x - ix; var fy = y - iy;
+        if (x <= -1 || y <= -1 || x >= width || y >= height)
+            return 0;
+        var ix = (int)Math.Floor(x);
+        var iy = (int)Math.Floor(y);
+        var fx = x - ix;
+        var fy = y - iy;
         double At(int px, int py) => px < 0 || py < 0 || px >= width || py >= height ? 0 : pixels[(py * width + px) * 4 + channel];
         return At(ix, iy) * (1 - fx) * (1 - fy) + At(ix + 1, iy) * fx * (1 - fy)
             + At(ix, iy + 1) * (1 - fx) * fy + At(ix + 1, iy + 1) * fx * fy;
@@ -253,15 +285,32 @@ public sealed partial class CairoRenderBackend
         for (var i = 0; i < pixels.Length; i += 4)
         {
             var alpha = pixels[i + 3];
-            if (alpha == 0) { pixels[i] = pixels[i + 1] = pixels[i + 2] = 0; continue; }
-            var r = pixels[i + 2] / (double)alpha; var g = pixels[i + 1] / (double)alpha; var b = pixels[i] / (double)alpha;
+            if (alpha == 0)
+            {
+                pixels[i] = pixels[i + 1] = pixels[i + 2] = 0;
+                continue;
+            }
+            var r = pixels[i + 2] / (double)alpha;
+            var g = pixels[i + 1] / (double)alpha;
+            var b = pixels[i] / (double)alpha;
             switch (kind)
             {
-                case BackdropFilterKind.Brightness: r *= amount; g *= amount; b *= amount; break;
-                case BackdropFilterKind.Contrast: r = (r - .5) * amount + .5; g = (g - .5) * amount + .5; b = (b - .5) * amount + .5; break;
+                case BackdropFilterKind.Brightness:
+                    r *= amount;
+                    g *= amount;
+                    b *= amount;
+                    break;
+                case BackdropFilterKind.Contrast:
+                    r = (r - .5) * amount + .5;
+                    g = (g - .5) * amount + .5;
+                    b = (b - .5) * amount + .5;
+                    break;
                 case BackdropFilterKind.Saturate:
                     var l = .213 * r + .715 * g + .072 * b;
-                    r = l + amount * (r - l); g = l + amount * (g - l); b = l + amount * (b - l); break;
+                    r = l + amount * (r - l);
+                    g = l + amount * (g - l);
+                    b = l + amount * (b - l);
+                    break;
             }
             pixels[i] = (byte)Math.Round(Math.Clamp(b, 0, 1) * alpha);
             pixels[i + 1] = (byte)Math.Round(Math.Clamp(g, 0, 1) * alpha);
@@ -269,26 +318,30 @@ public sealed partial class CairoRenderBackend
         }
     }
 
-    [StructLayout(LayoutKind.Sequential)] private struct FxMatrix { public double Xx, Yx, Xy, Yy, X0, Y0; }
+    [StructLayout(LayoutKind.Sequential)]
+    private struct FxMatrix
+    {
+        public double Xx, Yx, Xy, Yy, X0, Y0;
+    }
     private const string FxCairo = "libcairo.so.2";
-    [DllImport(FxCairo, CallingConvention=CallingConvention.Cdecl, EntryPoint="cairo_save")] private static extern void FxSave(IntPtr cr);
-    [DllImport(FxCairo, CallingConvention=CallingConvention.Cdecl, EntryPoint="cairo_restore")] private static extern void FxRestore(IntPtr cr);
-    [DllImport(FxCairo, CallingConvention=CallingConvention.Cdecl, EntryPoint="cairo_scale")] private static extern void FxScale(IntPtr cr,double x,double y);
-    [DllImport(FxCairo, CallingConvention=CallingConvention.Cdecl, EntryPoint="cairo_translate")] private static extern void FxTranslate(IntPtr cr,double x,double y);
-    [DllImport(FxCairo, CallingConvention=CallingConvention.Cdecl, EntryPoint="cairo_paint")] private static extern void FxPaint(IntPtr cr);
-    [DllImport(FxCairo, CallingConvention=CallingConvention.Cdecl, EntryPoint="cairo_fill")] private static extern void FxFill(IntPtr cr);
-    [DllImport(FxCairo, CallingConvention=CallingConvention.Cdecl, EntryPoint="cairo_clip")] private static extern void FxClip(IntPtr cr);
-    [DllImport(FxCairo, CallingConvention=CallingConvention.Cdecl, EntryPoint="cairo_new_path")] private static extern void FxNewPath(IntPtr cr);
-    [DllImport(FxCairo, CallingConvention=CallingConvention.Cdecl, EntryPoint="cairo_rectangle")] private static extern void FxRectangle(IntPtr cr,double x,double y,double w,double h);
-    [DllImport(FxCairo, CallingConvention=CallingConvention.Cdecl, EntryPoint="cairo_set_operator")] private static extern void FxSetOperator(IntPtr cr,int value);
-    [DllImport(FxCairo, CallingConvention=CallingConvention.Cdecl, EntryPoint="cairo_set_fill_rule")] private static extern void FxSetFillRule(IntPtr cr,int value);
-    [DllImport(FxCairo, CallingConvention=CallingConvention.Cdecl, EntryPoint="cairo_set_source_surface")] private static extern void FxSetSourceSurface(IntPtr cr,IntPtr surface,double x,double y);
-    [DllImport(FxCairo, CallingConvention=CallingConvention.Cdecl, EntryPoint="cairo_get_target")] private static extern IntPtr FxGetTarget(IntPtr cr);
-    [DllImport(FxCairo, CallingConvention=CallingConvention.Cdecl, EntryPoint="cairo_surface_flush")] private static extern void FxSurfaceFlush(IntPtr surface);
-    [DllImport(FxCairo, CallingConvention=CallingConvention.Cdecl, EntryPoint="cairo_image_surface_get_data")] private static extern IntPtr FxGetData(IntPtr surface);
-    [DllImport(FxCairo, CallingConvention=CallingConvention.Cdecl, EntryPoint="cairo_image_surface_get_stride")] private static extern int FxGetStride(IntPtr surface);
-    [DllImport(FxCairo, CallingConvention=CallingConvention.Cdecl, EntryPoint="cairo_get_matrix")] private static extern void FxGetMatrix(IntPtr cr,out FxMatrix matrix);
-    [DllImport(FxCairo, CallingConvention=CallingConvention.Cdecl, EntryPoint="cairo_copy_path")] private static extern IntPtr FxCopyPath(IntPtr cr);
-    [DllImport(FxCairo, CallingConvention=CallingConvention.Cdecl, EntryPoint="cairo_append_path")] private static extern void FxAppendPath(IntPtr cr,IntPtr path);
-    [DllImport(FxCairo, CallingConvention=CallingConvention.Cdecl, EntryPoint="cairo_path_destroy")] private static extern void FxDestroyPath(IntPtr path);
+    [DllImport(FxCairo, CallingConvention = CallingConvention.Cdecl, EntryPoint = "cairo_save")] private static extern void FxSave(IntPtr cr);
+    [DllImport(FxCairo, CallingConvention = CallingConvention.Cdecl, EntryPoint = "cairo_restore")] private static extern void FxRestore(IntPtr cr);
+    [DllImport(FxCairo, CallingConvention = CallingConvention.Cdecl, EntryPoint = "cairo_scale")] private static extern void FxScale(IntPtr cr, double x, double y);
+    [DllImport(FxCairo, CallingConvention = CallingConvention.Cdecl, EntryPoint = "cairo_translate")] private static extern void FxTranslate(IntPtr cr, double x, double y);
+    [DllImport(FxCairo, CallingConvention = CallingConvention.Cdecl, EntryPoint = "cairo_paint")] private static extern void FxPaint(IntPtr cr);
+    [DllImport(FxCairo, CallingConvention = CallingConvention.Cdecl, EntryPoint = "cairo_fill")] private static extern void FxFill(IntPtr cr);
+    [DllImport(FxCairo, CallingConvention = CallingConvention.Cdecl, EntryPoint = "cairo_clip")] private static extern void FxClip(IntPtr cr);
+    [DllImport(FxCairo, CallingConvention = CallingConvention.Cdecl, EntryPoint = "cairo_new_path")] private static extern void FxNewPath(IntPtr cr);
+    [DllImport(FxCairo, CallingConvention = CallingConvention.Cdecl, EntryPoint = "cairo_rectangle")] private static extern void FxRectangle(IntPtr cr, double x, double y, double w, double h);
+    [DllImport(FxCairo, CallingConvention = CallingConvention.Cdecl, EntryPoint = "cairo_set_operator")] private static extern void FxSetOperator(IntPtr cr, int value);
+    [DllImport(FxCairo, CallingConvention = CallingConvention.Cdecl, EntryPoint = "cairo_set_fill_rule")] private static extern void FxSetFillRule(IntPtr cr, int value);
+    [DllImport(FxCairo, CallingConvention = CallingConvention.Cdecl, EntryPoint = "cairo_set_source_surface")] private static extern void FxSetSourceSurface(IntPtr cr, IntPtr surface, double x, double y);
+    [DllImport(FxCairo, CallingConvention = CallingConvention.Cdecl, EntryPoint = "cairo_get_target")] private static extern IntPtr FxGetTarget(IntPtr cr);
+    [DllImport(FxCairo, CallingConvention = CallingConvention.Cdecl, EntryPoint = "cairo_surface_flush")] private static extern void FxSurfaceFlush(IntPtr surface);
+    [DllImport(FxCairo, CallingConvention = CallingConvention.Cdecl, EntryPoint = "cairo_image_surface_get_data")] private static extern IntPtr FxGetData(IntPtr surface);
+    [DllImport(FxCairo, CallingConvention = CallingConvention.Cdecl, EntryPoint = "cairo_image_surface_get_stride")] private static extern int FxGetStride(IntPtr surface);
+    [DllImport(FxCairo, CallingConvention = CallingConvention.Cdecl, EntryPoint = "cairo_get_matrix")] private static extern void FxGetMatrix(IntPtr cr, out FxMatrix matrix);
+    [DllImport(FxCairo, CallingConvention = CallingConvention.Cdecl, EntryPoint = "cairo_copy_path")] private static extern IntPtr FxCopyPath(IntPtr cr);
+    [DllImport(FxCairo, CallingConvention = CallingConvention.Cdecl, EntryPoint = "cairo_append_path")] private static extern void FxAppendPath(IntPtr cr, IntPtr path);
+    [DllImport(FxCairo, CallingConvention = CallingConvention.Cdecl, EntryPoint = "cairo_path_destroy")] private static extern void FxDestroyPath(IntPtr path);
 }

@@ -110,3 +110,73 @@ surfaces, software output and text shaping informs this design:
 These references do not imply Chromium visual conformance. Windows runtime
 regressions and Linux command/pixel tests are separate gates. A Linux cross-build
 of the Windows project is not Windows execution evidence.
+
+## Running isolated drawing checks
+
+From the repository root, with .NET 10 and the system libraries installed:
+
+```sh
+dotnet build bindings/dotnet/tests/AetherUI.Linux.RegressionTests/AetherUI.Linux.RegressionTests.csproj \
+  -c Release -p:AetherSkipNativeLibraryValidation=true
+env -u DISPLAY -u WAYLAND_DISPLAY dotnet run \
+  --project bindings/dotnet/tests/AetherUI.Linux.RegressionTests/AetherUI.Linux.RegressionTests.csproj \
+  -c Release --no-build -p:AetherSkipNativeLibraryValidation=true
+```
+
+These Linux tests construct display lists directly. Skipping native-library
+validation is appropriate only for these isolated drawing tests; an embedding
+application using `UiDocumentHost` still needs the normal native runtime.
+
+The separate drawing workflow runs the existing Windows WARP regression executable
+on Windows with a clean native runtime. Its existing scroll fixtures include
+`UiDocumentHost` and `MouseWheelScrolled`; it is a rendering suite, not a guarantee
+that every fixture is independent of input plumbing. It does not run the separate
+managed integration suite. Backup branches do not trigger drawing CI.
+
+When running in a restricted workspace, set `DOTNET_CLI_HOME` and `XDG_CACHE_HOME`
+to writable directories for .NET and Fontconfig. A build reporting zero errors but
+exiting nonzero is still a failed build. Check process status and the final build
+result, not just the diagnostic count.
+
+## Software limits and visual differences
+
+Linux viewports and images are limited to 8192 pixels per dimension and 64 MiB
+of pixel data per surface. Effect scratch work has a 256 MiB budget per operation,
+a maximum 256-pixel Gaussian kernel radius, and a 250-million convolution-sample
+budget. Exceeding a limit rejects the frame instead of silently omitting an effect.
+These are per-operation/surface limits, not a promise that total process memory is
+64 MiB: native surfaces, retained/presented frame copies, text layouts and temporary
+buffers coexist. No image or shadow cache is retained between frames.
+
+Box/text shadow blur uses sigma = CSS blur radius / 2, matching the parameter
+mapping used by the Windows renderer. The software kernel is Gaussian, truncated
+at three sigma and normalized. Rasterization, edge sampling and kernel truncation
+can differ from Direct2D effects; fixtures compare halos/geometry/alpha rather than
+claim identical pixels. Backdrop filters apply in list order to preceding pixels.
+
+The Pango layout cache is owned by one backend and limited to 128 entries and
+262144 UTF-16 characters. A single family list is limited to 4096 characters;
+font size is limited to 16384 DIPs, with an additional text-coordinate budget.
+Resize clears cached layouts. These limits prevent unbounded retained layouts,
+not all internal Fontconfig/Pango process caches.
+
+Linux double/groove/ridge border bands are positioned relative to each side's
+thickness. The legacy Windows painter places some bands relative to the whole
+outer rectangle; this pre-existing discrepancy is not changed by the Windows
+module extraction. Linux fixtures check each side explicitly. Other expected
+cross-platform differences include font fallback, glyph rasterization and color
+emoji. Color emoji keep their intrinsic RGB in normal text, with command opacity
+applied; gradients and shadows use glyph alpha coverage for their own coloring.
+
+Allocation-failure tests use an internal, per-instance injection seam. They prove
+rollback for simulated allocation failures, not recovery from actual system-wide
+out-of-memory conditions. Missing-dependency tests run in separate processes so
+native-loader state does not contaminate other fixtures.
+
+The color-glyph opacity review also consulted Chromium's
+[`GraphicsContext::BeginLayer`](https://github.com/chromium/chromium/blob/main/third_party/blink/renderer/platform/graphics/graphics_context.cc)
+(layer opacity is applied with `saveLayerAlphaf`) and
+[`DrawLooperBuilder::AddShadow`](https://github.com/chromium/chromium/blob/main/third_party/blink/renderer/platform/graphics/draw_looper_builder.cc)
+(shadow color/alpha and transform policy are explicit). This supports separating
+coverage, shadow coloring and final opacity; it is not a claim that Cairo follows
+Skia's implementation or yields identical glyph pixels.

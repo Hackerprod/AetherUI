@@ -24,7 +24,8 @@ internal sealed class PangoTextLayout : IDisposable
         {
             // Borrowed default font map; the returned context is owned by this instance.
             var fontMap = Native.pango_cairo_font_map_get_default();
-            if (fontMap == IntPtr.Zero) throw new InvalidOperationException("PangoCairo could not create its default font map.");
+            if (fontMap == IntPtr.Zero)
+                throw new InvalidOperationException("PangoCairo could not create its default font map.");
             var context = new GObjectHandle(Native.pango_font_map_create_context(fontMap));
             try
             {
@@ -48,7 +49,8 @@ internal sealed class PangoTextLayout : IDisposable
         CheckAccess();
         ArgumentNullException.ThrowIfNull(text);
         ArgumentNullException.ThrowIfNull(style);
-        if (text.Length == 0) return new TextMetrics(0, style.FontSize * style.LineHeight, style.FontSize * .8f);
+        if (text.Length == 0)
+            return new TextMetrics(0, style.FontSize * style.LineHeight, style.FontSize * .8f);
         // As on DirectWrite, intrinsic measurement is unwrapped and includes trailing spaces.
         var layout = GetLayout(text, style.FontFamily, style.FontSize, style.FontWeight, false, 0);
         Native.pango_layout_get_size(layout.DangerousGetHandle(), out var width, out var height);
@@ -63,8 +65,10 @@ internal sealed class PangoTextLayout : IDisposable
     {
         CheckAccess();
         ArgumentNullException.ThrowIfNull(text);
-        if (cairo == IntPtr.Zero) throw new ArgumentException("A valid Cairo context is required.", nameof(cairo));
-        if (text.Length == 0 || rect.IsEmpty) return;
+        if (cairo == IntPtr.Zero)
+            throw new ArgumentException("A valid Cairo context is required.", nameof(cairo));
+        if (text.Length == 0 || rect.IsEmpty)
+            return;
         var layout = GetLayout(text, family, size, weight, wrap, rect.Width, align);
         Native.pango_layout_get_size(layout.DangerousGetHandle(), out var width, out _);
         var x = rect.X;
@@ -72,8 +76,10 @@ internal sealed class PangoTextLayout : IDisposable
         // not to an artificial million-DIP layout width. Wrapped alignment is handled by Pango.
         if (!wrap)
         {
-            if (align == TextAlign.Center) x += (rect.Width - width / (float)Scale) * .5f;
-            else if (align is TextAlign.End or TextAlign.Right) x += rect.Width - width / (float)Scale;
+            if (align == TextAlign.Center)
+                x += (rect.Width - width / (float)Scale) * .5f;
+            else if (align is TextAlign.End or TextAlign.Right)
+                x += rect.Width - width / (float)Scale;
         }
         if (path)
         {
@@ -97,15 +103,18 @@ internal sealed class PangoTextLayout : IDisposable
     public void Clear()
     {
         CheckAccess();
-        foreach (var layout in _layouts.Values) layout.Dispose();
+        foreach (var layout in _layouts.Values)
+            layout.Dispose();
         _layouts.Clear();
         _cachedCharacters = 0;
     }
 
     public void Dispose()
     {
-        if (_ownerThread != Environment.CurrentManagedThreadId) throw new InvalidOperationException("Pango layout must be used on its owner thread.");
-        if (_disposed) return;
+        if (_ownerThread != Environment.CurrentManagedThreadId)
+            throw new InvalidOperationException("Pango layout must be used on its owner thread.");
+        if (_disposed)
+            return;
         Clear();
         _context.Dispose();
         _disposed = true;
@@ -114,18 +123,23 @@ internal sealed class PangoTextLayout : IDisposable
     private GObjectHandle GetLayout(string text, string family, float size, FontWeight weight,
         bool wrap, float width, TextAlign align = TextAlign.Start)
     {
-        if (text.Length > MaximumCachedCharacters) throw new ArgumentOutOfRangeException(nameof(text), "A single text run exceeds the 262144 UTF-16 character budget.");
+        if (text.Length > MaximumCachedCharacters)
+            throw new ArgumentOutOfRangeException(nameof(text), "A single text run exceeds the 262144 UTF-16 character budget.");
         family = string.IsNullOrWhiteSpace(family) ? "sans-serif" : family;
         size = float.IsFinite(size) && size > 0 ? size : 16;
-        if (size > 16384) throw new ArgumentOutOfRangeException(nameof(size));
-        if (family.Length > 4096) throw new ArgumentOutOfRangeException(nameof(family), "Font family lists are limited to 4096 characters.");
+        if (size > 16384)
+            throw new ArgumentOutOfRangeException(nameof(size));
+        if (family.Length > 4096)
+            throw new ArgumentOutOfRangeException(nameof(family), "Font family lists are limited to 4096 characters.");
         if (text.Length * (double)size > 1_000_000)
             throw new ArgumentOutOfRangeException(nameof(text), "The text run exceeds the Pango coordinate budget; split it into smaller runs.");
         var pangoWidth = wrap && float.IsFinite(width) && width > 0
             ? checked((int)Math.Min(Math.Round(width * (double)Scale), int.MaxValue)) : -1;
         var key = new LayoutKey(text, family, size, weight, pangoWidth, align);
-        if (_layouts.TryGetValue(key, out var cached)) return cached;
-        if (_layouts.Count >= MaximumEntries || _cachedCharacters + text.Length > MaximumCachedCharacters) Clear();
+        if (_layouts.TryGetValue(key, out var cached))
+            return cached;
+        if (_layouts.Count >= MaximumEntries || _cachedCharacters + text.Length > MaximumCachedCharacters)
+            Clear();
         var result = new GObjectHandle(Native.pango_layout_new(_context.DangerousGetHandle()));
         try
         {
@@ -153,7 +167,8 @@ internal sealed class PangoTextLayout : IDisposable
     private void CheckAccess()
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
-        if (_ownerThread != Environment.CurrentManagedThreadId) throw new InvalidOperationException("Pango layout must be used on its owner thread.");
+        if (_ownerThread != Environment.CurrentManagedThreadId)
+            throw new InvalidOperationException("Pango layout must be used on its owner thread.");
     }
 
     private readonly record struct LayoutKey(string Text, string Family, float Size, FontWeight Weight, int Width, TextAlign Align);
@@ -163,9 +178,14 @@ internal sealed class PangoTextLayout : IDisposable
         internal GObjectHandle(IntPtr value) : base(true)
         {
             SetHandle(value);
-            if (IsInvalid) throw new OutOfMemoryException("Pango object allocation failed.");
+            if (IsInvalid)
+                throw new OutOfMemoryException("Pango object allocation failed.");
         }
-        protected override bool ReleaseHandle() { Native.g_object_unref(handle); return true; }
+        protected override bool ReleaseHandle()
+        {
+            Native.g_object_unref(handle);
+            return true;
+        }
     }
 
     private sealed class FontDescriptionHandle : SafeHandleZeroOrMinusOneIsInvalid
@@ -173,9 +193,14 @@ internal sealed class PangoTextLayout : IDisposable
         internal FontDescriptionHandle(IntPtr value) : base(true)
         {
             SetHandle(value);
-            if (IsInvalid) throw new OutOfMemoryException("Pango font description allocation failed.");
+            if (IsInvalid)
+                throw new OutOfMemoryException("Pango font description allocation failed.");
         }
-        protected override bool ReleaseHandle() { Native.pango_font_description_free(handle); return true; }
+        protected override bool ReleaseHandle()
+        {
+            Native.pango_font_description_free(handle);
+            return true;
+        }
     }
 
     private static class Native
