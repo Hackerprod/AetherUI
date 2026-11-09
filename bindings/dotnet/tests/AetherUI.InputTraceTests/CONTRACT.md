@@ -69,3 +69,8 @@ and two file-image tests using Windows-style paths in Linux. No assertions were
 removed and no tests were skipped. This result is a differential regression
 check, not a full managed-suite PASS or Windows execution. These failures must
 remain visible rather than becoming automatic exclusions.
+
+The baseline CSV also reports state/manifest entries, revision-bound exports,
+publications and host visual-map/display-list/chunk work. Zero legacy patch
+copies must not be mistaken for zero map work: the current no-op host rebuilds
+its complete visual map on each of the ten measured resolutions.

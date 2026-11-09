@@ -11,7 +11,7 @@ internal static class InputBaseline
     {
         if (!NativeWorkCounters.TryEnableForCurrentThread())
             throw new InvalidOperationException("Baseline requires native work counters enabled at build time.");
-        Console.WriteLine("cards,owner,samples,styleResolutions,styleUpdates,layoutBuilds,pendingProcessed,computeNodes,contextEntries,contextBuilds,mapCopies,hitBoxes,managedAllocatedBytes,gc0,gc1,gc2,wallP50Ms,wallP95Ms,cpuMs");
+        Console.WriteLine("cards,owner,samples,styleResolutions,styleUpdates,layoutBuilds,pendingProcessed,computeNodes,contextEntries,contextBuilds,mapCopies,hitBoxes,managedAllocatedBytes,gc0,gc1,gc2,wallP50Ms,wallP95Ms,cpuMs,stateEntries,revisionRecords,revisionEntries,publications,visualMapBuilds,visualMapUpdates,displayListBuilds,paintChunks");
         foreach (var count in new[] { 100, 500, 1000 })
         foreach (var owner in new[] { "none", "transform", "backdrop" })
             Measure(count, owner);
@@ -66,6 +66,12 @@ internal static class InputBaseline
             ((times[4] + times[5]) / 2).ToString("F3", CultureInfo.InvariantCulture),
             times[9].ToString("F3", CultureInfo.InvariantCulture),
             cpuMs.ToString("F3", CultureInfo.InvariantCulture),
+            work.StateEntriesVisited - workBefore.StateEntriesVisited,
+            work.RevisionRecordsCreated - workBefore.RevisionRecordsCreated,
+            work.RevisionEntriesCreated - workBefore.RevisionEntriesCreated,
+            work.RevisionPublications - workBefore.RevisionPublications,
+            metrics.VisualStyleMapBuilds, metrics.VisualStyleMapUpdates,
+            metrics.DisplayListBuilds, metrics.PaintChunkBuilds,
         }));
     }
 
