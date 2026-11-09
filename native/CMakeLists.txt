@@ -21,6 +21,7 @@ add_library(aether_core SHARED
     src/dom/node.cpp
     src/dom/dom_snapshot.cpp
     src/dom/dom_edit.cpp
+    src/dom/dom_style_source.cpp
     src/dom/element_node.cpp
     src/dom/document_node.cpp
     src/dom/html_parser.cpp
@@ -1666,4 +1667,13 @@ if(AETHERUI_BUILD_TESTS)
     target_include_directories(aether_dom_edit_test PRIVATE src)
     target_link_libraries(aether_dom_edit_test PRIVATE AetherUI::Core)
     add_test(NAME aether.dom-edit COMMAND aether_dom_edit_test)
+endif()
+
+if(AETHERUI_BUILD_TESTS AND TARGET aether_publication_test_core)
+    target_compile_definitions(aether_publication_test_core PRIVATE AETHER_DOM_STYLE_TESTING)
+    add_executable(aether_dom_style_binding_test tests/test_dom_style_binding.cpp $<TARGET_OBJECTS:aether_publication_test_core>)
+    target_include_directories(aether_dom_style_binding_test PRIVATE include src)
+    target_compile_definitions(aether_dom_style_binding_test PRIVATE AETHER_DOM_STYLE_TESTING)
+    target_link_libraries(aether_dom_style_binding_test PRIVATE Threads::Threads)
+    add_test(NAME aether.dom-style-binding COMMAND aether_dom_style_binding_test)
 endif()

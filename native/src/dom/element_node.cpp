@@ -1,6 +1,7 @@
 #include "dom_types.h"
 #include "html_attribute_name.h"
 #include "../abi/aether_abi.h"
+#include <aether/aether_dom_sync.h>
 #include "../primitives/html_space_tokens.h"
 
 AETHER_API char* aether_element_get_tag_name(aether_node_t element) {
@@ -44,6 +45,11 @@ AETHER_API aether_status_t aether_element_set_attribute(
         return AETHER_ERROR_NULL_ARG;
     }
 
+    if (auto owner=element->document_owner.lock(); owner&&!owner->binding.expired()) {
+        aether_dom_token_v1_t token{},output{};auto status=aether_dom_read_token_v1(element,&token);if(status!=AETHER_OK)return status;
+        aether_dom_edit_spec_v1_t spec{};spec.kind=AETHER_DOM_SET_LEGACY_ATTRIBUTE;spec.target=element;spec.name={name,std::strlen(name)};spec.value={value,std::strlen(value)};
+        aether_dom_edit_t edit=nullptr;status=aether_dom_prepare_edit_v1(&token,&spec,&edit);if(status==AETHER_OK)status=aether_dom_edit_commit_v1(edit,&output);aether_dom_edit_destroy_v1(edit);return status;
+    }
     if (!aether_dom_can_touch(element)) return AETHER_ERROR_INVALID_STATE;
     try {
         const auto attribute_name=aether::canonical_html_attribute_name(name);
@@ -98,6 +104,7 @@ AETHER_API int32_t aether_element_get_state(aether_node_t element) {
 
 AETHER_API void aether_element_set_state(aether_node_t element, int32_t state) {
     if (element && element->state != state) {
+        if(aether_dom_access(element)!=AETHER_OK)return;
         if (!aether_dom_can_touch(element)) {
             if (auto owner=element->document_owner.lock()) owner->sticky_status=AETHER_ERROR_INVALID_STATE;
             return;

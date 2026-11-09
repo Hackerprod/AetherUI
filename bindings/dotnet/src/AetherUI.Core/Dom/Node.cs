@@ -25,6 +25,7 @@ public abstract class Node
     public DocumentNode? OwnerDocument { get { EnsureCurrent(); return OwnerDocumentCore; } }
 
     internal IDomBinding? BindingCore { get; set; }
+    internal NativeDomNodeRecord? NativeRecordCore { get; set; }
     internal Node? ParentCore => _parent;
     internal Node[] ChildrenCore => _children;
     internal DocumentNode? OwnerDocumentCore
@@ -89,8 +90,13 @@ public abstract class Node
     private void InsertCore(int index, Node child, bool append)
     {
         ArgumentNullException.ThrowIfNull(child);
-        EnsureCurrent();
-        if (child.BindingCore is { } childBinding && !ReferenceEquals(childBinding, BindingCore)) childBinding.EnsureCurrent();
+        if (BindingCore is null && child.BindingCore is NativeDomBinding nativeBinding)
+            nativeBinding.EnsureMaterializationInputs(this, child);
+        else
+        {
+            EnsureCurrent();
+            if (child.BindingCore is { } childBinding && !ReferenceEquals(childBinding, BindingCore)) childBinding.EnsureCurrent();
+        }
         for (Node? current = this; current is not null; current = current._parent)
             if (ReferenceEquals(current, child)) throw new InvalidOperationException("Un nodo no puede insertarse dentro de sí mismo.");
         var source = child._parent;

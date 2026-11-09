@@ -186,8 +186,11 @@ static void overflow_and_poison() {
     CHECK(f.doc->mutation_journal.size()==0&&f.doc->mutation_journal.floor_epoch()>old_floor);
     // An earlier overflow must not hide a later wrap/discontinuity.
     for(int i=0;i<130;++i)aether_element_set_state(f.a,1000+i);
-    f.doc->identity->mutation_epoch=UINT64_MAX;
-    aether_element_set_state(f.a,0);
+    // Public DOM boundaries no longer wrap. Inject the adversarial journal
+    // discontinuity directly so poison/floor coverage stays independent.
+    f.doc->identity->mutation_epoch=0;
+    f.doc->mutation_journal.append(f.a->identity,aether::dom::MutationKind::state,0,
+        f.doc->identity->structure_epoch,f.a->state,f.a->state);
     CHECK(f.doc->mutation_journal.monotonicity_lost());
     CHECK(f.doc->mutation_journal.loss()==aether::dom::JournalLoss::overflow);
     const auto floor=f.doc->mutation_journal.floor_epoch();

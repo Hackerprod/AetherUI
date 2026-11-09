@@ -117,36 +117,48 @@ int main() {
     aether_element_set_state(aether_doc_get_body(doc), 1);
     CHECK(doc->mutation_journal.loss() == JournalLoss::epoch_gap);
     aether_doc_destroy(doc);
-    doc = document();
+    doc = document(); child=aether_doc_get_body(doc);
     doc->identity->mutation_epoch = std::numeric_limits<uint64_t>::max();
-    aether_element_set_state(aether_doc_get_body(doc), 1);
-    CHECK(doc->identity->mutation_epoch == 0);
-    CHECK(doc->mutation_journal.coverage_lost(0));
+    const auto exhausted_state=child->state; const auto exhausted_ids=doc->next_style_node_id;
+    const auto exhausted_observation=doc->owner_control->observation_serial;
+    const auto exhausted_stamps=child->identity->state_bit_write_serial;
+    const auto exhausted_size=doc->mutation_journal.size(), exhausted_floor=doc->mutation_journal.floor_epoch();
+    const auto exhausted_last=doc->mutation_journal.last_epoch();
+    aether_element_set_state(child, 1);
+    // DOMsync v6 deliberately replaces legacy wrap with fail-closed no-write.
+    CHECK(doc->identity->mutation_epoch == UINT64_MAX && child->state==exhausted_state);
+    CHECK(child->identity->state_bit_write_serial==exhausted_stamps && doc->next_style_node_id==exhausted_ids);
+    CHECK(doc->owner_control->observation_serial==exhausted_observation && doc->owner_control->sticky_status==AETHER_ERROR_INVALID_STATE);
+    CHECK(doc->mutation_journal.size()==exhausted_size && doc->mutation_journal.floor_epoch()==exhausted_floor && doc->mutation_journal.last_epoch()==exhausted_last);
+    CHECK(!doc->mutation_journal.monotonicity_lost());
+    // Keep direct journal discontinuity coverage independently of the guarded ABI.
+    doc->mutation_journal.append(child->identity,MutationKind::state,0,doc->identity->structure_epoch,0,1);
+    CHECK(doc->mutation_journal.monotonicity_lost() && doc->mutation_journal.coverage_lost(0));
     aether_doc_destroy(doc);
 
-    // Failed attribute insertion may have partially modified input; the coarse
-    // attribute invalidation must already exist. Canonicalization uses SSO here.
+    // Strong legacy ABI failures report status, never throw or record a write.
     doc = document(); child = aether_doc_get_body(doc);
     epoch = doc->identity->mutation_epoch;
-    bool failed = false;
+    auto old_attributes=child->attributes;auto old_children=child->children;auto old_doc_children=doc->children;
+    auto old_observation=doc->owner_control->observation_serial;auto old_ids=doc->next_style_node_id;
+    auto old_structure=doc->identity->structure_epoch;auto old_journal_size=doc->mutation_journal.size();
+    auto old_journal_last=doc->mutation_journal.last_epoch();auto old_journal_floor=doc->mutation_journal.floor_epoch();
+    token=child->identity;auto* old_parent=child->parent;
     fail_alloc = true;
-    try { (void)aether_element_set_attribute(child, "x", "v"); }
-    catch (const std::bad_alloc&) { failed = true; }
+    auto status=aether_element_set_attribute(child, "x", "v");
     fail_alloc = false;
-    CHECK(failed && doc->identity->mutation_epoch == epoch + 1);
-    CHECK(doc->mutation_journal.end()[-1].kind == MutationKind::attribute);
-    aether_doc_destroy(doc);
-    doc = document();
-    token = aether_doc_get_body(doc)->identity;
-    epoch = doc->identity->mutation_epoch;
-    failed = false;
+    CHECK(status==AETHER_ERROR_OUT_OF_MEMORY && doc->identity->mutation_epoch==epoch);
+    CHECK(child->attributes==old_attributes&&child->children==old_children&&child->parent==old_parent&&child->identity==token&&token->alive&&token->attached);
+    CHECK(doc->owner_control->observation_serial==old_observation&&doc->next_style_node_id==old_ids&&doc->identity->structure_epoch==old_structure);
+    CHECK(doc->mutation_journal.size()==old_journal_size&&doc->mutation_journal.last_epoch()==old_journal_last&&doc->mutation_journal.floor_epoch()==old_journal_floor);
     fail_alloc = true;
-    try { (void)aether_doc_parse_html(doc, "<body>new</body>"); }
-    catch (const std::bad_alloc&) { failed = true; }
+    status=aether_doc_parse_html(doc, "<body>new</body>");
     fail_alloc = false;
-    CHECK(failed && doc->identity->mutation_epoch == epoch + 1);
-    CHECK(doc->mutation_journal.end()[-1].kind == MutationKind::structure);
-    CHECK(!token->alive && !token->attached);
+    CHECK(status==AETHER_ERROR_OUT_OF_MEMORY && doc->identity->mutation_epoch==epoch);
+    CHECK(doc->children==old_doc_children&&child->children==old_children&&child->parent==old_parent&&child->identity==token&&token->alive&&token->attached);
+    for(auto* c:old_children)CHECK(c->parent==child&&c->identity->alive&&c->identity->attached);
+    CHECK(child->attributes==old_attributes&&doc->owner_control->observation_serial==old_observation&&doc->next_style_node_id==old_ids&&doc->identity->structure_epoch==old_structure);
+    CHECK(doc->mutation_journal.size()==old_journal_size&&doc->mutation_journal.last_epoch()==old_journal_last&&doc->mutation_journal.floor_epoch()==old_journal_floor);
     aether_doc_destroy(doc);
     // Reusing the exact node address cannot reuse the retained authentic token.
     doc = document(); body = aether_doc_get_body(doc);

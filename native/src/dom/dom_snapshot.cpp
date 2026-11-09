@@ -18,10 +18,10 @@ bool same(const aether_dom_token_v1_t& a,const aether_dom_token_v1_t& b) noexcep
 }
 }
 AETHER_API uint32_t aether_dom_sync_version(){return AETHER_DOM_SYNC_VERSION;}
-AETHER_API aether_status_t aether_dom_read_node_identity_v1(aether_node_t node,uint64_t* out){if(out)*out=0;if(!node||!out)return AETHER_ERROR_NULL_ARG;auto status=aether_dom_access(node);if(status!=AETHER_OK)return status;*out=aether_node_identity(node);return AETHER_OK;}
+AETHER_API aether_status_t aether_dom_read_node_identity_v1(aether_node_t node,uint64_t* out){if(out)*out=0;if(!node||!out)return AETHER_ERROR_NULL_ARG;auto owner=node->document_owner.lock();if(!node->identity->alive)return AETHER_ERROR_DISPOSED;if(!owner||owner->owner_thread!=std::this_thread::get_id()||!owner->alive)return AETHER_ERROR_INVALID_STATE;*out=aether_node_identity(node);return AETHER_OK;}
 AETHER_API aether_status_t aether_dom_retain_node_v1(aether_node_t node,aether_dom_node_lease_t* out) {
     if(out)*out=nullptr;if(!node||!out)return AETHER_ERROR_NULL_ARG;
-    if(aether_dom_access(node)!=AETHER_OK)return AETHER_ERROR_INVALID_STATE;
+    auto owner=node->document_owner.lock();if(!node->identity->alive||!owner||!owner->alive||owner->owner_thread!=std::this_thread::get_id())return AETHER_ERROR_INVALID_STATE;
     auto lease=aether_editable_lease(node);if(!lease)return AETHER_ERROR_INVALID_STATE;
     try{auto result=std::make_unique<aether_dom_node_lease_s>();result->storage=std::move(lease);result->identity=node->identity;*out=result.release();return AETHER_OK;}
     catch(const std::bad_alloc&){return AETHER_ERROR_OUT_OF_MEMORY;}catch(...){return AETHER_ERROR_INVALID_STATE;}
@@ -32,6 +32,7 @@ AETHER_API aether_status_t aether_dom_node_lease_get_v1(aether_dom_node_lease_t 
 }
 AETHER_API aether_status_t aether_dom_read_token_v1(aether_node_t node,aether_dom_token_v1_t* out){
     if(out)*out={};if(!node||!out)return AETHER_ERROR_NULL_ARG;
+    if(node->unpublished)return AETHER_ERROR_INVALID_STATE;
     auto owner=node->document_owner.lock();if(!owner||owner->owner_thread!=std::this_thread::get_id())return AETHER_ERROR_INVALID_STATE;
     if(!owner->alive||!node->identity->alive)return AETHER_ERROR_DISPOSED;
     auto root=owner->document.lock();if(!root)return AETHER_ERROR_DISPOSED;

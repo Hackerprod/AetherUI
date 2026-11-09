@@ -1,20 +1,15 @@
 #include "dom_types.h"
 #include "html_attribute_name.h"
+#include "dom_strings.h"
 #include <aether/aether_dom_sync.h>
 #include <optional>
+#include "../style_runtime/aether_dom_style_binding.h"
 
 namespace {
 bool token_equal(const aether_dom_token_v1_t& a,const aether_dom_token_v1_t& b) noexcept {
     return a.owner_identity==b.owner_identity&&a.observation_serial==b.observation_serial&&a.input_epoch==b.input_epoch&&a.structure_epoch==b.structure_epoch&&a.sticky_status==b.sticky_status;
 }
-bool valid_utf8(aether_dom_string_v1_t s) noexcept {
-    if(s.length&&!s.data)return false;
-    for(size_t i=0;i<s.length;){auto c=static_cast<unsigned char>(s.data[i++]);if(!c)return false;if(c<0x80)continue;
-        unsigned n=0;uint32_t cp=0,min=0;
-        if(c>=0xc2&&c<=0xdf){n=1;cp=c&31;min=0x80;}else if(c>=0xe0&&c<=0xef){n=2;cp=c&15;min=0x800;}else if(c>=0xf0&&c<=0xf4){n=3;cp=c&7;min=0x10000;}else return false;
-        if(s.length-i<n)return false;while(n--){c=static_cast<unsigned char>(s.data[i++]);if((c&0xc0)!=0x80)return false;cp=(cp<<6)|(c&63);}if(cp<min||cp>0x10ffff||(cp>=0xd800&&cp<=0xdfff))return false;
-    }return true;
-}
+bool valid_utf8(aether_dom_string_v1_t s) noexcept {return (!s.length||s.data)&&aether_dom_valid_string({s.data?s.data:"",s.length});}
 std::string read(aether_dom_string_v1_t s){if(!valid_utf8(s))throw std::invalid_argument("DOM UTF-8 domain");return s.length?std::string(s.data,s.length):std::string{};}
 bool synthetic(const aether_node_s* node)noexcept{for(auto* n=node;n;n=n->parent)if(n->is_generated||n->anonymous_flex_owner)return true;return false;}
 void collect(aether_node_s* node,std::vector<aether_node_s*>& out){out.push_back(node);for(auto* c:node->children)collect(c,out);}
@@ -30,10 +25,12 @@ struct Links { aether_node_s* node=nullptr;std::shared_ptr<EditableNodeStorage> 
 struct Touch { aether_node_s* node; aether::dom::MutationKind kind;bool structure;int32_t before=0,after=0;aether_node_s* subject=nullptr; };
 }
 struct aether_dom_edit_s {
+    DomStyleSlotBatchRef style_batch;
     std::vector<Domain> domains;
     std::vector<Links> links;
     std::vector<Touch> touches;
-    std::vector<std::shared_ptr<EditableNodeStorage>> pins,created;
+    std::vector<std::shared_ptr<EditableNodeStorage>> pins,created,results;
+    std::vector<std::pair<aether_node_s*,aether_node_s*>> materialized_parents;
     std::vector<aether_node_s*> disconnect,attach,adopt;
     aether_node_s* target=nullptr; aether_node_s* child=nullptr;
     aether_node_s* new_parent=nullptr;
@@ -41,8 +38,8 @@ struct aether_dom_edit_s {
     std::optional<std::string> text,authored,runtime;
     std::optional<int32_t> state;
     bool authored_present=false,runtime_present=false,write_authored=false,write_runtime=false;
-    bool reparent=false,committed=false,structural=false;
-    int64_t adopt_first_id=0;
+    bool reparent=false,committed=false,structural=false,materialize=false;
+    std::vector<std::pair<aether_node_s*,int64_t>> adopted_ids;
     size_t adopt_domain=0;
 };
 namespace {
@@ -60,8 +57,8 @@ size_t insertion_position(const std::vector<aether_node_s*>& nodes,int64_t index
 void add_disconnect(aether_dom_edit_s& e,aether_node_s* node){std::vector<aether_node_s*> all;collect(node,all);for(auto* n:all){if(n->identity->disconnect_serial==UINT64_MAX)throw std::length_error("DOM disconnect exhausted");e.disconnect.push_back(n);}}
 void add_touch(aether_dom_edit_s& e,aether_node_s* node,aether::dom::MutationKind kind,bool structure=false,aether_node_s* subject=nullptr){e.touches.push_back({node,kind,structure,0,0,subject});}
 void prepare_create(aether_dom_edit_s& e,const aether_dom_edit_spec_v1_t& s){
-    if(s.node_count&&!s.nodes)throw std::invalid_argument("DOM specs");auto& d=e.domains[0];auto& owned=registry(d);e.created.reserve(s.node_count);
-    for(size_t i=0;i<s.node_count;++i){const auto& spec=s.nodes[i];if(spec.type<AETHER_NODE_ELEMENT||spec.type>AETHER_NODE_COMMENT||spec.parent_index>=static_cast<int64_t>(i)||spec.parent_index< -1)throw std::invalid_argument("DOM type/parent");
+    if(s.node_count&&!s.nodes)throw std::invalid_argument("DOM specs");auto& d=e.domains[0];auto& owned=registry(d);e.created.reserve(s.node_count);e.results.reserve(s.node_count);
+    for(size_t i=0;i<s.node_count;++i){const auto& spec=s.nodes[i];if(spec.existing_node)throw std::invalid_argument("existing subtree requires MATERIALIZE");if(spec.type<AETHER_NODE_ELEMENT||spec.type>AETHER_NODE_COMMENT||spec.parent_index>=static_cast<int64_t>(i)||spec.parent_index< -1)throw std::invalid_argument("DOM type/parent");
         if(d.next_id==INT64_MAX)throw std::length_error("DOM identity exhausted");auto node=std::make_unique<aether_node_s>();node->type=static_cast<aether_node_type_t>(spec.type);node->tag_name=aether::ascii_lowercase(read(spec.tag));node->text=read(spec.text);
         if(node->type==AETHER_NODE_ELEMENT&&node->tag_name.empty())throw std::invalid_argument("DOM tag");
         node->state=spec.state;node->runtime_value_present=spec.runtime_value_present!=0;node->runtime_value=read(spec.runtime_value);
@@ -69,11 +66,82 @@ void prepare_create(aether_dom_edit_s& e,const aether_dom_edit_spec_v1_t& s){
         for(size_t j=0;j<spec.attribute_count;++j){auto name=aether::ascii_lowercase(read(spec.attributes[j].name));if(name.empty())throw std::invalid_argument("DOM attribute name");node->attributes[name]=read(spec.attributes[j].value);}
         if(auto found=node->attributes.find("value");found!=node->attributes.end()){node->authored_value_present=true;node->authored_value=found->second;}
         if(node->tag_name=="input"&&node->runtime_value_present)node->attributes["value"]=node->runtime_value;
-        node->style_node_id=d.next_id++;node->identity->attached=false;auto storage=std::make_shared<EditableNodeStorage>(std::move(node));auto* raw=storage->node.get();
+        node->style_node_id=d.next_id++;node->identity->attached=false;node->unpublished=true;auto storage=std::make_shared<EditableNodeStorage>(std::move(node));auto* raw=storage->node.get();
         raw->editable_storage=storage;raw->identity->storage=storage;raw->document_owner=d.owner;raw->identity->document_owner=d.owner;
         if(spec.parent_index>=0){auto* parent=e.created[spec.parent_index]->node.get();parent->children.push_back(raw);raw->parent=parent;}
-        owned.emplace(raw,storage);e.created.push_back(std::move(storage));
+        owned.emplace(raw,storage);e.results.push_back(storage);e.created.push_back(std::move(storage));
     }
+}
+void prepare_materialize(aether_dom_edit_s& e,const aether_dom_edit_spec_v1_t& s) {
+    if(!s.node_count||!s.nodes)throw std::invalid_argument("empty materialization");
+    e.materialize=true;e.structural=true;e.results.reserve(s.node_count);e.created.reserve(s.node_count);
+    std::vector<aether_node_s*> existing_roots;
+    for(size_t i=0;i<s.node_count;++i) {
+        const auto& spec=s.nodes[i];
+        if(spec.parent_index< -1||spec.parent_index>=static_cast<int64_t>(i))throw std::invalid_argument("materialized parent");
+        if(spec.parent_index>=0&&s.nodes[spec.parent_index].existing_node)throw std::invalid_argument("existing subtree is opaque");
+        auto* parent=spec.parent_index>=0?e.results[spec.parent_index]->node.get():nullptr;
+        if(auto* node=spec.existing_node) {
+            if(spec.type||spec.state||spec.tag.length||spec.text.length||spec.runtime_value.length||spec.runtime_value_present||spec.attribute_count||spec.attributes)
+                throw std::invalid_argument("existing subtree payload");
+            if(node->type==AETHER_NODE_DOCUMENT||synthetic(node))throw std::invalid_argument("existing subtree type");
+            for(auto* other:existing_roots){for(auto* n=node;n;n=n->parent)if(n==other)throw std::invalid_argument("overlapping existing subtree");for(auto* n=other;n;n=n->parent)if(n==node)throw std::invalid_argument("overlapping existing subtree");}
+            const auto source=domain(e,node);auto storage=aether_editable_lease(node);if(!storage)throw std::invalid_argument("existing storage");
+            existing_roots.push_back(node);e.results.push_back(std::move(storage));
+            auto* old_parent=node->parent;
+            if(old_parent){auto& previous=links(e,old_parent).children;auto found=std::find(previous.begin(),previous.end(),node);if(found==previous.end())throw std::invalid_argument("nonreciprocal existing subtree");previous.erase(found);add_touch(e,old_parent,aether::dom::MutationKind::structure,true,node);}
+            if(node->identity->attached||source!=0)add_disconnect(e,node);
+            if(source!=0) {
+                std::vector<aether_node_s*> moving;collect(node,moving);
+                if(!old_parent)add_touch(e,node,aether::dom::MutationKind::structure,true,node);
+                for(auto* moved:moving)if(auto lease=aether_editable_lease(moved)) {
+                    if(e.domains[0].next_id==INT64_MAX)throw std::length_error("DOM identity exhausted");
+                    e.adopted_ids.emplace_back(moved,e.domains[0].next_id++);registry(e.domains[source]).erase(moved);registry(e.domains[0]).emplace(moved,std::move(lease));
+                    e.adopt.push_back(moved);
+                }
+            }
+            e.materialized_parents.emplace_back(node,parent);
+            std::vector<aether_node_s*> all;collect(node,all);e.attach.insert(e.attach.end(),all.begin(),all.end());
+            if(parent)parent->children.push_back(node);
+        } else {
+            if(spec.type<AETHER_NODE_ELEMENT||spec.type>AETHER_NODE_COMMENT)throw std::invalid_argument("materialized node type");
+            if(e.domains[0].next_id==INT64_MAX)throw std::length_error("DOM identity exhausted");
+            auto node=std::make_unique<aether_node_s>();node->type=static_cast<aether_node_type_t>(spec.type);node->tag_name=aether::ascii_lowercase(read(spec.tag));node->text=read(spec.text);
+            if(node->type==AETHER_NODE_ELEMENT&&node->tag_name.empty())throw std::invalid_argument("DOM tag");
+            node->state=spec.state;node->runtime_value_present=spec.runtime_value_present!=0;node->runtime_value=read(spec.runtime_value);
+            if(spec.attribute_count&&!spec.attributes)throw std::invalid_argument("DOM attributes");
+            for(size_t j=0;j<spec.attribute_count;++j){auto name=aether::ascii_lowercase(read(spec.attributes[j].name));if(name.empty())throw std::invalid_argument("DOM attribute name");node->attributes[name]=read(spec.attributes[j].value);}
+            if(auto found=node->attributes.find("value");found!=node->attributes.end()){node->authored_value_present=true;node->authored_value=found->second;}
+            if(node->tag_name=="input"&&node->runtime_value_present)node->attributes["value"]=node->runtime_value;
+            node->style_node_id=e.domains[0].next_id++;node->identity->attached=false;node->unpublished=true;
+            auto storage=std::make_shared<EditableNodeStorage>(std::move(node));auto* raw=storage->node.get();raw->editable_storage=storage;raw->identity->storage=storage;
+            raw->document_owner=e.domains[0].owner;raw->identity->document_owner=e.domains[0].owner;raw->parent=parent;if(parent)parent->children.push_back(raw);
+            registry(e.domains[0]).emplace(raw,storage);e.results.push_back(storage);e.created.push_back(std::move(storage));e.attach.push_back(raw);
+            if(!parent)add_touch(e,raw,aether::dom::MutationKind::structure,true);
+        }
+    }
+}
+const std::vector<aether_node_s*>& candidate_children(const aether_dom_edit_s& e,aether_node_s* node) noexcept {
+    for(const auto& l:e.links)if(l.node==node)return l.children;return node->children;
+}
+void candidate_text(const aether_dom_edit_s& e,aether_node_s* node,std::string& source) {
+    if(node->is_generated)return;
+    if(node->type==AETHER_NODE_TEXT)source+=(node==e.target&&e.text)?*e.text:node->text;
+    else for(auto* child:candidate_children(e,node))candidate_text(e,child,source);
+}
+void candidate_source(const aether_dom_edit_s& e,aether_node_s* node,std::string& source,bool& first) {
+    if(node->is_generated)return;
+    if(node->type==AETHER_NODE_ELEMENT&&node->tag_name=="style"){if(!first)source+='\n';first=false;candidate_text(e,node,source);}
+    for(auto* child:candidate_children(e,node))candidate_source(e,child,source,first);
+}
+aether_status_t prepare_slots(aether_dom_edit_s& e) {
+    if(!e.structural&&!e.text)return AETHER_OK;
+    std::vector<DomStyleSlotStageRef> stages;
+    for(const auto& d:e.domains)if(auto binding=d.owner->binding.lock()) {
+        std::string source;bool first=true;candidate_source(e,d.root->node.get(),source,first);
+        DomStyleSlotStageRef stage;auto status=aether_dom_style_prepare_slot(binding,source,stage);if(status!=AETHER_OK)return status;stages.push_back(std::move(stage));
+    }
+    return stages.empty()?AETHER_OK:aether_dom_style_finalize_slots(stages,e.style_batch);
 }
 void preflight_counters(const aether_dom_edit_s& e){
     for(const auto& d:e.domains){uint64_t n=0;for(const auto& t:e.touches)if(t.node->document_owner.lock()==d.owner)++n;if(d.owner->observation_serial>UINT64_MAX-n)throw std::length_error("DOM observation exhausted");}
@@ -86,15 +154,17 @@ AETHER_API aether_status_t aether_dom_prepare_edit_v1(const aether_dom_token_v1_
     try{
         auto e=std::make_unique<aether_dom_edit_s>();e->target=spec->target;domain(*e,spec->target);pin(*e,spec->target);if(!token_equal(*expected,e->domains[0].token))return AETHER_ERROR_INVALID_STATE;
         auto* target=spec->target;const auto kind=spec->kind;
-        if(kind==AETHER_DOM_SET_ATTRIBUTE||kind==AETHER_DOM_REMOVE_ATTRIBUTE){
+        if(kind==AETHER_DOM_MATERIALIZE_FOREST){prepare_materialize(*e,*spec);}
+        else if(kind==AETHER_DOM_SET_ATTRIBUTE||kind==AETHER_DOM_REMOVE_ATTRIBUTE||kind==AETHER_DOM_SET_LEGACY_ATTRIBUTE){
             if(target->type!=AETHER_NODE_ELEMENT)return AETHER_ERROR_INVALID_STATE;auto name=aether::ascii_lowercase(read(spec->name));if(name.empty())return AETHER_ERROR_INVALID_STATE;
             auto attrs=target->attributes;bool existed=attrs.contains(name);
             if(name=="value")existed=target->authored_value_present;
             if(kind==AETHER_DOM_REMOVE_ATTRIBUTE&&!existed){*out=e.release();return AETHER_OK;}
             if(name=="value"){
-                e->authored=kind==AETHER_DOM_SET_ATTRIBUTE?read(spec->value):std::string{};e->write_authored=true;e->authored_present=kind==AETHER_DOM_SET_ATTRIBUTE;
-                if(target->tag_name!="input"||!target->runtime_value_present){if(e->authored_present)attrs[name]=*e->authored;else attrs.erase(name);}
-            }else if(kind==AETHER_DOM_SET_ATTRIBUTE)attrs[name]=read(spec->value);else attrs.erase(name);
+                e->authored=kind!=AETHER_DOM_REMOVE_ATTRIBUTE?read(spec->value):std::string{};e->write_authored=true;e->authored_present=kind!=AETHER_DOM_REMOVE_ATTRIBUTE;
+                if(kind==AETHER_DOM_SET_LEGACY_ATTRIBUTE){e->runtime=std::string{};e->write_runtime=true;e->runtime_present=false;}
+                if(kind==AETHER_DOM_SET_LEGACY_ATTRIBUTE||target->tag_name!="input"||!target->runtime_value_present){if(e->authored_present)attrs[name]=*e->authored;else attrs.erase(name);}
+            }else if(kind!=AETHER_DOM_REMOVE_ATTRIBUTE)attrs[name]=read(spec->value);else attrs.erase(name);
             e->attributes=std::move(attrs);add_touch(*e,target,aether::dom::MutationKind::attribute);
         }else if(kind==AETHER_DOM_SET_STATE){
             if(target->type!=AETHER_NODE_ELEMENT)return AETHER_ERROR_INVALID_STATE;
@@ -117,8 +187,8 @@ AETHER_API aether_status_t aether_dom_prepare_edit_v1(const aether_dom_token_v1_
                 for(auto* a=target;a;a=a->parent)if(a==child)return AETHER_ERROR_INVALID_STATE;
                 if(old){auto& previous=links(*e,old).children;auto found=std::find(previous.begin(),previous.end(),child);if(found==previous.end())return AETHER_ERROR_INVALID_STATE;previous.erase(found);add_touch(*e,old,aether::dom::MutationKind::structure,true,child);}
                 auto& next=links(*e,target).children;next.insert(next.begin()+insertion_position(next,spec->index),child);e->new_parent=target;collect(child,e->attach);add_touch(*e,target,aether::dom::MutationKind::structure,true,child);
-                if(source!=0){add_disconnect(*e,child);e->adopt=e->attach;e->adopt_domain=0;e->adopt_first_id=e->domains[0].next_id;
-                    auto& src=registry(e->domains[source]);auto& dst=registry(e->domains[0]);for(auto* node:e->adopt)if(auto lease=aether_editable_lease(node)){if(e->domains[0].next_id==INT64_MAX)return AETHER_ERROR_INVALID_STATE;++e->domains[0].next_id;src.erase(node);dst.emplace(node,std::move(lease));}
+                if(source!=0){add_disconnect(*e,child);e->adopt=e->attach;e->adopt_domain=0;
+                    auto& src=registry(e->domains[source]);auto& dst=registry(e->domains[0]);for(auto* node:e->adopt)if(auto lease=aether_editable_lease(node)){if(e->domains[0].next_id==INT64_MAX)return AETHER_ERROR_INVALID_STATE;e->adopted_ids.emplace_back(node,e->domains[0].next_id++);src.erase(node);dst.emplace(node,std::move(lease));}
                     if(!old)add_touch(*e,child,aether::dom::MutationKind::structure,true,child);
                 }
             }
@@ -131,13 +201,14 @@ AETHER_API aether_status_t aether_dom_prepare_edit_v1(const aether_dom_token_v1_
             add_touch(*e,target,aether::dom::MutationKind::structure,true);
         }else return AETHER_ERROR_INVALID_STATE;
         for(auto* n:e->disconnect){auto* owner=n;while(owner&&!aether_editable_lease(owner))owner=owner->parent;if(!owner)return AETHER_ERROR_INVALID_STATE;pin(*e,owner);} // Generated descendants are retained through their editable host.
-        preflight_counters(*e);*out=e.release();return AETHER_OK;
+        preflight_counters(*e);const auto slots=prepare_slots(*e);if(slots!=AETHER_OK)return slots;*out=e.release();return AETHER_OK;
     }catch(const std::bad_alloc&){return AETHER_ERROR_OUT_OF_MEMORY;}catch(...){return AETHER_ERROR_INVALID_STATE;}
 }
-AETHER_API aether_status_t aether_dom_edit_created_node_v1(aether_dom_edit_t e,size_t index,aether_node_t* out){if(out)*out=nullptr;if(!e||!out)return AETHER_ERROR_NULL_ARG;if(index>=e->created.size())return AETHER_ERROR_INVALID_STATE;*out=e->created[index]->node.get();return AETHER_OK;}
-AETHER_API aether_status_t aether_dom_edit_validate_v1(aether_dom_edit_t e){if(!e)return AETHER_ERROR_NULL_ARG;if(e->committed)return AETHER_ERROR_INVALID_STATE;
+AETHER_API aether_status_t aether_dom_edit_created_node_v1(aether_dom_edit_t e,size_t index,aether_node_t* out){if(out)*out=nullptr;if(!e||!out)return AETHER_ERROR_NULL_ARG;if(index>=e->results.size())return AETHER_ERROR_INVALID_STATE;*out=e->results[index]->node.get();return AETHER_OK;}
+AETHER_API aether_status_t aether_dom_edit_validate_v1(aether_dom_edit_t e){if(!e)return AETHER_ERROR_NULL_ARG;if(e->committed)return AETHER_ERROR_INVALID_STATE;if(e->style_batch&&!aether_dom_style_validate_batch(e->style_batch))return AETHER_ERROR_INVALID_STATE;
     for(const auto& d:e->domains){aether_dom_token_v1_t now{};if(aether_dom_read_token_v1(d.root->node.get(),&now)!=AETHER_OK||!token_equal(now,d.token))return AETHER_ERROR_INVALID_STATE;}return AETHER_OK;}
 AETHER_API aether_status_t aether_dom_edit_commit_v1(aether_dom_edit_t e,aether_dom_token_v1_t* out){if(out)*out={};if(!e||!out)return AETHER_ERROR_NULL_ARG;auto status=aether_dom_edit_validate_v1(e);if(status!=AETHER_OK)return status;
+    for(auto& n:e->created)n->node->unpublished=false;
     for(const auto& t:e->touches)aether_node_touch_typed(t.node,t.kind,t.structure,t.before,t.after,t.subject);
     auto* target=e->target;if(e->attributes)target->attributes.swap(*e->attributes);if(e->text)target->text.swap(*e->text);
     if(e->write_authored){target->authored_value.swap(*e->authored);target->authored_value_present=e->authored_present;}
@@ -146,10 +217,13 @@ AETHER_API aether_status_t aether_dom_edit_commit_v1(aether_dom_edit_t e,aether_
     for(auto& l:e->links)l.node->children.swap(l.children);
     for(auto* n:e->disconnect){++n->identity->disconnect_serial;n->identity->attached=false;if(n->parent==target)n->parent=nullptr;}
     if(e->reparent)e->child->parent=e->new_parent;
-    for(auto& node:e->created)if(!node->node->parent)node->node->parent=target;
-    for(auto* n:e->attach)n->identity->attached=target->identity->attached;
-    int64_t id=e->adopt_first_id;for(auto* n:e->adopt){n->document_owner=e->domains[e->adopt_domain].owner;n->identity->document_owner=e->domains[e->adopt_domain].owner;if(aether_editable_lease(n))n->style_node_id=id++;}
+    if(!e->materialize)for(auto& node:e->created)if(!node->node->parent)node->node->parent=target;
+    for(const auto& [node,parent]:e->materialized_parents)node->parent=parent;
+    for(auto* n:e->attach)n->identity->attached=e->materialize?false:target->identity->attached;
+    for(auto* n:e->adopt){n->document_owner=e->domains[e->adopt_domain].owner;n->identity->document_owner=e->domains[e->adopt_domain].owner;}
+    for(const auto& [node,id]:e->adopted_ids)node->style_node_id=id;
     for(auto& d:e->domains)if(d.registry){auto* doc=static_cast<aether_doc_s*>(d.root->node.get());doc->editable_nodes.swap(*d.registry);doc->next_style_node_id=d.next_id;}
+    if(e->style_batch)aether_dom_style_commit_batch(e->style_batch);
     e->committed=true;return aether_dom_read_token_v1(target,out);
 }
 AETHER_API void aether_dom_edit_destroy_v1(aether_dom_edit_t e){if(e&&!e->committed)for(auto& n:e->created)aether_dom_retire_node(n->node.get());delete e;}

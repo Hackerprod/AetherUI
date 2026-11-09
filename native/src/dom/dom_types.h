@@ -18,13 +18,14 @@
 
 struct EditableNodeStorage;
 struct LegacyDocumentLease;
+struct DomStyleBinding;
 struct DomOwnerControl {
     const std::thread::id owner_thread = std::this_thread::get_id();
     std::weak_ptr<EditableNodeStorage> document;
     uint64_t observation_serial = 0;
     aether_status_t sticky_status = AETHER_OK;
     bool alive = true;
-    const void* binding = nullptr;
+    std::weak_ptr<DomStyleBinding> binding;
 };
 
 struct aether_node_s {
@@ -37,6 +38,7 @@ struct aether_node_s {
     std::string authored_value;
     bool runtime_value_present = false;
     std::string runtime_value;
+    bool unpublished = false; // Prepared typed nodes are not live mutation targets.
     bool snapshot_owned = false;
     // Current DOM ownership of generated nodes, also retained by style revisions.
     std::vector<std::shared_ptr<aether_node_s>> generated_storage;
@@ -87,6 +89,7 @@ inline std::shared_ptr<EditableNodeStorage> aether_identity_lease(const std::sha
 inline aether_status_t aether_dom_access(const aether_node_s* node) noexcept {
     if (!node) return AETHER_ERROR_NULL_ARG;
     if (!node->identity->alive) return AETHER_ERROR_DISPOSED;
+    if (node->unpublished) return AETHER_ERROR_INVALID_STATE;
     const auto owner = node->document_owner.lock();
     if (owner && (!owner->alive || owner->owner_thread != std::this_thread::get_id())) return AETHER_ERROR_INVALID_STATE;
     return owner ? owner->sticky_status : AETHER_OK;
@@ -144,7 +147,7 @@ inline void aether_node_touch_typed(aether_node_s* node, aether::dom::MutationKi
     auto* root = aether_dom_root(node);
     if (!root) return;
     if (!aether_dom_can_touch(node, 1, structure)) {
-        if (auto owner=node->document_owner.lock()) owner->sticky_status=AETHER_ERROR_INVALID_STATE;
+        if (aether_dom_access(node)==AETHER_OK) if (auto owner=node->document_owner.lock()) owner->sticky_status=AETHER_ERROR_INVALID_STATE;
         return;
     }
     if (auto owner=node->document_owner.lock()) ++owner->observation_serial;
@@ -184,4 +187,17 @@ inline void aether_destroy_dom_subtree(aether_node_s* node) noexcept {
     if (node->snapshot_owned) { aether_node_mark_attached(node, false); return; } // Host and revision share generated ownership.
     for (auto* child : node->children) aether_destroy_dom_subtree(child);
     delete node;
+}
+
+// Compatibility for internal/legacy manually-created nodes. Such nodes have no
+// retained-storage promise; ordinary typed edits/snapshots never certify them.
+// Call while every registry node is still alive, before releasing the registry.
+inline void aether_dom_dispose_unmanaged_children(aether_node_s* node) noexcept {
+    auto& children=node->children;
+    for(auto it=children.begin();it!=children.end();) {
+        auto* child=*it;
+        if(!aether_editable_lease(child) && !child->snapshot_owned) {
+            aether_destroy_dom_subtree(child);it=children.erase(it);
+        } else ++it;
+    }
 }

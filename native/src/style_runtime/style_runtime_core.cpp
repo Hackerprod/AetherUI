@@ -12,6 +12,10 @@ using aether::diagnostics::WorkCounter;
 #include "../css/computed_style_internal.h"
 #include "../css/style_map_types.h"
 #include "../dom/dom_types.h"
+#include "../dom/dom_style_source.h"
+#include "aether_dom_style_binding.h"
+#include <aether/aether_dom_style_binding.h>
+#include <aether/aether_dom_sync.h>
 #include "../primitives/html_space_tokens.h"
 #include "style_property_registry_internal.h"
 #include "style_runtime_types.h"
@@ -97,6 +101,8 @@ struct aether_style_update_s {
 struct CompiledStyleInputs {
     std::vector<std::shared_ptr<const compiled_style_sheet_s>> sheets;
     rule_index_s index;
+    // Cascade position is independent of fresh rule identities on slot replacement.
+    std::unordered_map<int32_t, int32_t> source_positions;
     std::vector<invalidation::Program> state_programs;
 };
 
@@ -124,7 +130,19 @@ public:
     void swap(RuntimeStateCache& other)noexcept{revision_.swap(other.revision_);}
 };
 
+struct StyleRuntimeControl {
+    aether_style_runtime_s* runtime;
+    const std::thread::id owner_thread = std::this_thread::get_id();
+    bool alive = true;
+    explicit StyleRuntimeControl(aether_style_runtime_s* value) : runtime(value) {}
+};
+
 struct aether_style_runtime_s {
+    std::shared_ptr<StyleRuntimeControl> lifetime = std::make_shared<StyleRuntimeControl>(this);
+    std::unordered_map<const DomOwnerControl*, std::weak_ptr<DomStyleBinding>> dom_bindings;
+    uint64_t diagnostic_recipient_serial = 0, binding_registration_serial = 0;
+    bool binding_registration_exhausted = false;
+    ~aether_style_runtime_s() { lifetime->alive = false; lifetime->runtime = nullptr; }
     aether_style_runtime_options_t options{};
     aether_style_environment_t environment{};
     aether_style_diagnostic_fn diag_cb = nullptr;
@@ -146,6 +164,8 @@ struct aether_style_runtime_s {
     aether_node_s* legacy_inheritance_root = nullptr; // Candidate-only compatibility boundary.
     std::thread::id owner_thread = std::this_thread::get_id();
     std::shared_ptr<const CompiledStyleInputs> compiled = std::make_shared<const CompiledStyleInputs>();
+    static std::shared_ptr<const CompiledStyleInputs> prepare_rule_index_from_sheets(
+        const decltype(sheets)& sheets, std::shared_ptr<const compiled_style_sheet_s> extra = {}, int64_t omit = 0);
     static std::shared_ptr<const CompiledStyleInputs> prepare_rule_index(const aether_style_runtime_s* runtime,
         std::shared_ptr<const compiled_style_sheet_s> extra = {}, int64_t omit = 0);
 };
@@ -187,6 +207,403 @@ struct stylesheet_diagnostics_s {
         }
     }
 };
+
+// DOM source stages keep control blocks, not an unprotected runtime borrow.
+// Explicit destruction revokes authority immediately even if a stage survives.
+struct DomSourceDiagnostics {
+    std::shared_ptr<stylesheet_diagnostics_s> messages;
+    uint64_t recipient_serial = 0;
+    bool replay_started = false;
+};
+struct DomStyleBinding {
+    std::weak_ptr<DomOwnerControl> owner;
+    std::shared_ptr<StyleRuntimeControl> runtime;
+    bool active = true, registered = false, has_source = false;
+    int64_t handle = 0;
+    std::string source;
+    std::shared_ptr<DomSourceDiagnostics> pending;
+};
+struct aether_dom_style_binding_s { DomStyleBindingRef value; };
+struct DomStyleSlotStage {
+    DomStyleBindingRef binding;
+    std::shared_ptr<DomOwnerControl> owner;
+    std::shared_ptr<EditableNodeStorage> document;
+    std::shared_ptr<const CompiledStyleInputs> base_compiled, compiled;
+    std::shared_ptr<const style_property_registry_s> base_registry, global_registry;
+    decltype(aether_style_runtime_s::sheets) sheets;
+    decltype(aether_style_runtime_s::dom_bindings) bindings;
+    RuntimeStateCache retired_states;
+    uint64_t base_epoch = 0, base_recipient = 0, base_registration = 0;
+    int64_t base_next_handle = 0, next_handle = 0, handle = 0;
+    int32_t base_next_rule = 0, next_rule = 0;
+    std::string source;
+    std::shared_ptr<DomSourceDiagnostics> pending;
+    bool changed = false, registering = false, committed = false, grouped = false;
+};
+static aether_style_runtime_s* binding_runtime(const DomStyleBindingRef& binding) noexcept {
+    if (!binding || !binding->active || !binding->runtime || !binding->runtime->alive ||
+        binding->runtime->owner_thread != std::this_thread::get_id()) return nullptr;
+    auto owner = binding->owner.lock();
+    if (!owner || !owner->alive || owner->owner_thread != std::this_thread::get_id()) return nullptr;
+    return binding->runtime->runtime;
+}
+static aether_status_t prepare_dom_slot(const DomStyleBindingRef& binding, const std::string& source,
+    DomStyleSlotStageRef& out, bool registering) noexcept {
+    out.reset();
+    auto* runtime = binding_runtime(binding);
+    if (!runtime || runtime->preparing || runtime->binding_registration_exhausted || (!registering && !binding->registered)) return AETHER_ERROR_INVALID_STATE;
+    try {
+        if (source.find('\0') != std::string::npos || !style_source_size_fits(source.size())) return AETHER_ERROR_INVALID_STATE;
+        auto stage = std::make_shared<DomStyleSlotStage>();
+        stage->binding = binding; stage->owner = binding->owner.lock();
+        stage->document = stage->owner->document.lock();
+        if (!stage->document) return AETHER_ERROR_INVALID_STATE;
+        stage->registering = registering;
+        stage->base_compiled = runtime->compiled; stage->base_registry = runtime->registry;
+        stage->global_registry = style_property_registry_pin();
+        stage->base_epoch = runtime->sheet_epoch; stage->base_recipient = runtime->diagnostic_recipient_serial;
+        stage->base_registration = runtime->binding_registration_serial;
+        stage->base_next_handle = stage->next_handle = runtime->next_sheet_handle;
+        stage->base_next_rule = stage->next_rule = runtime->next_rule_id;
+        stage->changed = !binding->has_source || binding->source != source;
+        if (registering) {
+            if (runtime->binding_registration_serial == UINT64_MAX || !stage->owner->binding.expired()) return AETHER_ERROR_INVALID_STATE;
+            stage->bindings = runtime->dom_bindings;
+            stage->bindings[stage->owner.get()] = binding;
+        }
+        if (stage->changed) {
+            if (stage->base_epoch == UINT64_MAX) return AETHER_ERROR_INVALID_STATE;
+            const bool existing = binding->handle && runtime->sheets.count(binding->handle);
+            if (!existing && !style_sheet_handle_available(stage->next_handle)) return AETHER_ERROR_INVALID_STATE;
+            stage->handle = existing ? binding->handle : stage->next_handle++;
+            stage->source = source;
+            stage->pending = std::make_shared<DomSourceDiagnostics>();
+            stage->pending->recipient_serial = stage->base_recipient;
+            stage->pending->messages = std::make_shared<stylesheet_diagnostics_s>(runtime->diag_cb, runtime->diag_user_data);
+            auto sheet = std::make_shared<compiled_style_sheet_s>();
+            sheet->handle = stage->handle; sheet->layer = style_sheet_layer::author; sheet->source_name = "DOM style slot";
+            const auto status = style_source_compile(source.c_str(), stage->handle, static_cast<int32_t>(sheet->layer),
+                sheet->rules, stage->next_rule, stage->pending->messages->collector(), stage->pending->messages.get());
+            if (status != AETHER_OK) return status;
+            stage->compiled = aether_style_runtime_s::prepare_rule_index(runtime, sheet, binding->handle);
+            stage->sheets = runtime->sheets;
+            if (binding->handle) stage->sheets.erase(binding->handle);
+            stage->sheets.emplace(stage->handle, std::move(sheet));
+        }
+        if (!aether_dom_style_validate_slot(stage)) return AETHER_ERROR_INVALID_STATE;
+        out = std::move(stage); return AETHER_OK;
+    } catch (const std::bad_alloc&) { return AETHER_ERROR_OUT_OF_MEMORY; }
+      catch (...) { return AETHER_ERROR_INVALID_STATE; }
+}
+aether_status_t aether_dom_style_prepare_slot(const DomStyleBindingRef& binding,
+    const std::string& source, DomStyleSlotStageRef& out) noexcept {
+    return prepare_dom_slot(binding, source, out, false);
+}
+static bool validate_dom_slot(const DomStyleSlotStageRef& stage) noexcept {
+    if (!stage || stage->committed) return false;
+    auto* runtime = binding_runtime(stage->binding);
+    if (!runtime || runtime->preparing || runtime->binding_registration_exhausted || runtime->binding_registration_serial != stage->base_registration || !stage->owner->alive || !stage->document->node->identity->alive ||
+        stage->binding->owner.lock() != stage->owner || runtime->compiled != stage->base_compiled ||
+        runtime->registry != stage->base_registry || style_property_registry_pin() != stage->global_registry ||
+        runtime->sheet_epoch != stage->base_epoch || runtime->next_sheet_handle != stage->base_next_handle ||
+        runtime->next_rule_id != stage->base_next_rule || runtime->diagnostic_recipient_serial != stage->base_recipient) return false;
+    if (stage->registering) return !stage->binding->registered && stage->owner->binding.expired();
+    return stage->binding->registered && stage->owner->binding.lock() == stage->binding;
+}
+bool aether_dom_style_validate_slot(const DomStyleSlotStageRef& stage) noexcept {
+    return stage && !stage->grouped && validate_dom_slot(stage);
+}
+void aether_dom_style_commit_slot(DomStyleSlotStageRef& stage) noexcept {
+    if (!stage || stage->grouped || stage->committed) return;
+    // Validation belongs to the composite DOM transaction, before its first swap.
+    auto& binding = *stage->binding;
+    auto* runtime = binding.runtime->runtime;
+    if (stage->registering) {
+        runtime->dom_bindings.swap(stage->bindings);
+        stage->owner->binding = stage->binding;
+        binding.registered = true;
+        runtime->binding_registration_serial = stage->base_registration + 1;
+    }
+    if (stage->changed) {
+        runtime->sheets.swap(stage->sheets); runtime->compiled.swap(stage->compiled);
+        runtime->states.swap(stage->retired_states);
+        binding.source.swap(stage->source); binding.pending.swap(stage->pending);
+        binding.handle = stage->handle; binding.has_source = true;
+        runtime->next_sheet_handle = stage->next_handle; runtime->next_rule_id = stage->next_rule;
+        runtime->sheet_epoch = stage->base_epoch + 1;
+    }
+    stage->committed = true;
+}
+struct DomStyleSlotBatch {
+    struct Group {
+        std::vector<DomStyleSlotStageRef> stages;
+        decltype(aether_style_runtime_s::sheets) sheets;
+        std::shared_ptr<const CompiledStyleInputs> compiled;
+        RuntimeStateCache retired_states;
+        int64_t next_handle = 0;
+        int32_t next_rule = 0;
+        bool changed = false;
+    };
+    std::vector<Group> groups;
+    bool committed = false;
+};
+aether_status_t aether_dom_style_finalize_slots(const std::vector<DomStyleSlotStageRef>& stages,
+    DomStyleSlotBatchRef& out) noexcept {
+    out.reset();
+    try {
+        auto batch = std::make_shared<DomStyleSlotBatch>();
+        for (const auto& stage : stages) {
+            if (!aether_dom_style_validate_slot(stage) || stage->registering) return AETHER_ERROR_INVALID_STATE;
+            DomStyleSlotBatch::Group* group = nullptr;
+            for (auto& current : batch->groups)
+                if (current.stages.front()->binding->runtime == stage->binding->runtime) { group = &current; break; }
+            if (!group) { batch->groups.emplace_back(); group = &batch->groups.back(); }
+            for (const auto& prior : group->stages) {
+                if (prior->binding == stage->binding || prior->base_compiled != stage->base_compiled ||
+                    prior->base_registry != stage->base_registry || prior->global_registry != stage->global_registry ||
+                    prior->base_epoch != stage->base_epoch || prior->base_next_handle != stage->base_next_handle ||
+                    prior->base_next_rule != stage->base_next_rule || prior->base_recipient != stage->base_recipient || prior->base_registration != stage->base_registration)
+                    return AETHER_ERROR_INVALID_STATE;
+            }
+            group->stages.push_back(stage);
+        }
+        struct Patch {DomStyleSlotStageRef stage;int64_t handle;std::shared_ptr<DomSourceDiagnostics> pending;};
+        std::vector<Patch> patches;
+        for (auto& group : batch->groups) {
+            const auto& first = group.stages.front();
+            auto* runtime = first->binding->runtime->runtime;
+            group.next_handle = first->base_next_handle; group.next_rule = first->base_next_rule;
+            if (group.stages.size() == 1) {
+                group.changed = first->changed;
+                if (group.changed) {
+                    group.sheets = first->sheets; group.compiled = first->compiled;
+                    group.next_handle = first->next_handle; group.next_rule = first->next_rule;
+                }
+                continue;
+            }
+            group.sheets = runtime->sheets;
+            for (const auto& stage : group.stages) {
+                if (!stage->changed) continue;
+                group.changed = true;
+                const bool existing = stage->binding->handle && group.sheets.count(stage->binding->handle);
+                if (!existing && !style_sheet_handle_available(group.next_handle)) return AETHER_ERROR_INVALID_STATE;
+                const int64_t handle = existing ? stage->binding->handle : group.next_handle++;
+                auto pending = std::make_shared<DomSourceDiagnostics>();
+                pending->recipient_serial = stage->base_recipient;
+                pending->messages = std::make_shared<stylesheet_diagnostics_s>(runtime->diag_cb, runtime->diag_user_data);
+                auto sheet = std::make_shared<compiled_style_sheet_s>();
+                sheet->handle = handle; sheet->layer = style_sheet_layer::author; sheet->source_name = "DOM style slot";
+                const auto status = style_source_compile(stage->source.c_str(), handle, static_cast<int32_t>(sheet->layer),
+                    sheet->rules, group.next_rule, pending->messages->collector(), pending->messages.get());
+                if (status != AETHER_OK) return status;
+                if (stage->binding->handle) group.sheets.erase(stage->binding->handle);
+                group.sheets.emplace(handle, std::move(sheet));
+                patches.push_back({stage, handle, std::move(pending)});
+            }
+            if (group.changed) group.compiled = aether_style_runtime_s::prepare_rule_index_from_sheets(group.sheets);
+        }
+        for (const auto& stage : stages) if (!aether_dom_style_validate_slot(stage)) return AETHER_ERROR_INVALID_STATE;
+        for (auto& patch : patches) { patch.stage->handle = patch.handle; patch.stage->pending.swap(patch.pending); }
+        for (const auto& stage : stages) stage->grouped = true;
+        out = std::move(batch); return AETHER_OK;
+    } catch (const std::bad_alloc&) { return AETHER_ERROR_OUT_OF_MEMORY; }
+      catch (...) { return AETHER_ERROR_INVALID_STATE; }
+}
+bool aether_dom_style_validate_batch(const DomStyleSlotBatchRef& batch) noexcept {
+    if (!batch || batch->committed) return false;
+    for (const auto& group : batch->groups) for (const auto& stage : group.stages)
+        if (!stage->grouped || !validate_dom_slot(stage)) return false;
+    return true;
+}
+void aether_dom_style_commit_batch(DomStyleSlotBatchRef& batch) noexcept {
+    if (!batch || batch->committed) return;
+    // Composite DOM caller validates every participant before changing DOM.
+    for (auto& group : batch->groups) {
+        if (group.changed) {
+            const auto& first = group.stages.front(); auto* runtime = first->binding->runtime->runtime;
+            runtime->sheets.swap(group.sheets); runtime->compiled.swap(group.compiled);
+            runtime->states.swap(group.retired_states); runtime->sheet_epoch = first->base_epoch + 1;
+            runtime->next_sheet_handle = group.next_handle; runtime->next_rule_id = group.next_rule;
+        }
+        for (const auto& stage : group.stages) {
+            if (stage->changed) {
+                auto& binding = *stage->binding;
+                binding.source.swap(stage->source); binding.pending.swap(stage->pending);
+                binding.handle = stage->handle; binding.has_source = true;
+            }
+            stage->committed = true;
+        }
+    }
+    batch->committed = true;
+}
+
+AETHER_API aether_status_t aether_dom_style_binding_create_v1(aether_doc_t document,
+    aether_style_runtime_t runtime, aether_dom_style_binding_t* out) {
+    if (out) *out = nullptr;
+    if (!document || !runtime || !out) return AETHER_ERROR_NULL_ARG;
+    if (!document->owner_control->alive || !document->identity->alive ||
+        document->owner_control->owner_thread != std::this_thread::get_id() ||
+        runtime->owner_thread != std::this_thread::get_id() || runtime->preparing ||
+        !document->owner_control->binding.expired()) return AETHER_ERROR_INVALID_STATE;
+    try {
+        auto handle = std::make_unique<aether_dom_style_binding_s>();
+        handle->value = std::make_shared<DomStyleBinding>();
+        handle->value->owner = document->owner_control; handle->value->runtime = runtime->lifetime;
+        std::string source;
+        auto status = aether_dom_collect_style_source(document, source);
+        if (status != AETHER_OK) return status;
+        DomStyleSlotStageRef stage;
+        status = prepare_dom_slot(handle->value, source, stage, true);
+        if (status != AETHER_OK) return status;
+        if (!aether_dom_style_validate_slot(stage)) return AETHER_ERROR_INVALID_STATE;
+        aether_dom_style_commit_slot(stage);
+        *out = handle.release(); return AETHER_OK;
+    } catch (const std::bad_alloc&) { return AETHER_ERROR_OUT_OF_MEMORY; }
+      catch (...) { return AETHER_ERROR_INVALID_STATE; }
+}
+AETHER_API void aether_dom_style_binding_destroy_v1(aether_dom_style_binding_t handle) {
+    if (!handle) return;
+    const auto binding = handle->value;
+    if (binding->runtime->owner_thread != std::this_thread::get_id()) return;
+    const bool was_registered = binding->registered;
+    binding->active = false; binding->registered = false; binding->pending.reset();
+    if (was_registered && binding->runtime->alive) {
+        auto* runtime = binding->runtime->runtime;
+        if (runtime->binding_registration_serial == UINT64_MAX) runtime->binding_registration_exhausted = true;
+        else ++runtime->binding_registration_serial;
+    }
+    if (auto owner = binding->owner.lock()) {
+        if (owner->binding.lock() == binding) owner->binding.reset();
+        if (binding->runtime->alive) {
+            auto& entries = binding->runtime->runtime->dom_bindings;
+            auto it = entries.find(owner.get());
+            if (it != entries.end() && it->second.lock() == binding) entries.erase(it);
+        }
+    }
+    delete handle;
+}
+AETHER_API aether_status_t aether_dom_style_binding_read_slot_v1(aether_dom_style_binding_t handle,
+    int64_t* out_handle, int32_t* out_present, uint64_t* out_epoch) {
+    if (out_handle) *out_handle = 0; if (out_present) *out_present = 0; if (out_epoch) *out_epoch = 0;
+    if (!handle || !out_handle || !out_present || !out_epoch) return AETHER_ERROR_NULL_ARG;
+    auto* runtime = binding_runtime(handle->value);
+    if (!runtime || !handle->value->registered) return AETHER_ERROR_INVALID_STATE;
+    *out_handle = handle->value->handle; *out_present = runtime->sheets.count(*out_handle) ? 1 : 0;
+    *out_epoch = runtime->sheet_epoch; return AETHER_OK;
+}
+struct aether_dom_style_rebind_s {
+    DomStyleBindingRef previous;
+    std::shared_ptr<DomOwnerControl> old_owner;
+    std::shared_ptr<EditableNodeStorage> old_document;
+    DomStyleSlotStageRef slot;
+    aether_dom_token_v1_t old_token{}, new_token{};
+    std::unique_ptr<aether_dom_style_binding_s> output;
+    bool committed = false;
+};
+static bool same_dom_binding_token(const aether_dom_token_v1_t& a, const aether_dom_token_v1_t& b) noexcept {
+    return a.owner_identity == b.owner_identity && a.observation_serial == b.observation_serial &&
+        a.input_epoch == b.input_epoch && a.structure_epoch == b.structure_epoch && a.sticky_status == b.sticky_status;
+}
+AETHER_API aether_status_t aether_dom_style_binding_prepare_rebind_v1(aether_dom_style_binding_t previous,
+    aether_doc_t document, aether_dom_style_rebind_t* out) {
+    if (out) *out = nullptr;
+    if (!previous || !document || !out) return AETHER_ERROR_NULL_ARG;
+    auto* runtime = binding_runtime(previous->value);
+    if (!runtime || !previous->value->registered || !document->owner_control->alive ||
+        document->owner_control->owner_thread != std::this_thread::get_id() || !document->owner_control->binding.expired())
+        return AETHER_ERROR_INVALID_STATE;
+    try {
+        auto transaction = std::make_unique<aether_dom_style_rebind_s>();
+        transaction->previous = previous->value; transaction->old_owner = previous->value->owner.lock();
+        transaction->old_document = transaction->old_owner->document.lock();
+        if (!transaction->old_document) return AETHER_ERROR_INVALID_STATE;
+        auto status = aether_dom_read_token_v1(transaction->old_document->node.get(), &transaction->old_token);
+        if (status != AETHER_OK) return status;
+        status = aether_dom_read_token_v1(document, &transaction->new_token);
+        if (status != AETHER_OK) return status;
+        transaction->output = std::make_unique<aether_dom_style_binding_s>();
+        auto binding = std::make_shared<DomStyleBinding>();
+        binding->owner = document->owner_control; binding->runtime = runtime->lifetime;
+        binding->source = previous->value->source; binding->has_source = previous->value->has_source;
+        binding->handle = previous->value->handle;
+        // Transfer a not-yet-replayed queue once. An in-progress old replay is
+        // cancelled by logical unbind and remains started, never duplicated.
+        binding->pending = previous->value->pending;
+        transaction->output->value = binding;
+        std::string source; status = aether_dom_collect_style_source(document, source);
+        if (status != AETHER_OK) return status;
+        status = prepare_dom_slot(binding, source, transaction->slot, true);
+        if (status != AETHER_OK) return status;
+        transaction->slot->bindings.erase(transaction->old_owner.get());
+        if (aether_dom_style_binding_validate_rebind_v1(transaction.get()) != AETHER_OK) return AETHER_ERROR_INVALID_STATE;
+        *out = transaction.release(); return AETHER_OK;
+    } catch (const std::bad_alloc&) { return AETHER_ERROR_OUT_OF_MEMORY; }
+      catch (...) { return AETHER_ERROR_INVALID_STATE; }
+}
+AETHER_API aether_status_t aether_dom_style_binding_validate_rebind_v1(aether_dom_style_rebind_t transaction) {
+    if (!transaction) return AETHER_ERROR_NULL_ARG;
+    if (transaction->committed || !binding_runtime(transaction->previous) || !transaction->previous->registered ||
+        transaction->old_owner->binding.lock() != transaction->previous ||
+        !aether_dom_style_validate_slot(transaction->slot)) return AETHER_ERROR_INVALID_STATE;
+    aether_dom_token_v1_t old_token{}, new_token{};
+    if (aether_dom_read_token_v1(transaction->old_document->node.get(), &old_token) != AETHER_OK ||
+        aether_dom_read_token_v1(transaction->slot->document->node.get(), &new_token) != AETHER_OK ||
+        !same_dom_binding_token(old_token, transaction->old_token) || !same_dom_binding_token(new_token, transaction->new_token))
+        return AETHER_ERROR_INVALID_STATE;
+    return AETHER_OK;
+}
+AETHER_API aether_status_t aether_dom_style_binding_commit_rebind_v1(aether_dom_style_rebind_t transaction,
+    aether_dom_style_binding_t* out) {
+    if (out) *out = nullptr;
+    if (!transaction || !out) return AETHER_ERROR_NULL_ARG;
+    const auto status = aether_dom_style_binding_validate_rebind_v1(transaction);
+    if (status != AETHER_OK) return status;
+    transaction->previous->active = false; transaction->previous->registered = false;
+    // Keep the old queue owned by the retained previous binding until after the
+    // publication boundary; active=false is enough to cancel its delivery.
+    transaction->old_owner->binding.reset();
+    aether_dom_style_commit_slot(transaction->slot);
+    transaction->committed = true; *out = transaction->output.release(); return AETHER_OK;
+}
+AETHER_API void aether_dom_style_binding_rebind_destroy_v1(aether_dom_style_rebind_t transaction) { delete transaction; }
+
+#ifdef AETHER_DOM_STYLE_TESTING
+void aether_dom_style_test_set_limits(aether_style_runtime_t runtime, uint64_t epoch,
+    int64_t next_handle, int32_t next_rule) noexcept {
+    runtime->sheet_epoch = epoch; runtime->next_sheet_handle = next_handle; runtime->next_rule_id = next_rule;
+}
+#endif
+static DomStyleBindingRef revision_dom_binding(aether_style_runtime_s* runtime, aether_node_s* document) noexcept {
+    auto owner = document->document_owner.lock();
+    if (!owner) return {};
+    auto it = runtime->dom_bindings.find(owner.get());
+    return it == runtime->dom_bindings.end() ? DomStyleBindingRef{} : it->second.lock();
+}
+static void replay_source_diagnostics(const DomStyleBindingRef& binding,
+    const std::shared_ptr<DomSourceDiagnostics>& queue) {
+    if (!queue || queue->replay_started || !binding) return;
+    queue->replay_started = true; // Nested same-source revisions must not replay it again.
+    for (const auto& entry : queue->messages->messages) {
+        auto* runtime = binding_runtime(binding);
+        if (!runtime || binding->pending != queue || !runtime->sheets.count(binding->handle) ||
+            runtime->diagnostic_recipient_serial != queue->recipient_serial) return;
+        const auto callback = queue->messages->callback;
+        if (!callback) return;
+        callback(entry.code ? entry.code->c_str() : nullptr, entry.property ? entry.property->c_str() : nullptr,
+            entry.value ? entry.value->c_str() : nullptr, entry.message ? entry.message->c_str() : nullptr,
+            queue->messages->user_data);
+        // Read-only revalidation above permits same-source State/R2 and stops
+        // removed/superseded/disposed sources without touching any newer queue.
+    }
+}
+static void replay_revision_diagnostics(const std::shared_ptr<StyleRuntimeControl>& control,
+    uint64_t recipient, const std::shared_ptr<stylesheet_diagnostics_s>& batch) {
+    for (const auto& entry : batch->messages) {
+        if (!control->alive || control->runtime->diagnostic_recipient_serial != recipient || !batch->callback) return;
+        batch->callback(entry.code ? entry.code->c_str() : nullptr, entry.property ? entry.property->c_str() : nullptr,
+            entry.value ? entry.value->c_str() : nullptr, entry.message ? entry.message->c_str() : nullptr, batch->user_data);
+    }
+}
 
 static constexpr uint32_t STYLE_IMPACT_ALL_BITS =
     static_cast<uint32_t>(STYLE_IMPACT_LAYOUT) |
@@ -378,11 +795,31 @@ static bool style_equal(ComputedStyleReadView av, const aether_computed_style_t&
 
 std::shared_ptr<const CompiledStyleInputs> aether_style_runtime_s::prepare_rule_index(
     const aether_style_runtime_s* runtime, std::shared_ptr<const compiled_style_sheet_s> extra, int64_t omit) {
+    return prepare_rule_index_from_sheets(runtime->sheets, std::move(extra), omit);
+}
+std::shared_ptr<const CompiledStyleInputs> aether_style_runtime_s::prepare_rule_index_from_sheets(
+    const decltype(sheets)& input_sheets, std::shared_ptr<const compiled_style_sheet_s> extra, int64_t omit) {
     auto result = std::make_shared<CompiledStyleInputs>();
     auto& owners = result->sheets;
-    owners.reserve(runtime->sheets.size() + (extra ? 1 : 0));
-    for (const auto& pair : runtime->sheets) if (pair.first != omit) owners.push_back(pair.second);
+    owners.reserve(input_sheets.size() + (extra ? 1 : 0));
+    for (const auto& pair : input_sheets) if (pair.first != omit) owners.push_back(pair.second);
     if (extra) owners.push_back(std::move(extra));
+    std::sort(owners.begin(), owners.end(), [](const auto& a, const auto& b) { return a->handle < b->handle; });
+    int32_t position = 0;
+    for (const auto& sheet : owners) {
+        std::vector<const compiled_rule_s*> ordered;
+        ordered.reserve(sheet->rules.size());
+        for (const auto& rule : sheet->rules) ordered.push_back(&rule);
+        std::stable_sort(ordered.begin(), ordered.end(), [](const auto* a, const auto* b) { return a->source_order < b->source_order; });
+        int32_t previous = 0; bool first = true;
+        for (const auto* rule : ordered) {
+            if (first || rule->source_order != previous) {
+                if (position == INT32_MAX) throw std::overflow_error("cascade position exhausted");
+                ++position; previous = rule->source_order; first = false;
+            }
+            result->source_positions.emplace(rule->rule_id, position);
+        }
+    }
     std::vector<const compiled_style_sheet_s*> sheets;
     sheets.reserve(owners.size());
     for (const auto& owner : owners) sheets.push_back(owner.get());
@@ -553,7 +990,7 @@ static PreparedNodeResult* compute_node(aether_style_runtime_s* runtime, aether_
         for (const auto& declaration : rule->declarations) {
             cascade_priority_t priority{
                 declaration.important, false, rule->layer, rule->selector.specificity,
-                rule->source_order, declaration.declaration_order
+                runtime->compiled->source_positions.at(rule->rule_id), declaration.declaration_order
             };
             if (declaration.property_id >= 0 &&
                 declaration.property_id < registry->property_count())
@@ -562,14 +999,14 @@ static PreparedNodeResult* compute_node(aether_style_runtime_s* runtime, aether_
         for (const auto& declaration : rule->custom_declarations) {
             cascade_priority_t priority{
                 declaration.important, false, rule->layer, rule->selector.specificity,
-                rule->source_order, declaration.declaration_order
+                runtime->compiled->source_positions.at(rule->rule_id), declaration.declaration_order
             };
             custom_winners[declaration.name].offer(priority, declaration);
         }
         for (const auto& declaration : rule->content_declarations) {
             cascade_priority_t priority{
                 declaration.important, false, rule->layer, rule->selector.specificity,
-                rule->source_order, declaration.declaration_order
+                runtime->compiled->source_positions.at(rule->rule_id), declaration.declaration_order
             };
             content_winner.offer(priority, declaration.source);
         }
@@ -666,7 +1103,7 @@ static PreparedNodeResult* compute_node(aether_style_runtime_s* runtime, aether_
         for (const auto& declaration : rule->shorthand_declarations) {
             offer_shorthand(declaration, cascade_priority_t{
                 declaration.important, false, rule->layer, rule->selector.specificity,
-                rule->source_order, declaration.declaration_order});
+                runtime->compiled->source_positions.at(rule->rule_id), declaration.declaration_order});
         }
     }
     for (const auto& declaration : inline_shorthands) {
@@ -1063,10 +1500,20 @@ AETHER_API aether_status_t aether_style_runtime_create(
 
 AETHER_API void aether_style_runtime_set_diagnostics_callback(
     aether_style_runtime_t runtime, aether_style_diagnostic_fn callback, void* user_data) {
-    if (runtime) { runtime->diag_cb = callback; runtime->diag_user_data = user_data; }
+    if (runtime && runtime->owner_thread == std::this_thread::get_id() && runtime->diagnostic_recipient_serial != UINT64_MAX) {
+        ++runtime->diagnostic_recipient_serial;
+        runtime->diag_cb = callback; runtime->diag_user_data = user_data;
+    }
 }
 
-AETHER_API void aether_style_runtime_destroy(aether_style_runtime_t runtime) { delete runtime; }
+AETHER_API void aether_style_runtime_destroy(aether_style_runtime_t runtime) {
+    if (!runtime || runtime->owner_thread != std::this_thread::get_id()) return;
+    for (const auto& entry : runtime->dom_bindings) if (auto binding = entry.second.lock()) {
+        binding->active = false; binding->registered = false; binding->pending.reset();
+        if (auto owner = binding->owner.lock(); owner && owner->binding.lock() == binding) owner->binding.reset();
+    }
+    delete runtime;
+}
 
 AETHER_API aether_status_t aether_style_runtime_add_stylesheet(
     aether_style_runtime_t runtime, const char* source, int32_t layer, const char* source_name,
@@ -1077,7 +1524,7 @@ AETHER_API aether_status_t aether_style_runtime_add_stylesheet(
     stylesheet_diagnostics_s diagnostics(runtime->diag_cb, runtime->diag_user_data);
     const auto collector = diagnostics.collector();
     const auto status = [&]() -> aether_status_t {
-        if (!style_sheet_handle_available(runtime->next_sheet_handle)) {
+        if (runtime->sheet_epoch == UINT64_MAX || !style_sheet_handle_available(runtime->next_sheet_handle)) {
             if (collector) collector("AETHER-CSS-LIMIT", "", "",
                 "The cumulative stylesheet handle capacity is exhausted.", &diagnostics);
             return AETHER_ERROR_INVALID_STATE;
@@ -1117,12 +1564,15 @@ AETHER_API aether_status_t aether_style_runtime_add_stylesheet(
 AETHER_API aether_bool_t aether_style_runtime_remove_stylesheet(
     aether_style_runtime_t runtime, int64_t sheet_handle) {
     if (!runtime || runtime->preparing || runtime->owner_thread != std::this_thread::get_id() ||
-        !runtime->sheets.count(sheet_handle)) return AETHER_FALSE;
+        !runtime->sheets.count(sheet_handle) || runtime->sheet_epoch == UINT64_MAX) return AETHER_FALSE;
     try {
         auto index = aether_style_runtime_s::prepare_rule_index(runtime, {}, sheet_handle);
         using std::swap;
         swap(runtime->compiled, index);
         runtime->sheets.erase(sheet_handle);
+        for (const auto& entry : runtime->dom_bindings) {
+            if (auto binding = entry.second.lock(); binding && binding->handle == sheet_handle) binding->pending.reset();
+        }
         runtime->states.clear(); ++runtime->sheet_epoch;
         return AETHER_TRUE;
     } catch (...) { return AETHER_FALSE; }
@@ -1197,7 +1647,11 @@ struct aether_style_transaction_s {
     std::vector<prepared_children_s> links;
     StyleRevisionRef revision;
     std::unique_ptr<aether_style_revision_handle_s> output;
-    std::unique_ptr<stylesheet_diagnostics_s> diagnostics;
+    std::shared_ptr<stylesheet_diagnostics_s> diagnostics;
+    std::shared_ptr<StyleRuntimeControl> runtime_control;
+    uint64_t diagnostic_recipient = 0, base_binding_registration = 0;
+    DomStyleBindingRef source_binding;
+    std::shared_ptr<DomSourceDiagnostics> source_diagnostics;
     bool committed = false;
     bool state_operation = false;
     aether_style_state_result_t state_result{};
@@ -1234,8 +1688,14 @@ static aether_status_t prepare_revision_impl(
         transaction->owner = runtime; transaction->base_pin = runtime->revision; transaction->base_registry_pin=runtime->registry; transaction->base_compiled_pin=runtime->revision_compiled; transaction->base_generation = runtime->generation;
         transaction->base_sheet_epoch = runtime->sheet_epoch;
         auto* document = aether_dom_root(root);
+        if (runtime->generation == UINT64_MAX || document->identity->style_tree_epoch == UINT64_MAX) return AETHER_ERROR_INVALID_STATE;
         transaction->document_lease=aether_editable_lease(document);
         transaction->document_lifetime = document->identity;
+        transaction->runtime_control = runtime->lifetime;
+        transaction->diagnostic_recipient = runtime->diagnostic_recipient_serial;
+        transaction->base_binding_registration = runtime->binding_registration_serial;
+        transaction->source_binding = revision_dom_binding(runtime, document);
+        if (transaction->source_binding) transaction->source_diagnostics = transaction->source_binding->pending;
         transaction->input_epoch = document->identity->mutation_epoch;
         transaction->base_style_tree_epoch = document->identity->style_tree_epoch;
         transaction->candidate = std::make_unique<aether_style_runtime_s>();
@@ -1252,7 +1712,7 @@ static aether_status_t prepare_revision_impl(
         staged.document_measures->root_font_size = requested_environment.root_font_size;
         staged.document_measures->generation = runtime->generation + 1;
         staged.document_measures->identity = aether_node_identity(document);
-        transaction->diagnostics = std::make_unique<stylesheet_diagnostics_s>(runtime->diag_cb, runtime->diag_user_data);
+        transaction->diagnostics = std::make_shared<stylesheet_diagnostics_s>(runtime->diag_cb, runtime->diag_user_data);
         staged.diag_cb = transaction->diagnostics->collector(); staged.diag_user_data = transaction->diagnostics.get();
         // Lookup checks retained token liveness before reusing a raw owner.
         // Sharing this owner is constant work; compute_node counts actual reads.
@@ -1382,13 +1842,18 @@ public:
         transaction->owner=runtime;transaction->base_pin=base;transaction->base_registry_pin=runtime->registry;transaction->base_compiled_pin=runtime->revision_compiled;
         transaction->base_generation=runtime->generation;transaction->base_sheet_epoch=runtime->sheet_epoch;
         transaction->document_lease=aether_editable_lease(document);transaction->document_lifetime=document->identity;transaction->input_epoch=document->identity->mutation_epoch;
+        transaction->runtime_control = runtime->lifetime;
+        transaction->diagnostic_recipient = runtime->diagnostic_recipient_serial;
+        transaction->base_binding_registration = runtime->binding_registration_serial;
+        transaction->source_binding = revision_dom_binding(runtime, document);
+        if (transaction->source_binding) transaction->source_diagnostics = transaction->source_binding->pending;
         transaction->base_style_tree_epoch=document->identity->style_tree_epoch;
         transaction->candidate=std::make_unique<aether_style_runtime_s>();
         auto& staged=*transaction->candidate;staged.options=runtime->options;staged.environment=runtime->environment;
         staged.compiled=runtime->compiled;staged.registry=runtime->revision_registry;
         staged.document_measures=std::make_shared<document_measure_context_s>(*runtime->document_measures);
         staged.document_measures->generation=runtime->generation+1;
-        transaction->diagnostics=std::make_unique<stylesheet_diagnostics_s>(runtime->diag_cb,runtime->diag_user_data);
+        transaction->diagnostics=std::make_shared<stylesheet_diagnostics_s>(runtime->diag_cb,runtime->diag_user_data);
         FullPayloadRevisionInput header;
         header.generation=runtime->generation+1;header.document_identity=base->document_identity();
         header.input_epoch=transaction->input_epoch;header.structure_epoch=base->structure_epoch();
@@ -1493,8 +1958,9 @@ AETHER_API aether_status_t aether_style_runtime_commit_revision(
     aether_style_runtime_t runtime, aether_style_transaction_t transaction, aether_style_revision_t* out_revision) {
     if (out_revision) *out_revision = nullptr;
     if (!runtime || !transaction || !out_revision) return AETHER_ERROR_NULL_ARG;
-    if (transaction->owner != runtime || transaction->base_pin!=runtime->revision ||
+    if (!transaction->runtime_control || !transaction->runtime_control->alive || transaction->owner != runtime || transaction->base_pin!=runtime->revision ||
         transaction->candidate->registry!=style_property_registry_pin() || transaction->committed || runtime->preparing ||
+        runtime->binding_registration_exhausted || runtime->binding_registration_serial != transaction->base_binding_registration ||
         runtime->owner_thread != std::this_thread::get_id() || runtime->generation != transaction->base_generation ||
         runtime->sheet_epoch != transaction->base_sheet_epoch || !transaction->document_lifetime->alive ||
         transaction->document_lifetime->mutation_epoch != transaction->input_epoch ||
@@ -1521,7 +1987,13 @@ AETHER_API aether_status_t aether_style_runtime_commit_revision(
     *out_revision = transaction->output.release();
     // Consumer reentrancy may publish another revision. Outputs above remain
     // those prepared by this operation; never read/write runtime after replay.
-    try { transaction->diagnostics->replay(); } catch (...) { /* C callback must not unwind through C ABI. */ }
+    const auto control = transaction->runtime_control;
+    const auto recipient = transaction->diagnostic_recipient;
+    const auto source_binding = transaction->source_binding;
+    const auto source_diagnostics = transaction->source_diagnostics;
+    const auto diagnostics = transaction->diagnostics;
+    try { replay_source_diagnostics(source_binding, source_diagnostics); } catch (...) { /* Notification failure is not rollback. */ }
+    try { replay_revision_diagnostics(control, recipient, diagnostics); } catch (...) { /* C callback must not unwind through C ABI. */ }
     return AETHER_OK;
 }
 AETHER_API void aether_style_transaction_destroy(aether_style_transaction_t transaction) { delete transaction; }
@@ -1660,7 +2132,11 @@ AETHER_API aether_status_t aether_style_runtime_update_resolved_style_map(aether
         map->current.swap(next);return AETHER_OK;
     }catch(const std::bad_alloc&){return AETHER_ERROR_OUT_OF_MEMORY;}catch(...){return AETHER_ERROR_INVALID_STATE;}
 }
-AETHER_API void aether_style_runtime_clear_cache(aether_style_runtime_t runtime) { if (runtime) { runtime->states.clear(); ++runtime->sheet_epoch; } }
+AETHER_API void aether_style_runtime_clear_cache(aether_style_runtime_t runtime) {
+    if (runtime && runtime->owner_thread == std::this_thread::get_id() && runtime->sheet_epoch != UINT64_MAX) {
+        runtime->states.clear(); ++runtime->sheet_epoch;
+    }
+}
 
 // D1: callback-free publication inspection and fallible pre-commit artifacts.
 static void fill_publication_token(const StyleRevisionRef& revision, uint64_t sheet_epoch,
@@ -1699,7 +2175,7 @@ AETHER_API aether_status_t aether_style_transaction_read_publication_token(
     if (!out_token) return AETHER_ERROR_NULL_ARG;
     const auto size = out_token->struct_size; *out_token = {};
     if (!transaction) return AETHER_ERROR_NULL_ARG;
-    if (size != sizeof(*out_token) || !transaction->owner ||
+    if (size != sizeof(*out_token) || !transaction->runtime_control || !transaction->runtime_control->alive || !transaction->owner ||
         transaction->owner->owner_thread != std::this_thread::get_id() || !transaction->revision ||
         !transaction->revision->authentic_owner(transaction->revision)) return AETHER_ERROR_INVALID_STATE;
     fill_publication_token(transaction->revision, transaction->base_sheet_epoch,
@@ -1712,7 +2188,7 @@ AETHER_API aether_status_t aether_style_transaction_preview_revision(
     aether_style_transaction_t transaction, aether_style_revision_t* out_revision) {
     if (out_revision) *out_revision = nullptr;
     if (!transaction || !out_revision) return AETHER_ERROR_NULL_ARG;
-    if (!transaction->owner || transaction->owner->owner_thread != std::this_thread::get_id() ||
+    if (!transaction->runtime_control || !transaction->runtime_control->alive || !transaction->owner || transaction->owner->owner_thread != std::this_thread::get_id() ||
         !transaction->revision || !transaction->revision->authentic_owner(transaction->revision))
         return AETHER_ERROR_INVALID_STATE;
     aether_style_revision_handle_s handle{transaction->revision};
@@ -1722,7 +2198,7 @@ AETHER_API aether_status_t aether_style_transaction_preview_legacy_map(
     aether_style_transaction_t transaction, aether_style_map_t* out_map) {
     if (out_map) *out_map = nullptr;
     if (!transaction || !out_map) return AETHER_ERROR_NULL_ARG;
-    if (!transaction->owner || transaction->owner->owner_thread != std::this_thread::get_id() ||
+    if (!transaction->runtime_control || !transaction->runtime_control->alive || !transaction->owner || transaction->owner->owner_thread != std::this_thread::get_id() ||
         !transaction->revision || !transaction->revision->authentic_owner(transaction->revision))
         return AETHER_ERROR_INVALID_STATE;
     aether_style_revision_handle_s handle{transaction->revision};
@@ -1731,7 +2207,7 @@ AETHER_API aether_status_t aether_style_transaction_preview_legacy_map(
 
 // D1: prepare the legacy projection patch without changing any published map.
 static bool publication_base_valid(const aether_style_transaction_s* transaction, const MapVersionRef& base) noexcept {
-    return transaction && transaction->owner && transaction->owner->owner_thread == std::this_thread::get_id() &&
+    return transaction && transaction->runtime_control && transaction->runtime_control->alive && transaction->owner && transaction->owner->owner_thread == std::this_thread::get_id() &&
         transaction->revision && transaction->revision->authentic_owner(transaction->revision) && base &&
         !base->contextual() && base->backing() && base->document_lifetime() == transaction->revision->document_lifetime() &&
         base->document_identity() == transaction->revision->document_identity() && structure_valid(base.get());
@@ -1757,7 +2233,7 @@ AETHER_API aether_status_t aether_style_transaction_get_publication_style(
     if (out_style) *out_style = nullptr;
     if (out_impact) *out_impact = 0;
     if (!transaction || !out_node || !out_style || !out_impact) return AETHER_ERROR_NULL_ARG;
-    if (!transaction->owner || transaction->owner->owner_thread != std::this_thread::get_id() ||
+    if (!transaction->runtime_control || !transaction->runtime_control->alive || !transaction->owner || transaction->owner->owner_thread != std::this_thread::get_id() ||
         !transaction->revision || !transaction->revision->authentic_owner(transaction->revision)) return AETHER_ERROR_INVALID_STATE;
     const auto base = pin_style_map(base_map);
     if (base_map && !publication_base_valid(transaction, base)) return AETHER_ERROR_INVALID_STATE;

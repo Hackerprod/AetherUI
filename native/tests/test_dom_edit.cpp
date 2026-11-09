@@ -24,5 +24,21 @@ int main(){
     s={};s.kind=AETHER_DOM_INSERT_CHILD;s.target=b;s.child=a;s.index=0;edit(s);CHECK(a->parent==b&&a->identity->disconnect_serial==0);s.kind=AETHER_DOM_REMOVE_CHILD;edit(s);CHECK(!a->parent&&!a->identity->attached&&a->identity->disconnect_serial==1);
     s.kind=AETHER_DOM_SET_ATTRIBUTE;s.target=a;s.name=str("x");const char bad[]={'a',0,'b'};s.value={bad,3};auto t=token(a);e=nullptr;CHECK(aether_dom_prepare_edit_v1(&t,&s,&e)==AETHER_ERROR_INVALID_STATE&&!e&&a->attributes.count("x")==0);
     s={};s.target=b;s.kind=AETHER_DOM_CLEAR_CHILDREN;edit(s);CHECK(b->children.empty());
+    // Materialize a new detached parent around the current native subtree.
+    // Existing payload specs are opaque and never replay stale managed values.
+    CHECK(aether_node_append_child(body,a)==AETHER_OK);
+    CHECK(aether_element_set_attribute(a,"x","native R2")==AETHER_OK);
+    aether_dom_node_spec_v1_t forest[2]{};forest[0].type=AETHER_NODE_ELEMENT;forest[0].tag=str("section");forest[0].parent_index=-1;forest[1].parent_index=0;forest[1].existing_node=a;
+    s={};s.kind=AETHER_DOM_MATERIALIZE_FOREST;s.target=a;s.nodes=forest;s.node_count=2;
+    const auto disconnect=a->identity->disconnect_serial;auto materialized=prepare(s);aether_node_t parent=nullptr,result=nullptr;
+    CHECK(aether_dom_edit_created_node_v1(materialized,0,&parent)==AETHER_OK&&parent->unpublished);
+    CHECK(aether_dom_edit_created_node_v1(materialized,1,&result)==AETHER_OK&&result==a);
+    auto state_before=parent->state;aether_element_set_state(parent,13);CHECK(parent->state==state_before&&d->owner_control->sticky_status==AETHER_OK);
+    CHECK(aether_element_set_attribute(parent,"bad","write")==AETHER_ERROR_INVALID_STATE);
+    uint64_t new_identity=0;CHECK(aether_dom_read_node_identity_v1(parent,&new_identity)==AETHER_OK&&new_identity);
+    commit(materialized);CHECK(!parent->unpublished&&!parent->parent&&!parent->identity->attached&&a->parent==parent&&a->attributes.at("x")=="native R2"&&a->identity->disconnect_serial==disconnect+1);
+    forest[1].state=99;s.target=a;auto current=token(a);materialized=nullptr;CHECK(aether_dom_prepare_edit_v1(&current,&s,&materialized)==AETHER_ERROR_INVALID_STATE&&!materialized);forest[1].state=0;
+    materialized=prepare(s);CHECK(aether_dom_edit_created_node_v1(materialized,0,&result)==AETHER_OK);aether_dom_node_lease_t provisional=nullptr;CHECK(aether_dom_retain_node_v1(result,&provisional)==AETHER_OK);auto old_parent=a->parent;
+    aether_dom_edit_destroy_v1(materialized);CHECK(!result->identity->alive&&a->identity->alive&&a->parent==old_parent);aether_dom_node_lease_destroy_v1(provisional);
     aether_doc_destroy(d);std::puts("typed DOM edits PASS");
 }

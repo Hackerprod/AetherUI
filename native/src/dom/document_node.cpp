@@ -49,6 +49,8 @@ AETHER_API void aether_doc_destroy(aether_doc_t doc) {
     auto root_pin=aether_editable_lease(doc);
     doc->owner_control->alive=false; aether_dom_retire_node(doc);
     for (const auto& [node, storage] : doc->editable_nodes) aether_dom_retire_node(node);
+    aether_dom_dispose_unmanaged_children(doc);
+    for (const auto& [node, storage] : doc->editable_nodes) aether_dom_dispose_unmanaged_children(node);
     doc->editable_nodes.clear();
     auto* lease=doc->legacy_lease; doc->legacy_lease=nullptr;
     if (lease) delete lease;

@@ -50,7 +50,8 @@ typedef enum aether_dom_edit_kind_v1_e {
     AETHER_DOM_SET_STATE=3, AETHER_DOM_SET_RUNTIME_VALUE=4,
     AETHER_DOM_SET_TEXT=5, AETHER_DOM_INSERT_CHILD=6,
     AETHER_DOM_REMOVE_CHILD=7, AETHER_DOM_CLEAR_CHILDREN=8,
-    AETHER_DOM_INSERT_SUBTREE=9, AETHER_DOM_REPLACE_CHILDREN=10
+    AETHER_DOM_INSERT_SUBTREE=9, AETHER_DOM_REPLACE_CHILDREN=10,
+    AETHER_DOM_MATERIALIZE_FOREST=11, AETHER_DOM_SET_LEGACY_ATTRIBUTE=12
 } aether_dom_edit_kind_v1_t;
 typedef struct aether_dom_node_spec_v1_s {
     int32_t type, state;
@@ -59,6 +60,10 @@ typedef struct aether_dom_node_spec_v1_s {
     int32_t runtime_value_present;
     const aether_dom_attribute_v1_t* attributes;
     size_t attribute_count;
+    /* MATERIALIZE only: opaque existing subtree. All payload fields must be
+       default; parent_index may name only a NEW preceding spec. Existing roots
+       must be unique and non-overlapping. Never replays managed input payload. */
+    aether_node_t existing_node;
 } aether_dom_node_spec_v1_t;
 typedef struct aether_dom_edit_spec_v1_s {
     int32_t kind;
@@ -71,6 +76,8 @@ typedef struct aether_dom_edit_spec_v1_s {
 } aether_dom_edit_spec_v1_t;
 AETHER_API aether_status_t aether_dom_prepare_edit_v1(const aether_dom_token_v1_t* expected,
     const aether_dom_edit_spec_v1_t* spec,aether_dom_edit_t* out_edit);
+/* Returns result by spec index, including opaque existing roots. New handles
+ * are provisional: only retain/identity reads are allowed before commit. */
 AETHER_API aether_status_t aether_dom_edit_created_node_v1(aether_dom_edit_t edit,size_t index,aether_node_t* out_node);
 AETHER_API aether_status_t aether_dom_edit_validate_v1(aether_dom_edit_t edit);
 AETHER_API aether_status_t aether_dom_edit_commit_v1(aether_dom_edit_t edit,aether_dom_token_v1_t* out_token);

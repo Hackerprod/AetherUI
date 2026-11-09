@@ -1,5 +1,6 @@
 #include "dom_types.h"
 #include "../abi/aether_abi.h"
+#include <aether/aether_dom_sync.h>
 
 namespace {
 // Layout wrappers contain borrowed aliases, and generated text may carry no
@@ -47,6 +48,13 @@ AETHER_API int64_t aether_node_get_style_node_id(aether_node_t node) {
 }
 
 namespace {
+bool has_binding(aether_node_s* node) noexcept {auto owner=node?node->document_owner.lock():nullptr;return owner&&!owner->binding.expired();}
+aether_status_t bound_structure(aether_node_s* parent,aether_node_s* child,int32_t kind) noexcept {
+    aether_dom_token_v1_t token{},output{};auto status=aether_dom_read_token_v1(parent,&token);if(status!=AETHER_OK)return status;
+    aether_dom_edit_spec_v1_t spec{};spec.kind=kind;spec.target=parent;spec.child=child;spec.index=-1;
+    aether_dom_edit_t edit=nullptr;status=aether_dom_prepare_edit_v1(&token,&spec,&edit);
+    if(status==AETHER_OK)status=aether_dom_edit_commit_v1(edit,&output);aether_dom_edit_destroy_v1(edit);return status;
+}
 void collect_subtree(aether_node_s* node, std::vector<aether_node_s*>& nodes) {
     nodes.push_back(node); for (auto* child : node->children) collect_subtree(child,nodes);
 }
@@ -61,12 +69,14 @@ void disconnect(const std::vector<aether_node_s*>& nodes) noexcept {
 
 AETHER_API aether_status_t aether_node_append_child(aether_node_t parent, aether_node_t child) {
     if (!parent || !child) return AETHER_ERROR_NULL_ARG;
+    if(has_binding(parent)||has_binding(child))return bound_structure(parent,child,AETHER_DOM_INSERT_CHILD);
     if (is_synthetic_endpoint(parent) || is_synthetic_endpoint(child) || child->type==AETHER_NODE_DOCUMENT)
         return AETHER_ERROR_INVALID_STATE;
     for(auto* ancestor=parent;ancestor;ancestor=ancestor->parent) if(ancestor==child) return AETHER_ERROR_INVALID_STATE;
     if(aether_dom_access(parent)!=AETHER_OK || aether_dom_access(child)!=AETHER_OK) return AETHER_ERROR_INVALID_STATE;
     auto target_owner=parent->document_owner.lock(), source_owner=child->document_owner.lock();
-    const bool adopt=target_owner!=source_owner;
+    const bool legacy_attach=target_owner && !source_owner && !aether_editable_lease(child);
+    const bool adopt=target_owner!=source_owner && !legacy_attach;
     // Factory owned nodes may not escape into an unowned legacy tree.
     if(adopt && (!target_owner || !source_owner)) return AETHER_ERROR_INVALID_STATE;
     auto* old_parent=child->parent;
@@ -87,6 +97,7 @@ AETHER_API aether_status_t aether_node_append_child(aether_node_t parent, aether
         std::shared_ptr<EditableNodeStorage> source_pin,target_pin;
         aether_doc_s* source_doc=nullptr; aether_doc_s* target_doc=nullptr;
         int64_t next_id=0;
+        if(legacy_attach) collect_subtree(child,moving);
         if(adopt) {
             collect_subtree(child,moving); if(!can_disconnect(moving)) return AETHER_ERROR_INVALID_STATE;
             source_pin=source_owner->document.lock(); target_pin=target_owner->document.lock();
@@ -113,6 +124,7 @@ AETHER_API aether_status_t aether_node_append_child(aether_node_t parent, aether
             }
             source_doc->editable_nodes.swap(source_registry); target_doc->editable_nodes.swap(target_registry); target_doc->next_style_node_id=next_id;
         }
+        if(legacy_attach) for(auto* node:moving) {node->document_owner=target_owner;node->identity->document_owner=target_owner;}
         aether_node_mark_attached(child,parent->identity->attached);
         return AETHER_OK;
     } catch(const std::bad_alloc&) { return AETHER_ERROR_OUT_OF_MEMORY; }
@@ -121,6 +133,7 @@ AETHER_API aether_status_t aether_node_append_child(aether_node_t parent, aether
 
 AETHER_API aether_status_t aether_node_remove_child(aether_node_t parent, aether_node_t child) {
     if(!parent||!child) return AETHER_ERROR_NULL_ARG;
+    if(has_binding(parent)||has_binding(child))return bound_structure(parent,child,AETHER_DOM_REMOVE_CHILD);
     if(is_synthetic_endpoint(parent)||is_synthetic_endpoint(child)||aether_dom_access(child)!=AETHER_OK || !aether_dom_can_touch(parent,1,true)) return AETHER_ERROR_INVALID_STATE;
     auto it=std::find(parent->children.begin(),parent->children.end(),child);
     if(it==parent->children.end()||child->parent!=parent) return AETHER_ERROR_INVALID_STATE;

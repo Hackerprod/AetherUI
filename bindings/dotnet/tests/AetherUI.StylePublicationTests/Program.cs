@@ -11,6 +11,7 @@ using AetherUI.Runtime;
 CssDiagnosticsTransactionTests.Run();
 ComponentRenderCandidateTests.Run();
 DomSyncManagedTests.Run();
+DomSyncNativeTests.Run();
 TransitionSyncInteropTests.Run();
 TransitionHostPublicationTests.Run();
 var count = 0;

@@ -1,4 +1,7 @@
 #include "dom_types.h"
+#include "dom_style_source.h"
+#include "dom_strings.h"
+#include "../style_runtime/aether_dom_style_binding.h"
 #include "html_attribute_name.h"
 #include "../abi/aether_abi.h"
 #include <cctype>
@@ -509,14 +512,26 @@ public:
 AETHER_API aether_status_t aether_doc_parse_html(aether_doc_t doc, const char* html) {
     if (!doc || !html) return AETHER_ERROR_NULL_ARG;
 
+    const bool bound=!doc->owner_control->binding.expired();
+    if(bound&&!aether_dom_valid_string(html))return AETHER_ERROR_INVALID_STATE;
     if (!aether_dom_can_touch(doc, 1, true) || doc->version == INT64_MAX) return AETHER_ERROR_INVALID_STATE;
     try {
         // Parse into private ownership. No published input, ID or epoch changes on failure.
         aether_doc_s candidate;
         HtmlParser parser(html, std::strlen(html)); parser.parse_document(&candidate);
+        if(bound)for(const auto& [node,storage]:candidate.editable_nodes) {
+            if(!aether_dom_valid_string(node->tag_name)||!aether_dom_valid_string(node->text))return AETHER_ERROR_INVALID_STATE;
+            for(const auto& [name,value]:node->attributes)if(!aether_dom_valid_string(name)||!aether_dom_valid_string(value))return AETHER_ERROR_INVALID_STATE;
+        }
+        DomStyleSlotStageRef style_stage;
+        if(auto binding=doc->owner_control->binding.lock()) {
+            std::string source;auto status=aether_dom_collect_style_source(&candidate,source);if(status!=AETHER_OK)return status;
+            status=aether_dom_style_prepare_slot(binding,source,style_stage);if(status!=AETHER_OK)return status;
+        }
         std::vector<aether_node_s*> retiring;
         retiring.reserve(doc->editable_nodes.size());
         for (const auto& [node, storage] : doc->editable_nodes) retiring.push_back(node);
+        if(style_stage&&!aether_dom_style_validate_slot(style_stage))return AETHER_ERROR_INVALID_STATE;
         // All allocations above; below this point only swaps and scalar stores.
         for (auto* node : retiring) aether_dom_retire_node(node);
         for (auto& [node, storage] : candidate.editable_nodes) {
@@ -525,7 +540,10 @@ AETHER_API aether_status_t aether_doc_parse_html(aether_doc_t doc, const char* h
         for (auto* node : candidate.children) node->parent=doc;
         doc->children.swap(candidate.children); doc->editable_nodes.swap(candidate.editable_nodes);
         doc->id_index.swap(candidate.id_index); doc->next_style_node_id=candidate.next_style_node_id;
+        aether_dom_dispose_unmanaged_children(&candidate);
+        for (auto& [node, storage] : candidate.editable_nodes) aether_dom_dispose_unmanaged_children(node);
         ++doc->version; aether_node_touch_typed(doc, aether::dom::MutationKind::structure, true);
+        if(style_stage)aether_dom_style_commit_slot(style_stage);
         return AETHER_OK;
     } catch(const std::bad_alloc&) { return AETHER_ERROR_OUT_OF_MEMORY; }
       catch(...) { return AETHER_ERROR_INVALID_STATE; }
