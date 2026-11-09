@@ -16,6 +16,7 @@ using aether::diagnostics::WorkCounter;
 #include "style_property_registry_internal.h"
 #include "style_runtime_types.h"
 #include "style_source_limits.h"
+#include "state_invalidation.h"
 #include "css_variable_tokens.h"
 #include "custom_property_scope_internal.h"
 #include "frozen_runtime_metadata.h"
@@ -88,6 +89,14 @@ struct aether_style_update_s {
     ~aether_style_update_s() { aether_computed_style_free(&current.style); }
 };
 
+// The rule index and state programs retain the exact immutable AST owners.
+// Transactions share this pin; removing a sheet cannot leave borrowed rule pointers.
+struct CompiledStyleInputs {
+    std::vector<std::shared_ptr<const compiled_style_sheet_s>> sheets;
+    rule_index_s index;
+    std::vector<invalidation::Program> state_programs;
+};
+
 struct aether_style_runtime_s {
     aether_style_runtime_options_t options{};
     aether_style_environment_t environment{};
@@ -95,7 +104,7 @@ struct aether_style_runtime_s {
     void* diag_user_data = nullptr;
     int64_t next_sheet_handle = 1;
     int32_t next_rule_id = 1;
-    std::unordered_map<int64_t, std::unique_ptr<compiled_style_sheet_s>> sheets;
+    std::unordered_map<int64_t, std::shared_ptr<const compiled_style_sheet_s>> sheets;
     std::unordered_map<aether_node_s*, FrozenNodePayloadRef> states;
     std::unordered_map<aether_node_s*, std::unique_ptr<PreparedNodeResult>> prepared;
     std::shared_ptr<document_measure_context_s> document_measures;
@@ -105,9 +114,9 @@ struct aether_style_runtime_s {
     bool preparing = false;
     aether_node_s* legacy_inheritance_root = nullptr; // Candidate-only compatibility boundary.
     std::thread::id owner_thread = std::this_thread::get_id();
-    rule_index_s index;
-    static rule_index_s prepare_rule_index(const aether_style_runtime_s* runtime,
-        const compiled_style_sheet_s* extra = nullptr, int64_t omit = 0);
+    std::shared_ptr<const CompiledStyleInputs> compiled = std::make_shared<const CompiledStyleInputs>();
+    static std::shared_ptr<const CompiledStyleInputs> prepare_rule_index(const aether_style_runtime_s* runtime,
+        std::shared_ptr<const compiled_style_sheet_s> extra = {}, int64_t omit = 0);
 };
 
 struct aether_style_revision_handle_s { std::shared_ptr<const style_revision_s> value; };
@@ -336,18 +345,23 @@ static bool style_equal(ComputedStyleReadView av, const aether_computed_style_t&
             a.transition_timing == b.transition_timing;
 }
 
-rule_index_s aether_style_runtime_s::prepare_rule_index(const aether_style_runtime_s* runtime,
-    const compiled_style_sheet_s* extra, int64_t omit) {
+std::shared_ptr<const CompiledStyleInputs> aether_style_runtime_s::prepare_rule_index(
+    const aether_style_runtime_s* runtime, std::shared_ptr<const compiled_style_sheet_s> extra, int64_t omit) {
+    auto result = std::make_shared<CompiledStyleInputs>();
+    auto& owners = result->sheets;
+    owners.reserve(runtime->sheets.size() + (extra ? 1 : 0));
+    for (const auto& pair : runtime->sheets) if (pair.first != omit) owners.push_back(pair.second);
+    if (extra) owners.push_back(std::move(extra));
     std::vector<const compiled_style_sheet_s*> sheets;
-    sheets.reserve(runtime->sheets.size() + (extra ? 1 : 0));
-    for (const auto& pair : runtime->sheets) if (pair.first != omit) sheets.push_back(pair.second.get());
-    if (extra) sheets.push_back(extra);
-    rule_index_s prepared;
+    sheets.reserve(owners.size());
+    for (const auto& owner : owners) sheets.push_back(owner.get());
+    auto& prepared = result->index;
     rule_index_rebuild(&prepared, sheets);
     // No match/media/state/content filtering: even a content-free pseudo rule
     // can produce diagnostics. Unknown future kinds force the full path.
     bool complete = true;
     for (const auto* sheet : sheets) for (const auto& rule : sheet->rules) {
+        result->state_programs.push_back(invalidation::compile(rule.rule_id, rule.selector));
         switch (rule.selector.pseudo_element) {
         case aether_pseudo_element_t::none: break;
         case aether_pseudo_element_t::before: prepared.before_possible_ = true; break;
@@ -356,7 +370,7 @@ rule_index_s aether_style_runtime_s::prepare_rule_index(const aether_style_runti
         }
     }
     prepared.pseudo_capabilities_complete_ = complete;
-    return prepared;
+    return result;
 }
 
 static void report(aether_style_runtime_s* runtime, const char* code,
@@ -500,7 +514,7 @@ static PreparedNodeResult* compute_node(aether_style_runtime_s* runtime, aether_
 
     std::vector<const compiled_rule_s*> candidates;
     auto info = get_node_info(node);
-    rule_index_get_candidates(&runtime->index, &info, candidates);
+    rule_index_get_candidates(&runtime->compiled->index, &info, candidates);
     for (const auto* rule : candidates) {
         if (rule->selector.pseudo_element != node->pseudo_element) continue;
         if (!media_condition_matches(rule->condition, &runtime->environment) ||
@@ -937,7 +951,7 @@ static std::shared_ptr<aether_node_s> create_generated_node() {
 static std::shared_ptr<aether_node_s> prepare_generated_pseudo(
     aether_style_runtime_s* staged, aether_node_s* host, PreparedNodeResult* host_state,
     aether_pseudo_element_t pseudo) {
-    if (!staged->index.may_target_pseudo(pseudo)) return {};
+    if (!staged->compiled->index.may_target_pseudo(pseudo)) return {};
     auto generated = create_generated_node();
     generated->type = AETHER_NODE_ELEMENT; generated->parent = host;
     generated->tag_name = host->tag_name; generated->attributes = host->attributes;
@@ -1028,7 +1042,7 @@ AETHER_API aether_status_t aether_style_runtime_add_stylesheet(
         }
         const auto handle = runtime->next_sheet_handle;
         auto next_rule_id = runtime->next_rule_id;
-        auto sheet = std::make_unique<compiled_style_sheet_s>();
+        auto sheet = std::make_shared<compiled_style_sheet_s>();
         sheet->handle = handle;
         sheet->layer = static_cast<style_sheet_layer>(layer);
         sheet->source_name = source_name ? source_name : "";
@@ -1038,10 +1052,10 @@ AETHER_API aether_status_t aether_style_runtime_add_stylesheet(
         // Preserve the compiler's global positions, including the shared position
         // of selectors in one list. ID capacity already bounds this narrowing.
         const auto rule_count = static_cast<int32_t>(sheet->rules.size());
-        auto index = aether_style_runtime_s::prepare_rule_index(runtime, sheet.get());
+        auto index = aether_style_runtime_s::prepare_rule_index(runtime, sheet);
         runtime->sheets.emplace(handle, std::move(sheet)); // Last fallible allocation.
         using std::swap;
-        swap(runtime->index, index);
+        swap(runtime->compiled, index);
         runtime->states.clear();
         ++runtime->sheet_epoch;
         runtime->next_sheet_handle = handle + 1;
@@ -1063,9 +1077,9 @@ AETHER_API aether_bool_t aether_style_runtime_remove_stylesheet(
     if (!runtime || runtime->preparing || runtime->owner_thread != std::this_thread::get_id() ||
         !runtime->sheets.count(sheet_handle)) return AETHER_FALSE;
     try {
-        auto index = aether_style_runtime_s::prepare_rule_index(runtime, nullptr, sheet_handle);
+        auto index = aether_style_runtime_s::prepare_rule_index(runtime, {}, sheet_handle);
         using std::swap;
-        swap(runtime->index, index);
+        swap(runtime->compiled, index);
         runtime->sheets.erase(sheet_handle);
         runtime->states.clear(); ++runtime->sheet_epoch;
         return AETHER_TRUE;
@@ -1171,7 +1185,7 @@ static aether_status_t prepare_revision_impl(
         staged.options = runtime->options; staged.environment = requested_environment;
         if (isolate_legacy_root && root != document && root->parent && root->parent->type != AETHER_NODE_DOCUMENT)
             staged.legacy_inheritance_root = root;
-        staged.index = runtime->index;
+        staged.compiled = runtime->compiled;
         staged.document_measures = std::make_shared<document_measure_context_s>();
         staged.document_measures->viewport_width = requested_environment.viewport_width;
         staged.document_measures->viewport_height = requested_environment.viewport_height;
