@@ -81,3 +81,42 @@ classification behind the hot counter. Existing content/input tests remain oracl
 E1 completion is only native ordinary-content foundation. Input chrome, host
 scroll snapshot/certificate/pending cursor, barrier correction, .NET ON/OFF input
 traces, independent whole E implementation review and F/Windows remain pending.
+
+## E0 trace evidence captured while proposal review is pending
+
+The unchanged base Core runtime passed all 16 existing real .NET input traces
+with input counters both OFF and ON. The new standalone
+`AetherUI.InputTraceTests --e-contract-baseline` records two historical contracts:
+CursorAt at B returns A's cursor while A is pending, even though B's independent
+cursor is Text; move/down/move/up produces down/up/click before B mouseover at
+Render. These tests intentionally describe the baseline, not proposed behavior.
+They do not authorize correcting either contract.
+
+## Exact E1 safety clarifications for independent sign-off
+
+- A cache entry is installed only after the complete query and all post-operation
+  geometry/provenance/liveness guards succeed. Null caused by exception, OOM,
+  stale inputs or invalidation is never cached as an authoritative miss.
+- Certificate captures geometry-document identity and its mutation/structure/style
+  epochs, base-map provenance document and selected-map provenance document with
+  their epochs, selected immutable map owner, policy and presentation serial.
+  Missing or unprovable provenance/liveness falls back to oracle or disables
+  result caching. A non-null cached target retains its authentic identity token,
+  verifies token owner/alive/attached, and never trusts raw address coincidence.
+- The presentation serial never wraps. Saturation permanently disables reuse for
+  that layout. Every finalize attempt invalidates before possible writes, even if
+  it fails or rolls back. Relevant geometry changes and release_box invalidate.
+  A new clone has its own empty accelerator and independent presentation serial.
+- The accelerator is owned by its layout and MUST NOT strongly retain that same
+  layout (no reference cycle). Only a query-local LayoutOperationPin owns geometry
+  during execution. The accelerator may pin immutable maps and identity tokens.
+- Bounds retain zero-size rectangles, inclusive endpoints, signed-zero behavior
+  and float-addition endpoints from the exact oracle. Tests include +/-0 and
+  nextafter just inside/outside boundaries. Unknown/nonfinite/negative geometry
+  is unbounded; unbounded propagates through unions without false pruning.
+- E1 does not project transform bounds with approximate float math. A transformed
+  subtree's incoming bound is unbounded; inside that subtree the exact existing
+  unmap executes before testing its local child ranges. Singular/nonfinite samples
+  therefore retain the exact oracle rejection, and are counted as conservative
+  paths. Every external offset callback uses the full oracle, with original
+  invocation behavior/order and guard protocol.

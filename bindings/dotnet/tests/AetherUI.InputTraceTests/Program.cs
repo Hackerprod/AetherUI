@@ -7,6 +7,12 @@ using AetherUI.Events;
 using AetherUI.Layout;
 using System.Reflection;
 
+if (args.Contains("--e-contract-baseline", StringComparer.Ordinal))
+{
+    InputEContractBaseline.Run();
+    return;
+}
+
 if (args.Contains("--baseline", StringComparer.Ordinal))
 {
     InputBaseline.Run();
