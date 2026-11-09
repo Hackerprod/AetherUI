@@ -194,7 +194,8 @@ public sealed partial class UiDocumentHost
             var initialStates = dom.BindingCore is null && !_nativeInitialStatesSynchronized
                 ? EnumerateElements(document).Select(static element => (int)element.State).ToArray() : null;
             using var diagnostics = CssDiagnostics.BeginTransaction();
-            using var native = _nativeStyleRuntime.PreparePublication(initialStates, _viewport.Width, _viewport.Height, _dpiScale, _nativeVisualStyleMap);
+            using var native = _nativeStyleRuntime.PreparePublication(initialStates, _viewport.Width, _viewport.Height, _dpiScale,
+                _forceFullProjectionRecovery ? null : _nativeVisualStyleMap);
             _nativeInitialStatesSynchronized = true;
             _stateInputsToSync.Clear(); // No callbacks have run; Bnext state writes start below.
             if (dom.BindingCore is null && _publishedStyleToken.DocumentIdentity == native.Token.DocumentIdentity &&
