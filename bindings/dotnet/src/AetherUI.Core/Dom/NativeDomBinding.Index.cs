@@ -7,9 +7,9 @@ internal sealed partial class NativeDomBinding
     {
         if (edit.Kind is not (DomEditKind.InsertChild or DomEditKind.RemoveChild or DomEditKind.ClearChildren or DomEditKind.ReplaceText))
             return owner._host.Prepare(edit, import: false);
-        #if AETHER_DOM_FAULT_TESTING
+#if AETHER_DOM_FAULT_TESTING
         AetherUI.Core.Native.ManagedDomFault.Before("dom.index.elements");
-        #endif
+#endif
         var elements = new List<IntPtr>();
         Visit(owner.Document);
         return owner._host.PrepareStructure(edit, elements);
@@ -22,9 +22,9 @@ internal sealed partial class NativeDomBinding
                 if (handle == IntPtr.Zero && created is not null)
                     foreach (var pair in created) if (ReferenceEquals(pair.Node, node)) { handle = pair.Record.Handle; break; }
                 if (handle == IntPtr.Zero) throw new InvalidOperationException("The candidate DOM index has an unmapped element.");
-                #if AETHER_DOM_FAULT_TESTING
+#if AETHER_DOM_FAULT_TESTING
                 AetherUI.Core.Native.ManagedDomFault.BeforeListAdd(elements, "dom.index.elements-add");
-                #endif
+#endif
                 elements.Add(handle);
             }
             if (ReferenceEquals(node, edit.Target))

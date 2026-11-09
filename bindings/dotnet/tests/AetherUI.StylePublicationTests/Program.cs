@@ -9,6 +9,8 @@ using AetherUI.Rendering;
 using AetherUI.Runtime;
 
 #if AETHER_DOM_FAULT_TESTING
+if (args.Contains("--component-faults")) { ComponentFaultSiteTests.Run(); return; }
+if (args.Contains("--dom-fault-counter-overflow")) { DomFaultSiteTests.CounterOverflowControl(); return; }
 if (args.Contains("--dom-faults")) { DomFaultSiteTests.Run(); return; }
 #else
 if (typeof(NativeDomDocument).Assembly.GetType("AetherUI.Core.Native.ManagedDomFault") is not null)
@@ -16,6 +18,7 @@ if (typeof(NativeDomDocument).Assembly.GetType("AetherUI.Core.Native.ManagedDomF
 #endif
 
 #if AETHER_DOM_COMMIT_ALLOCATION_TESTING
+if (args.Contains("--host-preparation-bootstrap")) { HostPublicationPreparationTests.Run(args[^1]); return; }
 if (args.Contains("--commit-allocations"))
 {
     DomCommitAllocationTests.Run();

@@ -56,14 +56,14 @@ internal sealed partial class NativeDomBinding
                 if (candidate.StateChanged != 0)
                 {
                     version = Node.PrepareVersions(element.OwnerDocumentCore, 1, false);
-                    #if AETHER_DOM_FAULT_TESTING
+#if AETHER_DOM_FAULT_TESTING
                     AetherUI.Core.Native.ManagedDomFault.Before("dom.interaction.bookkeeping-call-aggregate");
-                    #endif
+#endif
                     bookkeeping = owner._host.Prepare(new(DomEditKind.SetState, element, State: (ElementState)candidate.AfterState), import: false);
                 }
-                #if AETHER_DOM_FAULT_TESTING
+#if AETHER_DOM_FAULT_TESTING
                 AetherUI.Core.Native.ManagedDomFault.Before("dom.interaction.wrapper");
-                #endif
+#endif
                 return new(owner, element, native, bookkeeping, version, record);
             }
             catch { owner._synchronizing = false; bookkeeping?.Dispose(); native.Dispose(); throw; }

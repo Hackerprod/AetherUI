@@ -20,9 +20,9 @@ public sealed class ElementNode : Node
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(tagName);
         _tagName = DomNames.Canonicalize(tagName);
-        #if AETHER_DOM_FAULT_TESTING
+#if AETHER_DOM_FAULT_TESTING
         AetherUI.Core.Native.ManagedDomFault.Before("dom.element.attribute-view");
-        #endif
+#endif
         _attributeView = new AttributeView(this);
     }
     public string TagName { get { EnsureCurrent(); return _tagName; } }
@@ -115,9 +115,9 @@ public sealed class ElementNode : Node
     }
     private void SetAttributeCore(string name, string value)
     {
-        #if AETHER_DOM_FAULT_TESTING
+#if AETHER_DOM_FAULT_TESTING
         AetherUI.Core.Native.ManagedDomFault.Before("dom.element.set-copy");
-        #endif
+#endif
         var attributes = new Dictionary<string, string>(_attributes, StringComparer.Ordinal);
 #if AETHER_DOM_FAULT_TESTING
         AetherUI.Core.Native.ManagedDomFault.BeforeDictionaryInsert(attributes, name, "dom.element.set-map-insert-aggregate");
@@ -149,9 +149,9 @@ public sealed class ElementNode : Node
         EnsureCurrent();
         name = DomNames.Canonicalize(name);
         if (!_attributes.ContainsKey(name)) return false;
-        #if AETHER_DOM_FAULT_TESTING
+#if AETHER_DOM_FAULT_TESTING
         AetherUI.Core.Native.ManagedDomFault.Before("dom.element.remove-copy");
-        #endif
+#endif
         var attributes = new Dictionary<string, string>(_attributes, StringComparer.Ordinal);
         attributes.Remove(name);
         var change = PrepareVersions(OwnerDocumentCore, 1, true);
@@ -176,8 +176,15 @@ public sealed class ElementNode : Node
         CompleteMutation(binding, change.Document);
         return true;
     }
-    internal bool HasClassCore(string className) => !string.IsNullOrWhiteSpace(className) &&
-        (GetAttributeCore("class") ?? string.Empty).Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries).Contains(className, StringComparer.Ordinal);
+    internal bool HasClassCore(string className)
+    {
+        if (string.IsNullOrWhiteSpace(className)) return false;
+
+#if AETHER_DOM_FAULT_TESTING
+        AetherUI.Core.Native.ManagedDomFault.Before("dom.element.class-split-aggregate");
+#endif
+        return (GetAttributeCore("class") ?? string.Empty).Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries).Contains(className, StringComparer.Ordinal);
+    }
     public bool HasClass(string className) { EnsureCurrent(); return HasClassCore(className); }
     public void AddClass(string className)
     {
@@ -185,26 +192,53 @@ public sealed class ElementNode : Node
         EnsureCurrent();
         if (HasClassCore(className)) return;
         var current = GetAttributeCore("class");
-        SetAttributeCore("class", string.IsNullOrWhiteSpace(current) ? className : $"{current} {className}");
+        string value;
+        if (string.IsNullOrWhiteSpace(current)) value = className;
+        else
+        {
+#if AETHER_DOM_FAULT_TESTING
+            AetherUI.Core.Native.ManagedDomFault.Before("dom.element.class-concat");
+#endif
+            value = $"{current} {className}";
+        }
+        SetAttributeCore("class", value);
     }
     public void RemoveClass(string className)
     {
         EnsureCurrent();
-        var classes = (GetAttributeCore("class") ?? string.Empty).Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries)
-            .Where(existing => !string.Equals(existing, className, StringComparison.Ordinal));
-        SetAttributeCore("class", string.Join(' ', classes));
+
+#if AETHER_DOM_FAULT_TESTING
+        AetherUI.Core.Native.ManagedDomFault.Before("dom.element.remove-class-split-aggregate");
+#endif
+        var classes = (GetAttributeCore("class") ?? string.Empty).Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
+
+#if AETHER_DOM_FAULT_TESTING
+        AetherUI.Core.Native.ManagedDomFault.Before("dom.element.remove-class-filter-aggregate");
+#endif
+        var filtered = classes.Where(existing => !string.Equals(existing, className, StringComparison.Ordinal));
+
+#if AETHER_DOM_FAULT_TESTING
+        AetherUI.Core.Native.ManagedDomFault.Before("dom.element.remove-class-join-aggregate");
+#endif
+        SetAttributeCore("class", string.Join(' ', filtered));
     }
     public IEnumerable<ElementNode> AncestorsAndSelf()
     {
         EnsureCurrent();
-        #if AETHER_DOM_FAULT_TESTING
+#if AETHER_DOM_FAULT_TESTING
         AetherUI.Core.Native.ManagedDomFault.Before("dom.element.ancestors-list");
-        #endif
+#endif
         var result = new List<ElementNode>();
-        for (Node? node = this; node is ElementNode element; node = node.ParentCore) result.Add(element);
-        #if AETHER_DOM_FAULT_TESTING
+        for (Node? node = this; node is ElementNode element; node = node.ParentCore)
+        {
+#if AETHER_DOM_FAULT_TESTING
+            AetherUI.Core.Native.ManagedDomFault.BeforeListAdd(result, "dom.element.ancestor-add");
+#endif
+            result.Add(element);
+        }
+#if AETHER_DOM_FAULT_TESTING
         AetherUI.Core.Native.ManagedDomFault.Before("dom.element.ancestors-array");
-        #endif
+#endif
         return result.ToArray();
     }
     public ElementNode? Closest(string tagName)
@@ -232,6 +266,10 @@ public sealed class ElementNode : Node
         public IEnumerator<KeyValuePair<string, string>> GetEnumerator()
         {
             owner.EnsureCurrent();
+
+#if AETHER_DOM_FAULT_TESTING
+            AetherUI.Core.Native.ManagedDomFault.Before("dom.element.attribute-enumerator-box");
+#endif
             return owner._attributes.GetEnumerator();
         }
         IEnumerator IEnumerable.GetEnumerator() => GetEnumerator();

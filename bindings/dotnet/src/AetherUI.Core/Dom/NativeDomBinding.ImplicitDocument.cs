@@ -9,13 +9,13 @@ internal sealed partial class NativeDomBinding
     private NativeDomBinding(NativeDomDocument native, DocumentNode document, ThreadBindings registry,
         out NativeDomNodeRecord rootRecord)
     {
-        #if AETHER_DOM_FAULT_TESTING
+#if AETHER_DOM_FAULT_TESTING
         AetherUI.Core.Native.ManagedDomFault.Before("dom.implicit.interop-call-aggregate");
-        #endif
+#endif
         _interop = DomInterop.CreateStaged(native, document);
-        #if AETHER_DOM_FAULT_TESTING
+#if AETHER_DOM_FAULT_TESTING
         AetherUI.Core.Native.ManagedDomFault.Before("dom.implicit.bookkeeping-wrapper");
-        #endif
+#endif
         _host = new ImplicitDocumentBookkeeping(document);
         _registry = registry;
         _token = NativeDomSync.ReadToken(native);
@@ -24,16 +24,34 @@ internal sealed partial class NativeDomBinding
         var lease = NativeDomLease.Retain(borrow.Handle);
         try
         {
-            #if AETHER_DOM_FAULT_TESTING
+#if AETHER_DOM_FAULT_TESTING
             AetherUI.Core.Native.ManagedDomFault.Before("dom.implicit.root-record");
-            #endif
+#endif
             rootRecord = new NativeDomNodeRecord(this, identity, lease)
             {
                 Attached = true,
                 StyleNodeId = native.GetStyleNodeId(borrow.Handle),
             };
-            _nodes.Add(identity, new(document));
-            _handles.Add(borrow.Handle, new(document));
+
+#if AETHER_DOM_FAULT_TESTING
+            AetherUI.Core.Native.ManagedDomFault.Before("dom.implicit.root-weak");
+#endif
+            var rootWeak = new WeakReference<Node>(document);
+
+#if AETHER_DOM_FAULT_TESTING
+            AetherUI.Core.Native.ManagedDomFault.BeforeDictionaryInsert(_nodes, identity, "dom.implicit.root-node-add");
+#endif
+            _nodes.Add(identity, rootWeak);
+
+#if AETHER_DOM_FAULT_TESTING
+            AetherUI.Core.Native.ManagedDomFault.Before("dom.implicit.root-handle-weak");
+#endif
+            var handleWeak = new WeakReference<Node>(document);
+
+#if AETHER_DOM_FAULT_TESTING
+            AetherUI.Core.Native.ManagedDomFault.BeforeDictionaryInsert(_handles, borrow.Handle, "dom.implicit.root-handle-add");
+#endif
+            _handles.Add(borrow.Handle, handleWeak);
         }
         catch { lease.Dispose(); throw; }
     }
@@ -45,25 +63,31 @@ internal sealed partial class NativeDomBinding
         PreparedMaterialization? editCandidate = null;
         try
         {
-            #if AETHER_DOM_FAULT_TESTING
+#if AETHER_DOM_FAULT_TESTING
             AetherUI.Core.Native.ManagedDomFault.Before("dom.implicit.binding");
-            #endif
+#endif
             var destination = new NativeDomBinding(native, document, completionOwner._registry, out rootRecord);
-            #if AETHER_DOM_FAULT_TESTING
+#if AETHER_DOM_FAULT_TESTING
             AetherUI.Core.Native.ManagedDomFault.Before("dom.implicit.owners-map");
-            #endif
+#endif
             var owners = new Dictionary<ulong, WeakReference<NativeDomBinding>>(completionOwner._registry.Owners.Count + 1);
             foreach (var pair in completionOwner._registry.Owners)
                 if (pair.Value.TryGetTarget(out var live) && !live._disposed) owners.Add(pair.Key, pair.Value);
-            owners.Add(destination._token.OwnerIdentity, new(destination));
+
+#if AETHER_DOM_FAULT_TESTING
+            AetherUI.Core.Native.ManagedDomFault.Before("dom.implicit.owner-weak");
+#endif
+            var ownerWeak = new WeakReference<NativeDomBinding>(destination);
+            // Owners dictionary capacity is old Count+1, and pruning only shrinks it.
+            owners.Add(destination._token.OwnerIdentity, ownerWeak);
             editCandidate = PreparedMaterialization.PrepareCore(destination, edit, document, document: true);
-            #if AETHER_DOM_FAULT_TESTING
+#if AETHER_DOM_FAULT_TESTING
             AetherUI.Core.Native.ManagedDomFault.Before("dom.implicit.notification-array-aggregate");
-            #endif
+#endif
             var notifications = editCandidate.NotificationsExcept(completionOwner);
-            #if AETHER_DOM_FAULT_TESTING
+#if AETHER_DOM_FAULT_TESTING
             AetherUI.Core.Native.ManagedDomFault.Before("dom.implicit.result");
-            #endif
+#endif
             return new ImplicitDocumentEdit(completionOwner, destination, rootRecord, owners, editCandidate, notifications);
         }
         catch

@@ -34,12 +34,18 @@ public sealed class DocumentNode : Node
     {
         if (_idIndex is null)
         {
-            #if AETHER_DOM_FAULT_TESTING
+#if AETHER_DOM_FAULT_TESTING
             AetherUI.Core.Native.ManagedDomFault.Before("dom.document.id-map");
-            #endif
+#endif
             var index = new Dictionary<string, ElementNode>(StringComparer.Ordinal);
             foreach (var element in DescendantsCore().OfType<ElementNode>())
-                if (element.GetAttributeCore("id") is { Length: > 0 } key) index.TryAdd(key, element);
+                if (element.GetAttributeCore("id") is { Length: > 0 } key)
+                {
+#if AETHER_DOM_FAULT_TESTING
+                    AetherUI.Core.Native.ManagedDomFault.BeforeDictionaryInsert(index, key, "dom.document.id-map-add");
+#endif
+                    index.TryAdd(key, element);
+                }
             _idIndex = index;
         }
         return _idIndex.TryGetValue(id, out var result) ? result : null;
@@ -48,18 +54,18 @@ public sealed class DocumentNode : Node
     {
         EnsureCurrent();
         var name = DomNames.Canonicalize(tagName);
-        #if AETHER_DOM_FAULT_TESTING
+#if AETHER_DOM_FAULT_TESTING
         AetherUI.Core.Native.ManagedDomFault.Before("dom.document.tag-query-aggregate");
-        #endif
+#endif
         return DescendantsCore().OfType<ElementNode>().Where(element => element.TagNameCore == name).ToArray();
     }
     public ElementNode? QuerySelector(string selector)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(selector);
         EnsureCurrent();
-        #if AETHER_DOM_FAULT_TESTING
+#if AETHER_DOM_FAULT_TESTING
         AetherUI.Core.Native.ManagedDomFault.Before("dom.document.selector-trim");
-        #endif
+#endif
         selector = selector.Trim();
         if (selector[0] == '#') return GetElementByIdCore(selector[1..]);
         if (selector[0] == '.') return DescendantsCore().OfType<ElementNode>().FirstOrDefault(element => element.HasClassCore(selector[1..]));

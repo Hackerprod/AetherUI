@@ -11,7 +11,7 @@ using AetherUI.Runtime;
 
 internal static class DomFaultSiteTests
 {
-    private static readonly string[] Families = ["state", "runtime", "attribute", "remove-attribute", "text", "replace-text", "insert", "move", "cross-owner", "remove", "clear", "materialize", "implicit-document", "import-attribute", "import-insert", "import-then-state", "import-then-attribute", "import-then-insert"];
+    private static readonly string[] Families = ["activate-binding", "add-class", "remove-class", "query-id", "query-tag", "read-text", "descendants", "ancestors", "attribute-enumerator", "child-enumerator", "state", "runtime", "attribute", "remove-attribute", "text", "replace-text", "insert", "move", "cross-owner", "remove", "clear", "materialize", "implicit-document", "import-attribute", "import-insert", "import-then-state", "import-then-attribute", "import-then-insert"];
     internal static void Run()
     {
         Controls();
@@ -22,6 +22,7 @@ internal static class DomFaultSiteTests
         {
             Collect();
             var baseline = ManagedDomFault.Resources;
+            Check(baseline.Valid, "Resource ledger invalid before fixture");
             var trace = RunCase(family, null, 0).Trace;
             Collect(); Equal(baseline, ManagedDomFault.Resources, family + " baseline resource teardown");
             var occurrences = new Dictionary<string, int>(StringComparer.Ordinal);
@@ -101,6 +102,7 @@ internal static class DomFaultSiteTests
         internal readonly Renderer SourceRenderer = new(), TargetRenderer = new();
         internal readonly UiDocumentHost SourceHost, TargetHost;
         internal readonly DomInterop Source, Target;
+        internal readonly DomInterop? Unbound;
         internal readonly ElementNode Element, Parent, Other, NewChild;
         internal readonly DocumentNode Implicit = new();
         internal readonly ElementNode UnboundParent = new("section");
@@ -116,6 +118,8 @@ internal static class DomFaultSiteTests
             Source = Field<DomInterop>(SourceHost, "_nativeDom"); Target = Field<DomInterop>(TargetHost, "_nativeDom");
             Element = Source.Document.GetElementById("i")!; Parent = Source.Document.GetElementById("parent")!;
             Other = Source.Document.GetElementById("other")!; Text = (TextNode)Source.Document.GetElementById("text")!.FirstChild!;
+            if (family == "activate-binding") Unbound = DomInterop.Parse("<div><input value='base'></div>");
+            if (family is "add-class" or "remove-class") { Element.SetAttribute("class", "one two"); SourceHost.Render(); }
             NewChild = new ElementNode("ASIDE"); NewChild.SetAttribute("id", "new"); NewChild.AppendChild(new TextNode("new text"));
             UnboundParent.AppendChild(new TextNode("prefix")); Implicit.AppendChild(new ElementNode("prefix"));
             SourceHost.RenderRequested += (_, _) => Notifications++;
@@ -134,6 +138,16 @@ internal static class DomFaultSiteTests
         {
             switch (Family)
             {
+                case "activate-binding": Unbound!.EnableSynchronization(new EmptyBookkeeping()); break;
+                case "add-class": Element.AddClass("three"); break;
+                case "remove-class": Element.RemoveClass("two"); break;
+                case "query-id": _ = Target.Document.GetElementById("i"); break;
+                case "query-tag": _ = Source.Document.GetElementsByTagName("INPUT"); break;
+                case "read-text": _ = Parent.TextContent; break;
+                case "descendants": _ = Parent.Descendants(); _ = Parent.DescendantElements(); break;
+                case "ancestors": _ = Element.AncestorsAndSelf(); break;
+                case "attribute-enumerator": using (var e = Element.Attributes.GetEnumerator()) { while (e.MoveNext()) { } } break;
+                case "child-enumerator": using (var e = Parent.Children.GetEnumerator()) { while (e.MoveNext()) { } } break;
                 case "state": Element.State = ElementState.Invalid; break;
                 case "runtime": Element.RuntimeValue = "requested"; break;
                 case "attribute": Element.SetAttribute("DATA-NEW", "requested"); break;
@@ -156,13 +170,14 @@ internal static class DomFaultSiteTests
         }
         internal string NativeImage()
         {
-            return NativeTree(Source.Native) + "\nDEST\n" + NativeTree(Target.Native) + "\nSLOTS\n" +
+            return NativeTree(Source.Native) + "\nDEST\n" + NativeTree(Target.Native) + (Unbound is null ? "" : NativeTree(Unbound.Native)) + "\nSLOTS\n" +
                 Field<StyleRuntimeInterop>(SourceHost, "_nativeStyleRuntime").ReadDomSourceSlot() + "\n" +
                 Field<StyleRuntimeInterop>(TargetHost, "_nativeStyleRuntime").ReadDomSourceSlot();
         }
         internal string ManagedImage()
         {
             var result = new StringBuilder(); var seen = new HashSet<Node>(ReferenceEqualityComparer.Instance);
+            if (Unbound is not null) Capture(Unbound.Document);
             Capture(Source.Document); Capture(Target.Document); Capture(Element); Capture(Text); Capture(NewChild); Capture(UnboundParent); Capture(Implicit);
             return result.ToString();
             void Capture(Node node)
@@ -188,6 +203,7 @@ internal static class DomFaultSiteTests
         {
             CheckOwner(Source.BindingCore!); CheckOwner(Target.BindingCore!);
             if (Implicit.BindingCore is NativeDomBinding extra) CheckOwner(extra);
+            if (Unbound?.BindingCore is { } activated) CheckOwner(activated);
             void CheckOwner(NativeDomBinding binding)
             {
                 using var snapshot = NativeDomSnapshot.Acquire(binding.Native);
@@ -215,7 +231,26 @@ internal static class DomFaultSiteTests
         public void Dispose()
         {
             if (Implicit.BindingCore is NativeDomBinding extra) { extra.Dispose(); extra.Native.Dispose(); }
+            Unbound?.Dispose();
             SourceHost.Dispose(); TargetHost.Dispose(); SourceRenderer.Dispose(); TargetRenderer.Dispose();
+        }
+    }
+    internal static void CounterOverflowControl()
+    {
+        typeof(ManagedDomFault).GetField("_buffers", BindingFlags.Static | BindingFlags.NonPublic)!.SetValue(null, long.MaxValue);
+        ManagedDomFault.ResourceAcquired(ManagedDomFault.Resource.NativeBuffer);
+        Check(!ManagedDomFault.Resources.Valid, "Resource overflow did not invalidate ledger");
+        Console.WriteLine("PASS isolated resource overflow invalidity control");
+    }
+    private sealed class EmptyBookkeeping : IDomHostBookkeeping
+    {
+        public IDomPreparedBookkeeping Prepare(DomEdit? edit, bool import) => new EmptyPrepared();
+        public void NotifyMutationCompleted() { }
+        private sealed class EmptyPrepared : IDomPreparedBookkeeping
+        {
+            public void Validate() { }
+            public void Publish() { }
+            public void Dispose() { }
         }
     }
     private static string NativeTree(NativeDomDocument document)

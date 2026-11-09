@@ -7,15 +7,23 @@ namespace AetherUI.Core.Native;
 internal static class ManagedDomFault
 {
     [ThreadStatic] private static Session? _current;
+    private static int _invalidResources;
     private static long _snapshots, _edits, _leases, _owners, _interactionOwners, _claims, _interactionEdits, _buffers, _bookkeeping;
     internal enum Resource { Snapshot, Edit, NodeLease, Owner, InteractionOwner, InteractionClaim, InteractionEdit, NativeBuffer, Bookkeeping }
     internal readonly record struct Balance(long Snapshots, long Edits, long Leases, long Owners,
-        long InteractionOwners, long Claims, long InteractionEdits, long Buffers, long Bookkeeping);
+        long InteractionOwners, long Claims, long InteractionEdits, long Buffers, long Bookkeeping, bool Valid);
     internal static Balance Resources => new(Interlocked.Read(ref _snapshots), Interlocked.Read(ref _edits),
         Interlocked.Read(ref _leases), Interlocked.Read(ref _owners), Interlocked.Read(ref _interactionOwners),
-        Interlocked.Read(ref _claims), Interlocked.Read(ref _interactionEdits), Interlocked.Read(ref _buffers), Interlocked.Read(ref _bookkeeping));
-    internal static void ResourceAcquired(Resource kind) => Interlocked.Increment(ref Counter(kind));
-    internal static void ResourceReleased(Resource kind) => Interlocked.Decrement(ref Counter(kind));
+        Interlocked.Read(ref _claims), Interlocked.Read(ref _interactionEdits), Interlocked.Read(ref _buffers), Interlocked.Read(ref _bookkeeping), Volatile.Read(ref _invalidResources) == 0);
+    internal static void ResourceAcquired(Resource kind)
+    {
+        if (Interlocked.Increment(ref Counter(kind)) <= 0) Interlocked.Exchange(ref _invalidResources, 1);
+    }
+    internal static void ResourceReleased(Resource kind)
+    {
+        var value = Interlocked.Decrement(ref Counter(kind));
+        if (value < 0 || value == long.MaxValue) Interlocked.Exchange(ref _invalidResources, 1);
+    }
     private static ref long Counter(Resource kind)
     {
         switch (kind)

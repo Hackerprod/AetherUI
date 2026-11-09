@@ -38,15 +38,15 @@ internal static class DomNames
         for (var i = 0; i < name.Length; i++)
             if (name[i] is >= 'A' and <= 'Z') { first = i; break; }
         if (first < 0) return name;
-        #if AETHER_DOM_FAULT_TESTING
+#if AETHER_DOM_FAULT_TESTING
         AetherUI.Core.Native.ManagedDomFault.Before("dom.names.characters");
-        #endif
+#endif
         var chars = name.ToCharArray();
         for (var i = first; i < chars.Length; i++)
             if (chars[i] is >= 'A' and <= 'Z') chars[i] = (char)(chars[i] + ('a' - 'A'));
-        #if AETHER_DOM_FAULT_TESTING
+#if AETHER_DOM_FAULT_TESTING
         AetherUI.Core.Native.ManagedDomFault.Before("dom.names.result");
-        #endif
+#endif
         return new string(chars);
     }
 }

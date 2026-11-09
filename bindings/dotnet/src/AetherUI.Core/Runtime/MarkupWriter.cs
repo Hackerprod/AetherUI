@@ -16,12 +16,19 @@ public sealed class MarkupWriter
     // writer must not begin a cross-thread write that could complete after publication.
     private readonly int _ownerThreadId = Environment.CurrentManagedThreadId;
     private readonly StringBuilder _builder;
-    private readonly Dictionary<string, UiEventHandler> _events = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, UiEventHandler> _events;
     private long _nextEventId;
     private bool _sealed;
 
     internal MarkupWriter(int capacity = 2048)
     {
+#if AETHER_DOM_FAULT_TESTING
+        AetherUI.Core.Native.ManagedDomFault.Before("markup.event-map");
+#endif
+        _events = new(StringComparer.Ordinal);
+#if AETHER_DOM_FAULT_TESTING
+        AetherUI.Core.Native.ManagedDomFault.Before("markup.builder");
+#endif
         _builder = new StringBuilder(capacity);
     }
 
@@ -30,6 +37,9 @@ public sealed class MarkupWriter
         VerifyWritable();
         if (!string.IsNullOrEmpty(value))
         {
+#if AETHER_DOM_FAULT_TESTING
+            AetherUI.Core.Native.ManagedDomFault.Before("markup.literal-append-aggregate");
+#endif
             _builder.Append(value);
         }
     }
@@ -42,6 +52,9 @@ public sealed class MarkupWriter
             return;
         }
 
+#if AETHER_DOM_FAULT_TESTING
+        AetherUI.Core.Native.ManagedDomFault.Before("markup.format-call-aggregate");
+#endif
         var text = value switch
         {
             IFormattable formattable => formattable.ToString(null, CultureInfo.InvariantCulture),
@@ -50,7 +63,14 @@ public sealed class MarkupWriter
 
         if (!string.IsNullOrEmpty(text))
         {
-            _builder.Append(WebUtility.HtmlEncode(text));
+#if AETHER_DOM_FAULT_TESTING
+            AetherUI.Core.Native.ManagedDomFault.Before("markup.text-encode-aggregate");
+#endif
+            var encoded = WebUtility.HtmlEncode(text);
+#if AETHER_DOM_FAULT_TESTING
+            AetherUI.Core.Native.ManagedDomFault.Before("markup.text-append-aggregate");
+#endif
+            _builder.Append(encoded);
         }
     }
 
@@ -63,18 +83,31 @@ public sealed class MarkupWriter
             return;
         }
 
+#if AETHER_DOM_FAULT_TESTING
+        AetherUI.Core.Native.ManagedDomFault.Before("markup.attribute-prefix-append-aggregate");
+#endif
         _builder.Append(' ').Append(name);
         if (value is true)
         {
             return;
         }
 
+#if AETHER_DOM_FAULT_TESTING
+        AetherUI.Core.Native.ManagedDomFault.Before("markup.format-call-aggregate");
+#endif
         var text = value switch
         {
             IFormattable formattable => formattable.ToString(null, CultureInfo.InvariantCulture),
             _ => value.ToString(),
         };
-        _builder.Append("=\"").Append(WebUtility.HtmlEncode(text ?? string.Empty)).Append('"');
+#if AETHER_DOM_FAULT_TESTING
+        AetherUI.Core.Native.ManagedDomFault.Before("markup.attribute-encode-aggregate");
+#endif
+        var encoded = WebUtility.HtmlEncode(text ?? string.Empty);
+#if AETHER_DOM_FAULT_TESTING
+        AetherUI.Core.Native.ManagedDomFault.Before("markup.attribute-value-append-aggregate");
+#endif
+        _builder.Append("=\"").Append(encoded).Append('"');
     }
 
     public void WriteEventAttribute(string name, UiEventHandler handler)
@@ -88,9 +121,18 @@ public sealed class MarkupWriter
 
         ArgumentNullException.ThrowIfNull(handler);
         var next = checked(_nextEventId + 1);
+#if AETHER_DOM_FAULT_TESTING
+        AetherUI.Core.Native.ManagedDomFault.Before("markup.event-token-format-aggregate");
+#endif
         var token = $"aether:{_nextEventId:x}";
+#if AETHER_DOM_FAULT_TESTING
+        AetherUI.Core.Native.ManagedDomFault.BeforeDictionaryInsert(_events, token, "markup.event-map-growth");
+#endif
         _events.Add(token, handler);
         _nextEventId = next;
+#if AETHER_DOM_FAULT_TESTING
+        AetherUI.Core.Native.ManagedDomFault.Before("markup.event-append-aggregate");
+#endif
         _builder.Append(' ').Append(name).Append("=\"").Append(token).Append('"');
     }
 
@@ -98,12 +140,22 @@ public sealed class MarkupWriter
     {
         VerifyWritable();
         ArgumentNullException.ThrowIfNull(handler);
-        WriteEventAttribute(name, _ => handler());
+#if AETHER_DOM_FAULT_TESTING
+        AetherUI.Core.Native.ManagedDomFault.Before("markup.action-adapter-aggregate");
+#endif
+        WriteEventAttribute(name, AdaptAction(handler));
     }
+
+    // Keep allocation of the Action closure/delegate inside this aggregate operation so
+    // its test-only fault point precedes it, rather than a compiler-generated entry local.
+    private static UiEventHandler AdaptAction(Action handler) => _ => handler();
 
     private static void ValidateAttributeName(string name)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(name);
+#if AETHER_DOM_FAULT_TESTING
+        AetherUI.Core.Native.ManagedDomFault.Before("markup.attribute-validation-aggregate");
+#endif
         if (name.Any(static character =>
                 !char.IsLetterOrDigit(character) && character is not '-' and not '_' and not ':'))
         {
@@ -121,6 +173,9 @@ public sealed class MarkupWriter
     {
         VerifyOwnerThread();
         if (!_sealed) throw new InvalidOperationException("The render writer is not sealed.");
+#if AETHER_DOM_FAULT_TESTING
+        AetherUI.Core.Native.ManagedDomFault.Before("markup.registry");
+#endif
         return new UiComponent.EventRegistry(_events, generation);
     }
 
@@ -139,6 +194,9 @@ public sealed class MarkupWriter
     public override string ToString()
     {
         VerifyOwnerThread();
+#if AETHER_DOM_FAULT_TESTING
+        AetherUI.Core.Native.ManagedDomFault.Before("markup.result-string");
+#endif
         return _builder.ToString();
     }
 }

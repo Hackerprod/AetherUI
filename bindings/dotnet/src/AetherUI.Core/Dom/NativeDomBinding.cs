@@ -101,7 +101,7 @@ internal sealed partial class NativeDomBinding : IDomBinding, IDisposable
         if (_thread is null)
         {
 #if AETHER_DOM_FAULT_TESTING
-        AetherUI.Core.Native.ManagedDomFault.Before("dom.registry.object");
+            AetherUI.Core.Native.ManagedDomFault.Before("dom.registry.object");
 #endif
             _thread = new ThreadBindings();
         }
@@ -155,7 +155,13 @@ internal sealed partial class NativeDomBinding : IDomBinding, IDisposable
         var owners = new List<NativeDomBinding> { this };
         foreach (var weak in _registry.Owners.Values)
             if (weak.TryGetTarget(out var owner) && !ReferenceEquals(owner, this) && !owner._disposed &&
-                NativeDomSync.ReadToken(owner.Native) != owner._token) owners.Add(owner);
+                NativeDomSync.ReadToken(owner.Native) != owner._token)
+            {
+#if AETHER_DOM_FAULT_TESTING
+                AetherUI.Core.Native.ManagedDomFault.BeforeListAdd(owners, "dom.import.owner-list-add");
+#endif
+                owners.Add(owner);
+            }
         NativeDomWorkCounters.RecordImportFallback(NativeDomImportFallback.TokenChanged);
         Import(owners, null);
     }
@@ -184,64 +190,70 @@ internal sealed partial class NativeDomBinding : IDomBinding, IDisposable
 
     private void Import(IReadOnlyList<NativeDomBinding> owners, IReadOnlyDictionary<IntPtr, Node>? aliases)
     {
-        #if AETHER_DOM_FAULT_TESTING
+#if AETHER_DOM_FAULT_TESTING
         AetherUI.Core.Native.ManagedDomFault.Before("dom.import.stages");
-        #endif
+#endif
         var stages = new List<OwnerImport>();
-        #if AETHER_DOM_FAULT_TESTING
+#if AETHER_DOM_FAULT_TESTING
         AetherUI.Core.Native.ManagedDomFault.Before("dom.import.lease-list");
-        #endif
+#endif
         var newLeases = new List<NativeDomLease>();
         var committed = false;
         foreach (var owner in owners) owner._synchronizing = true;
         try
         {
-            #if AETHER_DOM_FAULT_TESTING
+#if AETHER_DOM_FAULT_TESTING
             AetherUI.Core.Native.ManagedDomFault.Before("dom.import.nodes-map");
-            #endif
+#endif
             var all = new Dictionary<ulong, (Node Node, NativeDomNodeData Data, NativeDomBinding Owner)>();
-            #if AETHER_DOM_FAULT_TESTING
+#if AETHER_DOM_FAULT_TESTING
             AetherUI.Core.Native.ManagedDomFault.Before("dom.import.global-copy");
-            #endif
+#endif
             var nextGlobal = new Dictionary<ulong, WeakReference<Node>>(_registry.Nodes);
             foreach (var owner in owners)
             {
-                #if AETHER_DOM_FAULT_TESTING
+#if AETHER_DOM_FAULT_TESTING
                 AetherUI.Core.Native.ManagedDomFault.Before("dom.import.known-list");
-                #endif
+#endif
                 var known = new List<NativeDomLease>();
                 foreach (var weak in owner._nodes.Values)
-                    if (weak.TryGetTarget(out var wrapper) && wrapper.NativeRecordCore is { } record && ReferenceEquals(record.Owner, owner)) known.Add(record.Lease);
-                #if AETHER_DOM_FAULT_TESTING
+                    if (weak.TryGetTarget(out var wrapper) && wrapper.NativeRecordCore is { } record && ReferenceEquals(record.Owner, owner))
+                    {
+#if AETHER_DOM_FAULT_TESTING
+                        AetherUI.Core.Native.ManagedDomFault.BeforeListAdd(known, "dom.import.known-list-add");
+#endif
+                        known.Add(record.Lease);
+                    }
+#if AETHER_DOM_FAULT_TESTING
                 AetherUI.Core.Native.ManagedDomFault.Before("dom.import.snapshot-call-aggregate");
-                #endif
+#endif
                 var snapshot = NativeDomSnapshot.Acquire(owner.Native, known);
                 IDomPreparedBookkeeping? bookkeeping = null;
                 try
                 {
-                    #if AETHER_DOM_FAULT_TESTING
+#if AETHER_DOM_FAULT_TESTING
                     AetherUI.Core.Native.ManagedDomFault.Before("dom.import.bookkeeping-call-aggregate");
-                    #endif
+#endif
                     bookkeeping = owner._host.PrepareImport(snapshot);
                     var version = default(DocumentVersionChange);
 
 #if AETHER_DOM_FAULT_TESTING
-        AetherUI.Core.Native.ManagedDomFault.Before("dom.import.stage-nodes-map");
+                    AetherUI.Core.Native.ManagedDomFault.Before("dom.import.stage-nodes-map");
 #endif
                     var stageNodes = new Dictionary<ulong, WeakReference<Node>>();
 
 #if AETHER_DOM_FAULT_TESTING
-        AetherUI.Core.Native.ManagedDomFault.Before("dom.import.stage-handles-map");
+                    AetherUI.Core.Native.ManagedDomFault.Before("dom.import.stage-handles-map");
 #endif
                     var stageHandles = new Dictionary<IntPtr, WeakReference<Node>>();
 
 #if AETHER_DOM_FAULT_TESTING
-        AetherUI.Core.Native.ManagedDomFault.Before("dom.import.owner-stage");
+                    AetherUI.Core.Native.ManagedDomFault.Before("dom.import.owner-stage");
 #endif
                     var stage = new OwnerImport(owner, snapshot, bookkeeping, stageNodes, stageHandles, version);
 
 #if AETHER_DOM_FAULT_TESTING
-        AetherUI.Core.Native.ManagedDomFault.BeforeListAdd(stages, "dom.import.stage-list-add");
+                    AetherUI.Core.Native.ManagedDomFault.BeforeListAdd(stages, "dom.import.stage-list-add");
 #endif
                     stages.Add(stage);
                     bookkeeping = null;
@@ -258,28 +270,28 @@ internal sealed partial class NativeDomBinding : IDomBinding, IDisposable
                     if (node is null && aliases is not null) aliases.TryGetValue(data.Handle, out node);
                     node ??= data.Type == (int)NodeType.Document && data.Identity == snapshot.Token.OwnerIdentity
                         ? owner.Document : CreateNode(data);
-                    #if AETHER_DOM_FAULT_TESTING
+#if AETHER_DOM_FAULT_TESTING
                     AetherUI.Core.Native.ManagedDomFault.BeforeDictionaryInsert(all, data.Identity, "dom.import.node-map-add");
-                    #endif
+#endif
                     all.Add(data.Identity, (node, data, owner));
                     if (data.Alive)
                     {
 #if AETHER_DOM_FAULT_TESTING
-        AetherUI.Core.Native.ManagedDomFault.Before("dom.import.global-weak");
+                        AetherUI.Core.Native.ManagedDomFault.Before("dom.import.global-weak");
 #endif
                         var nodeWeak = new WeakReference<Node>(node);
 
 #if AETHER_DOM_FAULT_TESTING
-        AetherUI.Core.Native.ManagedDomFault.BeforeDictionaryInsert(nextGlobal, data.Identity, "dom.import.global-insert-aggregate");
+                        AetherUI.Core.Native.ManagedDomFault.BeforeDictionaryInsert(nextGlobal, data.Identity, "dom.import.global-insert-aggregate");
 #endif
                         nextGlobal[data.Identity] = nodeWeak;
                     }
                     else nextGlobal.Remove(data.Identity);
                 }
             }
-            #if AETHER_DOM_FAULT_TESTING
+#if AETHER_DOM_FAULT_TESTING
             AetherUI.Core.Native.ManagedDomFault.Before("dom.import.records-list");
-            #endif
+#endif
             var imported = new List<Imported>(all.Count);
             foreach (var stage in stages)
             {
@@ -294,47 +306,47 @@ internal sealed partial class NativeDomBinding : IDomBinding, IDisposable
                         record = node.NativeRecordCore;
                         if (record is null || record.Identity != data.Identity)
                         {
-                            #if AETHER_DOM_FAULT_TESTING
+#if AETHER_DOM_FAULT_TESTING
                             AetherUI.Core.Native.ManagedDomFault.Before("dom.import.lease-capacity");
-                            #endif
+#endif
                             newLeases.EnsureCapacity(newLeases.Count + 1);
                             var lease = NativeDomLease.Retain(data.Handle); newLeases.Add(lease);
-                            #if AETHER_DOM_FAULT_TESTING
+#if AETHER_DOM_FAULT_TESTING
                             AetherUI.Core.Native.ManagedDomFault.Before("dom.import.node-record");
-                            #endif
+#endif
                             record = new(stage.Owner, data.Identity, lease);
                         }
 
 #if AETHER_DOM_FAULT_TESTING
-        AetherUI.Core.Native.ManagedDomFault.Before("dom.import.identity-weak");
+                        AetherUI.Core.Native.ManagedDomFault.Before("dom.import.identity-weak");
 #endif
                         var identityWeak = new WeakReference<Node>(node);
 
 #if AETHER_DOM_FAULT_TESTING
-        AetherUI.Core.Native.ManagedDomFault.BeforeDictionaryInsert(stage.Nodes, data.Identity, "dom.import.identity-add");
+                        AetherUI.Core.Native.ManagedDomFault.BeforeDictionaryInsert(stage.Nodes, data.Identity, "dom.import.identity-add");
 #endif
                         stage.Nodes.Add(data.Identity, identityWeak);
 
 #if AETHER_DOM_FAULT_TESTING
-        AetherUI.Core.Native.ManagedDomFault.Before("dom.import.handle-weak");
+                        AetherUI.Core.Native.ManagedDomFault.Before("dom.import.handle-weak");
 #endif
                         var handleWeak = new WeakReference<Node>(node);
 
 #if AETHER_DOM_FAULT_TESTING
-        AetherUI.Core.Native.ManagedDomFault.BeforeDictionaryInsert(stage.Handles, data.Handle, "dom.import.handle-add");
+                        AetherUI.Core.Native.ManagedDomFault.BeforeDictionaryInsert(stage.Handles, data.Handle, "dom.import.handle-add");
 #endif
                         stage.Handles.Add(data.Handle, handleWeak);
                     }
-                    #if AETHER_DOM_FAULT_TESTING
+#if AETHER_DOM_FAULT_TESTING
                     AetherUI.Core.Native.ManagedDomFault.Before("dom.import.children-array");
-                    #endif
+#endif
                     var children = new Node[data.Children.Length];
                     for (var i = 0; i < children.Length; i++) children[i] = Resolve(payload[data.Children[i]].Identity);
                     Node? parent = data.ParentIndex < 0 || (!data.Alive && payload[(int)data.ParentIndex].Alive)
                         ? null : Resolve(payload[(int)data.ParentIndex].Identity);
 
 #if AETHER_DOM_FAULT_TESTING
-        AetherUI.Core.Native.ManagedDomFault.Before("dom.import.node-stage");
+                    AetherUI.Core.Native.ManagedDomFault.Before("dom.import.node-stage");
 #endif
                     var nodeStage = new Imported(node, data, stage.Owner, record, parent, children);
                     // List capacity is all.Count; each canonical item is emitted at most once.
@@ -514,9 +526,9 @@ internal sealed partial class NativeDomBinding : IDomBinding, IDisposable
                 throw new NotSupportedException("Materializing a new destination around an existing bound child requires the native compound-target operation.");
             NativeDomEdit? native = null;
             IDomPreparedBookkeeping? bookkeeping = null, sourceBookkeeping = null;
-            #if AETHER_DOM_FAULT_TESTING
+#if AETHER_DOM_FAULT_TESTING
             AetherUI.Core.Native.ManagedDomFault.Before("dom.edit.created-list");
-            #endif
+#endif
             var created = new List<(Node Node, NativeDomNodeRecord Record)>();
             NativeDomBinding? lockedSource = null;
             var locked = false;
@@ -532,13 +544,13 @@ internal sealed partial class NativeDomBinding : IDomBinding, IDisposable
                 if (NativeDomSync.ReadToken(owner.Native) != owner._token) throw new InvalidOperationException("Destination DOM binding is not current.");
                 owner._synchronizing = true; locked = true;
                 if (source is not null) { source._synchronizing = true; lockedSource = source; }
-                #if AETHER_DOM_FAULT_TESTING
+#if AETHER_DOM_FAULT_TESTING
                 AetherUI.Core.Native.ManagedDomFault.Before("dom.edit.specs-list");
-                #endif
+#endif
                 var specs = new List<NativeDomNodeSpecData>();
 
 #if AETHER_DOM_FAULT_TESTING
-        AetherUI.Core.Native.ManagedDomFault.Before("dom.edit.wrapper-list");
+                AetherUI.Core.Native.ManagedDomFault.Before("dom.edit.wrapper-list");
 #endif
                 var wrappers = new List<Node>();
                 var childHandle = edit.Child?.NativeRecordCore?.Handle ?? IntPtr.Zero;
@@ -559,9 +571,9 @@ internal sealed partial class NativeDomBinding : IDomBinding, IDisposable
                     Capture(edit.Child, -1);
                 var request = new NativeDomEditRequest(kind, target.Handle, childHandle, edit.Index, edit.Name,
                     edit.Text, (int)edit.State, edit.Text is not null, specs);
-                #if AETHER_DOM_FAULT_TESTING
+#if AETHER_DOM_FAULT_TESTING
                 AetherUI.Core.Native.ManagedDomFault.Before("dom.edit.native-prepare-call-aggregate");
-                #endif
+#endif
                 native = NativeDomEdit.Prepare(owner._token, request);
                 Dictionary<ulong, WeakReference<Node>>? global = null, nodes = null, sourceNodes = null;
                 Dictionary<IntPtr, WeakReference<Node>>? handles = null, sourceHandles = null;
@@ -569,37 +581,37 @@ internal sealed partial class NativeDomBinding : IDomBinding, IDisposable
                 {
 
 #if AETHER_DOM_FAULT_TESTING
-        AetherUI.Core.Native.ManagedDomFault.Before("dom.edit.global-copy");
+                    AetherUI.Core.Native.ManagedDomFault.Before("dom.edit.global-copy");
 #endif
                     global = new(owner._registry.Nodes);
 
 #if AETHER_DOM_FAULT_TESTING
-        AetherUI.Core.Native.ManagedDomFault.Before("dom.edit.owner-copy");
+                    AetherUI.Core.Native.ManagedDomFault.Before("dom.edit.owner-copy");
 #endif
                     nodes = new(owner._nodes);
 
 #if AETHER_DOM_FAULT_TESTING
-        AetherUI.Core.Native.ManagedDomFault.Before("dom.edit.handles-copy");
+                    AetherUI.Core.Native.ManagedDomFault.Before("dom.edit.handles-copy");
 #endif
                     handles = new(owner._handles);
                     if (source is not null)
                     {
 #if AETHER_DOM_FAULT_TESTING
-        AetherUI.Core.Native.ManagedDomFault.Before("dom.edit.source-nodes-copy");
+                        AetherUI.Core.Native.ManagedDomFault.Before("dom.edit.source-nodes-copy");
 #endif
                         sourceNodes = new(source._nodes);
 
 #if AETHER_DOM_FAULT_TESTING
-        AetherUI.Core.Native.ManagedDomFault.Before("dom.edit.source-handles-copy");
+                        AetherUI.Core.Native.ManagedDomFault.Before("dom.edit.source-handles-copy");
 #endif
                         sourceHandles = new(source._handles);
                     }
                 }
                 foreach (var wrapper in wrappers)
                 {
-                    #if AETHER_DOM_FAULT_TESTING
+#if AETHER_DOM_FAULT_TESTING
                     AetherUI.Core.Native.ManagedDomFault.Before("dom.edit.created-capacity");
-                    #endif
+#endif
                     created.EnsureCapacity(created.Count + 1);
                     var handle = native.CreatedNode(created.Count);
                     var identity = NativeDomSync.ReadIdentity(handle);
@@ -608,7 +620,7 @@ internal sealed partial class NativeDomBinding : IDomBinding, IDisposable
                     try
                     {
 #if AETHER_DOM_FAULT_TESTING
-        AetherUI.Core.Native.ManagedDomFault.Before("dom.edit.node-record");
+                        AetherUI.Core.Native.ManagedDomFault.Before("dom.edit.node-record");
 #endif
                         record = new(owner, identity, lease);
                     }
@@ -616,42 +628,42 @@ internal sealed partial class NativeDomBinding : IDomBinding, IDisposable
                     created.Add((wrapper, record));
 
 #if AETHER_DOM_FAULT_TESTING
-        AetherUI.Core.Native.ManagedDomFault.Before("dom.edit.global-weak");
+                    AetherUI.Core.Native.ManagedDomFault.Before("dom.edit.global-weak");
 #endif
                     var globalWeak = new WeakReference<Node>(wrapper);
 
 #if AETHER_DOM_FAULT_TESTING
-        AetherUI.Core.Native.ManagedDomFault.BeforeDictionaryInsert(global!, identity, "dom.edit.global-add");
+                    AetherUI.Core.Native.ManagedDomFault.BeforeDictionaryInsert(global!, identity, "dom.edit.global-add");
 #endif
                     global!.Add(identity, globalWeak);
 
 #if AETHER_DOM_FAULT_TESTING
-        AetherUI.Core.Native.ManagedDomFault.Before("dom.edit.owner-weak");
+                    AetherUI.Core.Native.ManagedDomFault.Before("dom.edit.owner-weak");
 #endif
                     var ownerWeak = new WeakReference<Node>(wrapper);
 
 #if AETHER_DOM_FAULT_TESTING
-        AetherUI.Core.Native.ManagedDomFault.BeforeDictionaryInsert(nodes!, identity, "dom.edit.owner-add");
+                    AetherUI.Core.Native.ManagedDomFault.BeforeDictionaryInsert(nodes!, identity, "dom.edit.owner-add");
 #endif
                     nodes!.Add(identity, ownerWeak);
 
 #if AETHER_DOM_FAULT_TESTING
-        AetherUI.Core.Native.ManagedDomFault.Before("dom.edit.handle-weak");
+                    AetherUI.Core.Native.ManagedDomFault.Before("dom.edit.handle-weak");
 #endif
                     var handleWeak = new WeakReference<Node>(wrapper);
 
 #if AETHER_DOM_FAULT_TESTING
-        AetherUI.Core.Native.ManagedDomFault.BeforeDictionaryInsert(handles!, handle, "dom.edit.handle-add");
+                    AetherUI.Core.Native.ManagedDomFault.BeforeDictionaryInsert(handles!, handle, "dom.edit.handle-add");
 #endif
                     handles!.Add(handle, handleWeak);
                 }
-                #if AETHER_DOM_FAULT_TESTING
+#if AETHER_DOM_FAULT_TESTING
                 AetherUI.Core.Native.ManagedDomFault.Before("dom.edit.disconnect-list");
-                #endif
+#endif
                 var disconnect = new List<NativeDomNodeRecord>();
 
 #if AETHER_DOM_FAULT_TESTING
-        AetherUI.Core.Native.ManagedDomFault.Before("dom.edit.attach-list");
+                AetherUI.Core.Native.ManagedDomFault.Before("dom.edit.attach-list");
 #endif
                 var attach = new List<NativeDomNodeRecord>();
                 if (edit.Kind == DomEditKind.RemoveChild && edit.Child is not null) AddRecords(edit.Child, disconnect);
@@ -675,50 +687,50 @@ internal sealed partial class NativeDomBinding : IDomBinding, IDisposable
                             sourceNodes!.Remove(record.Identity); sourceHandles!.Remove(record.Handle);
 
 #if AETHER_DOM_FAULT_TESTING
-        AetherUI.Core.Native.ManagedDomFault.Before("dom.edit.adopt-node-weak");
+                            AetherUI.Core.Native.ManagedDomFault.Before("dom.edit.adopt-node-weak");
 #endif
                             var adoptedWeak = new WeakReference<Node>(wrapper);
 
 #if AETHER_DOM_FAULT_TESTING
-        AetherUI.Core.Native.ManagedDomFault.BeforeDictionaryInsert(nodes!, record.Identity, "dom.edit.adopt-node-add");
+                            AetherUI.Core.Native.ManagedDomFault.BeforeDictionaryInsert(nodes!, record.Identity, "dom.edit.adopt-node-add");
 #endif
                             nodes!.Add(record.Identity, adoptedWeak);
 
 #if AETHER_DOM_FAULT_TESTING
-        AetherUI.Core.Native.ManagedDomFault.Before("dom.edit.adopt-handle-weak");
+                            AetherUI.Core.Native.ManagedDomFault.Before("dom.edit.adopt-handle-weak");
 #endif
                             var adoptedHandleWeak = new WeakReference<Node>(wrapper);
 
 #if AETHER_DOM_FAULT_TESTING
-        AetherUI.Core.Native.ManagedDomFault.BeforeDictionaryInsert(handles!, record.Handle, "dom.edit.adopt-handle-add");
+                            AetherUI.Core.Native.ManagedDomFault.BeforeDictionaryInsert(handles!, record.Handle, "dom.edit.adopt-handle-add");
 #endif
                             handles!.Add(record.Handle, adoptedHandleWeak);
                         }
                     }
                 }
                 foreach (var record in disconnect) if (record.DisconnectSerial == ulong.MaxValue) throw new OverflowException("DOM disconnect serial exhausted.");
-                #if AETHER_DOM_FAULT_TESTING
+#if AETHER_DOM_FAULT_TESTING
                 AetherUI.Core.Native.ManagedDomFault.Before("dom.edit.bookkeeping-call-aggregate");
-                #endif
+#endif
                 bookkeeping = PrepareBookkeeping(owner, edit, created);
                 sourceBookkeeping = source is null ? null : PrepareBookkeeping(source, edit, created);
-                #if AETHER_DOM_FAULT_TESTING
+#if AETHER_DOM_FAULT_TESTING
                 AetherUI.Core.Native.ManagedDomFault.Before("dom.edit.created-array");
-                #endif
+#endif
                 var createdArray = created.ToArray();
 
 #if AETHER_DOM_FAULT_TESTING
-        AetherUI.Core.Native.ManagedDomFault.Before("dom.edit.disconnect-array");
+                AetherUI.Core.Native.ManagedDomFault.Before("dom.edit.disconnect-array");
 #endif
                 var disconnectArray = disconnect.ToArray();
 
 #if AETHER_DOM_FAULT_TESTING
-        AetherUI.Core.Native.ManagedDomFault.Before("dom.edit.attach-array");
+                AetherUI.Core.Native.ManagedDomFault.Before("dom.edit.attach-array");
 #endif
                 var attachArray = attach.ToArray();
 
 #if AETHER_DOM_FAULT_TESTING
-        AetherUI.Core.Native.ManagedDomFault.Before("dom.edit.result");
+                AetherUI.Core.Native.ManagedDomFault.Before("dom.edit.result");
 #endif
                 return new(owner, edit, native, source, bookkeeping, sourceBookkeeping, global, nodes, handles,
                     sourceNodes, sourceHandles, createdArray, disconnectArray, attachArray);
@@ -731,12 +743,30 @@ internal sealed partial class NativeDomBinding : IDomBinding, IDisposable
                         throw new InvalidOperationException("Nested documents and custom nodes cannot be synchronized.");
                     var element = node as ElementNode;
                     var index = specs.Count;
-                    specs.Add(new((int)node.NodeType, (int)(element?.StateCore ?? 0), parent, element?.TagNameCore ?? string.Empty,
+                    Dictionary<string, string> attributes;
+                    if (element is not null) attributes = element.AttributesCore;
+                    else
+                    {
+#if AETHER_DOM_FAULT_TESTING
+                        AetherUI.Core.Native.ManagedDomFault.Before("dom.edit.spec-empty-attributes");
+#endif
+                        attributes = new Dictionary<string, string>(StringComparer.Ordinal);
+                    }
+
+#if AETHER_DOM_FAULT_TESTING
+                    AetherUI.Core.Native.ManagedDomFault.Before("dom.edit.spec-object");
+#endif
+                    var spec = new NativeDomNodeSpecData((int)node.NodeType, (int)(element?.StateCore ?? 0), parent, element?.TagNameCore ?? string.Empty,
                         node is TextNode text ? text.TextCore : node is CommentNode comment ? comment.TextCore : string.Empty,
-                        element?.RuntimeValueCore, element?.AttributesCore ?? new Dictionary<string, string>(StringComparer.Ordinal)));
-                    #if AETHER_DOM_FAULT_TESTING
+                        element?.RuntimeValueCore, attributes);
+
+#if AETHER_DOM_FAULT_TESTING
+                    AetherUI.Core.Native.ManagedDomFault.BeforeListAdd(specs, "dom.edit.spec-add");
+#endif
+                    specs.Add(spec);
+#if AETHER_DOM_FAULT_TESTING
                     AetherUI.Core.Native.ManagedDomFault.BeforeListAdd(wrappers, "dom.edit.wrapper-list-add");
-                    #endif
+#endif
                     wrappers.Add(node);
                     foreach (var child in node.ChildrenCore) Capture(child, index);
                 }

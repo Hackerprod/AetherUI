@@ -56,6 +56,9 @@ public abstract class UiComponent : IDisposable
             throw new InvalidOperationException("Component render authority is exhausted.");
         var generation = AdvanceAuthority(ref _renderGeneration);
         var revision = _invalidationRevision;
+#if AETHER_DOM_FAULT_TESTING
+        AetherUI.Core.Native.ManagedDomFault.Before("component.writer");
+#endif
         var writer = new MarkupWriter();
         string markup;
         try
@@ -69,8 +72,11 @@ public abstract class UiComponent : IDisposable
             writer.Seal();
         }
 
-        var candidate = new RenderCandidate(this, generation, revision, markup,
-            writer.CreateEventRegistry(generation));
+        var registry = writer.CreateEventRegistry(generation);
+#if AETHER_DOM_FAULT_TESTING
+        AetherUI.Core.Native.ManagedDomFault.Before("component.candidate");
+#endif
+        var candidate = new RenderCandidate(this, generation, revision, markup, registry);
         if (!IsRenderCandidateCurrent(candidate))
         {
             candidate.Dispose();
