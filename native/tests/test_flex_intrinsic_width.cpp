@@ -19,7 +19,9 @@ static void near(float actual,float expected,const char* what) {
         ++failures; std::fprintf(stderr,"FAIL [%s] %s: actual=%g expected=%g\n",scenario.c_str(),what,actual,expected);
     }
 }
-static aether_text_metrics_t measure(const char*t,const aether_computed_style_t*,float,void*) {
+static std::vector<std::string> measurement_trace;
+static aether_text_metrics_t measure(const char*t,const aether_computed_style_t* style,float,void*) {
+    if (style && style->font_size == 37) measurement_trace.emplace_back(t);
     return {float(std::strlen(t))*10,20,15};
 }
 static const char* cards="<div id='a'></div><div id='b'></div><div id='c'></div>";
@@ -146,6 +148,57 @@ static void inline_height_regressions() {
         near(f.rect("last").y-f.rect("first").y, 20, "atomic line unchanged");
     }
 }
+
+// Narrow parity contract with final layout, not full CSS whitespace conformance.
+static void collapsed_height_case(const char* name, const std::string& text,
+                                  float height, float bx, float by, int spaces,
+                                  bool reject_marked_space = false) {
+    scenario = std::string("cross-run collapse ") + name;
+    measurement_trace.clear();
+    Fixture f("#outer{flex-direction:column;width:50px;height:20px;align-items:stretch}"
+              "#inner{display:block;width:auto;height:60px;flex:0 1 auto;white-space:normal;line-height:20px}", text);
+    near(f.rect().width, 50, "child width");
+    near(f.rect().height, height, "automatic minimum height");
+    int count = 0, words = 0;
+    auto host = f.rect(); auto box = f.box("inner");
+    for (int i = 0; i < aether_layout_box_get_child_count(box); ++i) {
+        auto child = aether_layout_box_get_child(box, i);
+        char* value = aether_layout_box_get_text(child);
+        if (value && std::strcmp(value, " ") == 0) ++count;
+        if (value && std::strcmp(value, "bb") == 0) {
+            auto r = aether_layout_box_get_border_box(child);
+            near(r.x-host.x, bx, "bb fragment x"); near(r.y-host.y, by, "bb fragment y");
+            near(r.width, 20, "bb width"); near(r.height, 20, "bb height"); ++words;
+        }
+        aether_string_free(value);
+    }
+    near(float(words), 1, "one bb fragment");
+    near(float(count), float(spaces), "space fragment count");
+    if (reject_marked_space) {
+        int measured_spaces = 0;
+        for (const auto& t : measurement_trace) if (t == " ") ++measured_spaces;
+        // One callback belongs to intrinsic width; height must not add another.
+        near(float(measured_spaces), 1, "marked space measured only by intrinsic width");
+    }
+}
+static void collapsed_height_regressions() {
+    collapsed_height_case("plain", "aa bb", 20, 30, 0, 1);
+    collapsed_height_case("split", "<span>aa </span><span> bb</span>", 20, 30, 0, 1);
+    collapsed_height_case("nested", "<span>aa </span><span><span> </span> bb</span>", 20, 30, 0, 1);
+    collapsed_height_case("marked", "<span>aa </span><span style='font-size:37px'> </span><span>bb</span>", 20, 30, 0, 1, true);
+    collapsed_height_case("word reset", "a <span>a </span><span> bb</span>", 40, 0, 20, 2);
+    collapsed_height_case("br", "<span>aa </span><br><span> bb</span>", 40, 0, 20, 1);
+    collapsed_height_case("atomic", "<span>aa </span><span style='display:inline-block;width:10px;height:20px'></span><span> bb</span>", 40, 0, 20, 2);
+    for (const char* mode : {"nowrap", "pre-line"})
+        collapsed_height_case(mode, "<span>aa </span><span style='white-space:"+std::string(mode)+"'> bb</span>", 20, 30, 0, 1);
+    for (const char* mode : {"pre", "pre-wrap"}) {
+        collapsed_height_case(mode, "<span>aa </span><span style='white-space:"+std::string(mode)+"'> </span><span>bb</span>", 40, 0, 20, 2);
+        collapsed_height_case(mode, "<span style='white-space:"+std::string(mode)+"'>aa </span><span> bb</span>", 40, 0, 20, 2);
+    }
+    collapsed_height_case("normal CRLF", "<span>aa </span><span>\r\n bb</span>", 20, 30, 0, 1);
+    collapsed_height_case("pre-line CRLF", "<span>aa </span><span style='white-space:pre-line'>\r\n bb</span>", 40, 0, 20, 1);
+    collapsed_height_case("break resets state", "aa <br>b <span>bb</span>", 40, 20, 20, 2);
+}
 int main(int argc,char**argv) {
 #if defined(__unix__)
     Dl_info info{}; require(dladdr(reinterpret_cast<void*>(&aether_layout_layout),&info)!=0,"dladdr");
@@ -162,6 +215,7 @@ int main(int argc,char**argv) {
     if(group=="all"||group=="atomic") {scenario="atomic inline consumer";Fixture f("",cards,true);f.row();near(f.rect("atomic").width,300,"atomic width");}
     if(group=="all") {
         inline_height_regressions();
+        collapsed_height_regressions();
         {scenario="explicit width";Fixture f("#inner{width:300px}");f.row();}
         for(int outer:{150,80}) {scenario="automatic minimum "+std::to_string(outer);Fixture f("#outer{width:"+std::to_string(outer)+"px}#inner{flex:0 1 auto}");f.lines(outer==80?100:150);}
         {scenario="empty";Fixture f("","");f.width(0);}

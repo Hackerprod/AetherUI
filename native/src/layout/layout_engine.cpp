@@ -1280,6 +1280,7 @@ static float measure_inline_items_height(
     float cursor_x = 0.f;
     float total_height = 0.f;
     bool has_line_content = false;
+    bool previous_collapsible_space = false;
 
     auto finish_line = [&](bool forced) {
         if (has_line_content || forced) total_height += line_height;
@@ -1298,6 +1299,7 @@ static float measure_inline_items_height(
     for (const auto& item : items) {
         if (item.is_line_break) {
             finish_line(true);
+            previous_collapsible_space = false;
             continue;
         }
         if (item.is_atomic) {
@@ -1309,19 +1311,26 @@ static float measure_inline_items_height(
             const float height = measure_intrinsic_height(
                 engine, styles, result, item.element, style, padding, border, available_width);
             append_fragment(width, height, false, true);
+            previous_collapsible_space = false;
             continue;
         }
         for (const auto& token : aether_tokenize_inline_text(item.text, item.style.white_space)) {
             if (token.kind == aether_inline_text_token_kind_e::forced_break) {
                 finish_line(true);
+                previous_collapsible_space = false;
                 continue;
             }
+            const bool collapsible = token.kind == aether_inline_text_token_kind_e::collapsible_space;
+            // Carry collapse state across runs, just as final inline layout does.
+            // Skip before measuring: a redundant space must not affect metrics.
+            if (collapsible && previous_collapsible_space) continue;
             const bool whitespace = token.kind != aether_inline_text_token_kind_e::word;
             const auto metrics = engine_measure_text(engine, token.text.c_str(), &item.style, 0.f, item.element);
             // Match final inline layout: forced breaks remain unconditional, but
             // soft wrapping belongs to the text run rather than its parent.
             append_fragment(metrics.width, metrics.height, whitespace,
                             aether_white_space_allows_soft_wrap(item.style.white_space));
+            if (has_line_content) previous_collapsible_space = collapsible;
         }
     }
     finish_line(false);
