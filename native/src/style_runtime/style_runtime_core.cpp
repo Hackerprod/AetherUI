@@ -1751,7 +1751,9 @@ static bool publication_record_reusable(const FrozenRevisionEntry& entry, const 
 AETHER_API aether_status_t aether_style_transaction_get_publication_style(
     aether_style_transaction_t transaction, aether_style_map_t base_map, int32_t index,
     aether_node_t* out_node, aether_computed_style_handle_t* out_style, uint32_t* out_impact) {
-    if (out_node) *out_node = nullptr; if (out_style) *out_style = nullptr; if (out_impact) *out_impact = 0;
+    if (out_node) *out_node = nullptr;
+    if (out_style) *out_style = nullptr;
+    if (out_impact) *out_impact = 0;
     if (!transaction || !out_node || !out_style || !out_impact) return AETHER_ERROR_NULL_ARG;
     if (!transaction->owner || transaction->owner->owner_thread != std::this_thread::get_id() ||
         !transaction->revision || !transaction->revision->authentic_owner(transaction->revision)) return AETHER_ERROR_INVALID_STATE;

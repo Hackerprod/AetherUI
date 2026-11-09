@@ -29,6 +29,8 @@ internal static unsafe partial class NativeMethods
     internal static partial int StyleRevisionGetStyle(IntPtr revision, int index, out IntPtr node, out IntPtr style, out uint impact);
     [LibraryImport(Lib, EntryPoint = "aether_style_revision_get_change")]
     internal static partial int StyleRevisionGetChange(IntPtr revision, int index, out IntPtr node, out IntPtr style, out uint impact);
+    [LibraryImport(Lib, EntryPoint = "aether_style_revision_get_change")]
+    internal static partial int StyleRevisionGetChangeImpact(IntPtr revision, int index, IntPtr node, IntPtr style, out uint impact);
     [LibraryImport(Lib, EntryPoint = "aether_style_runtime_read_publication_token")]
     internal static partial int StyleReadPublicationToken(IntPtr runtime, ref NativeStylePublicationToken token);
     [LibraryImport(Lib, EntryPoint = "aether_style_transaction_read_publication_token")]
@@ -119,16 +121,16 @@ public sealed unsafe partial class StyleRuntimeInterop
                 var changes = NativeMethods.StyleRevisionChangeCount(_preview);
                 for (var i = 0; i < changes; ++i)
                 {
-                    Throw(NativeMethods.StyleRevisionGetChange(_preview, i, out _, out var handle, out var impact));
+                    Throw(NativeMethods.StyleRevisionGetChangeImpact(_preview, i, IntPtr.Zero, IntPtr.Zero, out var impact));
                     aggregate |= (NativeStyleImpact)impact;
-                    if (handle != IntPtr.Zero) NativeMethods.ComputedStyleHandleDestroy(handle);
                 }
                 Styles = updates; Impact = aggregate;
                 IntPtr map;
                 if (previousMap is null) Throw(NativeMethods.StyleTransactionPreviewLegacyMap(transaction, out map));
                 else Throw(NativeMethods.StyleTransactionPreviewLegacyPatch(transaction, previousMap.Handle, out map));
                 MapPatched = previousMap is not null;
-                _map = new NativeStyleMap(map);
+                try { _map = new NativeStyleMap(map); }
+                catch { NativeMethods.StyleMapDestroy(map); throw; }
                 _transaction = transaction;
             }
             catch { Dispose(); throw; }
@@ -138,7 +140,9 @@ public sealed unsafe partial class StyleRuntimeInterop
         {
             ObjectDisposedException.ThrowIf(_transaction == IntPtr.Zero, this);
             if (_committed != IntPtr.Zero) throw new InvalidOperationException("Style publication was already committed.");
-            Throw(NativeMethods.StyleCommitRevision(_owner._runtime, _transaction, out _committed));
+            var status = NativeMethods.StyleCommitRevision(_owner._runtime, _transaction, out _committed);
+            if (status == -2) return false; // Inputs/base changed. Host retains B and permits one recovery.
+            Throw(status); // Allocation/marshalling failures never become zero updates or automatic retries.
             return _owner.IsCurrent(Token);
         }
 

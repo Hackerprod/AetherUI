@@ -138,7 +138,8 @@ public sealed partial class UiDocumentHost
 
     private bool TryPublishStyles()
     {
-        if (_document!.Version != _nativeSynchronizedDocumentVersion)
+        if (_inputReconciliationRequired || _document!.Version != _nativeSynchronizedDocumentVersion ||
+            _document.InputVersion != _knownManagedInputVersion)
         {
             RejectStyleProjection();
             _styleRetryBlocked = true;
@@ -156,6 +157,7 @@ public sealed partial class UiDocumentHost
         var document = _document!;
         var dom = _nativeDom!;
         var documentVersion = document.Version;
+        var documentInputVersion = document.InputVersion;
         var published = false;
         var transitions = new List<TransitionStyleMarshaler.PreparedObservation>();
         _stateDirtyElements = nextBatch;
@@ -206,7 +208,10 @@ public sealed partial class UiDocumentHost
             StylePublicationProbe?.Invoke("managed-staged");
             // No candidate is installed if staging itself called back and changed inputs.
             if (!HostInputsMatch()) return Reject();
-            if (!native.Commit() || !HostInputsMatch() || !_nativeStyleRuntime.IsCurrent(native.Token)) return Reject();
+            var nativeCurrent = native.Commit();
+            if (!nativeCurrent && _hostInputSerial != inputSerial)
+                _inputReconciliationRequired = true; // Mixed native/managed chronology needs DOMsync, never blind replay.
+            if (!nativeCurrent || !HostInputsMatch() || !_nativeStyleRuntime.IsCurrent(native.Token)) return Reject();
 
             // Certified owner-thread publication. All fallible .NET allocations happened above.
             var previousMap = _nativeVisualStyleMap;
@@ -218,10 +223,19 @@ public sealed partial class UiDocumentHost
             _lastStyleImpact = native.Impact;
             _publishedStyleToken = native.Token;
             _publishedDocumentVersion = documentVersion;
+            _publishedDocumentInputVersion = documentInputVersion;
             ++_hostPublicationSerial;
             _managedProjectionOutOfDate = false;
             AcknowledgeInvalidation(VisualInvalidation.Style, invalidations);
             ProduceInvalidation(InvalidationForStyleImpact(native.Impact));
+            if (_forceFullProjectionRecovery)
+            {
+                // Native deltas are relative to its current R2, not this host's
+                // older projection. Recovery must rebuild geometry/paint even
+                // when preparing R3 from R2 reports no further visual change.
+                ProduceInvalidation(VisualInvalidation.Layout | VisualInvalidation.DisplayList);
+                _forceFullProjectionRecovery = false;
+            }
             if (reorder)
             {
                 // Do not wipe Bnext; new notifications have not begun yet.
@@ -247,9 +261,11 @@ public sealed partial class UiDocumentHost
             Array.Copy(_invalidationProduced, publishedInvalidations, publishedInvalidations.Length);
             // Listeners are external effects, not part of rollback. They write Bnext.
             diagnostics.Replay();
+            var replayNativeCurrent = _nativeStyleRuntime.IsCurrent(native.Token);
+            if (!replayNativeCurrent && _hostInputSerial != inputSerial) _inputReconciliationRequired = true;
             if (_disposed || _hostInputSerial != inputSerial || _hostPublicationSerial != publicationSerial + 1 ||
                 !ReferenceEquals(_document, document) || !ReferenceEquals(_nativeDom, dom) ||
-                document.Version != documentVersion || !InvalidationsMatch(publishedInvalidations) || !_nativeStyleRuntime.IsCurrent(native.Token))
+                document.Version != documentVersion || document.InputVersion != documentInputVersion || !InvalidationsMatch(publishedInvalidations) || !replayNativeCurrent)
                 return Reject();
             foreach (var transition in transitions) transition.Apply(_transitionRuntime!, Environment.TickCount64);
             if (_scrollbarDrag is { } drag && !IsCurrentlyVisible(drag.Container)) CancelScrollbarDrag();
@@ -257,7 +273,8 @@ public sealed partial class UiDocumentHost
 
             bool HostInputsMatch() => !_disposed && !_markupDirty && _hostInputSerial == inputSerial &&
                 _hostPublicationSerial == publicationSerial && ReferenceEquals(_document, document) &&
-                ReferenceEquals(_nativeDom, dom) && document.Version == documentVersion && InvalidationsMatch(invalidations);
+                ReferenceEquals(_nativeDom, dom) && document.Version == documentVersion &&
+                document.InputVersion == documentInputVersion && InvalidationsMatch(invalidations);
             bool InvalidationsMatch(long[] serials)
             {
                 for (var i = 0; i < serials.Length; ++i)

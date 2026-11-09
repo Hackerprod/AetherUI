@@ -4,12 +4,16 @@ public sealed class DocumentNode : Node
 {
     private Dictionary<string, ElementNode>? _idIndex;
     private long _version;
+    private long _inputVersion;
+    internal event Action? InputsChanged;
 
     public DocumentNode() : base(NodeType.Document)
     {
     }
 
     public long Version => _version;
+    /// <summary>Pure serial of attached tree, attribute, text, state and runtime-value mutations.</summary>
+    public long InputVersion => _inputVersion;
     public ElementNode? DocumentElement => Children.OfType<ElementNode>().FirstOrDefault(element => element.TagName == "html")
         ?? Children.OfType<ElementNode>().FirstOrDefault();
     public ElementNode? Body => DescendantElements().FirstOrDefault(element => element.TagName == "body");
@@ -45,6 +49,14 @@ public sealed class DocumentNode : Node
     {
         _version++;
         _idIndex = null;
+        NotifyInputChanged();
+    }
+
+    internal void NotifyInputChanged()
+    {
+        ++_inputVersion;
+        // Internal bookkeeping only. Subscribers must not render or invoke user callbacks.
+        InputsChanged?.Invoke();
     }
 
     private void EnsureIndex()

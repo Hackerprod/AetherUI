@@ -107,7 +107,7 @@ public sealed partial class UiDocumentHost
     private void SetInputValue(ElementNode input, string value)
     {
         NoteInputMutation();
-        input.RuntimeValue = value;
+        SetKnownRuntimeValue(input, value);
         _runtimeValuesDirty = true;
         if (input.Id is { Length: > 0 } id)
         {

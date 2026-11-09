@@ -38,6 +38,7 @@ public sealed partial class UiDocumentHost : IDisposable
     private SizeF _viewport;
     private float _dpiScale = 1;
     private bool _markupDirty = true;
+    private long _markupInputSerial;
     private bool _displayListContainsPatchedChunks;
     private VisualInvalidation _invalidation = VisualInvalidation.Style;
     private long _styleResolutionCount;
@@ -301,6 +302,14 @@ public sealed partial class UiDocumentHost : IDisposable
 
     private void RebuildDocument()
     {
+        ++_styleOperationDepth;
+        try { RebuildDocumentCore(); }
+        finally { LeaveStyleOperation(); }
+    }
+
+    private void RebuildDocumentCore()
+    {
+        var markupSerial = _markupInputSerial;
         CancelScrollbarDrag();
         var focusedId = _focused?.Id;
         var hoveredId = _hovered?.Id;
@@ -308,8 +317,12 @@ public sealed partial class UiDocumentHost : IDisposable
         var markup = _component.RenderMarkup();
         var nativeDom = DomInterop.Parse(markup);
         var previousNativeDom = _nativeDom;
+        if (_document is not null) _document.InputsChanged -= OnManagedInputsChanged;
         _nativeDom = nativeDom;
         _document = nativeDom.Document;
+        _knownManagedInputVersion = _document.InputVersion;
+        _inputReconciliationRequired = false;
+        _document.InputsChanged += OnManagedInputsChanged;
         _styles = null;
         _nativeLayout?.Dispose();
         _nativeLayout = null;
@@ -350,7 +363,7 @@ public sealed partial class UiDocumentHost : IDisposable
         {
             if (input.GetAttribute("value") is { } controlledValue)
             {
-                input.RuntimeValue = controlledValue;
+                SetKnownRuntimeValue(input, controlledValue);
                 if (input.Id is { Length: > 0 } controlledId)
                 {
                     _uncontrolledInputValues[controlledId] = controlledValue;
@@ -358,7 +371,7 @@ public sealed partial class UiDocumentHost : IDisposable
             }
             else if (input.Id is { Length: > 0 } id && _uncontrolledInputValues.TryGetValue(id, out var saved))
             {
-                input.RuntimeValue = saved;
+                SetKnownRuntimeValue(input, saved);
             }
         }
 
@@ -367,7 +380,7 @@ public sealed partial class UiDocumentHost : IDisposable
         RestoreHoverChain(_hovered);
         _active = RestoreElement(activeId, ElementState.Active);
         _nativeSynchronizedDocumentVersion = _document.Version;
-        _markupDirty = false;
+        _markupDirty = _markupInputSerial != markupSerial;
         ProduceInvalidation(VisualInvalidation.Style);
     }
 
@@ -381,7 +394,7 @@ public sealed partial class UiDocumentHost : IDisposable
         var element = _document!.GetElementById(id);
         if (element is not null)
         {
-            element.State |= state;
+            SetKnownElementState(element, element.State | state);
         }
 
         return element;
@@ -396,7 +409,7 @@ public sealed partial class UiDocumentHost : IDisposable
 
         foreach (var element in target.AncestorsAndSelf())
         {
-            element.State |= ElementState.Hover;
+            SetKnownElementState(element, element.State | ElementState.Hover);
             _hoverChain.Add(element);
         }
     }
@@ -413,6 +426,7 @@ public sealed partial class UiDocumentHost : IDisposable
 
     private void OnComponentInvalidated(object? sender, EventArgs e)
     {
+        ++_markupInputSerial;
         NoteInputMutation();
         _markupDirty = true;
         ProduceInvalidation(VisualInvalidation.Style);
@@ -511,6 +525,7 @@ public sealed partial class UiDocumentHost : IDisposable
 
         _disposed = true;
         _component.Invalidated -= OnComponentInvalidated;
+        if (_document is not null) _document.InputsChanged -= OnManagedInputsChanged;
         if (_imageResolver is not null) _imageResolver.Changed -= OnImageResourceChanged;
         NoteInputMutation();
         _disposeResourcesPending = true;

@@ -22,8 +22,28 @@ public sealed class ElementNode : Node
 
     public string TagName { get; }
     public IReadOnlyDictionary<string, string> Attributes => _attributes;
-    public ElementState State { get; set; }
-    public string? RuntimeValue { get; set; }
+    private ElementState _state;
+    private string? _runtimeValue;
+    public ElementState State
+    {
+        get => _state;
+        set
+        {
+            if (_state == value) return;
+            _state = value;
+            OwnerDocument?.NotifyInputChanged();
+        }
+    }
+    public string? RuntimeValue
+    {
+        get => _runtimeValue;
+        set
+        {
+            if (string.Equals(_runtimeValue, value, StringComparison.Ordinal)) return;
+            _runtimeValue = value;
+            OwnerDocument?.NotifyInputChanged();
+        }
+    }
 
     public string? Id => GetAttribute("id");
     public string ClassName => GetAttribute("class") ?? string.Empty;

@@ -69,6 +69,7 @@ public sealed partial class UiDocumentHost
         }
         else
         {
+            _currentCursor = CursorKind.Default;
             _pendingPointerTarget = null;
             _hasPendingPointerTarget = false;
         }
@@ -293,7 +294,7 @@ public sealed partial class UiDocumentHost
     {
         ThrowIfDisposed();
         if (_options.EnableInputWorkCounters) Interlocked.Increment(ref _cursorQueries);
-        if (_styleOperationDepth != 0) return CursorKind.Default;
+        if (_styleOperationDepth != 0 || !HasCertifiedStyleSnapshot()) return CursorKind.Default;
         if (_hasPendingPointerMove)
         {
             return _currentCursor;
@@ -455,7 +456,9 @@ public sealed partial class UiDocumentHost
             return false;
         }
 
-        element.State = next;
+        _stateDirtyElements.EnsureCapacity(_stateDirtyElements.Count + 1);
+        _stateInputsToSync.EnsureCapacity(_stateInputsToSync.Count + 1);
+        SetKnownElementState(element, next);
         NoteInputMutation();
         _stateDirtyElements.Add(element);
         _stateInputsToSync.Add(element);

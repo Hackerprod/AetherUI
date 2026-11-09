@@ -8,8 +8,10 @@ out=${2:-"$build/publication-fault-tests"}
 mkdir -p "$out"
 mapfile -d '' objects < <(find "$build/CMakeFiles/aether_core.dir/src" -name '*.o' -print0 | sort -z)
 ((${#objects[@]} > 0))
-for test in test_style_publication_preview test_style_publication_preview_oom; do
+for test in test_style_publication_preview test_style_publication_preview_oom test_style_publication_preview_malloc; do
+    flags=()
+    [[ "$test" != test_style_publication_preview_malloc ]] || flags+=(-Wl,--wrap=malloc)
     "${CXX:-g++}" -std=c++20 -pthread -DAETHER_TEST_INTERNAL_REGISTRY -I "$repo/native/include" \
-        "$repo/native/tests/$test.cpp" "${objects[@]}" -o "$out/$test"
+        "$repo/native/tests/$test.cpp" "${objects[@]}" "${flags[@]}" -o "$out/$test"
     "$out/$test"
 done

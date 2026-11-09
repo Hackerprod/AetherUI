@@ -92,17 +92,21 @@ internal static class TransitionStyleMarshaler
 
         var itemSize = Marshal.SizeOf<StyleRuntimeInterop.TransformOperationRaw>();
         var items = Marshal.AllocHGlobal(itemSize * transforms.Count);
-        for (var index = 0; index < transforms.Count; index++)
+        try
         {
-            var operation = transforms[index];
-            var raw = new StyleRuntimeInterop.TransformOperationRaw(
-                (int)operation.Kind,
-                ToLengthRaw(operation.X), ToLengthRaw(operation.Y),
-                operation.ScalarX, operation.ScalarY, operation.AngleRadians,
-                operation.MatrixA, operation.MatrixB, operation.MatrixC,
-                operation.MatrixD, operation.MatrixE, operation.MatrixF);
-            Marshal.StructureToPtr(raw, items + index * itemSize, false);
+            for (var index = 0; index < transforms.Count; index++)
+            {
+                var operation = transforms[index];
+                var raw = new StyleRuntimeInterop.TransformOperationRaw(
+                    (int)operation.Kind,
+                    ToLengthRaw(operation.X), ToLengthRaw(operation.Y),
+                    operation.ScalarX, operation.ScalarY, operation.AngleRadians,
+                    operation.MatrixA, operation.MatrixB, operation.MatrixC,
+                    operation.MatrixD, operation.MatrixE, operation.MatrixF);
+                Marshal.StructureToPtr(raw, items + index * itemSize, false);
+            }
         }
+        catch { Marshal.FreeHGlobal(items); throw; }
 
         return (items, transforms.Count);
     }

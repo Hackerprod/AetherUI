@@ -13,6 +13,7 @@ public sealed partial class UiDocumentHost
     private int _renderDepth;
     private bool _disposeResourcesPending;
     private bool _managedProjectionOutOfDate = true;
+    private bool _forceFullProjectionRecovery;
     private bool _styleRetryBlocked;
     private bool _renderDeferred;
     private readonly Queue<Action> _deferredInput = new();
@@ -20,6 +21,9 @@ public sealed partial class UiDocumentHost
     private NativeStylePublicationToken _publishedStyleToken;
     private long _publishedDocumentVersion;
     private long _nativeSynchronizedDocumentVersion;
+    private long _knownManagedInputVersion;
+    private long _publishedDocumentInputVersion;
+    private bool _inputReconciliationRequired;
     // Fault probes are internal and unset in production. They run only in fallible staging.
     internal Action<string>? StylePublicationProbe { get; set; }
 
@@ -34,6 +38,42 @@ public sealed partial class UiDocumentHost
         _managedProjectionOutOfDate = true;
         _hasPendingPointerTarget = false;
         _pendingPointerTarget = null;
+    }
+
+    private void OnManagedInputsChanged()
+    {
+        NoteInputMutation();
+        ProduceInvalidation(VisualInvalidation.Style);
+        // No RenderRequested or user code inside a DOM mutation. Unknown writes
+        // remain unacknowledged until the separately reviewed DOMsync bridge.
+    }
+
+    private void SetKnownElementState(ElementNode element, ElementState value)
+    {
+        var document = element.OwnerDocument;
+        var before = document?.InputVersion ?? 0;
+        var changed = element.State != value;
+        element.State = value;
+        AcknowledgeKnownManagedWrite(document, before, changed);
+    }
+
+    private void SetKnownRuntimeValue(ElementNode element, string? value)
+    {
+        var document = element.OwnerDocument;
+        var before = document?.InputVersion ?? 0;
+        var changed = !string.Equals(element.RuntimeValue, value, StringComparison.Ordinal);
+        element.RuntimeValue = value;
+        AcknowledgeKnownManagedWrite(document, before, changed);
+        if (changed) _runtimeValuesDirty = true;
+    }
+
+    private void AcknowledgeKnownManagedWrite(DocumentNode? document, long before, bool changed)
+    {
+        // Acknowledge only this exact write. Never adopt an arbitrary latest
+        // serial, which could hide an earlier external/reentrant mutation.
+        var expected = before + (changed ? 1 : 0);
+        if (ReferenceEquals(document, _document) && _knownManagedInputVersion == before &&
+            document!.InputVersion == expected) _knownManagedInputVersion = expected;
     }
 
     private void ProduceInvalidation(VisualInvalidation flags)
@@ -82,11 +122,13 @@ public sealed partial class UiDocumentHost
 
     private bool HasCertifiedStyleSnapshot() => !_disposed && !_managedProjectionOutOfDate &&
         !_markupDirty && _document is not null && _document.Version == _publishedDocumentVersion &&
+        _document.InputVersion == _publishedDocumentInputVersion &&
         _nativeStyleRuntime.IsCurrent(_publishedStyleToken);
 
     private void RejectStyleProjection()
     {
         _managedProjectionOutOfDate = true;
+        _forceFullProjectionRecovery = true;
         _hasPendingPointerTarget = false;
         _pendingPointerTarget = null;
         ProduceInvalidation(VisualInvalidation.Style);

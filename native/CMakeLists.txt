@@ -1605,6 +1605,35 @@ endif()
 if(AETHERUI_BUILD_TESTS)
     add_executable(aether_style_publication_preview_test tests/test_style_publication_preview.cpp)
     target_include_directories(aether_style_publication_preview_test PRIVATE src)
-    target_link_libraries(aether_style_publication_preview_test PRIVATE AetherUI::Core)
+    target_link_libraries(aether_style_publication_preview_test PRIVATE AetherUI::Core Threads::Threads)
     add_test(NAME aether.style-publication-preview COMMAND aether_style_publication_preview_test)
+endif()
+
+if(AETHERUI_BUILD_TESTS AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    # White-box fault/registry tests link one real core singleton, not a local
+    # registry next to the shared library. Share test objects between both bins.
+    get_target_property(publication_core_sources aether_core SOURCES)
+    add_library(aether_publication_test_core OBJECT ${publication_core_sources})
+    target_include_directories(aether_publication_test_core PRIVATE include src)
+    target_compile_definitions(aether_publication_test_core PRIVATE
+        $<TARGET_PROPERTY:aether_core,COMPILE_DEFINITIONS>)
+    target_compile_options(aether_publication_test_core PRIVATE
+        $<TARGET_PROPERTY:aether_core,COMPILE_OPTIONS>)
+    add_executable(aether_style_publication_registry_test
+        tests/test_style_publication_preview.cpp $<TARGET_OBJECTS:aether_publication_test_core>)
+    target_include_directories(aether_style_publication_registry_test PRIVATE include src)
+    target_compile_definitions(aether_style_publication_registry_test PRIVATE AETHER_TEST_INTERNAL_REGISTRY)
+    target_link_libraries(aether_style_publication_registry_test PRIVATE Threads::Threads)
+    add_test(NAME aether.style-publication-registry COMMAND aether_style_publication_registry_test)
+    add_executable(aether_style_publication_preview_oom_test
+        tests/test_style_publication_preview_oom.cpp $<TARGET_OBJECTS:aether_publication_test_core>)
+    target_include_directories(aether_style_publication_preview_oom_test PRIVATE include src)
+    target_link_libraries(aether_style_publication_preview_oom_test PRIVATE Threads::Threads)
+    add_test(NAME aether.style-publication-preview-oom COMMAND aether_style_publication_preview_oom_test)
+    add_executable(aether_style_publication_preview_malloc_test
+        tests/test_style_publication_preview_malloc.cpp $<TARGET_OBJECTS:aether_publication_test_core>)
+    target_include_directories(aether_style_publication_preview_malloc_test PRIVATE include src)
+    target_link_libraries(aether_style_publication_preview_malloc_test PRIVATE Threads::Threads)
+    target_link_options(aether_style_publication_preview_malloc_test PRIVATE -Wl,--wrap=malloc)
+    add_test(NAME aether.style-publication-preview-malloc COMMAND aether_style_publication_preview_malloc_test)
 endif()

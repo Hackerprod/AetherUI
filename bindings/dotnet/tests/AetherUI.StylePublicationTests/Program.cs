@@ -54,6 +54,7 @@ Run("native callback R2 supersedes R1 without overwriting newer native inputs", 
     host.Render(); GC.KeepAlive(callback);
     True(invoked); True(Field<NativeStylePublicationToken>(host,"_publishedStyleToken").Generation > innerGeneration);
     Eq(99f,Style(host).Width.Value); Eq(1,r.Frames); True(!host.ManagedProjectionOutOfDate);
+    Console.WriteLine($"  R2={innerGeneration}, accepted={Field<NativeStylePublicationToken>(host,"_publishedStyleToken").Generation}, input={host.HostInputSerial}, publication={host.HostPublicationSerial}");
 });
 Run("native mutation without R2 forces recovery", () =>
 {
@@ -193,6 +194,91 @@ Run("dispose during managed notification never presents published candidate", ()
     CssDiagnostics.Reported+=listener;
     try{Throws<ObjectDisposedException>(host.Render);}finally{CssDiagnostics.Reported-=listener;host.Dispose();}
     True(retained);True(r.Disposed);Eq(0,r.Frames);
+});
+Run("native stylesheet callback invalidates candidate and recovers newest sheet", () =>
+{
+    using var r=new Renderer();using var host=New(new Component("transform:var(--undefined)"),r);host.Render();
+    var called=false;var runtime=Runtime(host);
+    StyleDiagnosticCallback callback=(_,_,_,_,_)=>
+    {
+        if(called)return;called=true;
+        typeof(StyleRuntimeInterop).GetMethod("AddStyleSheet",BindingFlags.NonPublic|BindingFlags.Instance)!.Invoke(runtime,["#a{width:107px}",2,"reentrant"]);
+    };
+    Native.SetDiagnostics(Handle(runtime),callback,IntPtr.Zero);
+    State(host,host.Document!.GetElementById("a")!,ElementState.Invalid,true);host.Render();GC.KeepAlive(callback);
+    True(called);Eq(107f,Style(host).Width.Value);Eq(2,r.Frames);
+});
+Run("native mutation during staging rejects commit and recovers once", () =>
+{
+    using var r=new Renderer();using var host=New(new Component(),r);host.Render();var once=true;
+    host.StylePublicationProbe=p=>
+    {
+        if(p!="managed-staged"||!once)return;once=false;
+        var dom=Field<DomInterop>(host,"_nativeDom");dom.Native.SetAttribute(dom.GetNativeHandle(host.Document!.GetElementById("a")!),"style","width:111px");
+    };
+    State(host,host.Document!.GetElementById("a")!,ElementState.Invalid,true);host.Render();
+    Eq(111f,Style(host).Width.Value);Eq(2,r.Frames);
+});
+Run("native publication between events invalidates cached hit before dispatch", () =>
+{
+    var c=new Component();using var r=new Renderer();using var host=New(c,r);host.Render();
+    host.PointerMoved(new(10,10));
+    var dom=Field<DomInterop>(host,"_nativeDom");dom.Native.SetAttribute(dom.GetNativeHandle(host.Document!.GetElementById("a")!),"style","display:none");
+    using(var native=Runtime(host).PreparePublication(null,200,200,1)){True(native.Commit());using var map=native.Publish();}
+    Eq(CursorKind.Default,host.CursorAt(new(10,10)));host.Render();
+    True((host.Document!.GetElementById("a")!.State&ElementState.Hover)==0);Eq(2,r.Frames);
+});
+Run("InputVersion tracks real attached state and runtime-value changes only", () =>
+{
+    var document=new DocumentNode();var element=new ElementNode("input");document.AppendChild(element);
+    var input=document.InputVersion;var tree=document.Version;
+    element.State=ElementState.Hover;Eq(input+1,document.InputVersion);Eq(tree,document.Version);
+    element.State=ElementState.Hover;Eq(input+1,document.InputVersion);
+    element.RuntimeValue="x";Eq(input+2,document.InputVersion);element.RuntimeValue="x";Eq(input+2,document.InputVersion);
+    element.RuntimeValue=null;Eq(input+3,document.InputVersion);element.RuntimeValue=null;Eq(input+3,document.InputVersion);
+    Eq(tree,document.Version);element.SetAttribute("title","new");Eq(input+4,document.InputVersion);Eq(tree+1,document.Version);
+});
+Run("direct managed State fails closed without consuming unknown input", () =>
+{
+    using var r=new Renderer();using var host=New(new Component(),r);host.Render();var serial=host.HostInputSerial;
+    var known=Field<long>(host,"_knownManagedInputVersion");var element=host.Document!.GetElementById("a")!;
+    element.State=ElementState.Invalid;True(host.HostInputSerial>serial);True(host.NeedsRender);
+    Throws<InvalidOperationException>(host.Render);Eq(1,r.Frames);Eq(known,Field<long>(host,"_knownManagedInputVersion"));
+    Eq(CursorKind.Default,host.CursorAt(new(10,10)));True(element.State==ElementState.Invalid);
+});
+Run("RuntimeValue to null is visible to serial guard; same null is a no-op", () =>
+{
+    using var r=new Renderer();using var host=New(new Component(),r);host.Render();var element=host.Document!.GetElementById("a")!;
+    var serial=host.Document.InputVersion;element.RuntimeValue="pending";element.RuntimeValue=null;
+    Eq(serial+2,host.Document.InputVersion);var hostSerial=host.HostInputSerial;element.RuntimeValue=null;Eq(hostSerial,host.HostInputSerial);
+    Throws<InvalidOperationException>(host.Render);Eq(1,r.Frames);True(host.ManagedProjectionOutOfDate);
+});
+Run("known write cannot acknowledge a preceding unknown same-node mutation", () =>
+{
+    using var r=new Renderer();using var host=New(new Component(),r);host.Render();var element=host.Document!.GetElementById("a")!;
+    State(host,element,ElementState.Hover,true);var known=Field<long>(host,"_knownManagedInputVersion");var once=true;
+    host.StylePublicationProbe=p=>
+    {
+        if(p!="managed-staged"||!once)return;once=false;
+        element.State|=ElementState.Invalid;State(host,element,ElementState.Focus,true);
+    };
+    Throws<InvalidOperationException>(host.Render);Eq(1,r.Frames);Eq(known,Field<long>(host,"_knownManagedInputVersion"));
+    True(host.Document.InputVersion>known);True((element.State&ElementState.Invalid)!=0);
+});
+Run("mixed managed writes and native R2 require reconciliation without overwriting R2", () =>
+{
+    using var r=new Renderer();using var host=New(new Component("transform:var(--undefined)"),r);host.Render();var called=false;ulong generation=0;
+    var runtime=Runtime(host);var element=host.Document!.GetElementById("a")!;
+    StyleDiagnosticCallback callback=(_,_,_,_,_)=>
+    {
+        if(called)return;called=true;State(host,element,ElementState.Invalid,true);
+        var dom=Field<DomInterop>(host,"_nativeDom");dom.Native.SetState(dom.GetNativeHandle(element),(int)ElementState.Hover);
+        using var inner=runtime.PreparePublication(null,200,200,1);True(inner.Commit());using var map=inner.Publish();generation=inner.Token.Generation;
+    };
+    Native.SetDiagnostics(Handle(runtime),callback,IntPtr.Zero);State(host,element,ElementState.Hover,true);
+    Throws<InvalidOperationException>(host.Render);GC.KeepAlive(callback);Eq(1,r.Frames);True(called);
+    var token=NativeStylePublicationToken.Empty;Eq(0,NativeMethods.StyleReadPublicationToken(Handle(runtime),ref token));Eq(generation,token.Generation);
+    True(Field<bool>(host,"_inputReconciliationRequired"));True(host.ManagedProjectionOutOfDate);
 });
 Console.WriteLine($"PASS {count} D1 host protocol tests; managed DOM synchronization remains a separate pending gate.");
 void Run(string name,Action action){action();++count;Console.WriteLine("PASS "+name);}

@@ -1,0 +1,23 @@
+name: Managed style publication contracts
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  portable-publication:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.201
+      - name: Build and install default-off native runtime
+        run: |
+          cmake -S native -B artifacts/build/publication -DCMAKE_BUILD_TYPE=Release -DAETHERUI_BUILD_TESTS=OFF -DAETHERUI_ENABLE_STATE_INCREMENTAL=OFF -DCMAKE_INSTALL_PREFIX="$PWD/artifacts/native/linux-x64"
+          cmake --build artifacts/build/publication --target aether_core --parallel 2
+          cmake --install artifacts/build/publication
+      - name: Run publication and input trace contracts
+        run: bindings/dotnet/tests/run-style-publication-tests.sh "$(command -v dotnet)" "$PWD/artifacts/native/linux-x64/lib/libaether_core.so"
