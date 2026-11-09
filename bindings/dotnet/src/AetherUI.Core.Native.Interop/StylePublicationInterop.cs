@@ -73,8 +73,17 @@ public sealed unsafe partial class StyleRuntimeInterop
         if (states is not null)
             for (var i = 0; i < states.Count; ++i) NativeMethods.ElementSetState(_elements[i], states[i]);
         var environment = new RuntimeEnvironment(width, height, dpiScale, 16, 0, 0, 0);
+#if AETHER_DOM_FAULT_TESTING
+        AetherUI.Core.Native.ManagedDomFault.Before("style.preview.native-prepare-call-aggregate");
+#endif
         Throw(NativeMethods.StylePrepareRevision(_runtime, _document, in environment, out var transaction));
-        try { return new PreparedPublication(this, transaction, previousMap); }
+        try
+        {
+#if AETHER_DOM_FAULT_TESTING
+            ManagedDomFault.Before("style.preview.wrapper");
+#endif
+            return new PreparedPublication(this, transaction, previousMap);
+        }
         catch { NativeMethods.StyleTransactionDestroy(transaction); throw; }
     }
 
@@ -107,7 +116,13 @@ public sealed unsafe partial class StyleRuntimeInterop
                 Token = token;
                 Throw(NativeMethods.StyleTransactionPreviewRevision(transaction, out _preview));
                 var count = NativeMethods.StyleRevisionCount(_preview);
+#if AETHER_DOM_FAULT_TESTING
+                AetherUI.Core.Native.ManagedDomFault.Before("style.preview.updates-array");
+#endif
                 var updates = new NativeStyleUpdate[count];
+#if AETHER_DOM_FAULT_TESTING
+                AetherUI.Core.Native.ManagedDomFault.Before("style.preview.styles-map");
+#endif
                 _styles = new Dictionary<IntPtr, NativeComputedStyle>(count);
                 var aggregate = NativeStyleImpact.None;
                 for (var i = 0; i < count; ++i)
@@ -116,9 +131,18 @@ public sealed unsafe partial class StyleRuntimeInterop
                     try
                     {
                         var changed = handle != IntPtr.Zero;
+#if AETHER_DOM_FAULT_TESTING
+                        if (changed) ManagedDomFault.Before("style.preview.style-read-call-aggregate");
+#endif
                         var style = changed ? ReadStyle(handle) : owner._styles[node];
                         if (changed) ++ChangedStyleCount;
+#if AETHER_DOM_FAULT_TESTING
+                        AetherUI.Core.Native.ManagedDomFault.Before("style.preview.update-record");
+#endif
                         updates[i] = new NativeStyleUpdate(node, style, (NativeStyleImpact)impact) { ProjectionChanged = changed };
+#if AETHER_DOM_FAULT_TESTING
+                        ManagedDomFault.BeforeDictionaryInsert(_styles, node, "style.preview.styles-growth");
+#endif
                         _styles.Add(node, style);
                         aggregate |= (NativeStyleImpact)impact;
                         StackingOrderChanged |= owner._styles.TryGetValue(node, out var previous) && previous.ZIndex != style.ZIndex;
@@ -137,7 +161,13 @@ public sealed unsafe partial class StyleRuntimeInterop
                 if (previousMap is null) Throw(NativeMethods.StyleTransactionPreviewLegacyMap(transaction, out map));
                 else Throw(NativeMethods.StyleTransactionPreviewLegacyPatch(transaction, previousMap.Handle, out map));
                 MapPatched = previousMap is not null;
-                try { _map = new NativeStyleMap(map); }
+                try
+                {
+#if AETHER_DOM_FAULT_TESTING
+                    ManagedDomFault.Before("style.preview.map-wrapper");
+#endif
+                    _map = new NativeStyleMap(map);
+                }
                 catch { NativeMethods.StyleMapDestroy(map); throw; }
                 _transaction = transaction;
             }

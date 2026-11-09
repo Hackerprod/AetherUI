@@ -28,10 +28,15 @@ internal static unsafe partial class NativeMethods
     internal static partial int InteractionOwnerPrepare(IntPtr document, ulong host, out IntPtr owner);
     [LibraryImport(Lib, EntryPoint = "aether_dom_interaction_owner_prepare_claim_v1")]
     internal static partial int InteractionOwnerPrepareClaim(NativeInteractionOwner owner, IntPtr node, int bit, ulong registry, out IntPtr claim);
-    [LibraryImport(Lib, EntryPoint = "aether_dom_interaction_owner_validate_prepared_v1")]
-    internal static partial int InteractionOwnerValidatePrepared(NativeInteractionOwner owner);
-    [LibraryImport(Lib, EntryPoint = "aether_dom_interaction_owner_activate_v1")]
-    internal static partial int InteractionOwnerActivate(NativeInteractionOwner owner, IntPtr binding);
+    internal static partial class InteractionOwnerPublication
+    {
+        private static int _preparation;
+        internal static void EnsurePrepared() => NativePublicationImports.EnsurePrepared(ref _preparation, typeof(InteractionOwnerPublication), 2);
+        [LibraryImport(Lib, EntryPoint = "aether_dom_interaction_owner_validate_prepared_v1")]
+        internal static partial int ValidatePrepared(NativeInteractionOwner owner);
+        [LibraryImport(Lib, EntryPoint = "aether_dom_interaction_owner_activate_v1")]
+        internal static partial int Activate(NativeInteractionOwner owner, IntPtr binding);
+    }
     [LibraryImport(Lib, EntryPoint = "aether_dom_interaction_owner_dispose_v1")]
     internal static partial int InteractionOwnerDispose(NativeInteractionOwner owner);
     [LibraryImport(Lib, EntryPoint = "aether_dom_interaction_owner_release_v1")]

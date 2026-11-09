@@ -34,6 +34,9 @@ public sealed partial class UiDocumentHost
 
     private void PublishComponentDocument()
     {
+        // RebuildDocument owns failure/retry blocking for this early preparation.
+        NativeDomSync.PrepareComponentPublicationImports();
+        ThrowIfDisposed();
         // UA initialization is persistent, outside the candidate transaction and before
         // capturing any bases. A failed initial candidate does not install UA twice.
         _nativeStyleRuntime.EnsureDomDefaults();
@@ -53,7 +56,13 @@ public sealed partial class UiDocumentHost
         var focusedId = _focused?.Id;
         var hoveredId = _hovered?.Id;
         var activeId = _active?.Id;
+#if AETHER_DOM_FAULT_TESTING
+        AetherUI.Core.Native.ManagedDomFault.Before("host.component.previous-style-snapshot-aggregate");
+#endif
         var previousStyles = BuildStyleSnapshot();
+#if AETHER_DOM_FAULT_TESTING
+        AetherUI.Core.Native.ManagedDomFault.Before("host.component.values-copy");
+#endif
         var values = new Dictionary<string, string>(_uncontrolledInputValues, StringComparer.Ordinal);
         using var candidate = _component.PrepareRenderCandidate();
         var registry = candidate.Registry;
@@ -68,16 +77,31 @@ public sealed partial class UiDocumentHost
             nextDom = DomInterop.Parse(markup);
             ComponentPublicationProbe?.Invoke("parsed");
             var document = nextDom.Document;
+#if AETHER_DOM_FAULT_TESTING
+            AetherUI.Core.Native.ManagedDomFault.Before("host.component.proxy");
+#endif
             var proxy = new ComponentBookkeepingProxy();
+#if AETHER_DOM_FAULT_TESTING
+            AetherUI.Core.Native.ManagedDomFault.Before("host.component.bridge-call-aggregate");
+#endif
             nextDom.EnableSynchronization(proxy);
             ComponentPublicationProbe?.Invoke("mapped");
             // Only the private B tree is modified. Its proxy has no live host target.
+#if AETHER_DOM_FAULT_TESTING
+            AetherUI.Core.Native.ManagedDomFault.Before("host.component.inputs-query-aggregate");
+#endif
             foreach (var input in document.GetElementsByTagName("input"))
             {
                 if (input.GetAttribute("value") is { } controlledValue)
                 {
                     input.RuntimeValue = controlledValue;
-                    if (input.Id is { Length: > 0 } controlledId) values[controlledId] = controlledValue;
+                    if (input.Id is { Length: > 0 } controlledId)
+                    {
+#if AETHER_DOM_FAULT_TESTING
+                        AetherUI.Core.Native.ManagedDomFault.BeforeDictionaryInsert(values, controlledId, "host.component.value-cache-growth");
+#endif
+                        values[controlledId] = controlledValue;
+                    }
                 }
                 else if (input.Id is { Length: > 0 } id && values.TryGetValue(id, out var saved))
                     input.RuntimeValue = saved;
@@ -92,24 +116,60 @@ public sealed partial class UiDocumentHost
             var focused = Restore(focusedId, ElementState.Focus);
             var hovered = Restore(hoveredId, ElementState.Hover);
             var active = Restore(activeId, ElementState.Active);
+#if AETHER_DOM_FAULT_TESTING
+            AetherUI.Core.Native.ManagedDomFault.Before("host.component.hover-set");
+#endif
             var hoverChain = new HashSet<ElementNode>();
             if (hovered is not null)
+            {
+#if AETHER_DOM_FAULT_TESTING
+                AetherUI.Core.Native.ManagedDomFault.Before("host.component.hover-ancestors-aggregate");
+#endif
                 foreach (var element in hovered.AncestorsAndSelf())
                 {
                     element.State |= ElementState.Hover;
+#if AETHER_DOM_FAULT_TESTING
+                    if (!hoverChain.Contains(element) && hoverChain.Count == hoverChain.EnsureCapacity(0))
+                        AetherUI.Core.Native.ManagedDomFault.Before("host.component.hover-growth");
+#endif
                     hoverChain.Add(element);
                 }
+            }
+#if AETHER_DOM_FAULT_TESTING
+            AetherUI.Core.Native.ManagedDomFault.Before("host.component.computed-map");
+#endif
             var computed = new Dictionary<ElementNode, ComputedStyle>();
+#if AETHER_DOM_FAULT_TESTING
+            AetherUI.Core.Native.ManagedDomFault.Before("host.component.dirty-set");
+#endif
             var dirty = new HashSet<ElementNode>();
+#if AETHER_DOM_FAULT_TESTING
+            AetherUI.Core.Native.ManagedDomFault.Before("host.component.sync-set");
+#endif
             var toSync = new HashSet<ElementNode>();
+#if AETHER_DOM_FAULT_TESTING
+            AetherUI.Core.Native.ManagedDomFault.Before("host.component.paint-map");
+#endif
             var paintDirty = new Dictionary<long, IntPtr>();
+#if AETHER_DOM_FAULT_TESTING
+            AetherUI.Core.Native.ManagedDomFault.Before("host.component.transition-runtime-call-aggregate");
+#endif
             nextTransitions = new TransitionRuntimeInterop();
             var transitionHandle = nextTransitions.Handle;
             var version = document.Version;
             var inputVersion = document.InputVersion;
+#if AETHER_DOM_FAULT_TESTING
+            AetherUI.Core.Native.ManagedDomFault.Before("host.component.bookkeeping-call-aggregate");
+#endif
             var bookkeeping = CreateDomHostBookkeeping(nextDom);
             ComponentPublicationProbe?.Invoke("initialized");
+#if AETHER_DOM_FAULT_TESTING
+            AetherUI.Core.Native.ManagedDomFault.Before("host.component.interaction-session-call-aggregate");
+#endif
             nextInteractions = PrepareInteractionSession(nextDom, registry, focused, active, hoverChain);
+#if AETHER_DOM_FAULT_TESTING
+            AetherUI.Core.Native.ManagedDomFault.Before("host.component.binding-call-aggregate");
+#endif
             using var binding = _nativeStyleRuntime.PrepareDomBinding(nextDom.Native);
             ComponentPublicationProbe?.Invoke("slot-prepared");
             var previousLayout = _nativeLayout;

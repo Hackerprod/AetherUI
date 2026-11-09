@@ -60,6 +60,9 @@ public sealed unsafe partial class StyleRuntimeInterop
     /// </summary>
     internal PreparedDomBinding PrepareDomBinding(NativeDomDocument document)
     {
+        NativeMethods.BindingPublication.EnsurePrepared();
+        // A first loader resolution can run application code. Revalidate the
+        // owner after linking and before capturing any native/managed bases.
         VerifyDomBindingThread();
         ThrowIfDisposed();
         ArgumentNullException.ThrowIfNull(document);
@@ -228,8 +231,8 @@ public sealed unsafe partial class StyleRuntimeInterop
                 throw new InvalidOperationException("The candidate document changed during preparation.");
             using var transactionBorrow = _transaction!.Borrow();
             NativeDomSync.Throw(_previousBinding == IntPtr.Zero
-                ? NativeMethods.DomStyleBindingValidateCreate(transactionBorrow.Handle)
-                : NativeMethods.DomStyleBindingValidateRebind(transactionBorrow.Handle));
+                ? NativeMethods.BindingPublication.ValidateCreate(transactionBorrow.Handle)
+                : NativeMethods.BindingPublication.ValidateRebind(transactionBorrow.Handle));
         }
 
         internal void Commit()
@@ -242,8 +245,8 @@ public sealed unsafe partial class StyleRuntimeInterop
             // Both paths were prepared before host validation. This segment only
             // validates native bases, publishes prepared storage, and swaps refs.
             var status = _previousBinding == IntPtr.Zero
-                ? NativeMethods.DomStyleBindingCommitCreate(transactionBorrow.Handle, out binding)
-                : NativeMethods.DomStyleBindingCommitRebind(transactionBorrow.Handle, out binding);
+                ? NativeMethods.BindingPublication.CommitCreate(transactionBorrow.Handle, out binding)
+                : NativeMethods.BindingPublication.CommitRebind(transactionBorrow.Handle, out binding);
             NativeDomSync.Throw(status);
             _retiredBinding = _owner._domStyleBinding;
             _retiredRevision = _owner._managedPublicationRevision;

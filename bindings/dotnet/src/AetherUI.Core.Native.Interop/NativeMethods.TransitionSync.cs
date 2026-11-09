@@ -23,12 +23,15 @@ internal static unsafe partial class NativeMethods
         NativeTransitionObservation* observations, nuint observationCount,
         IntPtr* retiredNodes, nuint retirementCount, long nowMs, out IntPtr candidate);
 
-    [LibraryImport(Lib, EntryPoint = "aether_transition_candidate_validate")]
-    internal static partial int TransitionCandidateValidate(TransitionCandidateHandle candidate);
-
-    [LibraryImport(Lib, EntryPoint = "aether_transition_candidate_commit")]
-    internal static partial int TransitionCandidateCommit(TransitionCandidateHandle candidate,
-        out NativeTransitionToken token);
+    internal static partial class TransitionPublication
+    {
+        private static int _preparation;
+        internal static void EnsurePrepared() => NativePublicationImports.EnsurePrepared(ref _preparation, typeof(TransitionPublication), 2);
+        [LibraryImport(Lib, EntryPoint = "aether_transition_candidate_validate")]
+        internal static partial int Validate(TransitionCandidateHandle candidate);
+        [LibraryImport(Lib, EntryPoint = "aether_transition_candidate_commit")]
+        internal static partial int Commit(TransitionCandidateHandle candidate, out NativeTransitionToken token);
+    }
 
     [LibraryImport(Lib, EntryPoint = "aether_transition_candidate_destroy")]
     internal static partial void TransitionCandidateDestroy(IntPtr candidate);

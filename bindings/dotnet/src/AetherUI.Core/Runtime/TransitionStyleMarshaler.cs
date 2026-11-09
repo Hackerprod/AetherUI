@@ -33,7 +33,12 @@ internal static class TransitionStyleMarshaler
     }
 
     internal static PreparedObservation Prepare(IntPtr node, AetherUI.Css.ComputedStyle before, AetherUI.Css.ComputedStyle after)
-        => new(node, before, after);
+    {
+#if AETHER_DOM_FAULT_TESTING
+        ManagedDomFault.Before("transition.prepare.observation-wrapper");
+#endif
+        return new(node, before, after);
+    }
 
     /// <summary>Prepare a single native transaction before any style publication.
     /// No Apply loop is permitted after managed diagnostic replay.</summary>
@@ -43,6 +48,9 @@ internal static class TransitionStyleMarshaler
     {
         if (observations.Count == 0)
             return runtime.PreparePublication(ReadOnlySpan<NativeTransitionObservation>.Empty, retiredNodes, nowMs);
+#if AETHER_DOM_FAULT_TESTING
+        ManagedDomFault.Before("transition.prepare.entries-array");
+#endif
         var entries = new NativeTransitionObservation[observations.Count];
         for (var i = 0; i < entries.Length; ++i) entries[i] = observations[i].Observation;
         return runtime.PreparePublication(entries, retiredNodes, nowMs);
@@ -61,13 +69,31 @@ internal static class TransitionStyleMarshaler
                 var size = Marshal.SizeOf<StyleRuntimeInterop.ComputedStyleRaw>();
                 _beforeTransforms = AllocateTransforms(before);
                 _afterTransforms = AllocateTransforms(after);
+#if AETHER_DOM_FAULT_TESTING
+                ManagedDomFault.Before("transition.prepare.style-before-buffer");
+#endif
                 _before = Marshal.AllocHGlobal(size);
+#if AETHER_DOM_FAULT_TESTING
+                ManagedDomFault.ResourceAcquired(ManagedDomFault.Resource.NativeBuffer);
+#endif
+#if AETHER_DOM_FAULT_TESTING
+                ManagedDomFault.Before("transition.prepare.style-after-buffer");
+#endif
                 _after = Marshal.AllocHGlobal(size);
+#if AETHER_DOM_FAULT_TESTING
+                ManagedDomFault.ResourceAcquired(ManagedDomFault.Resource.NativeBuffer);
+#endif
                 var beforeRaw = CreateRaw(before);
                 beforeRaw.Transforms = new StyleRuntimeInterop.TransformListRaw(_beforeTransforms.Items, _beforeTransforms.Count);
                 var afterRaw = CreateRaw(after);
                 afterRaw.Transforms = new StyleRuntimeInterop.TransformListRaw(_afterTransforms.Items, _afterTransforms.Count);
+#if AETHER_DOM_FAULT_TESTING
+                ManagedDomFault.Before("transition.prepare.structure-copy-aggregate");
+#endif
                 Marshal.StructureToPtr(beforeRaw, _before, false);
+#if AETHER_DOM_FAULT_TESTING
+                ManagedDomFault.Before("transition.prepare.structure-copy-aggregate");
+#endif
                 Marshal.StructureToPtr(afterRaw, _after, false);
             }
             catch { Dispose(); throw; }
@@ -83,7 +109,7 @@ internal static class TransitionStyleMarshaler
         internal void Apply(TransitionRuntimeInterop runtime, long nowMs) => runtime.Observe(_node, _before, _after, nowMs);
         public void Dispose()
         {
-            Marshal.FreeHGlobal(_after); Marshal.FreeHGlobal(_before);
+            FreeBuffer(_after); FreeBuffer(_before);
             FreeTransforms(_afterTransforms); FreeTransforms(_beforeTransforms);
             _before = _after = IntPtr.Zero; _beforeTransforms = _afterTransforms = default;
         }
@@ -112,7 +138,13 @@ internal static class TransitionStyleMarshaler
         }
 
         var itemSize = Marshal.SizeOf<StyleRuntimeInterop.TransformOperationRaw>();
-        var items = Marshal.AllocHGlobal(itemSize * transforms.Count);
+#if AETHER_DOM_FAULT_TESTING
+        ManagedDomFault.Before("transition.prepare.transforms-buffer");
+#endif
+        var items = Marshal.AllocHGlobal(checked(itemSize * transforms.Count));
+#if AETHER_DOM_FAULT_TESTING
+        ManagedDomFault.ResourceAcquired(ManagedDomFault.Resource.NativeBuffer);
+#endif
         try
         {
             for (var index = 0; index < transforms.Count; index++)
@@ -124,10 +156,13 @@ internal static class TransitionStyleMarshaler
                     operation.ScalarX, operation.ScalarY, operation.AngleRadians,
                     operation.MatrixA, operation.MatrixB, operation.MatrixC,
                     operation.MatrixD, operation.MatrixE, operation.MatrixF);
+#if AETHER_DOM_FAULT_TESTING
+                ManagedDomFault.Before("transition.prepare.structure-copy-aggregate");
+#endif
                 Marshal.StructureToPtr(raw, items + index * itemSize, false);
             }
         }
-        catch { Marshal.FreeHGlobal(items); throw; }
+        catch { FreeBuffer(items); throw; }
 
         return (items, transforms.Count);
     }
@@ -136,8 +171,17 @@ internal static class TransitionStyleMarshaler
     {
         if (transforms.Items != IntPtr.Zero)
         {
-            Marshal.FreeHGlobal(transforms.Items);
+            FreeBuffer(transforms.Items);
         }
+    }
+
+    private static void FreeBuffer(IntPtr buffer)
+    {
+        if (buffer == IntPtr.Zero) return;
+        Marshal.FreeHGlobal(buffer);
+#if AETHER_DOM_FAULT_TESTING
+        ManagedDomFault.ResourceReleased(ManagedDomFault.Resource.NativeBuffer);
+#endif
     }
 
     private static StyleRuntimeInterop.LengthRaw ToLengthRaw(AetherUI.Css.CssLength length) => new(

@@ -154,6 +154,10 @@ public sealed partial class UiDocumentHost
 
     private bool TryPublishStyles()
     {
+        // This precedes the later staging try/finally and all captured bases.
+        // A resolver failure is a preparation failure, never an automatic retry.
+        try { NativeDomSync.PrepareStylePublicationImports(); ThrowIfDisposed(); }
+        catch { RejectStyleProjection(); _styleRetryBlocked = true; throw; }
         if (_nativeDom?.BindingCore is null && (_inputReconciliationRequired || _document!.Version != _nativeSynchronizedDocumentVersion ||
             _document.InputVersion != _knownManagedInputVersion))
         {
@@ -165,20 +169,47 @@ public sealed partial class UiDocumentHost
         RequireHealthyTransitions(transitionRuntime);
         var transitionNowMs = Environment.TickCount64;
         var start = Stopwatch.GetTimestamp();
-        // Allocate Bnext before removing B. Notifications never write into B.
-        var nextBatch = new HashSet<ElementNode>();
-        var batch = new RetainedStyleBatch(_stateDirtyElements);
-        var retainedAtStart = _retainedStyleBatches;
-        var invalidations = (long[])_invalidationProduced.Clone();
-        var publishedInvalidations = new long[_invalidationProduced.Length];
-        var inputSerial = _hostInputSerial;
-        var publicationSerial = _hostPublicationSerial;
-        var document = _document!;
-        var dom = _nativeDom!;
-        var documentVersion = document.Version;
-        var documentInputVersion = document.InputVersion;
+        // Prepare every fallible prefix before extracting B or entering the publication guard.
+        HashSet<ElementNode> nextBatch;
+        RetainedStyleBatch batch;
+        RetainedStyleBatch? retainedAtStart;
+        long[] invalidations, publishedInvalidations;
+        long inputSerial, publicationSerial, documentVersion, documentInputVersion;
+        DocumentNode document;
+        DomInterop dom;
+        List<TransitionStyleMarshaler.PreparedObservation> transitions;
+        try
+        {
+#if AETHER_DOM_FAULT_TESTING
+            AetherUI.Core.Native.ManagedDomFault.Before("host.style.next-batch");
+#endif
+            nextBatch = new HashSet<ElementNode>();
+#if AETHER_DOM_FAULT_TESTING
+            AetherUI.Core.Native.ManagedDomFault.Before("host.style.retained-batch");
+#endif
+            batch = new RetainedStyleBatch(_stateDirtyElements);
+            retainedAtStart = _retainedStyleBatches;
+#if AETHER_DOM_FAULT_TESTING
+            AetherUI.Core.Native.ManagedDomFault.Before("host.style.invalidations-copy");
+#endif
+            invalidations = (long[])_invalidationProduced.Clone();
+#if AETHER_DOM_FAULT_TESTING
+            AetherUI.Core.Native.ManagedDomFault.Before("host.style.published-invalidations");
+#endif
+            publishedInvalidations = new long[_invalidationProduced.Length];
+            inputSerial = _hostInputSerial;
+            publicationSerial = _hostPublicationSerial;
+            document = _document!;
+            dom = _nativeDom!;
+            documentVersion = document.Version;
+            documentInputVersion = document.InputVersion;
+#if AETHER_DOM_FAULT_TESTING
+            AetherUI.Core.Native.ManagedDomFault.Before("host.style.observations-list");
+#endif
+            transitions = new List<TransitionStyleMarshaler.PreparedObservation>();
+        }
+        catch { RejectStyleProjection(); _styleRetryBlocked = true; throw; }
         var published = false;
-        var transitions = new List<TransitionStyleMarshaler.PreparedObservation>();
         _stateDirtyElements = nextBatch;
         ++_styleOperationDepth;
         try
@@ -191,9 +222,19 @@ public sealed partial class UiDocumentHost
                     if (ReferenceEquals(element.OwnerDocument, document))
                         dom.Native.SetState(dom.GetNativeHandle(element), (int)element.State);
             }
+#if AETHER_DOM_FAULT_TESTING
+            if (dom.BindingCore is null && !_nativeInitialStatesSynchronized)
+                AetherUI.Core.Native.ManagedDomFault.Before("host.style.initial-state-array-aggregate");
+#endif
             var initialStates = dom.BindingCore is null && !_nativeInitialStatesSynchronized
                 ? EnumerateElements(document).Select(static element => (int)element.State).ToArray() : null;
+#if AETHER_DOM_FAULT_TESTING
+            AetherUI.Core.Native.ManagedDomFault.Before("host.style.diagnostics-call-aggregate");
+#endif
             using var diagnostics = CssDiagnostics.BeginTransaction();
+#if AETHER_DOM_FAULT_TESTING
+            AetherUI.Core.Native.ManagedDomFault.Before("host.style.preview-call-aggregate");
+#endif
             using var native = _nativeStyleRuntime.PreparePublication(initialStates, _viewport.Width, _viewport.Height, _dpiScale,
                 _forceFullProjectionRecovery ? null : _nativeVisualStyleMap);
             _nativeInitialStatesSynchronized = true;
@@ -202,8 +243,17 @@ public sealed partial class UiDocumentHost
                 _publishedStyleToken.StructureEpoch != native.Token.StructureEpoch)
                 throw new InvalidOperationException("Native DOM structure changed without a certified managed mapping.");
             StylePublicationProbe?.Invoke("native-preview");
+#if AETHER_DOM_FAULT_TESTING
+            AetherUI.Core.Native.ManagedDomFault.Before("host.style.computed-map");
+#endif
             var computed = new Dictionary<ElementNode, ComputedStyle>(native.Styles.Count);
+#if AETHER_DOM_FAULT_TESTING
+            AetherUI.Core.Native.ManagedDomFault.Before("host.style.boxes-list");
+#endif
             var boxes = new List<(LayoutBox Box, ComputedStyle Style)>();
+#if AETHER_DOM_FAULT_TESTING
+            AetherUI.Core.Native.ManagedDomFault.Before("host.style.paint-copy");
+#endif
             var paintDirty = new Dictionary<long, IntPtr>(_paintChunkDirtyNodes);
             var visibilityChanged = false;
             foreach (var update in native.Styles)
@@ -212,24 +262,67 @@ public sealed partial class UiDocumentHost
                 if (dom.GetManagedElement(update.Node) is not { } element) continue;
                 _computedStyles.TryGetValue(element, out var previous);
                 if (previous is null && ElementIdentityKey(element) is { } key) _previousStyleSnapshot.TryGetValue(key, out previous);
+#if AETHER_DOM_FAULT_TESTING
+                if (update.ProjectionChanged || previous is null)
+                    AetherUI.Core.Native.ManagedDomFault.Before("host.style.style-map-call-aggregate");
+#endif
                 var style = !update.ProjectionChanged && previous is not null
                     ? previous : StyleRuntimeBridge.ToComputedStyle(update.Style, element);
+#if AETHER_DOM_FAULT_TESTING
+                AetherUI.Core.Native.ManagedDomFault.BeforeDictionaryInsert(computed, element, "host.style.computed-growth");
+#endif
                 computed.Add(element, style);
                 visibilityChanged |= previous is not null && previous.Visible != style.Visible;
-                if (update.ProjectionChanged && previous is not null) transitions.Add(TransitionStyleMarshaler.Prepare(update.Node, previous, style));
+                if (update.ProjectionChanged && previous is not null)
+                {
+                    // Reserve before acquiring an observation's unmanaged buffers. Add then
+                    // cannot grow, so no fallible ownership gap follows successful Prepare.
+                    if (transitions.Count == transitions.Capacity)
+                    {
+#if AETHER_DOM_FAULT_TESTING
+                        AetherUI.Core.Native.ManagedDomFault.Before("host.style.observations-capacity");
+#endif
+                        transitions.EnsureCapacity(checked(transitions.Count + 1));
+                    }
+#if AETHER_DOM_FAULT_TESTING
+                    AetherUI.Core.Native.ManagedDomFault.Before("host.style.observation-call-aggregate");
+#endif
+                    transitions.Add(TransitionStyleMarshaler.Prepare(update.Node, previous, style));
+                }
             }
+#if AETHER_DOM_FAULT_TESTING
+            AetherUI.Core.Native.ManagedDomFault.Before("host.style.style-map-wrapper");
+#endif
             var styles = new StyleMap(computed);
             if (_layout is not null)
                 foreach (var box in _layout.Root.DescendantsAndSelf())
-                    if (computed.TryGetValue(box.Element, out var style) && !ReferenceEquals(style, box.Style)) boxes.Add((box, style));
+                    if (computed.TryGetValue(box.Element, out var style) && !ReferenceEquals(style, box.Style))
+                    {
+#if AETHER_DOM_FAULT_TESTING
+                        AetherUI.Core.Native.ManagedDomFault.BeforeListAdd(boxes, "host.style.boxes-growth");
+#endif
+                        boxes.Add((box, style));
+                    }
             var reorder = visibilityChanged || native.StackingOrderChanged;
-            if (reorder) paintDirty = new Dictionary<long, IntPtr>();
+            if (reorder)
+            {
+#if AETHER_DOM_FAULT_TESTING
+                AetherUI.Core.Native.ManagedDomFault.Before("host.style.paint-reset");
+#endif
+                paintDirty = new Dictionary<long, IntPtr>();
+            }
+#if AETHER_DOM_FAULT_TESTING
+            AetherUI.Core.Native.ManagedDomFault.Before("host.style.transition-batch-call-aggregate");
+#endif
             using var transitionCandidate = TransitionStyleMarshaler.PrepareBatch(transitionRuntime, transitions, [], transitionNowMs);
             diagnostics.Seal();
             var nextPublicationSerial = checked(publicationSerial + 1);
             var publicationFlags = InvalidationForStyleImpact(native.Impact);
             if (_forceFullProjectionRecovery) publicationFlags |= VisualInvalidation.Layout | VisualInvalidation.DisplayList;
             if (reorder) publicationFlags |= VisualInvalidation.DisplayList;
+#if AETHER_DOM_FAULT_TESTING
+            AetherUI.Core.Native.ManagedDomFault.Before("host.style.next-invalidations-copy");
+#endif
             var nextInvalidations = (long[])invalidations.Clone();
             for (var i = 0; i < nextInvalidations.Length; ++i)
                 if (((int)publicationFlags & (1 << i)) != 0) nextInvalidations[i] = checked(nextInvalidations[i] + 1);

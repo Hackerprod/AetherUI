@@ -11,6 +11,13 @@ internal static class NativeDomSync
         NativeMethods.InteractionEditPublication.EnsurePrepared();
     }
 
+    internal static void PrepareComponentPublicationImports()
+    {
+        NativeMethods.BindingPublication.EnsurePrepared();
+        NativeMethods.InteractionOwnerPublication.EnsurePrepared();
+        NativeMethods.TransitionPublication.EnsurePrepared();
+    }
+    internal static void PrepareStylePublicationImports() => NativeMethods.TransitionPublication.EnsurePrepared();
     internal static void Throw(int status)
     {
         if (status == -3) throw new OutOfMemoryException("Native DOM synchronization allocation failed.");

@@ -20,3 +20,7 @@ cp -L "$native" "$output/$name"
 cmp "$native" "$output/$name"
 sha256sum "$native" "$output/$name"
 DOTNET_TieredCompilation=0 "$dotnet" "$target" --commit-allocations
+# Fresh processes preserve the first-link/first-publication boundary for each
+# resolver failure/reentry/disposal control. No dummy commit warms those paths.
+DOTNET_TieredCompilation=0 "$dotnet" "$target" --host-preparation-bootstrap retry
+DOTNET_TieredCompilation=0 "$dotnet" "$target" --host-preparation-bootstrap dispose

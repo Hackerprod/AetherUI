@@ -15,6 +15,9 @@ public sealed class TransitionRuntimeInterop : IDisposable
 
     public TransitionRuntimeInterop()
     {
+        // Before the runtime is created/exposed: no caller can yet have captured
+        // spans or native payload pointers for its first prepared publication.
+        NativeMethods.TransitionPublication.EnsurePrepared();
         NativeAbiContract.EnsureCompatible();
         Throw(NativeMethods.TransitionRuntimeCreate(out _runtime));
     }
@@ -119,14 +122,21 @@ public sealed class TransitionRuntimeInterop : IDisposable
         ReadOnlySpan<NativeTransitionObservation> observations,
         ReadOnlySpan<IntPtr> retiredNodes, long nowMs)
     {
+        NativeMethods.TransitionPublication.EnsurePrepared();
         EnsureOwner();
         // Allocate both managed owners before asking native to produce a handle.
+#if AETHER_DOM_FAULT_TESTING
+        AetherUI.Core.Native.ManagedDomFault.Before("transition.prepare.publication-wrapper");
+#endif
         var prepared = new PreparedPublication(this);
         try
         {
             fixed (NativeTransitionObservation* entries = observations)
             fixed (IntPtr* retired = retiredNodes)
             {
+#if AETHER_DOM_FAULT_TESTING
+                AetherUI.Core.Native.ManagedDomFault.Before("transition.prepare.native-call-aggregate");
+#endif
                 var status = NativeMethods.TransitionRuntimePrepare(_runtime, entries,
                     (nuint)observations.Length, retired, (nuint)retiredNodes.Length, nowMs, out var handle);
                 prepared.Initialize(handle);
@@ -151,6 +161,9 @@ public sealed class TransitionRuntimeInterop : IDisposable
         internal PreparedPublication(TransitionRuntimeInterop owner)
         {
             _owner = owner;
+#if AETHER_DOM_FAULT_TESTING
+            AetherUI.Core.Native.ManagedDomFault.Before("transition.prepare.candidate-handle");
+#endif
             _handle = new TransitionCandidateHandle(owner);
         }
         internal void Initialize(IntPtr handle) => _handle.Initialize(handle);
@@ -159,14 +172,14 @@ public sealed class TransitionRuntimeInterop : IDisposable
         public int Validate()
         {
             var status = AccessStatus;
-            return status != 0 ? status : NativeMethods.TransitionCandidateValidate(_handle);
+            return status != 0 ? status : NativeMethods.TransitionPublication.Validate(_handle);
         }
         public int TryCommit(out NativeTransitionToken token)
         {
             token = default;
             var status = AccessStatus;
             if (status != 0) return status;
-            status = NativeMethods.TransitionCandidateCommit(_handle, out token);
+            status = NativeMethods.TransitionPublication.Commit(_handle, out token);
             if (status == 0) _committed = true;
             return status;
         }

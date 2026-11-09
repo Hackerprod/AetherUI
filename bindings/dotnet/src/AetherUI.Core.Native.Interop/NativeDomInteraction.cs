@@ -10,6 +10,7 @@ internal sealed class NativeInteractionOwner : SafeHandle
     public override bool IsInvalid => handle == IntPtr.Zero;
     internal static NativeInteractionOwner Prepare(NativeDomDocument document, ulong host)
     {
+        NativeMethods.InteractionOwnerPublication.EnsurePrepared();
         NativeMethods.InteractionEditPublication.EnsurePrepared();
 #if AETHER_DOM_FAULT_TESTING
         ManagedDomFault.Before("interop.interaction.owner-wrapper");
@@ -40,8 +41,8 @@ internal sealed class NativeInteractionOwner : SafeHandle
         }
         catch { claim.Dispose(); throw; }
     }
-    internal void ValidatePrepared() => NativeDomSync.Throw(NativeMethods.InteractionOwnerValidatePrepared(this));
-    internal void Activate(IntPtr binding) => NativeDomSync.Throw(NativeMethods.InteractionOwnerActivate(this, binding));
+    internal void ValidatePrepared() => NativeDomSync.Throw(NativeMethods.InteractionOwnerPublication.ValidatePrepared(this));
+    internal void Activate(IntPtr binding) => NativeDomSync.Throw(NativeMethods.InteractionOwnerPublication.Activate(this, binding));
     internal void Retire() => NativeDomSync.Throw(NativeMethods.InteractionOwnerDispose(this));
     protected override bool ReleaseHandle()
     {

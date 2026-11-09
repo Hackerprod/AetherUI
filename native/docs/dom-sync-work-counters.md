@@ -112,8 +112,13 @@ checked independently. Setup and teardown have separate measurement boundaries.
 The first typed commit is measured before commit warmup. Cold allocation is a test
 failure, not an exemption. Subsequent cases exercise attributes, State, runtime
 value, text/style slots, structure, adoption, forest/document materialization and
-interaction claims. Invalid and repeated commits are checked separately for zero
-requests and preserved inputs. The unit is allocator requests, including failed
+interaction claims. Separate initial/replacement binding intervals include
+prepared restored focus/hover/press claims, Owner.ValidatePrepared, binding commit,
+Owner.Activate and attachment to a real display-list builder. Diagnostic/text
+callbacks are connected and must remain uncalled in these intervals. Transition
+candidate validation/swaps and Native.Publish's old-revision release are measured
+explicitly; native style commit/replay is outside that release interval. Invalid
+and repeated commits are checked separately for zero requests and preserved inputs. The unit is allocator requests, including failed
 requests, not net memory use.
 
 Coverage is the linked product and static C++ runtime. It excludes private libc,
@@ -136,8 +141,14 @@ The internal test-only ledger reads `GC.GetAllocatedBytesForCurrentThread` direc
 It has no delegate, observer, event, collection, formatted string, logging or throw
 inside a measured interval. It measures the nine existing public Node/Element
 mutation commit-plus-mirror/version segments, the certified import-publication
-segment, and the interaction commit. It counts successful/failed scopes and their
-bytes separately; nesting counts bytes once. Tests demand a nonzero, exact expected
+segment, and the interaction commit. It also measures initial/replacement component
+publication from Owner.ValidatePrepared through binding commit, activation, renderer
+attachment and the final published flag; initial binding uses the prepared native
+create API. Certified style publication begins before transition TryCommit, includes
+Native.Publish and its old-revision release, all maps/box styles/scalars, and ends
+after published=true. Native style commit/replay before that interval is separate.
+It counts successful/failed scopes and their bytes separately; nesting counts bytes
+once. Tests demand a nonzero, exact expected
 scope count so missing instrumentation cannot pass as zero.
 
 Staging, prepared-object disposal and notification are outside these publication
@@ -150,9 +161,9 @@ validate the measurement. Cold publication paths are measured first; every cold
 allocation inside a successful commit fails just like a warm allocation.
 
 The managed measurement covers GC-attributed allocation on the calling thread,
-not native allocation, JIT internals or another thread. Component and transition
-publication and any other segments outside the explicitly listed intervals remain
-**unmeasured** by these gates. Full transactional, OOM, lifetime and sanitizer tests
+not native allocation, JIT internals or another thread. Native style commit/replay,
+post-publication disposal/notification and any other segments outside the explicitly
+listed intervals remain **unmeasured** by this managed gate. Full transactional, OOM, lifetime and sanitizer tests
 remain independent requirements; allocator counts do not replace their oracles.
 
 ### Cold managed P/Invoke resolution
@@ -179,3 +190,23 @@ reporting ready or measured zero. Tests exercise retry after a failure between
 imports, same-thread and other-thread busy attempts, one successful readiness and
 missing metadata/export. Execution evidence is CoreCLR 10 Linux; no AOT, trimmed,
 Windows or macOS execution certification is inferred from that evidence.
+
+The expanded host cold gate separately exposed 192 bytes in its original measured
+intervals: 48 each in owner validation, initial binding commit, owner activation and
+transition commit. Their eight required validation/commit imports now have three
+small groups. Component bootstrap runs before any captured bases; style bootstrap
+has its own early failure catch that rejects projection and blocks automatic retry.
+The public transition wrapper links before creating/exposing a runtime, so the
+first prepare with caller-owned spans cannot unexpectedly enter a loader resolver.
+Owner/thread/disposal checks follow defensive preparation. None of these changes
+move a measured commit boundary.
+
+The allocation runner also starts two fresh processes for real loader-resolver
+bootstrap controls: fail then explicitly retry with reentry, and dispose during
+preparation. It verifies no publication/frame during the failed attempt, retry
+blocking, complete first publication after retry, and zero cold commit bytes.
+Whole-operation preparation/exception/disposal costs remain separately reported.
+The CI native job requires all three actual results (commit oracle, DOM edit fault
+matrix, transition fault matrix), rejects skipped/error results and retains each
+source/object/linkage manifest. Diagnostic work counters are enabled only for the
+dedicated job; experimental feature defaults remain unchanged.
