@@ -12,6 +12,7 @@ using AetherUI.Runtime;
 if (args.Contains("--commit-allocations"))
 {
     DomCommitAllocationTests.Run();
+    NativePublicationPreparationTests.Run();
     return;
 }
 #else
@@ -21,6 +22,7 @@ if (args.Contains("--commit-allocations"))
     throw new InvalidOperationException("Allocation test requires AetherDomCommitAllocationTesting=true.");
 #endif
 
+NativePublicationPreparationTests.Run();
 CssDiagnosticsTransactionTests.Run();
 ComponentRenderCandidateTests.Run();
 DomStyleBindingInteropTests.Run();

@@ -42,10 +42,15 @@ internal static unsafe partial class NativeMethods
     internal static partial int InteractionPrepareCleanup(NativeInteractionClaim claim, ulong generation, ulong recordId, ulong recordSerial, out IntPtr edit);
     [LibraryImport(Lib, EntryPoint = "aether_dom_interaction_edit_candidate_v1")]
     internal static partial int InteractionEditCandidate(NativeInteractionEditHandle edit, out NativeInteractionCandidate candidate);
-    [LibraryImport(Lib, EntryPoint = "aether_dom_interaction_edit_validate_v1")]
-    internal static partial int InteractionEditValidate(NativeInteractionEditHandle edit);
-    [LibraryImport(Lib, EntryPoint = "aether_dom_interaction_edit_commit_v1")]
-    internal static partial int InteractionEditCommit(NativeInteractionEditHandle edit, out IntPtr claim, out NativeDomToken token);
+    internal static partial class InteractionEditPublication
+    {
+        private static int _preparation;
+        internal static void EnsurePrepared() => NativePublicationImports.EnsurePrepared(ref _preparation, typeof(InteractionEditPublication), 2);
+        [LibraryImport(Lib, EntryPoint = "aether_dom_interaction_edit_validate_v1")]
+        internal static partial int Validate(NativeInteractionEditHandle edit);
+        [LibraryImport(Lib, EntryPoint = "aether_dom_interaction_edit_commit_v1")]
+        internal static partial int Commit(NativeInteractionEditHandle edit, out IntPtr claim, out NativeDomToken token);
+    }
     [LibraryImport(Lib, EntryPoint = "aether_dom_interaction_edit_release_v1")]
     internal static partial void InteractionEditRelease(IntPtr edit);
     [LibraryImport(Lib, EntryPoint = "aether_dom_interaction_claim_read_v1")]

@@ -44,12 +44,18 @@ internal static class DomCommitAllocationTests
             var session = Field<object>(fixture.Host, "_interactionSession");
             var owner = Field<NativeInteractionOwner>(session, "Owner");
             var binding = fixture.Dom.BindingCore!;
-            using var acquire = binding.PrepareInteractionAcquire(owner, node, ElementState.Focus, 123);
-            Measure("cold interaction acquire", acquire.Commit, DomCommitAllocationKind.Interaction);
+            NativeInteractionClaim claim;
+            using (var acquire = binding.PrepareInteractionAcquire(owner, node, ElementState.Focus, 123))
+            {
+                Measure("cold interaction acquire", acquire.Commit, DomCommitAllocationKind.Interaction);
+                claim = acquire.Claim;
+            }
+            // Prepared-operation teardown releases the synchronization guard before
+            // public getters or preparation of another operation. It stays outside
+            // the measured commit, exactly as on the production host path.
             Check((node.State & ElementState.Focus) != 0, "interaction State not published");
-            var claim = acquire.Claim;
-            using var cleanup = binding.PrepareInteractionCleanup(node, claim, claim.Read().Generation);
-            Measure("interaction cleanup", cleanup.Commit, DomCommitAllocationKind.Interaction);
+            using (var cleanup = binding.PrepareInteractionCleanup(node, claim, claim.Read().Generation))
+                Measure("interaction cleanup", cleanup.Commit, DomCommitAllocationKind.Interaction);
             Check((node.State & ElementState.Focus) == 0, "interaction cleanup not published");
             claim.Dispose();
         }

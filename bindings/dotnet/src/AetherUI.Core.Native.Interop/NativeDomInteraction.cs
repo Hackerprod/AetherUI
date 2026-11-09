@@ -10,6 +10,7 @@ internal sealed class NativeInteractionOwner : SafeHandle
     public override bool IsInvalid => handle == IntPtr.Zero;
     internal static NativeInteractionOwner Prepare(NativeDomDocument document, ulong host)
     {
+        NativeMethods.InteractionEditPublication.EnsurePrepared();
         var result = new NativeInteractionOwner();
         try
         {
@@ -73,6 +74,7 @@ internal sealed class NativeInteractionEdit : IDisposable
     private NativeInteractionEdit() { }
     internal static NativeInteractionEdit Acquire(NativeInteractionOwner owner, NativeDomToken token, IntPtr node, int bit, ulong registry)
     {
+        NativeMethods.InteractionEditPublication.EnsurePrepared();
         var edit = new NativeInteractionEdit();
         try
         {
@@ -83,6 +85,7 @@ internal sealed class NativeInteractionEdit : IDisposable
     }
     internal static NativeInteractionEdit Cleanup(NativeInteractionClaim claim, ulong generation, ulong recordId, ulong recordSerial)
     {
+        NativeMethods.InteractionEditPublication.EnsurePrepared();
         var edit = new NativeInteractionEdit();
         try
         {
@@ -97,10 +100,10 @@ internal sealed class NativeInteractionEdit : IDisposable
         NativeDomSync.Throw(NativeMethods.InteractionEditCandidate(_handle, out var candidate));
         Candidate = candidate;
     }
-    internal void Validate() => NativeDomSync.Throw(NativeMethods.InteractionEditValidate(_handle));
+    internal void Validate() => NativeDomSync.Throw(NativeMethods.InteractionEditPublication.Validate(_handle));
     internal NativeDomToken Commit()
     {
-        NativeDomSync.Throw(NativeMethods.InteractionEditCommit(_handle, out var claim, out var token));
+        NativeDomSync.Throw(NativeMethods.InteractionEditPublication.Commit(_handle, out var claim, out var token));
         Claim.Initialize(claim); _transferred = claim != IntPtr.Zero;
         return token;
     }

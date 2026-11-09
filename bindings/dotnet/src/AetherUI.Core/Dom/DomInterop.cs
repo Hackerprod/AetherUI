@@ -38,6 +38,11 @@ internal sealed class DomInterop : IDisposable
         ArgumentNullException.ThrowIfNull(bookkeeping);
         ObjectDisposedException.ThrowIf(_disposed, this);
         if (_binding is not null) throw new InvalidOperationException("This DOM already has a synchronization adapter.");
+        // Loader resolution may run application code. Finish it before capturing
+        // binding snapshots/links/versions, and recheck this owner after reentry.
+        NativeDomSync.PreparePublicationImports();
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        if (_binding is not null) throw new InvalidOperationException("This DOM already has a synchronization adapter.");
         var binding = new NativeDomBinding(this, bookkeeping);
         _binding = binding;
         _nodesByHandle.Clear(); _handlesByNode.Clear();

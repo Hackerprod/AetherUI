@@ -5,6 +5,12 @@ namespace AetherUI.Core.Native;
 
 internal static class NativeDomSync
 {
+    internal static void PreparePublicationImports()
+    {
+        NativeMethods.DomEditPublication.EnsurePrepared();
+        NativeMethods.InteractionEditPublication.EnsurePrepared();
+    }
+
     internal static void Throw(int status)
     {
         if (status == -3) throw new OutOfMemoryException("Native DOM synchronization allocation failed.");
@@ -177,6 +183,7 @@ internal sealed class NativeDomEdit : IDisposable
     private NativeDomEdit(NativeDomEditHandle handle) => _handle = handle;
     internal static NativeDomEdit Prepare(NativeDomToken expected, NativeDomEditRequest request)
     {
+        NativeMethods.DomEditPublication.EnsurePrepared();
         var handle = new NativeDomEditHandle();
         try
         {
@@ -213,8 +220,8 @@ internal sealed class NativeDomEdit : IDisposable
         catch { handle.Dispose(); throw; }
     }
     internal IntPtr CreatedNode(int index) { NativeDomSync.Throw(NativeMethods.DomEditCreatedNode(_handle, (nuint)index, out var node)); return node; }
-    internal void Validate() => NativeDomSync.Throw(NativeMethods.DomEditValidate(_handle));
-    internal NativeDomToken Commit() { NativeDomSync.Throw(NativeMethods.DomEditCommit(_handle, out var token)); return token; }
+    internal void Validate() => NativeDomSync.Throw(NativeMethods.DomEditPublication.Validate(_handle));
+    internal NativeDomToken Commit() { NativeDomSync.Throw(NativeMethods.DomEditPublication.Commit(_handle, out var token)); return token; }
     public void Dispose() => _handle.Dispose();
 }
 

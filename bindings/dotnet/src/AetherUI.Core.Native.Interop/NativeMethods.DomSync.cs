@@ -75,10 +75,15 @@ internal static unsafe partial class NativeMethods
     internal static partial int DomPrepareEdit(in NativeDomToken expected, in NativeDomEditSpec spec, out IntPtr edit);
     [LibraryImport(Lib, EntryPoint = "aether_dom_edit_created_node_v1")]
     internal static partial int DomEditCreatedNode(NativeDomEditHandle edit, nuint index, out IntPtr node);
-    [LibraryImport(Lib, EntryPoint = "aether_dom_edit_validate_v1")]
-    internal static partial int DomEditValidate(NativeDomEditHandle edit);
-    [LibraryImport(Lib, EntryPoint = "aether_dom_edit_commit_v1")]
-    internal static partial int DomEditCommit(NativeDomEditHandle edit, out NativeDomToken token);
+    internal static partial class DomEditPublication
+    {
+        private static int _preparation;
+        internal static void EnsurePrepared() => NativePublicationImports.EnsurePrepared(ref _preparation, typeof(DomEditPublication), 2);
+        [LibraryImport(Lib, EntryPoint = "aether_dom_edit_validate_v1")]
+        internal static partial int Validate(NativeDomEditHandle edit);
+        [LibraryImport(Lib, EntryPoint = "aether_dom_edit_commit_v1")]
+        internal static partial int Commit(NativeDomEditHandle edit, out NativeDomToken token);
+    }
     [LibraryImport(Lib, EntryPoint = "aether_dom_edit_destroy_v1")]
     internal static partial void DomEditDestroy(IntPtr edit);
 }

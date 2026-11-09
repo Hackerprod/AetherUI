@@ -154,3 +154,28 @@ not native allocation, JIT internals or another thread. Component and transition
 publication and any other segments outside the explicitly listed intervals remain
 **unmeasured** by these gates. Full transactional, OOM, lifetime and sanitizer tests
 remain independent requirements; allocator counts do not replace their oracles.
+
+### Cold managed P/Invoke resolution
+
+The first measured State publication exposed 96 GC bytes: 48 in the first native
+validate import and 48 in the first commit import, then zero on the same stubs.
+The generated SafeHandle marshaller was independently measured at zero. Selective
+`Marshal.Prelink` before publication removes those first-resolution allocations
+without invoking native commit. Reflection/linking itself is fallible staging and
+has nonzero cost; it is not excluded from a whole-operation claim of zero.
+
+DOM binding activation prepares small source-generated import groups before
+capturing binding snapshots, links or versions. It rechecks disposal/binding after
+linking because a loader resolver may run application code. Defensive low-level
+preparation remains. A CAS state has unprepared/busy/ready values; only the winning
+initializer can reset it after failure. Busy reentrant or concurrent calls fail
+explicitly and may be retried; no lock/wait is held around a resolver. Ready is set
+only after the full declared group links. There is no fallible static constructor,
+SafeHandle lifetime change, dummy commit, or relaxation of the cold zero-byte gate.
+
+The helper preserves reflected method metadata and checks exact import count.
+Unsupported linking, missing metadata/exports and OOM fail preparation instead of
+reporting ready or measured zero. Tests exercise retry after a failure between
+imports, same-thread and other-thread busy attempts, one successful readiness and
+missing metadata/export. Execution evidence is CoreCLR 10 Linux; no AOT, trimmed,
+Windows or macOS execution certification is inferred from that evidence.
