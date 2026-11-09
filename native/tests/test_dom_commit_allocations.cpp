@@ -6,6 +6,7 @@ int main() { std::puts("UNAVAILABLE DOM commit allocation coverage: unsupported 
 #else
 #include <aether/aether_dom_interaction.h>
 #include <aether/aether_transition_sync.h>
+#include <aether/aether_contextual_style.h>
 #include "../src/animations/transition_runtime.h"
 #include "../src/dom/dom_types.h"
 #include <cstdlib>
@@ -102,20 +103,41 @@ static void controls(size_t size){
     std::thread worker([size]{CHECK(!ledger::depth&&ledger::counts.requests==0);ledger::reset();{ledger::Scope scope;void* p=positive(0,size);std::free(p);}CHECK(ledger::counts.requests==1);});worker.join();CHECK(ledger::counts.requests==0);
     ledger::reset();{ledger::Scope scope;}zero("empty scope");
 }
+static uint64_t publication_callbacks=0;
+static void publication_diagnostic(const char*,const char*,const char*,const char*,void*){if(ledger::depth)++publication_callbacks;}
+static aether_text_metrics_t publication_measure(const char*,const aether_computed_style_t*,float,void*){if(ledger::depth)++publication_callbacks;return {};}
+struct RestoredInteractions {
+    aether_dom_interaction_owner_t owner=nullptr;aether_dom_interaction_claim_t claims[3]{};
+    explicit RestoredInteractions(aether_doc_t doc){
+        auto node=aether_doc_get_element_by_id(doc,"x");CHECK(node);aether_element_set_state(node,AETHER_STATE_FOCUS|AETHER_STATE_HOVER|AETHER_STATE_ACTIVE);
+        ok(aether_dom_interaction_owner_prepare_v1(doc,101,&owner));
+        const int bits[]={AETHER_STATE_FOCUS,AETHER_STATE_HOVER,AETHER_STATE_ACTIVE};
+        for(unsigned i=0;i<3;++i)ok(aether_dom_interaction_owner_prepare_claim_v1(owner,node,bits[i],201,&claims[i]));
+    }
+    void verify(){for(auto claim:claims){aether_dom_interaction_claim_info_v1_t info{};ok(aether_dom_interaction_claim_read_v1(claim,&info));CHECK(info.current&&info.host_identity==101&&info.registry_identity==201);}}
+    void dispose(){if(owner){ok(aether_dom_interaction_owner_dispose_v1(owner));for(auto claim:claims)aether_dom_interaction_claim_release_v1(claim);aether_dom_interaction_owner_release_v1(owner);owner=nullptr;}}
+    ~RestoredInteractions(){dispose();}
+};
+struct PublicationRenderer {
+    aether_display_list_builder_t builder=nullptr;aether_transition_runtime_t transitions=nullptr;
+    PublicationRenderer(){ok(aether_display_list_builder_create(publication_measure,nullptr,&builder));ok(aether_transition_runtime_create(&transitions));}
+    ~PublicationRenderer(){aether_display_list_builder_destroy(builder);aether_transition_runtime_destroy(transitions);}
+};
 // This must run before Fixture's compatibility create route: its first commit
 // resolves the exact initial publication path, with all work prepared beforehand.
 static void initial_binding_case(){
     aether_doc_t doc=nullptr;ok(aether_doc_create(&doc));ok(aether_doc_parse_html(doc,"<body><style>#x{opacity:.2}</style><input id='x'></body>"));
-    aether_style_runtime_t runtime=nullptr;ok(aether_style_runtime_create(nullptr,nullptr,nullptr,nullptr,&runtime));
+    aether_style_runtime_t runtime=nullptr;ok(aether_style_runtime_create(nullptr,nullptr,publication_diagnostic,nullptr,&runtime));
+    RestoredInteractions interactions(doc);PublicationRenderer renderer;
     aether_dom_style_create_t stage=nullptr;ok(aether_dom_style_binding_prepare_create_v1(doc,runtime,&stage));
     aether_dom_style_binding_t binding=nullptr;aether_status_t status;
-    ledger::reset();{ledger::Scope scope;status=aether_dom_style_binding_validate_create_v1(stage);if(status==AETHER_OK)status=aether_dom_style_binding_commit_create_v1(stage,&binding);}zero("cold initial style binding");ok(status);CHECK(binding);
+    publication_callbacks=0;ledger::reset();{ledger::Scope scope;status=aether_dom_interaction_owner_validate_prepared_v1(interactions.owner);if(status==AETHER_OK)status=aether_dom_style_binding_validate_create_v1(stage);if(status==AETHER_OK)status=aether_dom_style_binding_commit_create_v1(stage,&binding);if(status==AETHER_OK)status=aether_dom_interaction_owner_activate_v1(interactions.owner,binding);if(status==AETHER_OK)aether_display_list_builder_set_transition_runtime(renderer.builder,renderer.transitions);}zero("cold initial binding, restored claims and renderer");ok(status);CHECK(binding&&!publication_callbacks);interactions.verify();
     int64_t handle=0;int32_t present=0;uint64_t epoch=0;ok(aether_dom_style_binding_read_slot_v1(binding,&handle,&present,&epoch));CHECK(present);
     aether_dom_style_binding_t repeated=nullptr;
     ledger::reset();{ledger::Scope scope;status=aether_dom_style_binding_commit_create_v1(stage,&repeated);}zero("repeated initial style binding");CHECK(status==AETHER_ERROR_INVALID_STATE&&!repeated);
     ledger::reset();{ledger::Scope scope;aether_dom_style_binding_create_destroy_v1(stage);}CHECK(!ledger::counts.invalid);
-    std::printf("DOM cold initial style binding validate+commit: requests=0; teardown requests=%llu (separate)\n",(unsigned long long)ledger::counts.requests);
-    aether_dom_style_binding_destroy_v1(binding);aether_style_runtime_destroy(runtime);aether_doc_destroy(doc);
+    std::printf("DOM cold initial binding+Owner.Activate+renderer, restored focus/hover/press: requests=0 callbacks=0; teardown requests=%llu (separate)\n",(unsigned long long)ledger::counts.requests);
+    interactions.dispose();aether_dom_style_binding_destroy_v1(binding);aether_style_runtime_destroy(runtime);aether_doc_destroy(doc);
 }
 struct Fixture {
     aether_doc_t doc=nullptr;aether_style_runtime_t runtime=nullptr;aether_dom_style_binding_t binding=nullptr;aether_dom_interaction_owner_t owner=nullptr;
@@ -170,12 +192,23 @@ static void interaction_cases(){
 static void rebind_case(){
     Fixture f;aether_doc_t next=nullptr;ok(aether_doc_create(&next));ok(aether_doc_parse_html(next,"<body><style>#x{opacity:.7}</style><div id='x'></div></body>"));
     int64_t foreign=0;ok(aether_style_runtime_add_stylesheet(f.runtime,"#x{height:37px}",2,"foreign",&foreign,nullptr));
+    aether_style_runtime_set_diagnostics_callback(f.runtime,publication_diagnostic,nullptr);RestoredInteractions interactions(next);PublicationRenderer renderer;
     aether_dom_style_rebind_t edit=nullptr;ok(aether_dom_style_binding_prepare_rebind_v1(f.binding,next,&edit));
     aether_dom_style_binding_t replacement=nullptr;aether_status_t status;
-    ledger::reset();{ledger::Scope scope;status=aether_dom_style_binding_validate_rebind_v1(edit);if(status==AETHER_OK)status=aether_dom_style_binding_commit_rebind_v1(edit,&replacement);}zero("cold style binding rebind");ok(status);CHECK(replacement);
+    publication_callbacks=0;ledger::reset();{ledger::Scope scope;status=aether_dom_interaction_owner_validate_prepared_v1(interactions.owner);if(status==AETHER_OK)status=aether_dom_style_binding_validate_rebind_v1(edit);if(status==AETHER_OK)status=aether_dom_style_binding_commit_rebind_v1(edit,&replacement);if(status==AETHER_OK)status=aether_dom_interaction_owner_activate_v1(interactions.owner,replacement);if(status==AETHER_OK)aether_display_list_builder_set_transition_runtime(renderer.builder,renderer.transitions);}zero("cold rebind, restored claims and renderer");ok(status);CHECK(replacement&&!publication_callbacks);interactions.verify();
     int64_t handle=0;int32_t present=0;uint64_t epoch=0;ok(aether_dom_style_binding_read_slot_v1(replacement,&handle,&present,&epoch));CHECK(present&&aether_style_runtime_remove_stylesheet(f.runtime,foreign));
-    aether_dom_style_binding_rebind_destroy_v1(edit);aether_dom_style_binding_destroy_v1(replacement);aether_doc_destroy(next);
-    std::puts("DOM style binding replacement validate+commit: requests=0 (separate from initial create)");
+    interactions.dispose();aether_dom_style_binding_rebind_destroy_v1(edit);aether_dom_style_binding_destroy_v1(replacement);aether_doc_destroy(next);
+    std::puts("DOM replacement binding+Owner.Activate+renderer, restored focus/hover/press: requests=0 callbacks=0");
+}
+static void old_revision_retirement_case(){
+    Fixture f;aether_style_runtime_set_diagnostics_callback(f.runtime,publication_diagnostic,nullptr);
+    aether_style_transaction_t transaction=nullptr;aether_style_revision_t old=nullptr,current=nullptr;
+    ok(aether_style_runtime_prepare_revision(f.runtime,f.doc,nullptr,&transaction));ok(aether_style_runtime_commit_revision(f.runtime,transaction,&old));aether_style_transaction_destroy(transaction);
+    aether_element_set_state(f.node,AETHER_STATE_HOVER);ok(aether_style_runtime_prepare_revision(f.runtime,f.doc,nullptr,&transaction));ok(aether_style_runtime_commit_revision(f.runtime,transaction,&current));aether_style_transaction_destroy(transaction);
+    // Mirrors Native.Publish's oldRevision release, which is inside its managed
+    // publication interval. The native revision commit/replay above is separate.
+    publication_callbacks=0;ledger::reset();{ledger::Scope scope;aether_style_revision_destroy(old);}zero("old published revision release");CHECK(!publication_callbacks);
+    aether_style_revision_destroy(current);std::puts("Native.Publish oldRevision release: requests=0 callbacks=0; native commit/replay outside this interval");
 }
 static aether_transition_token_t transition_token(aether_transition_runtime_t runtime){aether_transition_token_t t{};ok(aether_transition_runtime_read_token(runtime,&t));return t;}
 static void transition_commit(aether_transition_candidate_t candidate,const char* label){
@@ -205,7 +238,7 @@ int main(int argc,char**){
     // Before any calibration/warmup of the commit entry point. Cold allocations
     // fail identically to warm allocations; only ledger TLS itself is initialized.
     ledger::reset();initial_binding_case();scalar_cases();
-    controls(257u+unsigned(argc));structural_cases();interaction_cases();rebind_case();transition_cases();
+    controls(257u+unsigned(argc));structural_cases();interaction_cases();rebind_case();transition_cases();old_revision_retirement_case();
     std::printf("PASS DOM commit allocation oracle: %u typed commits plus interaction, Linux product link-unit + static C++ runtime; libc-private/CLR/Windows/macOS/whole host publication UNMEASURED\n",commits);
 }
 #endif

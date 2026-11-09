@@ -1,10 +1,14 @@
 #pragma once
+#include <climits>
 // Included by test_dom_edit.cpp so its existing allocator and CTest target
 // exercise each preparation family. Capture is outside the injected interval.
 #include <aether/aether_dom_interaction.h>
 #include <aether/aether_state_style.h>
 
 namespace dom_fault_matrix {
+#if defined(AETHER_DOM_FAULT_LINK_UNIT)
+static fault_alloc::Counts last_attempt_counts;
+#endif
 struct NodeImage {
     aether_node_s* node;
     std::shared_ptr<node_identity_s> identity;
@@ -213,6 +217,9 @@ static bool prepare_attempt(int mode,long point,Lifetimes& lifetimes){
         };
         auto t=token(s.target);aether_dom_edit_t candidate=nullptr;failure=point;
         const auto status=aether_dom_prepare_edit_v1(&t,&s,&candidate);failure=-1;
+#if defined(AETHER_DOM_FAULT_LINK_UNIT)
+        last_attempt_counts=fault_alloc::counts;
+#endif
         if(status!=AETHER_OK){CHECK(status==AETHER_ERROR_OUT_OF_MEMORY&&!candidate);unchanged();return false;}
         CHECK(candidate);unchanged();aether_dom_edit_destroy_v1(candidate);unchanged();commit(prepare(s));
         Fixture twin(mode);aether_dom_node_spec_v1_t twin_nodes[2]{};auto reference=configure(twin,mode,twin_nodes);
@@ -226,6 +233,18 @@ static bool prepare_attempt(int mode,long point,Lifetimes& lifetimes){
         return true;
 }
 static void all_prepare_families(){
+#if defined(AETHER_DOM_FAULT_LINK_UNIT)
+    for(int mode=0;mode<21;++mode){Lifetimes initial;CHECK(prepare_attempt(mode,LONG_MAX,initial));
+        const auto count=last_attempt_counts.requests;CHECK(count>0&&!last_attempt_counts.injected_failures);
+        for(const auto& weak:initial)CHECK(weak.expired());uint64_t failures=0,recovered=0;
+        for(uint64_t point=0;point<count;++point){Lifetimes lifetimes;const bool completed=prepare_attempt(mode,static_cast<long>(point),lifetimes);
+            CHECK(last_attempt_counts.injected_failures==1&&last_attempt_counts.failed_ordinal==point);
+            for(const auto& weak:lifetimes)CHECK(weak.expired());if(completed)++recovered;else ++failures;
+        }
+        CHECK(failures+recovered==count);std::printf("DOM link-unit fault family %d: requests=%llu rejected=%llu recovered=%llu; typed/FULL/layout/leases verified\n",mode,
+            (unsigned long long)count,(unsigned long long)failures,(unsigned long long)recovered);
+    }
+#else
     for(int mode=0;mode<21;++mode){bool success=false;long failures=0;
         for(long point=0;point<3000;++point){Lifetimes lifetimes;const auto completed=prepare_attempt(mode,point,lifetimes);
             // No oracle or fixture pins remain here. Every initial/final known
@@ -236,6 +255,7 @@ static void all_prepare_families(){
         CHECK(success&&failures>0);
         std::printf("typed cold prepare sweep family %d: %ld failures; no-write, last leases, typed values and next FULL/layout match clean twin\n",mode,failures);
     }
+#endif
 }
 static std::vector<ValueImage> snapshot_records(aether_dom_snapshot_t snapshot){
     size_t count=0;CHECK(aether_dom_snapshot_count_v1(snapshot,&count)==AETHER_OK);
@@ -261,6 +281,9 @@ static bool snapshot_attempt(int mode,long point,Lifetimes& lifetimes,aether_dom
     const DocumentImage before(f.doc),destination(f.destination);const NodeImage known(f.input);
     aether_dom_snapshot_t snapshot=nullptr;failure=point;
     const auto status=aether_dom_acquire_snapshot_v1(f.doc,&lease,1,&snapshot);failure=-1;
+#if defined(AETHER_DOM_FAULT_LINK_UNIT)
+    last_attempt_counts=fault_alloc::counts;
+#endif
     before.unchanged();destination.unchanged();known.unchanged();
     if(status!=AETHER_OK){CHECK(status==AETHER_ERROR_OUT_OF_MEMORY&&!snapshot);aether_dom_node_lease_destroy_v1(lease);return false;}
     CHECK(snapshot);size_t count=0;CHECK(aether_dom_snapshot_count_v1(snapshot,&count)==AETHER_OK);
@@ -287,6 +310,21 @@ static bool snapshot_attempt(int mode,long point,Lifetimes& lifetimes,aether_dom
     aether_dom_node_lease_destroy_v1(lease);retained=snapshot;return true;
 }
 static void snapshot_allocations(){
+#if defined(AETHER_DOM_FAULT_LINK_UNIT)
+    for(int mode=0;mode<3;++mode){Lifetimes initial;aether_dom_snapshot_t calibration=nullptr;
+        CHECK(snapshot_attempt(mode,LONG_MAX,initial,calibration));const auto count=last_attempt_counts.requests;
+        CHECK(count>0&&!last_attempt_counts.injected_failures);aether_dom_snapshot_destroy_v1(calibration);
+        for(const auto& weak:initial)CHECK(weak.expired());uint64_t failures=0,recovered=0;
+        for(uint64_t point=0;point<count;++point){Lifetimes lifetimes;aether_dom_snapshot_t snapshot=nullptr;
+            const bool complete=snapshot_attempt(mode,static_cast<long>(point),lifetimes,snapshot);
+            CHECK(last_attempt_counts.injected_failures==1&&last_attempt_counts.failed_ordinal==point);
+            if(complete){CHECK(snapshot&&!lifetimes.front().expired());(void)snapshot_records(snapshot);aether_dom_snapshot_destroy_v1(snapshot);++recovered;}else ++failures;
+            for(const auto& weak:lifetimes)CHECK(weak.expired());
+        }
+        CHECK(failures+recovered==count);std::printf("snapshot link-unit fault family %d: requests=%llu rejected=%llu recovered=%llu; exact data/last leases verified\n",mode,
+            (unsigned long long)count,(unsigned long long)failures,(unsigned long long)recovered);
+    }
+#else
     for(int mode=0;mode<3;++mode){bool succeeded=false;long failures=0;
         for(long point=0;point<1000;++point){Lifetimes lifetimes;aether_dom_snapshot_t snapshot=nullptr;
             const bool complete=snapshot_attempt(mode,point,lifetimes,snapshot);
@@ -296,6 +334,7 @@ static void snapshot_allocations(){
         }
         CHECK(succeeded&&failures>0);std::printf("snapshot cold sweep %d: %ld failures; typed payload, known lease and final release verified\n",mode,failures);
     }
+#endif
 }
 static void run(){all_prepare_families();snapshot_allocations();}
 }

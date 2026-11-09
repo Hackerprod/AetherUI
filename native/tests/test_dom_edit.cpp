@@ -1,9 +1,23 @@
+#if defined(AETHER_DOM_ALLOCATIONS_UNAVAILABLE)
+#include <cstdio>
+int main(){std::puts("UNAVAILABLE DOM allocation-failure coverage: unsupported link unit");return 77;}
+#else
 #include <aether/aether_dom_sync.h>
 #include <aether/aether_contextual_style.h>
 #include "../src/dom/dom_types.h"
 #include <cstdio>
 #include <cstdlib>
 #include <new>
+#if defined(AETHER_DOM_FAULT_LINK_UNIT)
+#include "fault_allocator.h"
+struct FaultInterval {
+    void operator=(long ordinal) const {
+        if(ordinal<0){fault_alloc::end();fault_alloc::check(fault_alloc::valid(),"DOM fault interval validity");}
+        else {fault_alloc::reset(static_cast<uint64_t>(ordinal));fault_alloc::begin();}
+    }
+};
+static FaultInterval failure;
+#else
 static long failure=-1;void* operator new(std::size_t n){if(failure==0)throw std::bad_alloc();if(failure>0)--failure;if(auto p=std::malloc(n?n:1))return p;throw std::bad_alloc();}void* operator new[](std::size_t n){return ::operator new(n);}void operator delete(void* p)noexcept{std::free(p);}void operator delete[](void* p)noexcept{std::free(p);}void operator delete(void* p,std::size_t)noexcept{std::free(p);}void operator delete[](void* p,std::size_t)noexcept{std::free(p);}
 // Keep nothrow allocations in the same fault-allocator family. Otherwise ASan
 // intercepts nothrow new while our sized delete calls free, a harness mismatch.
@@ -11,11 +25,16 @@ void* operator new(std::size_t n,const std::nothrow_t&)noexcept{try{return ::ope
 void* operator new[](std::size_t n,const std::nothrow_t&)noexcept{try{return ::operator new[](n);}catch(...){return nullptr;}}
 void operator delete(void* p,const std::nothrow_t&)noexcept{std::free(p);}
 void operator delete[](void* p,const std::nothrow_t&)noexcept{std::free(p);}
+#endif
 #define CHECK(x) do{if(!(x)){std::fprintf(stderr,"%d: %s\n",__LINE__,#x);std::abort();}}while(0)
 static aether_dom_string_v1_t str(const char* s){return {s,std::strlen(s)};}
 static aether_dom_token_v1_t token(aether_node_t n){aether_dom_token_v1_t t{};CHECK(aether_dom_read_token_v1(n,&t)==AETHER_OK);return t;}
 static aether_dom_edit_t prepare(aether_dom_edit_spec_v1_t& s){auto t=token(s.target);aether_dom_edit_t e=nullptr;CHECK(aether_dom_prepare_edit_v1(&t,&s,&e)==AETHER_OK);return e;}
-static void commit(aether_dom_edit_t e){aether_dom_token_v1_t t{};failure=0;auto status=aether_dom_edit_commit_v1(e,&t);failure=-1;CHECK(status==AETHER_OK);aether_dom_edit_destroy_v1(e);}
+static void commit(aether_dom_edit_t e){aether_dom_token_v1_t t{};failure=0;auto status=aether_dom_edit_commit_v1(e,&t);failure=-1;
+#if defined(AETHER_DOM_FAULT_LINK_UNIT)
+    CHECK(fault_alloc::counts.requests==0);
+#endif
+    CHECK(status==AETHER_OK);aether_dom_edit_destroy_v1(e);}
 static void edit(aether_dom_edit_spec_v1_t s){commit(prepare(s));}
 static void full_style(aether_style_runtime_t runtime,aether_doc_t doc) {
     aether_style_transaction_t transaction=nullptr;aether_style_revision_t revision=nullptr;
@@ -101,6 +120,9 @@ static void materialize_document_atomic() {
 }
 #include "dom_edit_fault_matrix.h"
 int main(){
+#if defined(AETHER_DOM_FAULT_LINK_UNIT)
+    fault_alloc::positive_controls();
+#endif
     dom_fault_matrix::run();
     materialize_document_atomic();
     style_replacement_invalidates_edit();
@@ -135,3 +157,5 @@ int main(){
     aether_dom_edit_destroy_v1(materialized);CHECK(!result->identity->alive&&a->identity->alive&&a->parent==old_parent);aether_dom_node_lease_destroy_v1(provisional);
     aether_doc_destroy(d);std::puts("typed DOM edits PASS");
 }
+
+#endif

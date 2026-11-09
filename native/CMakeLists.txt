@@ -1737,3 +1737,54 @@ if(AETHERUI_BUILD_TESTS)
     add_test(NAME aether.dom-commit-allocations COMMAND aether_dom_commit_allocations_test)
     set_tests_properties(aether.dom-commit-allocations PROPERTIES SKIP_RETURN_CODE 77)
 endif()
+
+# Real-allocator transition fault matrix; separate from the zero-allocation oracle.
+if(AETHERUI_BUILD_TESTS)
+    add_executable(aether_transition_allocations_test tests/test_transition_allocations.cpp)
+    if(dom_allocation_supported)
+        target_sources(aether_transition_allocations_test PRIVATE $<TARGET_OBJECTS:aether_publication_test_core>)
+        target_include_directories(aether_transition_allocations_test PRIVATE include src)
+        target_link_libraries(aether_transition_allocations_test PRIVATE Threads::Threads)
+        target_compile_options(aether_transition_allocations_test PRIVATE -fno-lto -fno-builtin)
+        target_link_options(aether_transition_allocations_test PRIVATE -fno-lto -static-libstdc++ -static-libgcc
+            -Wl,--wrap=malloc -Wl,--wrap=calloc -Wl,--wrap=realloc
+            -Wl,--wrap=aligned_alloc -Wl,--wrap=posix_memalign)
+        set(transition_allocation_manifest "${CMAKE_CURRENT_BINARY_DIR}/transition-allocation-manifest-$<CONFIG>.txt")
+        file(GENERATE OUTPUT "${transition_allocation_manifest}" CONTENT
+            "Product sources (all aether_core SOURCES):\n${dom_allocation_source_manifest}\nProduct objects:\n$<JOIN:$<TARGET_OBJECTS:aether_publication_test_core>,\n>\nC++ runtime: ${dom_static_cpp}\n")
+        add_custom_command(TARGET aether_transition_allocations_test POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -DEXECUTABLE=$<TARGET_FILE:aether_transition_allocations_test>
+                -DMANIFEST=${transition_allocation_manifest} -DREADELF=${dom_readelf} -DNM=${dom_nm}
+                -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/verify_dom_commit_allocation_linkage.cmake VERBATIM)
+    else()
+        target_compile_definitions(aether_transition_allocations_test PRIVATE AETHER_DOM_ALLOCATIONS_UNAVAILABLE)
+    endif()
+    add_test(NAME aether.transition-allocations COMMAND aether_transition_allocations_test)
+    set_tests_properties(aether.transition-allocations PROPERTIES SKIP_RETURN_CODE 77)
+endif()
+
+# Real-allocator DOM edit/snapshot fault matrix; independent of commit measurements.
+if(AETHERUI_BUILD_TESTS)
+    add_executable(aether_dom_edit_allocations_test tests/test_dom_edit.cpp)
+    if(dom_allocation_supported)
+        target_compile_definitions(aether_dom_edit_allocations_test PRIVATE AETHER_DOM_FAULT_LINK_UNIT)
+        target_sources(aether_dom_edit_allocations_test PRIVATE $<TARGET_OBJECTS:aether_publication_test_core>)
+        target_include_directories(aether_dom_edit_allocations_test PRIVATE include src)
+        target_link_libraries(aether_dom_edit_allocations_test PRIVATE Threads::Threads)
+        target_compile_options(aether_dom_edit_allocations_test PRIVATE -fno-lto -fno-builtin)
+        target_link_options(aether_dom_edit_allocations_test PRIVATE -fno-lto -static-libstdc++ -static-libgcc
+            -Wl,--wrap=malloc -Wl,--wrap=calloc -Wl,--wrap=realloc
+            -Wl,--wrap=aligned_alloc -Wl,--wrap=posix_memalign)
+        set(dom_edit_allocation_manifest "${CMAKE_CURRENT_BINARY_DIR}/dom-edit-allocation-manifest-$<CONFIG>.txt")
+        file(GENERATE OUTPUT "${dom_edit_allocation_manifest}" CONTENT
+            "Product sources (all aether_core SOURCES):\n${dom_allocation_source_manifest}\nProduct objects:\n$<JOIN:$<TARGET_OBJECTS:aether_publication_test_core>,\n>\nC++ runtime: ${dom_static_cpp}\n")
+        add_custom_command(TARGET aether_dom_edit_allocations_test POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -DEXECUTABLE=$<TARGET_FILE:aether_dom_edit_allocations_test>
+                -DMANIFEST=${dom_edit_allocation_manifest} -DREADELF=${dom_readelf} -DNM=${dom_nm}
+                -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/verify_dom_commit_allocation_linkage.cmake VERBATIM)
+    else()
+        target_compile_definitions(aether_dom_edit_allocations_test PRIVATE AETHER_DOM_ALLOCATIONS_UNAVAILABLE)
+    endif()
+    add_test(NAME aether.dom-edit-allocations COMMAND aether_dom_edit_allocations_test)
+    set_tests_properties(aether.dom-edit-allocations PROPERTIES SKIP_RETURN_CODE 77)
+endif()
