@@ -1697,3 +1697,43 @@ if(AETHERUI_BUILD_TESTS AND TARGET aether_publication_test_core)
     target_link_libraries(aether_dom_interaction_test PRIVATE Threads::Threads)
     add_test(NAME aether.dom-interaction COMMAND aether_dom_interaction_test)
 endif()
+
+# Test-only allocator oracle. No observer API or allocation hook in aether_core.
+if(AETHERUI_BUILD_TESTS)
+    add_executable(aether_dom_commit_allocations_test tests/test_dom_commit_allocations.cpp)
+    set(dom_allocation_supported FALSE)
+    if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_CXX_COMPILER_ID STREQUAL "GNU"
+       AND TARGET aether_publication_test_core AND CMAKE_SIZEOF_VOID_P EQUAL 8
+       AND NOT CMAKE_INTERPROCEDURAL_OPTIMIZATION)
+        execute_process(COMMAND ${CMAKE_CXX_COMPILER} -print-file-name=libstdc++.a
+            OUTPUT_VARIABLE dom_static_cpp OUTPUT_STRIP_TRAILING_WHITESPACE)
+        find_program(dom_readelf readelf)
+        find_program(dom_nm nm)
+        set(dom_allocation_flags "${CMAKE_CXX_FLAGS} ${CMAKE_CXX_FLAGS_DEBUG} ${CMAKE_CXX_FLAGS_RELEASE} ${CMAKE_EXE_LINKER_FLAGS}")
+        if(EXISTS "${dom_static_cpp}" AND dom_readelf AND dom_nm AND NOT dom_allocation_flags MATCHES "sanitize|flto")
+            set(dom_allocation_supported TRUE)
+        endif()
+    endif()
+    if(dom_allocation_supported)
+        target_sources(aether_dom_commit_allocations_test PRIVATE $<TARGET_OBJECTS:aether_publication_test_core>)
+        target_include_directories(aether_dom_commit_allocations_test PRIVATE include src)
+        target_link_libraries(aether_dom_commit_allocations_test PRIVATE Threads::Threads)
+        target_compile_options(aether_dom_commit_allocations_test PRIVATE -fno-lto -fno-builtin)
+        target_link_options(aether_dom_commit_allocations_test PRIVATE -fno-lto -static-libstdc++ -static-libgcc
+            -Wl,--wrap=malloc -Wl,--wrap=calloc -Wl,--wrap=realloc
+            -Wl,--wrap=aligned_alloc -Wl,--wrap=posix_memalign)
+        get_target_property(dom_allocation_sources aether_core SOURCES)
+        string(JOIN "\n" dom_allocation_source_manifest ${dom_allocation_sources})
+        set(dom_allocation_manifest "${CMAKE_CURRENT_BINARY_DIR}/dom-commit-allocation-manifest-$<CONFIG>.txt")
+        file(GENERATE OUTPUT "${dom_allocation_manifest}" CONTENT
+            "Product sources (all aether_core SOURCES):\n${dom_allocation_source_manifest}\nProduct objects:\n$<JOIN:$<TARGET_OBJECTS:aether_publication_test_core>,\n>\nC++ runtime: ${dom_static_cpp}\n")
+        add_custom_command(TARGET aether_dom_commit_allocations_test POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -DEXECUTABLE=$<TARGET_FILE:aether_dom_commit_allocations_test>
+                -DMANIFEST=${dom_allocation_manifest} -DREADELF=${dom_readelf} -DNM=${dom_nm}
+                -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/verify_dom_commit_allocation_linkage.cmake VERBATIM)
+    else()
+        target_compile_definitions(aether_dom_commit_allocations_test PRIVATE AETHER_DOM_ALLOCATIONS_UNAVAILABLE)
+    endif()
+    add_test(NAME aether.dom-commit-allocations COMMAND aether_dom_commit_allocations_test)
+    set_tests_properties(aether.dom-commit-allocations PROPERTIES SKIP_RETURN_CODE 77)
+endif()
