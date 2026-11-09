@@ -1,6 +1,7 @@
-# Hover work counters (phase A)
+# Hover work counters (phase A baseline, B1+B2 checkpoint)
 
-This checkpoint adds observability, not an incremental resolver or hit-test cache.
+Phase A added observability. B1+B2 separates immutable payloads and introduces
+persistent legacy map patches, not an incremental resolver or hit-test cache.
 The full resolver, publication, transition-context calculation, hit traversal and
 input dispatch remain the correctness oracle. No fast path is enabled.
 
@@ -43,8 +44,13 @@ separate because attributing thread-wide counters to a single host would be fals
 - `revision_publications`: successful revision commits, including reentrant commits.
 - `state_full_fallbacks`: valid legacy state requests sent to the full resolver.
   This is the one current fallback category, not a future typed invalidation diary.
-- `map_entries_copied`: entries successfully copied into the legacy patch backing.
-  This does not count the second index construction in `freeze_backing`.
+- `map_entries_copied`: changed leaf records successfully inserted/replaced in a
+  legacy map patch. In the phase A baseline it counted N entries copied into a
+  temporary hash index (excluding a second full `freeze_backing` construction).
+  B2 uses a persistent Patricia backing: the fixture now counts K=2 changed
+  leaves, and a same-owner no-op counts zero. This counter does **not** count
+  copied internal tree nodes/routes, deletions, full imports, or total allocation
+  work. It may count completed earlier leaf changes in a later-aborted patch.
 - `transition_context_entries_visited` and `transition_context_builds`: entries
   and invocations in the complete effective-containing-block helper, whether
   called by preparation or layout. These do not mean membership actually changed.
@@ -60,10 +66,14 @@ patching and first-card hit testing with and without explicit z-index.
 
 `aether.hover-work-counters` asserts the current complete oracle's structural work
 at 100/500/1000 cards, disabled behavior, thread isolation, and counter saturation.
-These assertions describe the baseline, not the desired final complexity. Later
-incremental phases must preserve this full-oracle fixture and add separate fast
-path expectations. Zero visual updates currently still compute and freeze N
-records. Do not reinterpret zero updates as zero work.
+Resolver assertions retain the phase A full-oracle baseline; the B2 map-patch
+assertion requires K=2 copied leaf records instead of N. The separate
+`aether.persistent-style-backing` test checks bounded path allocation, snapshots,
+zero-allocation reads, history release and fault injection. These do not prove
+independence of N for the complete pipeline. Later incremental phases must
+preserve the full-oracle fixture and add separate fast-path expectations. Zero
+visual updates still compute and freeze N records, and the revision manifest is
+still fully materialized. Do not reinterpret zero updates as zero work.
 
 ## Chromium references consulted
 
@@ -98,5 +108,8 @@ Paths below are under `third_party/blink/renderer/` in that revision.
 
 No Chromium executable was run. Native Linux measurements do not establish
 Windows CPU, input-to-present latency, GC or renderer performance. Managed event
-traces, allocation measurements and the payload/agenda/map/context/hit fast paths
-remain pending before the overall hover optimization can pass.
+traces and full-pipeline allocation measurements remain pending. B1+B2 is only a
+phase B checkpoint: payload separation and persistent legacy backing exist;
+revision payload-directory/manifest migration, certified delta publication, and
+agenda/context/hit fast paths remain pending before the overall optimization can
+pass. See [phase B checkpoint](hover-phase-b-checkpoint.md).
