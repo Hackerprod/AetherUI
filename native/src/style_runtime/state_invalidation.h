@@ -3,7 +3,7 @@
 #include "style_runtime_types.h"
 #include "../dom/node_identity.h"
 
-// Dormant C2 foundation. These objects do not authorize incremental resolution:
+// C2 planner foundation. These objects alone do not authorize incremental resolution:
 // callers still need the journal, stylesheet/environment and revision certificates.
 namespace aether::style::invalidation {
 enum class Walk : uint8_t { self, children, descendants, next_sibling, following_siblings, ancestors };

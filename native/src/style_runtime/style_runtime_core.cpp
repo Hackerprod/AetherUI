@@ -1558,8 +1558,8 @@ AETHER_API aether_status_t aether_style_runtime_prepare_state_revision(
                 changes,static_cast<size_t>(change_count),reconciled);
             if(reason!=AETHER_STATE_FALLBACK_NONE)fallback=reason;
         } else fallback=AETHER_STATE_FALLBACK_JOURNAL_MISSING;
-        // C3 foundation: this API is explicit but still FULL. Coverage is not a
-        // certificate; no environment variable or caller flag can enable reuse.
+        // FULL remains the fallback. Only the private gated producer can turn
+        // reconciled coverage and a proved local agenda into reuse authority.
         aether_style_transaction_t raw=nullptr;
 #if defined(AETHERUI_ENABLE_STATE_INCREMENTAL)
         if(fallback==AETHER_STATE_FALLBACK_DISABLED) {

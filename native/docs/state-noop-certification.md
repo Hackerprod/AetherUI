@@ -1,5 +1,8 @@
 # C3b experimental no-op state certification
 
+Historical reviewed foundation. The C3c local-category extension is specified
+in state-local-certification.md; C3b restrictions below describe its predecessor.
+
 The build option AETHERUI_ENABLE_STATE_INCREMENTAL defaults OFF. It is an internal
 experimental gate, not a user trust flag. With the option ON, the only incremental
 category in C3b is a state batch proven to have an empty AST candidate superset.
