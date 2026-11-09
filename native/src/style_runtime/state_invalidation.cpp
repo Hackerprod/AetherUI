@@ -169,6 +169,8 @@ Program compile(int32_t rule_id, const compiled_selector_s& selector) {
     return result;
 }
 
+bool source_applies(const StaticFilter& filter,aether_node_s* node) noexcept { return accepts(filter,node); }
+
 std::vector<Candidate> plan(aether_node_s* root, const std::vector<Program>& programs,
                             const std::vector<StateChange>& changes) {
     std::vector<Candidate> result;

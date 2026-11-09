@@ -1,6 +1,7 @@
 #include "style_revision.h"
 #include "../dom/dom_types.h"
 #include "../style_runtime/frozen_runtime_metadata.h"
+#include "../style_runtime/state_semantics.h"
 #include <climits>
 #include <unordered_set>
 #include <cstring>
@@ -19,47 +20,8 @@ PayloadManifest import_manifest(const StyleRevisionInput& in){
     for(size_t i=0;i<in.entries.size();++i)entries.push_back({i,{in.entries[i].node,in.entries[i].record->payload_owner()}});
     return PayloadManifest::build(std::move(entries));
 }
-bool scopes_equal(const FrozenCustomPropertyScope* a,const FrozenCustomPropertyScope* b)noexcept{
-    while(a!=b){
-        if(!a||!b||a->local_count()!=b->local_count())return false;
-        for(const auto& entry:a->local_entries()) {const auto* other=b->find_local(entry.name());
-            if(!other||entry.status()!=other->status()||entry.value()!=other->value())return false;}
-        a=a->parent();b=b->parent();
-    }
-    return true;
-}
-bool colors_equal(const FrozenColorMetadata& a,const FrozenColorMetadata& b)noexcept{
-    if(a.background()!=b.background()||a.text_shadow_count()!=b.text_shadow_count()||a.box_shadow_count()!=b.box_shadow_count())return false;
-    for(size_t i=0;i<4;++i)if(a.border(i)!=b.border(i))return false;
-    for(size_t i=0;i<a.text_shadow_count();++i)if(a.text_shadow_at(i)!=b.text_shadow_at(i))return false;
-    for(size_t i=0;i<a.box_shadow_count();++i)if(a.box_shadow_at(i)!=b.box_shadow_at(i))return false;
-    return true;
-}
-bool measures_equal(const FrozenMeasurePayload& a,const FrozenMeasurePayload& b)noexcept{
-    // Byte equality is only used for pointer-free scalar values. Padding can
-    // cause a conservative replacement, never a false equivalence.
-    if(std::memcmp(&a.scalars(),&b.scalars(),sizeof(MeasureScalarValues)))return false;
-    const auto ap=a.background_positions(),bp=b.background_positions();
-    const auto az=a.background_sizes(),bz=b.background_sizes();
-    if(ap.size()!=bp.size()||az.size()!=bz.size()||a.property_dependencies().size()!=b.property_dependencies().size())return false;
-    for(size_t i=0;i<ap.size();++i)if(std::memcmp(&ap[i],&bp[i],sizeof(MeasureBackgroundPosition)))return false;
-    for(size_t i=0;i<az.size();++i)if(std::memcmp(&az[i],&bz[i],sizeof(MeasureBackgroundSize)))return false;
-    const auto ad=a.property_dependencies(),bd=b.property_dependencies();
-    // Preserve even noncanonical imported sequence metadata. A different order
-    // conservatively replaces; no assumption of unique imported names is needed.
-    for(size_t i=0;i<ad.size();++i)if(ad[i].flags()!=bd[i].flags()||
-        !ad[i].name().equals(std::string_view(bd[i].name().c_str(),bd[i].name().size())))return false;
-    return true;
-}
-bool payload_equivalent(const FrozenNodePayload& a,const FrozenNodePayload& b)noexcept{
-    return a.origin()==b.origin()&&a.node()==b.node()&&same_owner(a.style(),b.style())&&
-        same_owner(a.node_lifetime(),b.node_lifetime())&&same_owner(a.document_lifetime(),b.document_lifetime())&&
-        same_owner(a.generated_leaf(),b.generated_leaf())&&a.node_identity()==b.node_identity()&&a.document_identity()==b.document_identity()&&
-        a.declared_impact()==b.declared_impact()&&a.declared_inherited_impact()==b.declared_inherited_impact()&&
-        a.inherited_change_impact()==b.inherited_change_impact()&&a.measures()&&b.measures()&&
-        measures_equal(*a.measures(),*b.measures())&&scopes_equal(a.custom_properties().get(),b.custom_properties().get())&&
-        scopes_equal(a.backdrop_custom_properties().get(),b.backdrop_custom_properties().get())&&
-        a.color_references()&&b.color_references()&&colors_equal(*a.color_references(),*b.color_references());
+bool payload_equivalent(const FrozenNodePayload& a,const FrozenNodePayload& b)noexcept {
+    return node_semantically_equal(a,b);
 }
 bool context_equal(const DocumentMeasureValues& a,const DocumentMeasureValues& b)noexcept{
     return a.identity==b.identity&&a.viewport_width==b.viewport_width&&a.viewport_height==b.viewport_height&&

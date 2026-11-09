@@ -5,6 +5,8 @@ include(CTest)
 include(CMakePackageConfigHelpers)
 include(GNUInstallDirs)
 
+option(AETHERUI_ENABLE_STATE_INCREMENTAL "Experimental native state transaction categories (requires independent gates)" OFF)
+
 option(AETHERUI_ENABLE_WORK_COUNTERS "Compile opt-in thread-local diagnostic work counters" OFF)
 
 option(AETHERUI_BUILD_TESTS "Build the AetherUI native test executables" "${BUILD_TESTING}")
@@ -31,7 +33,7 @@ add_library(aether_core SHARED
     src/css/frozen_node_record.cpp
     src/css/immutable_style_backing.cpp
     src/css/style_map_version.cpp
-    src/css/style_revision.cpp
+    src/css/style_revision.cpp src/style_runtime/state_semantics.cpp
     src/css/frozen_measure_read.cpp
     src/css/border_radii.cpp
     src/css/background_layers.cpp
@@ -91,6 +93,9 @@ add_library(aether_core SHARED
 )
 
 add_library(AetherUI::Core ALIAS aether_core)
+if(AETHERUI_ENABLE_STATE_INCREMENTAL)
+    target_compile_definitions(aether_core PRIVATE AETHERUI_ENABLE_STATE_INCREMENTAL)
+endif()
 if(AETHERUI_ENABLE_WORK_COUNTERS)
     target_compile_definitions(aether_core PUBLIC AETHERUI_ENABLE_WORK_COUNTERS)
 endif()
@@ -556,7 +561,7 @@ if(AETHERUI_BUILD_TESTS)
         add_test(NAME aether.persistent-style-backing COMMAND aether_persistent_style_backing_test)
 
         add_executable(aether_payload_revision_delta_test tests/test_payload_revision_delta.cpp
-            src/css/style_revision.cpp src/css/style_map_version.cpp src/css/immutable_style_backing.cpp
+            src/css/style_revision.cpp src/style_runtime/state_semantics.cpp src/css/style_map_version.cpp src/css/immutable_style_backing.cpp
             src/css/frozen_node_record.cpp src/css/frozen_c_string.cpp src/css/frozen_measure_read.cpp
             src/css/style_freeze.cpp src/style_runtime/frozen_runtime_metadata.cpp)
         target_include_directories(aether_payload_revision_delta_test PRIVATE include src)
@@ -564,7 +569,7 @@ if(AETHERUI_BUILD_TESTS)
         add_test(NAME aether.payload-revision-delta COMMAND aether_payload_revision_delta_test)
 
         add_executable(aether_immutable_style_revision_test tests/test_immutable_style_revision.cpp
-            src/css/style_revision.cpp src/css/style_map_version.cpp
+            src/css/style_revision.cpp src/style_runtime/state_semantics.cpp src/css/style_map_version.cpp
             src/css/immutable_style_backing.cpp src/css/frozen_node_record.cpp
             src/css/frozen_c_string.cpp src/style_runtime/frozen_runtime_metadata.cpp)
         target_include_directories(aether_immutable_style_revision_test PRIVATE include src)
@@ -573,7 +578,7 @@ if(AETHERUI_BUILD_TESTS)
 
         add_executable(aether_immutable_style_handle_test tests/test_immutable_style_handle.cpp
             src/abi/aether_abi.cpp src/css/style_resolver.cpp src/css/style_map_version.cpp
-            src/css/style_revision.cpp src/css/immutable_style_backing.cpp src/css/frozen_node_record.cpp
+            src/css/style_revision.cpp src/style_runtime/state_semantics.cpp src/css/immutable_style_backing.cpp src/css/frozen_node_record.cpp
             src/css/frozen_c_string.cpp src/css/frozen_style.cpp src/css/style_freeze.cpp
             src/css/style_c_export.cpp src/css/computed_style.cpp src/css/css_length.cpp
             src/css/background_layers.cpp src/css/linear_gradient.cpp src/css/backdrop_filters.cpp)
@@ -1581,4 +1586,12 @@ if(AETHERUI_BUILD_TESTS)
     add_executable(aether_state_prepare_test tests/test_state_prepare.cpp)
     target_link_libraries(aether_state_prepare_test PRIVATE AetherUI::Core Threads::Threads)
     add_test(NAME aether.state-prepare COMMAND aether_state_prepare_test)
+endif()
+
+if(AETHERUI_BUILD_TESTS)
+    add_executable(aether_state_semantics_test tests/test_state_semantics.cpp
+        src/style_runtime/state_semantics.cpp src/css/frozen_node_record.cpp
+        src/css/frozen_c_string.cpp src/css/frozen_style.cpp src/style_runtime/frozen_runtime_metadata.cpp)
+    target_include_directories(aether_state_semantics_test PRIVATE include src)
+    add_test(NAME aether.state-semantics COMMAND aether_state_semantics_test)
 endif()

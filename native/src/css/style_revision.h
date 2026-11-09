@@ -71,6 +71,7 @@ struct FullPayloadRevisionInput {
     std::vector<PayloadRevisionEntry> entries;
     std::vector<PayloadRevisionEntry> retired; // Full cross-document import only; never dereference retired nodes.
 };
+class StateRevisionPreparation;
 class CertifiedRevisionDelta;
 using CertifiedRevisionDeltaRef=std::shared_ptr<const CertifiedRevisionDelta>;
 aether_status_t certify_full_payload_revision(const StyleRevisionRef&,const FullPayloadRevisionInput&,CertifiedRevisionDeltaRef&) noexcept;
@@ -92,6 +93,7 @@ class CertifiedRevisionDelta {
     friend aether_status_t certify_full_payload_revision(const StyleRevisionRef&,const FullPayloadRevisionInput&,CertifiedRevisionDeltaRef&) noexcept;
     friend aether_status_t freeze_certified_revision(const CertifiedRevisionDeltaRef&,StyleRevisionRef&) noexcept;
     friend class ::style_revision_s;
+    friend class StateRevisionPreparation;
 public:
     size_t changed_payloads()const noexcept{return changes_.size();}
     bool stable_order()const noexcept{return stable_order_;}

@@ -35,6 +35,8 @@ struct Program {
 };
 // Owns all filter data; selector AST/source can be destroyed after compilation.
 Program compile(int32_t rule_id, const compiled_selector_s& selector);
+// Necessary source filter only, never current dynamic matching.
+bool source_applies(const StaticFilter&, aether_node_s*) noexcept;
 
 struct StateChange { aether_node_s* node = nullptr; uint32_t changed_bits = 0; };
 struct Candidate {

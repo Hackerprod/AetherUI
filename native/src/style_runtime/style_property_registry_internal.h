@@ -112,6 +112,9 @@ struct style_property_definition_s {
     std::string name;
     bool inherited = false;
     uint32_t impact = STYLE_IMPACT_NONE;
+    // Explicit audit of reads from parent background/border color. Unknown
+    // future definitions conservatively depend on both; impacts are unrelated.
+    uint32_t parent_color_reads = 3;
     std::string initial_value;
     property_parse_fn parse;
     property_parse_failure_fn parse_failure;

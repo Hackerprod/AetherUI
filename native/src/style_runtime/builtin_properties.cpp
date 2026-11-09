@@ -1996,5 +1996,26 @@ void builtin_properties_register(style_property_registry_s* reg) {
         };
     }
 
+    // Audited applicators/default inheritance read no parent background/border
+    // except through the explicit inherit hooks tracked by compute_node. Keep
+    // this allowlist explicit: adding a property never silently grants coverage.
+    static constexpr const char* color_independent[] = {
+        "display", "position", "width", "height", "min-width", "min-height", "max-width", "max-height",
+        "left", "right", "top", "bottom", "margin-left", "margin-right", "margin-top", "margin-bottom",
+        "padding-left", "padding-right", "padding-top", "padding-bottom", "color", "font-size", "font-family",
+        "font-weight", "line-height", "text-align", "text-transform", "white-space", "cursor", "pointer-events",
+        "visibility", "background-color", "background-image", "background-position", "background-size",
+        "background-repeat", "border-left-color", "border-right-color", "border-top-color", "border-bottom-color",
+        "border-left-width", "border-right-width", "border-top-width", "border-bottom-width",
+        "border-left-style", "border-right-style", "border-top-style", "border-bottom-style",
+        "border-top-left-radius", "border-top-right-radius", "border-bottom-left-radius", "border-bottom-right-radius",
+        "flex-direction", "flex-wrap", "flex-grow", "flex-shrink", "flex-basis", "align-items", "align-self",
+        "align-content", "justify-content", "row-gap", "column-gap", "opacity", "overflow-x", "overflow-y",
+        "z-index", "transform", "transform-origin", "box-shadow", "text-shadow", "backdrop-filter",
+        "transition-property", "transition-duration", "transition-delay", "transition-timing-function"
+    };
+    for(auto& definition:reg->definitions)
+        for(const char* name:color_independent)if(definition.name==name){definition.parent_color_reads=0;break;}
+
     transition_properties_register_shorthands(reg);
 }
