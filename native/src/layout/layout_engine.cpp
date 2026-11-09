@@ -1418,7 +1418,6 @@ static aether::style::ContextOwnersRef effective_fixed_containers(
     const StyleLookup* styles, const std::unordered_set<aether_node_s*>& active) {
     using namespace aether::style;
     count_work(WorkCounter::transition_context_builds);
-    count_work(WorkCounter::context_builds);
     std::vector<ContextOwnerIndex::Entry> effective;
     const auto version = styles ? styles->selected_version() : MapVersionRef{};
     if (version) version->for_each_node([&](const BoundNodeView& view) {
@@ -1486,12 +1485,12 @@ static aether::style::ContextOwnersRef prepare_context_owners(aether_layout_engi
                     entry->node->type==AETHER_NODE_ELEMENT && !entry->node->anonymous_flex_owner;
             }
             if(present) index=update_context_owner(std::move(index),{entry->node,entry->identity,1});
-            else index=index.erase(key);
+            else index=erase_context_owner(std::move(index),key);
         };
         cache.statics->owners.diff(statics->owners,update);
         if(active) cache.active->owners.diff(active->owners,update);
         effective=publish_context_owners(cache.effective,std::move(index));
-        count_work(effective==cache.effective?WorkCounter::context_reuses:WorkCounter::context_builds);
+        if(effective==cache.effective) count_work(WorkCounter::context_reuses);
     }
     // Store cache only when all certificate components are available and current.
     if(statics && document && (!runtime || active) && structure_valid(map.get()) &&
@@ -1526,6 +1525,11 @@ AETHER_API aether_status_t aether_layout_prepare_transition_context(
     aether_bool_t* out_changed) {
     if (out_changed) *out_changed = AETHER_FALSE;
     if (!engine || !current_styles || !out_changed) return AETHER_ERROR_NULL_ARG;
+    engine->transition_context_prepared=false;
+    engine->prepared_context_map.reset();
+    engine->prepared_context_owners.reset();
+    engine->prepared_active_snapshot.reset();
+    engine->prepared_active_nodes.clear();
     try {
         count_work(WorkCounter::context_calls);
         const auto map=aether::style::pin_style_map(current_styles);
@@ -1879,3 +1883,23 @@ AETHER_API aether_layout_box_t aether_layout_box_get_child(aether_layout_box_t b
 }
 
 } // extern "C"
+
+// D2 diagnostic API. Never invoked by production preparation or rendering.
+extern "C" {
+AETHER_API aether_status_t aether_layout_context_validate_full(aether_transition_runtime_t runtime,
+    aether_style_map_t map,aether_layout_result_t layout,aether_bool_t* out_equal) {
+    if(out_equal)*out_equal=AETHER_FALSE;
+    if(!map || !layout || !out_equal)return AETHER_ERROR_NULL_ARG;
+    try {
+        const StyleLookup styles(aether::style::pin_style_map(map),nullptr,{});
+        *out_equal=context_membership_equal(effective_fixed_containers(&styles,aether_active_transform_owners(runtime)),layout->effective_context_owners);
+        return AETHER_OK;
+    } catch(const std::bad_alloc&){return AETHER_ERROR_OUT_OF_MEMORY;}
+}
+AETHER_API aether_status_t aether_layout_context_snapshot_info(aether_layout_result_t layout,uint64_t* out_serial,uint64_t* out_size) {
+    if(!layout || !out_serial || !out_size)return AETHER_ERROR_NULL_ARG;
+    *out_serial=layout->effective_context_owners?layout->effective_context_owners->membership_serial:0;
+    *out_size=layout->effective_context_owners?layout->effective_context_owners->owners.size():0;
+    return AETHER_OK;
+}
+}

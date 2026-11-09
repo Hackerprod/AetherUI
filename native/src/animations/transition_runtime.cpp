@@ -223,7 +223,7 @@ AETHER_API aether_status_t aether_transition_runtime_observe(
         if (transform_changed) {
             // Preflight must not persist an interruption sample on rejection.
             for (const auto& entry : runtime->active) {
-                if (entry.node != node || entry.property != AETHER_TRANSITION_PROPERTY_TRANSFORM)
+                if (entry.node != node || entry.identity!=node->identity || entry.property != AETHER_TRANSITION_PROPERTY_TRANSFORM)
                     continue;
                 auto sampled = entry;
                 sample_transition(sampled, now_ms);
@@ -269,7 +269,7 @@ AETHER_API aether_status_t aether_transition_runtime_observe(
     const auto supersede_active = [&](int32_t property, float* opacity,
                                       aether_transform_matrix* matrix) {
         for (auto it = runtime->active.begin(); it != runtime->active.end(); ++it) {
-            if (it->node != node || it->property != property) continue;
+            if (it->node != node || it->identity!=node->identity || it->property != property) continue;
             sample_transition(*it, now_ms);
             if (opacity) *opacity = it->current_opacity;
             if (matrix) *matrix = it->current_matrix;
@@ -347,7 +347,7 @@ AETHER_API aether_bool_t aether_transition_runtime_tick(aether_transition_runtim
                 aether::diagnostics::count_work(aether::diagnostics::WorkCounter::context_active_visits);
                 if(entry.property==AETHER_TRANSITION_PROPERTY_TRANSFORM &&
                     (!entry.identity->alive || !entry.identity->attached || transition_elapsed_ms(entry,now_ms)>=static_cast<uint64_t>(entry.duration_ms)))
-                    index=index.erase(reinterpret_cast<uintptr_t>(entry.identity.get()));
+                    index=aether::style::erase_context_owner(std::move(index),reinterpret_cast<uintptr_t>(entry.identity.get()));
             }
             next_owners=aether::style::publish_context_owners(runtime->owners,std::move(index));
         }

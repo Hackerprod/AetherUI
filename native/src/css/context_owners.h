@@ -26,6 +26,7 @@ struct ContextOwnersSnapshot {
     const uint64_t membership_serial;
     ContextOwnersSnapshot(ContextOwnerIndex entries,ContextLineageRef source):owners(std::move(entries)),lineage(std::move(source)),membership_serial(next_serial()) {
         diagnostics::count_work(diagnostics::WorkCounter::context_allocations);
+        diagnostics::count_work(diagnostics::WorkCounter::context_builds);
     }
 private:
     static uint64_t next_serial() noexcept { static std::atomic<uint64_t> serial{0}; return ++serial; }
@@ -39,10 +40,14 @@ inline ContextOwnersRef publish_context_owners(const ContextOwnersRef& previous,
     if(previous && previous->owners.shares_root(owners)) return previous;
     return std::make_shared<const ContextOwnersSnapshot>(std::move(owners),previous?previous->lineage:make_context_lineage());
 }
+inline ContextOwnerIndex erase_context_owner(ContextOwnerIndex index,uintptr_t key) {
+    if(index.find(key)) diagnostics::count_work(diagnostics::WorkCounter::context_updates);
+    return index.erase(key);
+}
 inline ContextOwnerIndex update_context_owner(ContextOwnerIndex index,const ContextOwnerEntry& entry) {
     const auto key=reinterpret_cast<uintptr_t>(entry.identity.get());
     const auto* old=index.find(key);
-    if (!entry.causes) return index.erase(key);
+    if (!entry.causes) return erase_context_owner(std::move(index),key);
     if (old && old->node==entry.node && old->identity==entry.identity && old->causes==entry.causes) return index;
     diagnostics::count_work(diagnostics::WorkCounter::context_updates);
     return index.set(key,entry);

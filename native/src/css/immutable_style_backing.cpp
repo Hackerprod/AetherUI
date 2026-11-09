@@ -11,7 +11,7 @@ ContextOwnerEntry static_owner(const FrozenNodeRef& record) {
     ContextOwnerEntry entry{record->node(),record->node_lifetime(),0};
     if(!entry.identity || entry.identity->owner!=entry.node || !entry.identity->alive || !entry.identity->attached) return entry;
     if(entry.node->type!=AETHER_NODE_ELEMENT || entry.node->anonymous_flex_owner) return entry;
-    const auto style=record->style_view();
+    const auto& style=*record->style();
     entry.causes=(!style.transforms().empty()?StaticTransform:0)|(!style.backdrop_filters().empty()?StaticBackdrop:0);
     return entry;
 }
@@ -116,7 +116,7 @@ aether_status_t patch_backing(const BackingRef& base, std::span<const BackingPat
             const auto previous=old_leaf && old_leaf->entry.first==entry.node?old_leaf->entry.second:FrozenNodeRef{};
             if(!previous || !entry.record || previous->node_lifetime()!=entry.record->node_lifetime()) topology_changed=true;
             if(previous && (!entry.record || previous->node_lifetime()!=entry.record->node_lifetime()))
-                owners=owners.erase(reinterpret_cast<uintptr_t>(previous->node_lifetime().get()));
+                owners=erase_context_owner(std::move(owners),reinterpret_cast<uintptr_t>(previous->node_lifetime().get()));
             if(entry.record) owners=update_context_owner(std::move(owners),static_owner(entry.record));
             bool changed=false;
             if (entry.record) {

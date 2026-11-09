@@ -8,6 +8,7 @@ using AetherUI.Primitives;
 using AetherUI.Rendering;
 using AetherUI.Runtime;
 
+if (args.Contains("--d2")) { D2ContextTests.Run(); return; }
 CssDiagnosticsTransactionTests.Run();
 var count = 0;
 Run("aborted inset staging does not consume diagnostic; same-node replay recovers", () =>

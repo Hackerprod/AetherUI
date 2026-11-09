@@ -1642,3 +1642,20 @@ endif()
 if(AETHERUI_ENABLE_CONTEXT_OWNERS)
     target_compile_definitions(aether_core PRIVATE AETHERUI_ENABLE_CONTEXT_OWNERS)
 endif()
+
+if(AETHERUI_BUILD_TESTS AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    add_executable(aether_effective_context_owners_test
+        tests/test_effective_context_owners.cpp $<TARGET_OBJECTS:aether_publication_test_core>)
+    target_include_directories(aether_effective_context_owners_test PRIVATE include src)
+    target_link_libraries(aether_effective_context_owners_test PRIVATE Threads::Threads)
+    add_test(NAME aether.effective-context-owners COMMAND aether_effective_context_owners_test)
+endif()
+
+set(AETHERUI_DOTNET_EXECUTABLE "" CACHE FILEPATH "Optional SDK for registered managed D2 context integration gate")
+if(AETHERUI_BUILD_TESTS AND AETHERUI_DOTNET_EXECUTABLE AND AETHERUI_ENABLE_CONTEXT_OWNERS
+    AND AETHERUI_ENABLE_STATE_INCREMENTAL AND AETHERUI_ENABLE_WORK_COUNTERS)
+    add_test(NAME aether.effective-context-managed
+        COMMAND bash "${CMAKE_CURRENT_SOURCE_DIR}/../bindings/dotnet/tests/run-context-owner-tests.sh"
+        "${AETHERUI_DOTNET_EXECUTABLE}" "$<TARGET_FILE:aether_core>")
+    set_tests_properties(aether.effective-context-managed PROPERTIES RUN_SERIAL TRUE)
+endif()
