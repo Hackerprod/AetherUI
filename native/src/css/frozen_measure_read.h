@@ -37,6 +37,7 @@ public:
 };
 // document is explicitly supplied AFTER root bootstrap; mutable state.document
 // is never retained or silently frozen by this factory.
+aether_status_t freeze_runtime_measure_payload(const measure_state_s&, FrozenMeasurePayloadRef&) noexcept;
 aether_status_t freeze_runtime_measures(const measure_state_s&, FrozenDocumentRef document, FrozenMeasuresRef&) noexcept;
 float measure_used_line_height(const MeasuresReadView*, const StyleScalars&);
 bool measure_has_percentage(const MeasuresReadView*, const std::string&, aether_css_length);

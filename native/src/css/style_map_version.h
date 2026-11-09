@@ -1,5 +1,6 @@
 #pragma once
 #include "immutable_style_backing.h"
+#include "style_revision.h"
 class style_revision_s;
 namespace aether::style {
 enum class MapMode { legacy_partial, legacy_complete, contextual };
@@ -20,6 +21,7 @@ struct MapVersionInput {
 class MapVersion;
 using MapVersionRef = std::shared_ptr<const MapVersion>;
 aether_status_t make_map_version(const MapVersionInput&, MapVersionRef&) noexcept;
+aether_status_t materialize_legacy_revision_map(const StyleRevisionRef&, MapVersionRef&) noexcept;
 class MapVersion {
     const BackingRef backing_;
     const MapMode mode_;
@@ -32,6 +34,7 @@ class MapVersion {
     const uint64_t style_tree_epoch_;
     explicit MapVersion(const MapVersionInput&);
     friend aether_status_t make_map_version(const MapVersionInput&, MapVersionRef&) noexcept;
+    friend aether_status_t materialize_legacy_revision_map(const StyleRevisionRef&, MapVersionRef&) noexcept;
 public:
     const BackingRef& backing() const noexcept { return backing_; }
     const MapMode& mode() const noexcept { return mode_; }
@@ -42,6 +45,14 @@ public:
     const uint64_t& structure_epoch() const noexcept { return structure_epoch_; }
     const uint64_t& input_epoch() const noexcept { return input_epoch_; }
     const uint64_t& style_tree_epoch() const noexcept { return style_tree_epoch_; }
+    BoundNodeView lookup(const aether_node_s* node) const noexcept {
+        if(revision_)return BoundNodeView::find(revision_,node);
+        return backing_?BoundNodeView::from_legacy(backing_->find_owner(node)):BoundNodeView{};
+    }
+    template<class Fn> void for_each_node(Fn&& fn) const {
+        if(revision_) {for(const auto& entry:revision_->directory().entries())fn(BoundNodeView::find(revision_,entry.second.payload->node()));}
+        else if(backing_) {for(const auto& entry:backing_->entries())fn(BoundNodeView::from_legacy(entry.second));}
+    }
     bool contextual() const noexcept { return mode_==MapMode::contextual; }
 };
 bool structure_valid(const MapVersion*) noexcept;

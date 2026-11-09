@@ -80,13 +80,14 @@ static aether_node_s* create_anonymous_flex_item(
         ImmutableArray<aether_shadow>{});
     auto frozen_style = std::make_shared<const FrozenStyle>(scalars, std::move(payload));
     FrozenMeasuresRef frozen_measures;
-    if (const auto parent_measures = styles->lookup_measures_owner(parent)) {
+    if (const auto binding = styles->lookup_measure_binding(parent)) {
+        const auto& parent_measures = binding.payload;
         auto values = parent_measures->scalars();
         values.row_gap = values.column_gap = aether_css_length_zero();
         const auto positions = parent_measures->background_positions();
         const auto sizes = parent_measures->background_sizes();
         const auto dependencies = parent_measures->property_dependencies();
-        frozen_measures = std::make_shared<const FrozenMeasures>(values, parent_measures->document_owner(),
+        frozen_measures = std::make_shared<const FrozenMeasures>(values, binding.document,
             ImmutableArray<MeasureBackgroundPosition>::generate(positions.size(), [&](size_t i) { return positions[i]; }),
             ImmutableArray<MeasureBackgroundSize>::generate(sizes.size(), [&](size_t i) { return sizes[i]; }),
             ImmutableArray<FrozenPropertyDependency>::generate(dependencies.size(), [&](size_t i) {

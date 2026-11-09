@@ -423,10 +423,10 @@ inline aether_text_metrics_t engine_measure_text(
     if (!e || (!e->contextual_text_measurer && !e->text_measurer)) return {0.f, 0.f, 0.f};
     const auto lifetime = e->measure_document;
     const CallbackEpochGuard guard(lifetime);
-    std::shared_ptr<node_identity_s> identity;
-    if (node && e->measure_styles) {
-        if (const auto* record = e->measure_styles->lookup_record(node)) identity = record->node_lifetime();
-    }
+    const auto bound_node = node && e->measure_styles
+        ? e->measure_styles->lookup_record(node) : aether::style::BoundNodeView{};
+    const auto identity = bound_node ? bound_node.payload_owner()->node_lifetime()
+                                     : std::shared_ptr<node_identity_s>{};
     const auto valid_node = [&]() { return !identity || (identity->owner == node && identity->alive && identity->attached); };
     if (!valid_node()) throw std::runtime_error("Retired text measurement node");
     aether::style::CallbackStyleCopy copy;

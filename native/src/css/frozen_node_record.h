@@ -29,6 +29,27 @@ struct NodeRecordInput {
     std::shared_ptr<node_identity_s> document_lifetime = {};
     std::shared_ptr<aether_node_s> generated_leaf = {};
 };
+struct NodePayloadInput {
+    RecordOrigin origin = RecordOrigin::legacy;
+    aether_node_s* node = nullptr;
+    FrozenStyleRef style = {};
+    FrozenMeasurePayloadRef measures = {};
+    FrozenScopeRef custom_properties = {};
+    FrozenColorRef color_references = {};
+    FrozenScopeRef backdrop_custom_properties = {};
+    uint32_t declared_impact = 0;
+    uint32_t declared_inherited_impact = 0;
+    uint32_t inherited_change_impact = 0;
+    uint64_t document_identity = 0;
+    uint64_t node_identity = 0;
+    std::shared_ptr<node_identity_s> node_lifetime = {};
+    std::shared_ptr<node_identity_s> document_lifetime = {};
+    std::shared_ptr<aether_node_s> generated_leaf = {};
+};
+class FrozenNodePayload;
+class BoundNodeView;
+using FrozenNodePayloadRef = std::shared_ptr<const FrozenNodePayload>;
+aether_status_t freeze_node_payload(const NodePayloadInput&, FrozenNodePayloadRef&) noexcept;
 class FrozenNodeRecord;
 using FrozenNodeRef = std::shared_ptr<const FrozenNodeRecord>;
 aether_status_t freeze_node_record(const NodeRecordInput&, FrozenNodeRef&) noexcept;
@@ -41,6 +62,7 @@ class FrozenNodePayload {
     const FrozenMeasurePayloadRef measures_;
     const FrozenScopeRef custom_properties_;
     const FrozenColorRef color_references_;
+    const FrozenScopeRef backdrop_custom_properties_;
     const uint32_t declared_impact_;
     const uint32_t declared_inherited_impact_;
     const uint32_t inherited_change_impact_;
@@ -49,7 +71,8 @@ class FrozenNodePayload {
     const std::shared_ptr<node_identity_s> node_lifetime_;
     const std::shared_ptr<node_identity_s> document_lifetime_;
     const std::shared_ptr<aether_node_s> generated_leaf_;
-    explicit FrozenNodePayload(const NodeRecordInput&);
+    explicit FrozenNodePayload(const NodePayloadInput&);
+    friend aether_status_t freeze_node_payload(const NodePayloadInput&, FrozenNodePayloadRef&) noexcept;
     friend class FrozenNodeRecord;
     friend aether_status_t freeze_node_record(const NodeRecordInput&, FrozenNodeRef&) noexcept;
 public:
@@ -59,6 +82,7 @@ public:
     const FrozenMeasurePayloadRef& measures() const noexcept { return measures_; }
     const FrozenScopeRef& custom_properties() const noexcept { return custom_properties_; }
     const FrozenColorRef& color_references() const noexcept { return color_references_; }
+    const FrozenScopeRef& backdrop_custom_properties() const noexcept { return backdrop_custom_properties_; }
     const uint32_t& declared_impact() const noexcept { return declared_impact_; }
     const uint32_t& declared_inherited_impact() const noexcept { return declared_inherited_impact_; }
     const uint32_t& inherited_change_impact() const noexcept { return inherited_change_impact_; }
@@ -76,7 +100,9 @@ using FrozenNodePayloadRef = std::shared_ptr<const FrozenNodePayload>;
 class FrozenNodeRecord {
     const FrozenNodePayloadRef payload_;
     const FrozenMeasuresRef measures_;
-    explicit FrozenNodeRecord(const NodeRecordInput&);
+    FrozenNodeRecord(FrozenNodePayloadRef payload, FrozenMeasuresRef measures)
+        : payload_(std::move(payload)), measures_(std::move(measures)) {}
+    friend class BoundNodeView;
     friend aether_status_t freeze_node_record(const NodeRecordInput&, FrozenNodeRef&) noexcept;
 public:
     const FrozenNodePayloadRef& payload_owner() const noexcept { return payload_; }

@@ -32,30 +32,55 @@ public:
         return assets_ ? assets_->structure_valid() : aether::style::structure_valid(base_.get());
     }
     bool override_supplied() const noexcept { return override_supplied_; }
-    const FrozenNodeRecord* lookup_record(const aether_node_s* node) const noexcept {
-        if (synthetic(node)) return nullptr;
-        return selected_ ? selected_->backing()->find(node) : nullptr;
-    }
-    FrozenNodeRef lookup_record_owner(const aether_node_s* node) const noexcept {
+    BoundNodeView lookup_record(const aether_node_s* node) const noexcept {
         if (synthetic(node)) return {};
-        return selected_ ? selected_->backing()->find_owner(node) : FrozenNodeRef{};
+        return selected_ ? selected_->lookup(node) : BoundNodeView{};
+    }
+    BoundNodeView lookup_record_owner(const aether_node_s* node) const noexcept {
+        return lookup_record(node);
     }
     FrozenStyleRef lookup_node_owner(const aether_node_s* node) const noexcept {
         if (const auto* entry = synthetic(node)) return entry->style();
-        const auto* record = lookup_record(node); return record ? record->style() : FrozenStyleRef{};
+        const auto record = lookup_record(node);
+        return record ? record.payload_owner()->style() : FrozenStyleRef{};
     }
     std::optional<ComputedStyleReadView> lookup_node(const aether_node_s* node) const noexcept {
         if (const auto* entry = synthetic(node)) return entry->style()->view();
-        const auto* record = lookup_record(node);
-        return record ? std::optional<ComputedStyleReadView>(record->style_view()) : std::nullopt;
+        const auto record = lookup_record(node);
+        return record ? std::optional<ComputedStyleReadView>(record.style_view()) : std::nullopt;
     }
+    struct MeasureBinding {
+        FrozenMeasurePayloadRef payload;
+        FrozenDocumentRef document;
+        explicit operator bool() const noexcept { return payload && document; }
+    };
+    // Pins both owners without allocating a per-read FrozenMeasures wrapper.
+    // Synthetic layout construction may deliberately copy this local data.
+    MeasureBinding lookup_measure_binding(const aether_node_s* node) const noexcept {
+        if (const auto* entry = synthetic(node)) {
+            const auto& measures = entry->measures();
+            return measures ? MeasureBinding{measures->payload_owner(), measures->document_owner()} : MeasureBinding{};
+        }
+        const auto record = lookup_record(node);
+        return record && record.has_measures()
+            ? MeasureBinding{record.payload_owner()->measures(), record.document_owner()} : MeasureBinding{};
+    }
+    // Compatibility reader for already-bound legacy/synthetic owners only.
+    // Contextual consumers use lookup_measures or lookup_measure_binding.
     FrozenMeasuresRef lookup_measures_owner(const aether_node_s* node) const noexcept {
         if (const auto* entry = synthetic(node)) return entry->measures();
-        const auto* record = lookup_record(node); return record ? record->measures() : FrozenMeasuresRef{};
+        const auto record = lookup_record(node);
+        return record && record.legacy_record() ? record.legacy_record()->measures() : FrozenMeasuresRef{};
     }
     std::optional<MeasuresReadView> lookup_measures(const aether_node_s* node) const noexcept {
-        const auto owner = lookup_measures_owner(node);
-        return owner ? std::optional<MeasuresReadView>(MeasuresReadView(*owner)) : std::nullopt;
+        if (const auto* entry = synthetic(node)) {
+            const auto& measures = entry->measures();
+            return measures ? std::optional<MeasuresReadView>(MeasuresReadView(*measures)) : std::nullopt;
+        }
+        const auto record = lookup_record(node);
+        // selected_ (or the synthetic owner above) keeps this borrowed view alive.
+        return record && record.has_measures()
+            ? std::optional<MeasuresReadView>(record.measures_view()) : std::nullopt;
     }
     const FrozenStyleRef& default_owner() const noexcept { return defaults_; }
     ComputedStyleReadView default_style() const noexcept { return defaults_->view(); }

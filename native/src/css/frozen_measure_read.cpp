@@ -49,9 +49,9 @@ MeasureBackgroundSize MeasuresReadView::size_at(size_t i) const {
     if(i>=values.size()) throw std::out_of_range("measure size");
     return {values[i].kind, values[i].x, values[i].y};
 }
-aether_status_t freeze_runtime_measures(const measure_state_s& source, FrozenDocumentRef document, FrozenMeasuresRef& output) noexcept {
+aether_status_t freeze_runtime_measure_payload(const measure_state_s& source, FrozenMeasurePayloadRef& output) noexcept {
     try {
-        if(!document || source.background_positions.empty() || source.background_sizes.empty()) return AETHER_ERROR_INVALID_STATE;
+        if(source.background_positions.empty() || source.background_sizes.empty()) return AETHER_ERROR_INVALID_STATE;
         MeasureScalarValues scalars{source.parent_font_size,source.self_font_size,freeze_kind(source.line_height.kind),
             source.line_height.value,source.row_gap,source.column_gap,source.dependencies};
         std::vector<MeasureBackgroundPosition> positions;
@@ -63,9 +63,16 @@ aether_status_t freeze_runtime_measures(const measure_state_s& source, FrozenDoc
         std::vector<PropertyDependencyInput> dependencies;
         dependencies.reserve(source.property_dependencies.size());
         for(const auto& [name, flags]:source.property_dependencies) if(flags) dependencies.push_back({name,flags});
-        return freeze_measures(scalars,std::move(document),positions,sizes,dependencies,output);
+        return freeze_measure_payload(scalars,positions,sizes,dependencies,output);
     } catch(const std::bad_alloc&) { return AETHER_ERROR_OUT_OF_MEMORY; }
       catch(...) { return AETHER_ERROR_INVALID_STATE; }
+}
+aether_status_t freeze_runtime_measures(const measure_state_s& source, FrozenDocumentRef document, FrozenMeasuresRef& output) noexcept {
+    if(!document)return AETHER_ERROR_INVALID_STATE;
+    FrozenMeasurePayloadRef payload;const auto status=freeze_runtime_measure_payload(source,payload);
+    if(status!=AETHER_OK)return status;
+    try { auto result=std::make_shared<const FrozenMeasures>(std::move(payload),std::move(document));output=std::move(result);return AETHER_OK; }
+    catch(const std::bad_alloc&){return AETHER_ERROR_OUT_OF_MEMORY;}
 }
 float measure_used_line_height(const MeasuresReadView* view, const StyleScalars& flat) {
     if(!view || !*view) return flat.font_size * (flat.line_height > 0 ? flat.line_height : 1.2f);

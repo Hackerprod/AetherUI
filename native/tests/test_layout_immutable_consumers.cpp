@@ -101,7 +101,7 @@ static void selection_and_clone() {
     REQUIRE(external.lookup_box(box, BoxStylePolicy::effective_map).scalars().opacity == .7f);
     REQUIRE(empty_external.lookup_box(box, BoxStylePolicy::effective_map).scalars().opacity == .25f);
     REQUIRE(!empty_external.lookup_node(&node));
-    REQUIRE(own.lookup_record_owner(&node) == base->backing()->find_owner(&node));
+    REQUIRE(own.lookup_record_owner(&node).legacy_record() == base->backing()->find_owner(&node));
     aether_layout_box_s synthetic;
     synthetic.element = anonymous_raw; synthetic.presentation_owner = &host;
     synthetic.style = BoxStyleSnapshot(snapshot); synthetic.style.opacity = .12f;

@@ -133,14 +133,20 @@ namespace {
             document_identity, node_identity};
     }
     SampleReadInputs sample_inputs(const aether::style::MapVersion& binding,
-        const aether::style::FrozenNodeRef& record) {
-        if (!record || !binding.backing()) throw std::invalid_argument("sample record");
-        const auto member = binding.backing()->find_owner(record->node());
-        if (member != record || member.owner_before(record) || record.owner_before(member))
+        const aether::style::BoundNodeView& record) {
+        if (!record) throw std::invalid_argument("sample record");
+        const auto member = binding.lookup(record.payload_owner()->node());
+        const auto same_owner = [](const auto& a, const auto& b) noexcept {
+            return a == b && !a.owner_before(b) && !b.owner_before(a);
+        };
+        if (!member || !same_owner(member.payload_owner(), record.payload_owner()) ||
+            !same_owner(member.document_owner(), record.document_owner()) ||
+            !same_owner(member.revision_owner(), record.revision_owner()) ||
+            !same_owner(member.legacy_record(), record.legacy_record()))
             throw std::invalid_argument("sample record owner");
-        // Global identity comes from the captured binding, not from a record
+        // Global identity comes from the captured binding, not from a payload
         // which might have survived in a partial legacy map with no global ID.
-        return sample_inputs(record->style_view(), binding.document_identity(), record->node_identity());
+        return sample_inputs(record.style_view(), binding.document_identity(), record.payload_owner()->node_identity());
     }
     Endpoint copy_endpoint(const TransformReadInputs& transforms) {
         Endpoint e;

@@ -1417,17 +1417,17 @@ static std::unordered_set<aether_node_s*> effective_fixed_containers(
     count_work(WorkCounter::transition_context_builds);
     std::unordered_set<aether_node_s*> effective;
     const auto version = styles ? styles->selected_version() : aether::style::MapVersionRef{};
-    if (version) for (const auto& entry : version->backing()->entries()) {
+    if (version) version->for_each_node([&](const aether::style::BoundNodeView& view) {
         count_work(WorkCounter::transition_context_entries_visited);
-        const auto& record = entry.second;
+        const auto& record = view.payload_owner();
         auto* node = record->node();
         const auto& identity = record->node_lifetime();
-        if (identity && (identity->owner != node || !identity->alive || !identity->attached)) continue;
+        if (identity && (identity->owner != node || !identity->alive || !identity->attached)) return;
         const auto style = record->style_view();
         if (node && node->type == AETHER_NODE_ELEMENT && !node->anonymous_flex_owner &&
             (!style.transforms().empty() || !style.backdrop_filters().empty() || active.count(node)))
             effective.insert(node);
-    }
+    });
     return effective;
 }
 
@@ -1512,14 +1512,10 @@ AETHER_API aether_status_t aether_layout_layout(
     const auto* styles = &build_lookup;
     engine->measure_styles = styles;
     engine->measure_document = document_identity;
-    if (version && version->contextual()) {
-        for (const auto& entry : version->backing()->entries()) {
-            if (!entry.second->measures()) continue;
-            const auto& document = entry.second->measures()->document().values();
-            if (document.viewport_width != viewport_width || document.viewport_height != viewport_height)
-                throw std::runtime_error("Layout viewport differs from style document");
-            break;
-        }
+    if (version && version->contextual() && !version->revision()->entries().empty()) {
+        const auto& document = version->revision()->document()->values();
+        if (document.viewport_width != viewport_width || document.viewport_height != viewport_height)
+            throw std::runtime_error("Layout viewport differs from style document");
     }
     const auto freeze_assets = [&]() {
         auto assets = std::make_shared<const aether::layout::LayoutAssets>(version, result->build_overlay->freeze(), defaults, document_identity, document_structure_epoch);
@@ -1634,19 +1630,19 @@ struct input_callback_context_s {
     input_callback_context_s(const StyleLookup& styles, aether_scroll_offset_fn fn, void* user_data)
         : lookup(styles), callback(fn), data(user_data), epochs(styles.document_lifetime()), provenance_epochs(styles.base_version()) {}
 };
-static bool input_record_alive(const aether::style::FrozenNodeRecord* record, const aether_node_s* node) {
-    if (!record || !record->node_lifetime()) return true;
-    const auto& identity = record->node_lifetime();
+static bool input_record_alive(const aether::style::BoundNodeView& record, const aether_node_s* node) {
+    if (!record || !record.payload_owner()->node_lifetime()) return true;
+    const auto& identity = record.payload_owner()->node_lifetime();
     return identity->owner == node && identity->alive && identity->attached;
 }
 static aether_scroll_offset_t checked_input_offsets(aether_node_t node, void* data) {
     auto& context = *static_cast<input_callback_context_s*>(data);
     // Historical input guards use base provenance, even for an external paint override.
     const auto& base = context.lookup.base_version();
-    const auto record = base ? base->backing()->find_owner(node) : aether::style::FrozenNodeRef{};
-    if (!input_record_alive(record.get(), node)) throw std::invalid_argument("retired input node");
+    const auto record = base ? base->lookup(node) : aether::style::BoundNodeView{};
+    if (!input_record_alive(record, node)) throw std::invalid_argument("retired input node");
     const auto offset = context.callback(node, context.data);
-    if (!context.valid() || !input_record_alive(record.get(), node))
+    if (!context.valid() || !input_record_alive(record, node))
         throw std::invalid_argument("input callback changed document");
     return offset;
 }
@@ -1654,8 +1650,8 @@ static bool live_input_owner(const StyleLookup& lookup, aether_node_t node) {
     if (!node) return true;
     const auto& base = lookup.base_version();
     if (!base || !base->contextual()) return true;
-    const auto* record = base->backing()->find(node);
-    return record && record->node_lifetime() && input_record_alive(record, node);
+    const auto record = base->lookup(node);
+    return record && record.payload_owner()->node_lifetime() && input_record_alive(record, node);
 }
 static aether_node_t hit_with_pin(aether_layout_result_t result, aether_style_map_t styles,
     float x, float y, aether_scroll_offset_fn offsets, void* user_data) {
