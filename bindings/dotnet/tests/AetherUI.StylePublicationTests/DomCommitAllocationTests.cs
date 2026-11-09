@@ -71,6 +71,8 @@ internal static class DomCommitAllocationTests
         var counts = DomCommitAllocationLedger.Read();
         Check(!counts.Invalid && counts.Successful == expected && counts.Failed == 0 && counts.Count(kind) == expected,
             $"{name}: missing/extra/failed interval successful={counts.Successful}, failed={counts.Failed}, kind={counts.Count(kind)}");
+        if (counts.SuccessfulBytes != 0)
+            Console.WriteLine($"DOM allocation attribution {name}: nativeValidate={counts.NativeValidationBytes}, bookkeepingValidate={counts.BookkeepingValidationBytes}, nativeCommit={counts.NativeCommitBytes}, managedMaps={counts.ManagedMapsBytes}, bookkeepingPublish={counts.BookkeepingPublishBytes}, scalarMirror={counts.ScalarMirrorBytes}, total={counts.SuccessfulBytes}");
         Check(counts.SuccessfulBytes == 0, $"{name}: commit allocated {counts.SuccessfulBytes} managed bytes (cold allocations also fail)");
         if (expected > 0) Covered.Add(kind);
         Console.WriteLine($"DOM managed {name}: intervals={counts.Successful}, commitBytes={counts.SuccessfulBytes}, wholeOperationBytes={total} (staging/teardown/notification included only in whole operation)");

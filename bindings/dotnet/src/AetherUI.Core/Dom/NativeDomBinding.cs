@@ -465,8 +465,18 @@ internal sealed partial class NativeDomBinding : IDomBinding, IDisposable
         }
         public void Commit()
         {
-            _native.Validate(); _bookkeeping.Validate(); _sourceBookkeeping?.Validate();
+            _native.Validate();
+#if AETHER_DOM_COMMIT_ALLOCATION_TESTING
+            DomCommitAllocationLedger.MarkPhase(DomCommitAllocationPhase.NativeValidation);
+#endif
+            _bookkeeping.Validate(); _sourceBookkeeping?.Validate();
+#if AETHER_DOM_COMMIT_ALLOCATION_TESTING
+            DomCommitAllocationLedger.MarkPhase(DomCommitAllocationPhase.BookkeepingValidation);
+#endif
             var token = _native.Commit();
+#if AETHER_DOM_COMMIT_ALLOCATION_TESTING
+            DomCommitAllocationLedger.MarkPhase(DomCommitAllocationPhase.NativeCommit);
+#endif
             // All following operations are pure scalar writes/swaps over prepared storage.
             foreach (var pair in _created)
             {
@@ -501,7 +511,13 @@ internal sealed partial class NativeDomBinding : IDomBinding, IDisposable
                 _source._nodes = _sourceNodes!; _source._handles = _sourceHandles!;
                 _source._token = NativeDomSync.ReadToken(_source.Native);
             }
+#if AETHER_DOM_COMMIT_ALLOCATION_TESTING
+            DomCommitAllocationLedger.MarkPhase(DomCommitAllocationPhase.ManagedMaps);
+#endif
             _bookkeeping.Publish(); _sourceBookkeeping?.Publish();
+#if AETHER_DOM_COMMIT_ALLOCATION_TESTING
+            DomCommitAllocationLedger.MarkPhase(DomCommitAllocationPhase.BookkeepingPublish);
+#endif
             _owner._pendingOtherHosts = _otherHosts;
             _committed = true;
         }

@@ -9,6 +9,17 @@ typedef struct aether_dom_style_binding_s* aether_dom_style_binding_t;
  * Binding/slot publication does not deliver diagnostics or resolve styles. */
 AETHER_API aether_status_t aether_dom_style_binding_create_v1(aether_doc_t document,
     aether_style_runtime_t runtime, aether_dom_style_binding_t* out_binding);
+/* Initial creation can also be staged. Prepare owns the output handle and pins
+ * the native document/runtime bases without registering or consuming IDs.
+ * Commit is one-shot and allocation/callback-free. Destroy only releases staging,
+ * including after success; it never unregisters the published output. */
+typedef struct aether_dom_style_create_s* aether_dom_style_create_t;
+AETHER_API aether_status_t aether_dom_style_binding_prepare_create_v1(aether_doc_t document,
+    aether_style_runtime_t runtime, aether_dom_style_create_t* out_transaction);
+AETHER_API aether_status_t aether_dom_style_binding_validate_create_v1(aether_dom_style_create_t transaction);
+AETHER_API aether_status_t aether_dom_style_binding_commit_create_v1(
+    aether_dom_style_create_t transaction, aether_dom_style_binding_t* out_binding);
+AETHER_API void aether_dom_style_binding_create_destroy_v1(aether_dom_style_create_t transaction);
 /* Logical unbind immediately revokes retained stages. The native sheet remains
  * installed: keep its handle and explicitly remove it before a replacement if
  * the runtime survives. Destruction never compiles, resolves, or calls user code.

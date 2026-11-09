@@ -4,10 +4,12 @@ namespace AetherUI.Dom;
 // Test build only. Direct scalar bookkeeping, never an observer/delegate or a
 // production diagnostic API. This type and all call sites are absent normally.
 internal enum DomCommitAllocationKind { ReplaceText, InsertChild, RemoveChild, ClearChildren, Text, State, RuntimeValue, SetAttribute, RemoveAttribute, Import, Interaction }
+internal enum DomCommitAllocationPhase { NativeValidation, BookkeepingValidation, NativeCommit, ManagedMaps, BookkeepingPublish, ScalarMirror }
 internal struct DomCommitAllocationSnapshot
 {
     internal ulong Successful, Failed, SuccessfulBytes, FailedBytes, Nested;
     internal ulong ReplaceText, InsertChild, RemoveChild, ClearChildren, Text, State, RuntimeValue, SetAttribute, RemoveAttribute, Import, Interaction;
+    internal ulong NativeValidationBytes, BookkeepingValidationBytes, NativeCommitBytes, ManagedMapsBytes, BookkeepingPublishBytes, ScalarMirrorBytes;
     internal bool Invalid;
     internal readonly ulong Count(DomCommitAllocationKind kind) => kind switch
     {
@@ -23,7 +25,7 @@ internal static class DomCommitAllocationLedger
 {
     [ThreadStatic] private static bool _enabled;
     [ThreadStatic] private static int _depth;
-    [ThreadStatic] private static long _start;
+    [ThreadStatic] private static long _start, _phaseStart;
     [ThreadStatic] private static bool _failed;
     [ThreadStatic] private static DomCommitAllocationSnapshot _counts;
     internal static void Reset()
@@ -51,7 +53,7 @@ internal static class DomCommitAllocationLedger
     {
         if (!_enabled) return;
         if (_depth == int.MaxValue) { _counts.Invalid = true; return; }
-        if (_depth++ == 0) { _failed = false; _start = GC.GetAllocatedBytesForCurrentThread(); }
+        if (_depth++ == 0) { _failed = false; _start = _phaseStart = GC.GetAllocatedBytesForCurrentThread(); }
         else Add(ref _counts.Nested);
         switch (kind)
         {
@@ -67,6 +69,25 @@ internal static class DomCommitAllocationLedger
             case DomCommitAllocationKind.Import: Add(ref _counts.Import); break;
             case DomCommitAllocationKind.Interaction: Add(ref _counts.Interaction); break;
             default: _counts.Invalid = true; break;
+        }
+    }
+    // Attribution only. Does not change the outer interval or its zero-byte gate.
+    internal static void MarkPhase(DomCommitAllocationPhase phase)
+    {
+        if (!_enabled || _depth == 0) return;
+        var now = GC.GetAllocatedBytesForCurrentThread();
+        var delta = now - _phaseStart;
+        _phaseStart = now;
+        if (delta < 0) { _counts.Invalid = true; return; }
+        var bytes = (ulong)delta;
+        switch (phase)
+        {
+            case DomCommitAllocationPhase.NativeValidation: Add(ref _counts.NativeValidationBytes, bytes); break;
+            case DomCommitAllocationPhase.BookkeepingValidation: Add(ref _counts.BookkeepingValidationBytes, bytes); break;
+            case DomCommitAllocationPhase.NativeCommit: Add(ref _counts.NativeCommitBytes, bytes); break;
+            case DomCommitAllocationPhase.ManagedMaps: Add(ref _counts.ManagedMapsBytes, bytes); break;
+            case DomCommitAllocationPhase.BookkeepingPublish: Add(ref _counts.BookkeepingPublishBytes, bytes); break;
+            case DomCommitAllocationPhase.ScalarMirror: Add(ref _counts.ScalarMirrorBytes, bytes); break;
         }
     }
     internal static void End(bool successful)

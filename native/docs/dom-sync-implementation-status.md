@@ -108,3 +108,29 @@ before managed diagnostic replay; typed DOM and source slots follow native write
 removed/reinserted targets lose old press/focus continuity, and blur uses its frozen old target-only
 route. Cleanups never revoke a newer claim or native bit stamp. These corrections are part of the
 approved v6 contract rather than a claim of exact equivalence to the former partial D1 behavior.
+
+## Subsequent review and measurement cuts
+
+- Exact native tree cf0f2c9 equals e2c06e7, including tests. Full Release ON passed
+  **247/247**, and Debug default OFF passed **246/246**. Focused TSan on e2 passed
+  **4/4** (owner, edit, interaction, state-prepare), with no suppressions. These
+  runs do not prove all platforms or global race-freedom.
+- Independent review found e2 lifecycle capture allocation/decoding outside its
+  retry-blocking catch. Fix 852f4bd protects the entire capture and verifies both
+  early and final-array OOM boundaries. Its full managed runner received focused
+  independent ON/OFF PASS. The historical e2 failure remains recorded.
+- f4e189e rejects null certified output strings even at length zero, while valid
+  empty and absent values remain distinct. Input null+zero conventions are unchanged.
+  Its normal Release publication runner passes.
+- Native test-only allocation oracle 84df520 passed cold typed/interaction commit
+  boundaries with zero allocation requests in its instrumented Linux link unit.
+  It covers wrapped C allocation families and all new families in those objects,
+  not libc-private allocations or the CLR. Extension 92451d4 initially failed test
+  compilation; 842648e fixes the API spelling and awaits its exact run.
+- Managed test-only instrumentation deliberately retains a failing cold State
+  oracle: 96 bytes, attributed in 76a8563 to 48 in native validation and 48 in
+  native commit. Cause remains under investigation. No warmup, threshold change
+  or narrower publication boundary has been used to suppress this failure.
+
+Component/style publication allocation scope and the initial binding staging
+boundary still need complete measured evidence. These findings keep D1 open.

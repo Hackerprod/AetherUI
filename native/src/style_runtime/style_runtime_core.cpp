@@ -451,8 +451,20 @@ void aether_dom_style_commit_batch(DomStyleSlotBatchRef& batch) noexcept {
     batch->committed = true;
 }
 
-AETHER_API aether_status_t aether_dom_style_binding_create_v1(aether_doc_t document,
-    aether_style_runtime_t runtime, aether_dom_style_binding_t* out) {
+static bool same_dom_binding_token(const aether_dom_token_v1_t& a, const aether_dom_token_v1_t& b) noexcept {
+    return a.owner_identity == b.owner_identity && a.observation_serial == b.observation_serial &&
+        a.input_epoch == b.input_epoch && a.structure_epoch == b.structure_epoch && a.sticky_status == b.sticky_status;
+}
+struct aether_dom_style_create_s {
+    // Root/control/runtime are authentically retained by the slot. The output
+    // is ordinary staging ownership, NOT a registered handle requiring unbind.
+    DomStyleSlotStageRef slot;
+    aether_dom_token_v1_t token{};
+    std::unique_ptr<aether_dom_style_binding_s> output;
+    bool committed = false;
+};
+AETHER_API aether_status_t aether_dom_style_binding_prepare_create_v1(aether_doc_t document,
+    aether_style_runtime_t runtime, aether_dom_style_create_t* out) {
     if (out) *out = nullptr;
     if (!document || !runtime || !out) return AETHER_ERROR_NULL_ARG;
     if (!document->owner_control->alive || !document->identity->alive ||
@@ -460,20 +472,60 @@ AETHER_API aether_status_t aether_dom_style_binding_create_v1(aether_doc_t docum
         runtime->owner_thread != std::this_thread::get_id() || runtime->preparing ||
         !document->owner_control->binding.expired()) return AETHER_ERROR_INVALID_STATE;
     try {
-        auto handle = std::make_unique<aether_dom_style_binding_s>();
-        handle->value = std::make_shared<DomStyleBinding>();
-        handle->value->owner = document->owner_control; handle->value->runtime = runtime->lifetime;
+        auto transaction = std::make_unique<aether_dom_style_create_s>();
+        // Keep the root across all fallible staging, before source collection.
+        const auto document_pin = aether_editable_lease(document);
+        const auto runtime_pin = runtime->lifetime;
+        if (!document_pin) return AETHER_ERROR_INVALID_STATE;
+        auto status = aether_dom_read_token_v1(document, &transaction->token);
+        if (status != AETHER_OK) return status;
+        transaction->output = std::make_unique<aether_dom_style_binding_s>();
+        transaction->output->value = std::make_shared<DomStyleBinding>();
+        transaction->output->value->owner = document->owner_control;
+        transaction->output->value->runtime = runtime_pin;
         std::string source;
-        auto status = aether_dom_collect_style_source(document, source);
+        status = aether_dom_collect_style_source(document, source);
         if (status != AETHER_OK) return status;
-        DomStyleSlotStageRef stage;
-        status = prepare_dom_slot(handle->value, source, stage, true);
+        status = prepare_dom_slot(transaction->output->value, source, transaction->slot, true);
         if (status != AETHER_OK) return status;
-        if (!aether_dom_style_validate_slot(stage)) return AETHER_ERROR_INVALID_STATE;
-        aether_dom_style_commit_slot(stage);
-        *out = handle.release(); return AETHER_OK;
+        status = aether_dom_style_binding_validate_create_v1(transaction.get());
+        if (status != AETHER_OK) return status;
+        *out = transaction.release(); return AETHER_OK;
     } catch (const std::bad_alloc&) { return AETHER_ERROR_OUT_OF_MEMORY; }
       catch (...) { return AETHER_ERROR_INVALID_STATE; }
+}
+AETHER_API aether_status_t aether_dom_style_binding_validate_create_v1(aether_dom_style_create_t transaction) {
+    if (!transaction) return AETHER_ERROR_NULL_ARG;
+    if (transaction->committed || !transaction->output || !aether_dom_style_validate_slot(transaction->slot))
+        return AETHER_ERROR_INVALID_STATE;
+    aether_dom_token_v1_t current{};
+    if (aether_dom_read_token_v1(transaction->slot->document->node.get(), &current) != AETHER_OK ||
+        !same_dom_binding_token(current, transaction->token)) return AETHER_ERROR_INVALID_STATE;
+    return AETHER_OK;
+}
+AETHER_API aether_status_t aether_dom_style_binding_commit_create_v1(aether_dom_style_create_t transaction,
+    aether_dom_style_binding_t* out) {
+    if (out) *out = nullptr;
+    if (!transaction || !out) return AETHER_ERROR_NULL_ARG;
+    const auto status = aether_dom_style_binding_validate_create_v1(transaction);
+    if (status != AETHER_OK) return status;
+    aether_dom_style_commit_slot(transaction->slot);
+    transaction->committed = true;
+    *out = transaction->output.release(); return AETHER_OK;
+}
+AETHER_API void aether_dom_style_binding_create_destroy_v1(aether_dom_style_create_t transaction) {
+    delete transaction;
+}
+AETHER_API aether_status_t aether_dom_style_binding_create_v1(aether_doc_t document,
+    aether_style_runtime_t runtime, aether_dom_style_binding_t* out) {
+    if (out) *out = nullptr;
+    if (!document || !runtime || !out) return AETHER_ERROR_NULL_ARG;
+    aether_dom_style_create_t transaction = nullptr;
+    const auto prepared = aether_dom_style_binding_prepare_create_v1(document, runtime, &transaction);
+    if (prepared != AETHER_OK) return prepared;
+    const auto result = aether_dom_style_binding_commit_create_v1(transaction, out);
+    aether_dom_style_binding_create_destroy_v1(transaction);
+    return result;
 }
 AETHER_API void aether_dom_style_binding_destroy_v1(aether_dom_style_binding_t handle) {
     if (!handle) return;
@@ -514,10 +566,6 @@ struct aether_dom_style_rebind_s {
     std::unique_ptr<aether_dom_style_binding_s> output;
     bool committed = false;
 };
-static bool same_dom_binding_token(const aether_dom_token_v1_t& a, const aether_dom_token_v1_t& b) noexcept {
-    return a.owner_identity == b.owner_identity && a.observation_serial == b.observation_serial &&
-        a.input_epoch == b.input_epoch && a.structure_epoch == b.structure_epoch && a.sticky_status == b.sticky_status;
-}
 AETHER_API aether_status_t aether_dom_style_binding_prepare_rebind_v1(aether_dom_style_binding_t previous,
     aether_doc_t document, aether_dom_style_rebind_t* out) {
     if (out) *out = nullptr;

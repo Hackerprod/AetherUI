@@ -159,7 +159,7 @@ static void rebind_case(){
     aether_dom_style_binding_t replacement=nullptr;aether_status_t status;
     ledger::reset();{ledger::Scope scope;status=aether_dom_style_binding_validate_rebind_v1(edit);if(status==AETHER_OK)status=aether_dom_style_binding_commit_rebind_v1(edit,&replacement);}zero("cold style binding rebind");ok(status);CHECK(replacement);
     int64_t handle=0;int32_t present=0;uint64_t epoch=0;ok(aether_dom_style_binding_read_slot_v1(replacement,&handle,&present,&epoch));CHECK(present&&aether_style_runtime_remove_stylesheet(f.runtime,foreign));
-    aether_dom_style_rebind_destroy_v1(edit);aether_dom_style_binding_destroy_v1(replacement);aether_doc_destroy(next);
+    aether_dom_style_binding_rebind_destroy_v1(edit);aether_dom_style_binding_destroy_v1(replacement);aether_doc_destroy(next);
     std::puts("DOM style binding replacement validate+commit: requests=0 (initial create remains outside this gate)");
 }
 static aether_transition_token_t transition_token(aether_transition_runtime_t runtime){aether_transition_token_t t{};ok(aether_transition_runtime_read_token(runtime,&t));return t;}

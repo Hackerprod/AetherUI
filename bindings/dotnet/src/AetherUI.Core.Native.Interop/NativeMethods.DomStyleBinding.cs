@@ -6,6 +6,14 @@ internal static unsafe partial class NativeMethods
 {
     [LibraryImport(Lib, EntryPoint = "aether_dom_style_binding_create_v1")]
     internal static partial int DomStyleBindingCreate(IntPtr document, IntPtr runtime, out IntPtr binding);
+    [LibraryImport(Lib, EntryPoint = "aether_dom_style_binding_prepare_create_v1")]
+    internal static partial int DomStyleBindingPrepareCreate(IntPtr document, IntPtr runtime, out IntPtr transaction);
+    [LibraryImport(Lib, EntryPoint = "aether_dom_style_binding_validate_create_v1")]
+    internal static partial int DomStyleBindingValidateCreate(IntPtr transaction);
+    [LibraryImport(Lib, EntryPoint = "aether_dom_style_binding_commit_create_v1")]
+    internal static partial int DomStyleBindingCommitCreate(IntPtr transaction, out IntPtr binding);
+    [LibraryImport(Lib, EntryPoint = "aether_dom_style_binding_create_destroy_v1")]
+    internal static partial void DomStyleBindingCreateDestroy(IntPtr transaction);
     [LibraryImport(Lib, EntryPoint = "aether_dom_style_binding_destroy_v1")]
     internal static partial void DomStyleBindingDestroy(IntPtr binding);
     [LibraryImport(Lib, EntryPoint = "aether_dom_style_binding_read_slot_v1")]

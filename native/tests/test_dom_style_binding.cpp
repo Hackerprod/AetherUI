@@ -95,7 +95,58 @@ static void real_dom_source(){
     ok(aether_doc_parse_html(f.doc,"<body><style>#x{opacity:.35}</style><div id='x'></div></body>"));CHECK(std::fabs(f.opacity()-.35f)<.001f);
 }
 
-int main(){removal_and_order();identity_and_disposal();diagnostic_replay();fault_atomicity();all_cascade_positions();batch_and_rebind();real_dom_source();
+static void initial_create_staging(){
+    // This is the first successful commit in this process: no warm-up commit.
+    Fixture f; aether_dom_style_create_t first=nullptr, second=nullptr, aborted=nullptr;
+    ok(aether_dom_style_binding_prepare_create_v1(f.doc,f.runtime,&first));
+    ok(aether_dom_style_binding_prepare_create_v1(f.doc,f.runtime,&second));
+    ok(aether_dom_style_binding_prepare_create_v1(f.doc,f.runtime,&aborted));
+    CHECK(f.doc->owner_control->binding.expired());
+    aether_dom_style_binding_create_destroy_v1(aborted);
+    ok(aether_dom_style_binding_validate_create_v1(first));
+    fault_delivered=false;fail_after=0;
+    const auto committed=aether_dom_style_binding_commit_create_v1(first,&f.binding);
+    fail_after=-1;CHECK(committed==AETHER_OK&&!fault_delivered);
+    CHECK(slot(f.binding).handle==1&&slot(f.binding).epoch==1);
+    auto out=reinterpret_cast<aether_dom_style_binding_t>(uintptr_t{1});
+    CHECK(aether_dom_style_binding_validate_create_v1(first)==AETHER_ERROR_INVALID_STATE);
+    CHECK(aether_dom_style_binding_commit_create_v1(first,&out)==AETHER_ERROR_INVALID_STATE&&!out);
+    out=reinterpret_cast<aether_dom_style_binding_t>(uintptr_t{1});
+    CHECK(aether_dom_style_binding_commit_create_v1(second,&out)==AETHER_ERROR_INVALID_STATE&&!out);
+    aether_dom_style_binding_create_destroy_v1(first);aether_dom_style_binding_create_destroy_v1(second);
+    CHECK(slot(f.binding).present&&std::fabs(f.opacity()-.2f)<.001f);
+}
+static void initial_stale_and_lifetime(){
+    for(int kind=0;kind<6;++kind){Fixture f;aether_dom_style_create_t stage=nullptr;ok(aether_dom_style_binding_prepare_create_v1(f.doc,f.runtime,&stage));
+        if(kind==0)ok(aether_element_set_attribute(aether_doc_get_element_by_id(f.doc,"x"),"class","changed"));
+        if(kind==1)ok(aether_doc_parse_html(f.doc,"<body><style>div{opacity:.7}</style><div></div></body>"));
+        if(kind==2)aether_style_runtime_set_diagnostics_callback(f.runtime,nullptr,nullptr);
+        if(kind==3){f.bind();aether_dom_style_binding_destroy_v1(f.binding);f.binding=nullptr;}
+        if(kind==4){aether_doc_destroy(f.doc);f.doc=nullptr;}
+        if(kind==5){aether_style_runtime_destroy(f.runtime);f.runtime=nullptr;}
+        auto out=reinterpret_cast<aether_dom_style_binding_t>(uintptr_t{1});
+        CHECK(aether_dom_style_binding_validate_create_v1(stage)==AETHER_ERROR_INVALID_STATE);
+        CHECK(aether_dom_style_binding_commit_create_v1(stage,&out)==AETHER_ERROR_INVALID_STATE&&!out);
+        aether_dom_style_binding_create_destroy_v1(stage);
+        if(f.doc)CHECK(f.doc->owner_control->binding.expired());
+    }
+    Fixture f;aether_dom_style_create_t stage=nullptr;ok(aether_dom_style_binding_prepare_create_v1(f.doc,f.runtime,&stage));
+    int result=AETHER_OK;std::thread wrong([&]{result=aether_dom_style_binding_validate_create_v1(stage);});wrong.join();CHECK(result==AETHER_ERROR_INVALID_STATE);
+    ok(aether_dom_style_binding_validate_create_v1(stage));aether_dom_style_binding_create_destroy_v1(stage);
+}
+static void initial_prepare_oom(){
+    Fixture f;bool succeeded=false;
+    for(long i=0;i<2000;++i){aether_dom_style_create_t stage=reinterpret_cast<aether_dom_style_create_t>(uintptr_t{1});
+        aether_dom_token_v1_t before{},after{};ok(aether_dom_read_token_v1(f.doc,&before));
+        fault_delivered=false;fail_after=i;auto status=aether_dom_style_binding_prepare_create_v1(f.doc,f.runtime,&stage);fail_after=-1;
+        CHECK(f.doc->owner_control->binding.expired());ok(aether_dom_read_token_v1(f.doc,&after));
+        CHECK(before.owner_identity==after.owner_identity&&before.observation_serial==after.observation_serial&&before.input_epoch==after.input_epoch&&before.structure_epoch==after.structure_epoch);
+        if(status==AETHER_OK){ok(aether_dom_style_binding_commit_create_v1(stage,&f.binding));aether_dom_style_binding_create_destroy_v1(stage);CHECK(slot(f.binding).handle==1&&slot(f.binding).epoch==1);succeeded=true;break;}
+        CHECK(status==AETHER_ERROR_OUT_OF_MEMORY&&fault_delivered&&!stage);
+    }CHECK(succeeded);
+}
+
+int main(){initial_create_staging();initial_stale_and_lifetime();initial_prepare_oom();removal_and_order();identity_and_disposal();diagnostic_replay();fault_atomicity();all_cascade_positions();batch_and_rebind();real_dom_source();
 #ifdef AETHER_DOM_STYLE_TESTING
 exhaustion();
 #endif

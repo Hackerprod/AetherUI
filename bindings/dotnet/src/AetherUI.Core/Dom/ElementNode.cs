@@ -51,6 +51,7 @@ public sealed class ElementNode : Node
                 _state = value;
                 change.Publish();
 #if AETHER_DOM_COMMIT_ALLOCATION_TESTING
+                DomCommitAllocationLedger.MarkPhase(DomCommitAllocationPhase.ScalarMirror);
                     allocationCommitSucceeded = true;
                 }
                 finally { DomCommitAllocationLedger.End(allocationCommitSucceeded); }

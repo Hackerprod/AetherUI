@@ -12,10 +12,44 @@ internal static class DomStyleBindingInteropTests
 
     internal static void Run()
     {
+        InitialCreationIsPreparedAndOneShot();
         AbortAndStaleBasesPreservePublishedRuntime();
         RebindPreservesForeignSheetsAndRemovedSource();
         LoadedFinalizableDocumentRemainsBorrowed();
         Console.WriteLine("PASS native DOM style rebind, cache staging and foreign sheets");
+    }
+
+    private static void InitialCreationIsPreparedAndOneShot()
+    {
+        using var document = NativeDomDocument.Parse("<style>button{width:70px}</style><button>A</button>");
+        using var runtime = new StyleRuntimeInterop(200, 200, 1);
+        using var first = runtime.PrepareDomBinding(document);
+        using var second = runtime.PrepareDomBinding(document);
+        using (var aborted = runtime.PrepareDomBinding(document)) aborted.Validate();
+        Check(runtime.DomStyleBindingHandle == IntPtr.Zero && Field<IntPtr>(runtime, "_document") == IntPtr.Zero,
+            "Initial preparation or abort published a binding.");
+        first.Validate(); first.Commit();
+        var binding = runtime.DomStyleBindingHandle;
+        var slot = runtime.ReadDomSourceSlot();
+        Throws<InvalidOperationException>(first.Validate);
+        Throws<InvalidOperationException>(first.Commit);
+        Throws<InvalidOperationException>(second.Commit);
+        first.Dispose(); second.Dispose();
+        Check(runtime.DomStyleBindingHandle == binding && runtime.ReadDomSourceSlot() == slot,
+            "Disposing committed staging unregistered the published binding.");
+
+        for (var kind = 0; kind < 3; kind++)
+        {
+            using var candidate = NativeDomDocument.Parse("<style>button{width:80px}</style><button>B</button>");
+            using var owner = new StyleRuntimeInterop(200, 200, 1);
+            using var staged = owner.PrepareDomBinding(candidate);
+            if (kind == 0) candidate.SetAttribute(candidate.EnumerateElementHandles().Last(), "class", "new-source-base");
+            if (kind == 1) candidate.Dispose();
+            if (kind == 2) owner.Dispose();
+            if (kind == 1) Throws<ObjectDisposedException>(staged.Commit);
+            else Throws<InvalidOperationException>(staged.Commit);
+            Check(owner.DomStyleBindingHandle == IntPtr.Zero, "Stale initial stage published a binding.");
+        }
     }
 
     private static void AbortAndStaleBasesPreservePublishedRuntime()

@@ -99,7 +99,9 @@ static void materialize_document_atomic() {
     auto current=token(destination);candidate=nullptr;CHECK(aether_dom_prepare_edit_v1(&current,&spec,&candidate)==AETHER_ERROR_INVALID_STATE&&!candidate);
     aether_doc_destroy(source);aether_doc_destroy(destination);
 }
+#include "dom_edit_fault_matrix.h"
 int main(){
+    dom_fault_matrix::run();
     materialize_document_atomic();
     style_replacement_invalidates_edit();
     aether_doc_t d=nullptr;CHECK(aether_doc_create(&d)==AETHER_OK);CHECK(aether_doc_parse_html(d,"<body><input id='a' value='base'><p id='b'></p></body>")==AETHER_OK);auto* a=aether_doc_get_element_by_id(d,"a");auto* b=aether_doc_get_element_by_id(d,"b");auto* body=a->parent;

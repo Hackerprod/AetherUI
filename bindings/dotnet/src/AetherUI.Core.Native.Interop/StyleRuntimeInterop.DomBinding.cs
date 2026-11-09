@@ -1,4 +1,38 @@
+using System.Runtime.InteropServices;
+
 namespace AetherUI.Core.Native;
+
+// The wrapper exists before acquisition. Its finalizer only destroys staging,
+// never a published binding or its registration. Both stage kinds share the
+// same allocation-free borrowed-handle protocol.
+internal sealed class NativeDomBindingStageHandle : SafeHandle
+{
+    private readonly bool _initial;
+    internal NativeDomBindingStageHandle(bool initial) : base(IntPtr.Zero, true) => _initial = initial;
+    public override bool IsInvalid => handle == IntPtr.Zero;
+    internal void Initialize(IntPtr value) => SetHandle(value);
+    internal BorrowedStage Borrow() => new(this);
+    protected override bool ReleaseHandle()
+    {
+        if (_initial) NativeMethods.DomStyleBindingCreateDestroy(handle);
+        else NativeMethods.DomStyleBindingRebindDestroy(handle);
+        return true;
+    }
+    internal readonly ref struct BorrowedStage
+    {
+        private readonly NativeDomBindingStageHandle _owner;
+        internal IntPtr Handle { get; }
+        internal BorrowedStage(NativeDomBindingStageHandle owner)
+        {
+            var acquired = false;
+            owner.DangerousAddRef(ref acquired);
+            if (!acquired) throw new ObjectDisposedException(nameof(NativeDomBindingStageHandle));
+            _owner = owner;
+            Handle = owner.DangerousGetHandle();
+        }
+        public void Dispose() => _owner.DangerousRelease();
+    }
+}
 
 public sealed unsafe partial class StyleRuntimeInterop
 {
@@ -138,7 +172,7 @@ public sealed unsafe partial class StyleRuntimeInterop
         private readonly Dictionary<IntPtr, int> _index = [];
         private readonly List<IntPtr> _elements = [];
         private NativeDomSnapshot? _snapshot;
-        private IntPtr _transaction;
+        private NativeDomBindingStageHandle? _transaction;
         private IntPtr _retiredBinding;
         private IntPtr _retiredRevision;
         private bool _committed;
@@ -152,10 +186,11 @@ public sealed unsafe partial class StyleRuntimeInterop
             _previousDocument = owner._document;
             _previousDocumentOwner = owner._loadedDocument;
             _documentOwner = document;
-            using var documentBorrow = document.Borrow();
-            _document = documentBorrow.Handle;
+            _transaction = new NativeDomBindingStageHandle(_previousBinding == IntPtr.Zero);
             try
             {
+                using var documentBorrow = document.Borrow();
+                _document = documentBorrow.Handle;
                 // Snapshot pins all storage until validation/publication finishes. A disposed
                 // NativeDomDocument can invalidate this stage but cannot leave a dangling root.
                 _snapshot = NativeDomSnapshot.Acquire(document);
@@ -163,7 +198,15 @@ public sealed unsafe partial class StyleRuntimeInterop
                 if (_previousBinding != IntPtr.Zero)
                 {
                     NativeDomWorkCounters.RecordRebind();
-                    NativeDomSync.Throw(NativeMethods.DomStyleBindingPrepareRebind(_previousBinding, _document, out _transaction));
+                    var status = NativeMethods.DomStyleBindingPrepareRebind(_previousBinding, _document, out var transaction);
+                    _transaction.Initialize(transaction);
+                    NativeDomSync.Throw(status);
+                }
+                else
+                {
+                    var status = NativeMethods.DomStyleBindingPrepareCreate(_document, _runtime, out var transaction);
+                    _transaction.Initialize(transaction);
+                    NativeDomSync.Throw(status);
                 }
                 Validate();
             }
@@ -183,8 +226,10 @@ public sealed unsafe partial class StyleRuntimeInterop
                 throw new InvalidOperationException("The loaded document owner changed during preparation.");
             if (NativeDomSync.ReadToken(documentBorrow.Handle) != _snapshot!.Token)
                 throw new InvalidOperationException("The candidate document changed during preparation.");
-            if (_transaction != IntPtr.Zero)
-                NativeDomSync.Throw(NativeMethods.DomStyleBindingValidateRebind(_transaction));
+            using var transactionBorrow = _transaction!.Borrow();
+            NativeDomSync.Throw(_previousBinding == IntPtr.Zero
+                ? NativeMethods.DomStyleBindingValidateCreate(transactionBorrow.Handle)
+                : NativeMethods.DomStyleBindingValidateRebind(transactionBorrow.Handle));
         }
 
         internal void Commit()
@@ -193,12 +238,12 @@ public sealed unsafe partial class StyleRuntimeInterop
             using var documentBorrow = _documentOwner!.Borrow();
             using var previousBorrow = _previousDocumentOwner?.Borrow() ?? default;
             IntPtr binding;
-            // Initial create is the last fallible operation before the first publication.
-            // It has the native strong guarantee. Replacement commit uses only preallocated
-            // native storage after validating both DOMs, runtime, sheets and binding identity.
-            var status = _transaction != IntPtr.Zero
-                ? NativeMethods.DomStyleBindingCommitRebind(_transaction, out binding)
-                : NativeMethods.DomStyleBindingCreate(_document, _runtime, out binding);
+            using var transactionBorrow = _transaction!.Borrow();
+            // Both paths were prepared before host validation. This segment only
+            // validates native bases, publishes prepared storage, and swaps refs.
+            var status = _previousBinding == IntPtr.Zero
+                ? NativeMethods.DomStyleBindingCommitCreate(transactionBorrow.Handle, out binding)
+                : NativeMethods.DomStyleBindingCommitRebind(transactionBorrow.Handle, out binding);
             NativeDomSync.Throw(status);
             _retiredBinding = _owner._domStyleBinding;
             _retiredRevision = _owner._managedPublicationRevision;
@@ -217,10 +262,11 @@ public sealed unsafe partial class StyleRuntimeInterop
             if (_disposed) return;
             _owner.VerifyDomBindingThread();
             _disposed = true;
-            if (_transaction != IntPtr.Zero) NativeMethods.DomStyleBindingRebindDestroy(_transaction);
+            _transaction?.Dispose();
+            _transaction = null;
             if (_retiredBinding != IntPtr.Zero) NativeMethods.DomStyleBindingDestroy(_retiredBinding);
             if (_retiredRevision != IntPtr.Zero) NativeMethods.StyleRevisionDestroy(_retiredRevision);
-            _transaction = _retiredBinding = _retiredRevision = IntPtr.Zero;
+            _retiredBinding = _retiredRevision = IntPtr.Zero;
             _snapshot?.Dispose();
             _snapshot = null;
             _documentOwner = _previousDocumentOwner = null;
