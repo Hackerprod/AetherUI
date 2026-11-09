@@ -275,8 +275,17 @@ struct aether_layout_result_s {
         // Resolve through retained immutable assets, never dereference an old
         // frame's raw DOM pointer merely to obtain its identity token.
         const auto view=assets->base->lookup(node);
-        return view && effective_context_owners->owners.find(
-            reinterpret_cast<uintptr_t>(view.payload_owner()->node_lifetime().get()));
+        if(!view) return false;
+        const auto& identity=view.payload_owner()->node_lifetime();
+        if(identity) return effective_context_owners->owners.find(reinterpret_cast<uintptr_t>(identity.get()));
+        // An unbound legacy import is always a complete-helper fallback. The
+        // helper captured authentic tokens while the DOM was live; old-frame
+        // queries compare retained entries only, never dereference that DOM.
+        for(const auto& entry:effective_context_owners->owners.entries()) {
+            aether::diagnostics::count_work(aether::diagnostics::WorkCounter::context_index_visits);
+            if(entry.second.node==node) return true;
+        }
+        return false;
     }
     aether::layout::LayoutAssetsRef assets;
     std::unique_ptr<aether::layout::MutableLayoutOverlay> build_overlay;

@@ -76,7 +76,8 @@ public sealed unsafe partial class StyleRuntimeInterop
             current.InputsCurrent != 0 && current == expected;
     }
 
-    /// <summary>Full, fallible staging. Never enables the experimental state resolver.</summary>
+    /// <summary>Fallible staging. The default uses the full resolver; the internal opt-in
+    /// requests state deltas, still subject to native feature gates and certified coverage.</summary>
     public PreparedPublication PreparePublication(IReadOnlyList<int>? states, float width, float height, float dpiScale, NativeStyleMap? previousMap = null, bool experimentalDelta = false)
     {
         ThrowIfDisposed();

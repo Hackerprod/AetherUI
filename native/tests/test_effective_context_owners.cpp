@@ -126,9 +126,57 @@ static void destroyed_owner() {
  aether_layout_result_t rejected=nullptr;CHECK(aether_layout_layout(f.engine,nullptr,f.map,200,200,nullptr,nullptr,&rejected)==AETHER_ERROR_NULL_ARG);
  CHECK(!f.engine->transition_context_prepared && !f.engine->prepared_context_owners);
 }
+static aether::style::FrozenNodeRef unbound_record(aether_node_t node,const aether_computed_style_t& style) {
+ using namespace aether::style;
+ NodeRecordInput input;input.node=node;ok(freeze_style(style,input.style));
+ FrozenNodeRef record;ok(freeze_node_record(input,record));CHECK(!record->node_lifetime());return record;
+}
+static void install_legacy(Fixture& f,const aether::style::FrozenNodeRef& record) {
+ using namespace aether::style;
+ MapVersionInput input;const auto previous=f.map->current;
+ input.document_lifetime=previous->document_lifetime();input.document_identity=previous->document_identity();
+ input.structure_epoch=previous->structure_epoch();input.input_epoch=previous->input_epoch();input.style_tree_epoch=previous->style_tree_epoch();
+ BackingPatchEntry patch{f.node,record};ok(patch_backing(previous->backing(),std::span(&patch,1),input.backing));
+ ok(make_map_version(input,f.map->current));
+}
+static void unbound_legacy_fallback() {
+ using namespace aether::style;
+ Fixture f;auto base=aether_computed_style_default();aether_transform_operation operation{};auto target=transformed(operation,20);
+ auto bound=f.map->current->backing()->find_owner(f.node);auto legacy=unbound_record(f.node,target);
+ install_legacy(f,legacy);CHECK(!f.map->current->static_context_owners());
+ // Full import as well as delta patch must reject partial owner coverage.
+ BackingBuildInput imported;imported.entries.emplace(f.node,legacy);BackingRef unbound;
+ ok(freeze_backing(imported,unbound));CHECK(!unbound->context_owners());
+ // Repeated keys use the current staged root when maintaining unknown coverage.
+ BackingPatchEntry rebound[]={{f.node,bound},{f.node,legacy},{f.node,bound}};BackingRef restored;
+ ok(patch_backing(unbound,rebound,restored));CHECK(restored->context_owners());
+ BackingPatchEntry removed{f.node,{}};ok(patch_backing(unbound,std::span(&removed,1),restored));
+ CHECK(restored->context_owners() && restored->size()==0);
+ f.prepare(true);f.build();CHECK(f.owners()==1 && f.layout->effective_fixed_container(f.node));
+ aether_work_counters_reset();f.prepare(false);CHECK(!f.engine->context_cache.effective);
+#if defined(AETHERUI_ENABLE_WORK_COUNTERS)
+ aether_context_work_counters_v1_t counters{};ok(aether_context_work_counters_get_v1(&counters));
+ CHECK(counters.backing_entries_visited>0 && counters.fallbacks==1);
+#endif
+ // Active-only legacy membership also uses the full helper. Finish excludes it.
+ ok(aether_transition_runtime_observe(f.transitions,f.node,&base,&target,0));
+ install_legacy(f,unbound_record(f.node,base));f.prepare(false);f.build();CHECK(f.owners()==1);
+ CHECK(!aether_transition_runtime_tick(f.transitions,2000));f.prepare(true);f.build();CHECK(!f.owners());
+ aether_backdrop_filter blur{};blur.kind=AETHER_BACKDROP_FILTER_BLUR;blur.length_amount={2,AETHER_CSS_UNIT_PX};
+ auto backdrop=base;backdrop.backdrop_filters={&blur,1};install_legacy(f,unbound_record(f.node,backdrop));
+ f.prepare(true);f.build();CHECK(f.owners()==1);
+ aether_layout_result_t clone{};ok(aether_layout_clone_snapshot(f.layout,&clone));
+ const auto snapshot=clone->effective_context_owners;auto* old_node=f.node;
+ aether_doc_destroy(f.doc);f.doc=nullptr;f.node=nullptr;
+ CHECK(clone->effective_fixed_container(old_node));CHECK(f.layout->effective_fixed_container(old_node));
+ aether_bool_t changed{};ok(aether_layout_prepare_transition_context(f.engine,f.transitions,f.map,f.layout,&changed));
+ CHECK(changed && f.engine->prepared_context_owners->owners.empty());
+ CHECK(clone->effective_context_owners==snapshot && snapshot->owners.size()==1);
+ aether_layout_result_destroy(clone);
+}
 static void persistent_diff(){
  using Index=aether::style::PersistentIndex<int>;Index index;std::map<uintptr_t,int> values;std::mt19937 rng(12345);
  for(int round=0;round<2000;++round){auto next=index;auto expected=values;for(int change=0;change<6;++change){auto key=uintptr_t(rng()%100);if(rng()%3){int value=rng()%20;next=next.set(key,value);expected[key]=value;}else{next=next.erase(key);expected.erase(key);}}
   auto actual=values;index.diff(next,[&](uintptr_t key,const int*,const int* after){if(after)actual[key]=*after;else actual.erase(key);});CHECK(actual==expected);index=std::move(next);values=std::move(expected);}
 }
-int main(){aether_work_counters_set_enabled(AETHER_TRUE);persistent_diff();cause_lifecycle();compact_provenance_and_context();generated_staging_and_contextual();destroyed_owner();std::printf("PASS D2 owners/compact/provenance %u checks\n",checks);return 0;}
+int main(){aether_work_counters_set_enabled(AETHER_TRUE);persistent_diff();cause_lifecycle();compact_provenance_and_context();generated_staging_and_contextual();destroyed_owner();unbound_legacy_fallback();std::printf("PASS D2 owners/compact/provenance %u checks\n",checks);return 0;}

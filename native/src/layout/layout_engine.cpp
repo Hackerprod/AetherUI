@@ -1420,12 +1420,14 @@ static aether::style::ContextOwnersRef effective_fixed_containers(
     count_work(WorkCounter::transition_context_builds);
     std::vector<ContextOwnerIndex::Entry> effective;
     const auto version = styles ? styles->selected_version() : MapVersionRef{};
-    if (version) version->for_each_node([&](const BoundNodeView& view) {
+    // Legacy records may omit the token. Their raw nodes must be live during
+    // the operation, as before D2. A known dead document is never dereferenced.
+    if (version && (!version->document_lifetime() || version->document_lifetime()->alive)) version->for_each_node([&](const BoundNodeView& view) {
         count_work(WorkCounter::transition_context_entries_visited);
         count_work(WorkCounter::context_backing_visits);
         const auto& record = view.payload_owner();
         auto* node = record->node();
-        const auto& identity = record->node_lifetime();
+        const auto identity = record->node_lifetime() ? record->node_lifetime() : node ? node->identity : nullptr;
         if (!identity || identity->owner != node || !identity->alive || !identity->attached) return;
         const auto style = record->style_view();
         if (node && node->type == AETHER_NODE_ELEMENT && !node->anonymous_flex_owner &&
