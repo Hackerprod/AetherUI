@@ -553,6 +553,14 @@ if(AETHERUI_BUILD_TESTS)
         target_link_options(aether_persistent_style_backing_test PRIVATE "-Wl,--wrap=malloc" "-Wl,--wrap=free")
         add_test(NAME aether.persistent-style-backing COMMAND aether_persistent_style_backing_test)
 
+        add_executable(aether_payload_revision_delta_test tests/test_payload_revision_delta.cpp
+            src/css/style_revision.cpp src/css/style_map_version.cpp src/css/immutable_style_backing.cpp
+            src/css/frozen_node_record.cpp src/css/frozen_c_string.cpp src/css/frozen_measure_read.cpp
+            src/css/style_freeze.cpp src/style_runtime/frozen_runtime_metadata.cpp)
+        target_include_directories(aether_payload_revision_delta_test PRIVATE include src)
+        target_link_options(aether_payload_revision_delta_test PRIVATE "-Wl,--wrap=malloc" "-Wl,--wrap=free")
+        add_test(NAME aether.payload-revision-delta COMMAND aether_payload_revision_delta_test)
+
         add_executable(aether_immutable_style_revision_test tests/test_immutable_style_revision.cpp
             src/css/style_revision.cpp src/css/style_map_version.cpp
             src/css/immutable_style_backing.cpp src/css/frozen_node_record.cpp

@@ -166,7 +166,7 @@ struct committed_callback_context {
     int32_t* outer_count;
     int calls = 0;
     int64_t nested = -1;
-    const aether::style::FrozenNodeRecord* final_state = nullptr;
+    const aether::style::FrozenNodePayload* final_state = nullptr;
     aether_style_map_t outer_map = nullptr;
     aether_style_map_t final_map = nullptr;
 };
@@ -233,8 +233,8 @@ struct failed_callback_context {
     bool calc_first;
     int calls = 0;
     int64_t nested = -1;
-    const aether::style::FrozenNodeRecord* original_state;
-    const aether::style::FrozenNodeRecord* final_state = nullptr;
+    const aether::style::FrozenNodePayload* original_state;
+    const aether::style::FrozenNodePayload* final_state = nullptr;
 };
 void failed_callback(const char* code, const char*, const char*, const char*, void* data) {
     auto& c = *static_cast<failed_callback_context*>(data);
@@ -292,7 +292,7 @@ struct last_id_context {
     int outer_calls = 0;
     int nested_calls = 0;
     int64_t empty = -1;
-    const aether::style::FrozenNodeRecord* final_state = nullptr;
+    const aether::style::FrozenNodePayload* final_state = nullptr;
 };
 void last_id_callback(const char* code, const char*, const char*, const char*, void* data) {
     auto& c = *static_cast<last_id_context*>(data);
@@ -341,7 +341,7 @@ struct handle_failure_context {
     int64_t* output;
     int32_t* count;
     int calls = 0;
-    const aether::style::FrozenNodeRecord* final_state = nullptr;
+    const aether::style::FrozenNodePayload* final_state = nullptr;
 };
 void handle_failure_callback(const char* code, const char*, const char*, const char*, void* data) {
     auto& c = *static_cast<handle_failure_context*>(data);
@@ -378,7 +378,7 @@ struct source_failure_context {
     int32_t* count;
     int calls = 0;
     int64_t nested = -1;
-    const aether::style::FrozenNodeRecord* final_state = nullptr;
+    const aether::style::FrozenNodePayload* final_state = nullptr;
 };
 void source_failure_callback(const char* code, const char*, const char*, const char*, void* data) {
     auto& c = *static_cast<source_failure_context*>(data);

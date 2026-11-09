@@ -209,7 +209,7 @@ struct Fixture {
         r.check(map && map->current && map->current->mode() ==
                 (contextual ? MapMode::contextual : MapMode::legacy_complete), 3);
         base = map->current;
-        base_count = base->backing()->size();
+        base_count = base->size();
         save_dom(doc, dom);
         structure = doc->identity->structure_epoch;
         mutation = doc->identity->mutation_epoch;
@@ -267,7 +267,7 @@ struct Fixture {
         const bool value_ok = value && std::strcmp(value, placeholder ? "" : value64) == 0;
         aether_string_free(value);
         r.check(value_ok, 19);
-        r.check(map->current == base && base->backing()->size() == base_count, 20);
+        r.check(map->current == base && base->size() == base_count, 20);
         verify_frame(source);
         verify_frame(clone);
         r.check(aether_display_list_get_count(old_list) == old_count, 21);

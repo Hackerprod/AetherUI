@@ -264,25 +264,33 @@ void provenance_map_modes(){
     const auto original=f.layout->assets->base;
     CHECK(original&&original->contextual()&&original->revision());
     const auto revision=original->revision();
-    // These are authentic runtime records/revision owners, not legacy records
-    // relabeled contextual. make_map_version validates exact owner/provenance.
+    MapVersionRef materialized;
+    CHECK(materialize_legacy_revision_map(revision,materialized)==AETHER_OK);
+    CHECK(materialized->mode()==MapMode::legacy_complete && materialized->backing());
+    // Contextual reads use the authentic revision directory. Legacy modes use
+    // records explicitly materialized from that same revision, never relabeled
+    // arbitrary records. Each factory keeps its owner/provenance checks.
     for(auto mode:{MapMode::contextual,MapMode::legacy_complete,MapMode::legacy_partial}){
         MapVersionInput input;
-        input.mode=mode;input.backing=revision->backing();
+        input.mode=mode;
+        if(mode==MapMode::legacy_partial)input.backing=materialized->backing();
         input.document_lifetime=revision->document_lifetime();
         input.document_identity=revision->document_identity();
         input.structure_epoch=revision->structure_epoch();
         input.input_epoch=revision->input_epoch();input.style_tree_epoch=revision->style_tree_epoch();
         if(mode!=MapMode::legacy_partial){input.revision=revision;input.generation=revision->generation();}
         aether_style_map_s selected;
-        CHECK(make_map_version(input,selected.current)==AETHER_OK);
+        if(mode==MapMode::legacy_complete)selected.current=materialized;
+        else CHECK(make_map_version(input,selected.current)==AETHER_OK);
         CHECK(selected.current->mode()==mode);
         aether_layout_result_t frame=nullptr;
         CHECK(aether_layout_layout(f.engine,f.doc,&selected,800,600,nullptr,nullptr,&frame)==AETHER_OK);
         auto* box=aether_layout_result_find_primary_box(frame,f.node);CHECK(box);
         aether_contextual_transition_sample expected{};
         aether_computed_style_handle_t reference=nullptr;
-        CHECK(export_style_handle(*selected.current,selected.current->backing()->find_owner(f.node),&reference)==AETHER_OK);
+        FrozenNodeRef reference_record;
+        CHECK(selected.current->lookup(f.node).export_record(reference_record)==AETHER_OK);
+        CHECK(export_style_handle(*selected.current,reference_record,&reference)==AETHER_OK);
         CHECK(aether_contextual_transition_sample_box(f.next,reference,box->border_box,&expected)==AETHER_OK);
         aether_computed_style_handle_destroy(reference);
         selected.current.reset();
@@ -292,7 +300,7 @@ void provenance_map_modes(){
     }
     // Partial map can retain valid records while its global identity is absent.
     // It must fail sampling exactly as its exported public reference does.
-    MapVersionInput input;input.backing=original->backing();
+    MapVersionInput input;input.backing=materialized->backing();
     aether_style_map_s unbound;CHECK(make_map_version(input,unbound.current)==AETHER_OK);
     aether_layout_result_t frame=nullptr;
     CHECK(aether_layout_layout(f.engine,f.doc,&unbound,800,600,nullptr,nullptr,&frame)==AETHER_OK);
@@ -333,7 +341,7 @@ void provenance_synthetic_text(){
     auto* anonymous=frame->anonymous_flex_items.at(flex)[0];
     CHECK(anonymous->anonymous_flex_owner==flex);
     CHECK(frame->assets->synthetic->find(anonymous));
-    CHECK(!frame->assets->base->backing()->find(anonymous));
+    CHECK(!frame->assets->base->lookup(anonymous));
     aether_layout_result_t clone=nullptr;
     CHECK(aether_layout_clone_snapshot(frame,&clone)==AETHER_OK);
     CHECK(clone->assets==frame->assets);
@@ -413,7 +421,8 @@ void handle_control(Fixture& f){
     std::printf("map_get positive: gets=%zu nested_exports=%zu (same-TU calls need not interpose)\n",gets,exports);
     aether_computed_style_handle_t cloned{};reset();region=true;auto status=aether_computed_style_handle_clone(h,&cloned);region=false;CHECK(status==AETHER_OK && clones==1);
     reset();region=true;aether_computed_style_handle_destroy(h);aether_computed_style_handle_destroy(cloned);region=false;CHECK(destroys==2);
-    auto version=f.layout->assets->base;auto record=version->backing()->find_owner(f.node);
+    auto version=f.layout->assets->base;FrozenNodeRef record;
+    CHECK(version->lookup(f.node).export_record(record)==AETHER_OK);
     reset();region=true;status=aether::style::export_style_handle(*version,record,&h);region=false;CHECK(status==AETHER_OK && exports==1);aether_computed_style_handle_destroy(h);
     std::puts("positive controls: map_get=1 export=1 clone=1 destroy=2 direct_export=1");
 }
@@ -442,14 +451,14 @@ void sweep(Fixture& f,bool baseline,bool transforms,aether_contextual_transition
 }
 void scaled_handles(bool baseline,size_t count){
     Fixture f(true,count);size_t rich=0;
-    for(const auto& [node,record]:f.layout->assets->base->backing()->entries()){
-        const auto view=record->style_view();
+    f.layout->assets->base->for_each_node([&](const aether::style::BoundNodeView& record){
+        const auto view=record.style_view();
         if(view.background_layers().size()==2){
             CHECK(!view.box_shadows().empty() && !view.text_shadows().empty() && !view.backdrop_filters().empty());
             CHECK(view.background_layers()[0].view().image_source.present());
             CHECK(view.background_layers()[1].view().gradient.stops.size()>=2);++rich;
         }
-    }
+    });
     CHECK(rich==count);
     for(auto batch:{static_cast<aether_contextual_transition_batch_t>(nullptr),f.next}){
         reset();region=true;const auto status=aether_contextual_transition_finalize_layout(f.layout,batch);region=false;

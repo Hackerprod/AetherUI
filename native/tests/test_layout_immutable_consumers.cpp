@@ -453,7 +453,7 @@ static void runtime_context_and_anonymous() {
     REQUIRE(aether_style_revision_create_map(revision, &map) == AETHER_OK);
     aether_style_revision_destroy(revision);
     const auto before = map->current;
-    const auto base_count = before->backing()->size();
+    const auto base_count = before->size();
     struct MeasureContext { aether_style_map_t wrapper; int count = 0; } context{map};
     aether_layout_engine_t engine = nullptr;
     REQUIRE(aether_layout_create([](const char*, const aether_computed_style_t* copy, float, void* data) {
@@ -465,21 +465,21 @@ static void runtime_context_and_anonymous() {
     aether_layout_result_t frame = nullptr;
     REQUIRE(aether_layout_layout(engine, doc, map, 800, 600, nullptr, nullptr, &frame) == AETHER_OK);
     REQUIRE(context.count > 0 && !context.wrapper);
-    REQUIRE(frame->assets->base == before && before->backing()->size() == base_count);
+    REQUIRE(frame->assets->base == before && before->size() == base_count);
     REQUIRE(!frame->build_overlay);
     const StyleLookup lookup(frame->assets, {}, false);
     auto* flex = aether_doc_get_element_by_id(doc, "flex");
     const auto& sequence = frame->anonymous_flex_items.at(flex);
     REQUIRE(sequence.size() == 1);
     auto* anonymous = sequence[0];
-    REQUIRE(!before->backing()->find(anonymous));
+    REQUIRE(!before->lookup(anonymous));
     const auto anonymous_style = lookup.lookup_node(anonymous);
     REQUIRE(anonymous_style && anonymous_style->text_shadows().size() == 1);
     REQUIRE(anonymous_style->text_shadows()[0].offset_x == 1);
     const auto measures = lookup.lookup_measures(anonymous);
     REQUIRE(measures && measures->row_gap().value == 0 && measures->column_gap().value == 0);
     REQUIRE(lookup.lookup_measures_owner(anonymous)->document_owner() ==
-        before->backing()->find(flex)->measures()->document_owner());
+        before->lookup(flex).document_owner());
     aether_style_map_s empty;
     REQUIRE(StyleOperationPin(frame->assets, {}, false).accepts_override());
     REQUIRE(!StyleOperationPin(frame->assets, empty.current, true).accepts_override());

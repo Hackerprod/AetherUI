@@ -1,7 +1,8 @@
-# Hover work counters (phase A baseline, B1+B2 checkpoint)
+# Hover work counters (phase A baseline, phase B payload revisions)
 
-Phase A added observability. B1+B2 separates immutable payloads and introduces
-persistent legacy map patches, not an incremental resolver or hit-test cache.
+Phase A added observability. Phase B separates immutable payload revisions and
+introduces persistent directories/manifests and legacy map patches. It does not
+enable an incremental resolver or hit-test cache.
 The full resolver, publication, transition-context calculation, hit traversal and
 input dispatch remain the correctness oracle. No fast path is enabled.
 
@@ -38,8 +39,14 @@ separate because attributing thread-wide counters to a single host would be fals
 
 - `compute_nodes`: calls to the existing node computation, including generated nodes.
 - `state_entries_visited`: old state entries visited during complete preparation.
-- `revision_records_created`: successfully frozen node records.
-- `revision_entries_created`: appended complete revision manifest entries.
+- `revision_records_created`: bound node records actually created for requested
+  legacy updates, map materialization/patches or exported handles. In phase A and
+  B1+B2 the runtime allocated one per node during every full prepare. B3 full
+  preparation now creates local payloads instead; a no-update resolve creates
+  zero bound records. This counter does **not** count node payload allocations.
+- `revision_entries_created`: entries appended to the complete full-preparation
+  output. It still counts N in B3, including the exhaustive certification pass's
+  input. It is not the number of persistent manifest paths copied by delta freeze.
 - `revision_prepares`: valid-owner preparation attempts, including later failures.
 - `revision_publications`: successful revision commits, including reentrant commits.
 - `state_full_fallbacks`: valid legacy state requests sent to the full resolver.
@@ -70,7 +77,8 @@ warmup its records are unchanged, so B2 measures a no-op patch there. The added
 sets prepared by separate runtimes of the same document before timing. It checks
 exact ownership and output after every call, outside wall/CPU timing. ON builds
 require K=2 changed leaves per iteration (100 over 50 samples) and zero style
-computation/publications; OFF builds require zero counters while still checking
+computation/publications; B3 also creates K requested bound legacy records in each
+replacement patch, which is included in the measured operation and reported; OFF builds require zero counters while still checking
 alternating output. Neither case measures whole-pipeline hover CPU.
 
 `aether.hover-work-counters` asserts the current complete oracle's structural work
@@ -81,8 +89,9 @@ assertion requires K=2 copied leaf records instead of N. The separate
 zero-allocation reads, history release and fault injection. These do not prove
 independence of N for the complete pipeline. Later incremental phases must
 preserve the full-oracle fixture and add separate fast-path expectations. Zero
-visual updates still compute and freeze N records, and the revision manifest is
-still fully materialized. Do not reinterpret zero updates as zero work.
+visual updates still compute N nodes and prepare/certify N logical entries, but
+create zero bound records. The final directory and ordered manifest path-copy
+only changed payload routes; this does not erase the full preparation cost. Do not reinterpret zero updates as zero work.
 
 ## Chromium references consulted
 
@@ -117,8 +126,9 @@ Paths below are under `third_party/blink/renderer/` in that revision.
 
 No Chromium executable was run. Native Linux measurements do not establish
 Windows CPU, input-to-present latency, GC or renderer performance. Managed event
-traces and full-pipeline allocation measurements remain pending. B1+B2 is only a
-phase B checkpoint: payload separation and persistent legacy backing exist;
-revision payload-directory/manifest migration, certified delta publication, and
-agenda/context/hit fast paths remain pending before the overall optimization can
-pass. See [phase B checkpoint](hover-phase-b-checkpoint.md).
+traces and full-pipeline allocation measurements remain pending. The original
+[B1+B2 checkpoint](hover-phase-b-checkpoint.md) is historical. B3 migrates runtime
+payload directories, ordered manifests and contextual readers while preserving
+full resolution. See [payload revisions](hover-payload-revisions.md). Agenda,
+context and hit fast paths remain pending; native correctness is not a Windows
+CPU improvement claim.

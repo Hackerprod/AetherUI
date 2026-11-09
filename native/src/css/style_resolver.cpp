@@ -24,10 +24,18 @@ namespace aether::style {
 aether_status_t export_style_handle(const MapVersion& binding, const FrozenNodeRef& record,
     aether_computed_style_handle_t* out) noexcept {
     if (!out) return AETHER_ERROR_NULL_ARG;
-    if (!record || !binding.backing()) return AETHER_ERROR_INVALID_STATE;
-    const auto member = binding.backing()->find_owner(record->node());
-    if (member != record || member.owner_before(record) || record.owner_before(member))
-        return AETHER_ERROR_INVALID_STATE;
+    if (!record) return AETHER_ERROR_INVALID_STATE;
+    if(binding.backing()) {
+        const auto member=binding.backing()->find_owner(record->node());
+        if(member!=record||member.owner_before(record)||record.owner_before(member))return AETHER_ERROR_INVALID_STATE;
+    } else {
+        const auto member=binding.lookup(record->node());
+        if(!member||!record->measures())return AETHER_ERROR_INVALID_STATE;
+        const auto& payload=record->payload_owner();const auto& expected=member.payload_owner();
+        const auto& document=record->measures()->document_owner();const auto selected=member.document_owner();
+        if(payload!=expected||payload.owner_before(expected)||expected.owner_before(payload)||
+            document!=selected||document.owner_before(selected)||selected.owner_before(document))return AETHER_ERROR_INVALID_STATE;
+    }
     try {
         auto result = std::make_unique<aether_computed_style_handle_s>();
         const auto status = export_owned_flat(record->style_view(), &result->style);
@@ -51,14 +59,8 @@ AETHER_API aether_computed_style_handle_t aether_style_map_get(aether_style_map_
     if(!view)return nullptr;
     aether::style::FrozenNodeRef record;
     if(view.export_record(record)!=AETHER_OK)return nullptr;
-    try {
-        auto result=std::make_unique<aether_computed_style_handle_s>();
-        if(aether::style::export_owned_flat(record->style_view(),&result->style)!=AETHER_OK)return nullptr;
-        result->record=record;result->measures=record->measures();result->revision=version->revision();
-        result->document_identity=version->document_identity();result->document_lifetime=version->document_lifetime();
-        result->node_identity=record->node_identity();result->node_lifetime=record->node_lifetime();
-        return result.release();
-    }catch(const std::bad_alloc&){return nullptr;}
+    aether_computed_style_handle_t result=nullptr;
+    return aether::style::export_style_handle(*version,record,&result)==AETHER_OK?result:nullptr;
 
 }
 

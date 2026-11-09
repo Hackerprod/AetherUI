@@ -88,7 +88,7 @@ struct Fixture {
             REQUIRE(aether_style_runtime_update_resolved_style_map(runtime, map, elements.data(), static_cast<int32_t>(elements.size())) == AETHER_OK);
         }
         REQUIRE(map->current && map->current->mode() == mode);
-        base = map->current; base_count = base->backing()->size();
+        base = map->current; base_count = base->size();
         REQUIRE(aether_layout_create(measure, nullptr, &engine) == AETHER_OK);
         REQUIRE(aether_display_list_builder_create(measure, nullptr, &painter) == AETHER_OK);
         capture(doc, dom);
@@ -108,7 +108,7 @@ struct Fixture {
             REQUIRE(n.node->text == n.text && n.node->children == n.children);
             REQUIRE(aether_node_identity(n.node) == n.identity && n.node->identity->alive);
         }
-        REQUIRE(base->backing()->size() == base_count);
+        REQUIRE(base->size() == base_count);
         if (map) REQUIRE(map->current == base);
     }
     aether_layout_result_t layout() {
@@ -125,7 +125,7 @@ struct Fixture {
         for (auto index : {0, 2}) {
             auto* wrapper = sequence[index];
             REQUIRE(wrapper->anonymous_flex_owner == flex && wrapper->parent == flex);
-            REQUIRE(!base->backing()->find(wrapper));
+            REQUIRE(!base->lookup(wrapper));
             const auto* entry = frame->assets->synthetic->find(wrapper);
             REQUIRE(entry && entry->style()->view().scalars().opacity == 1.f);
             REQUIRE(entry->style()->view().text_shadows().size() == 1);
@@ -219,7 +219,7 @@ static void epochs(MapMode mode) {
         REQUIRE(aether_style_runtime_update_resolved_style_map(f.runtime, f.map, elements.data(), static_cast<int32_t>(elements.size())) == AETHER_OK);
     }
     REQUIRE(f.map->current->mode() == mode);
-    f.base = f.map->current; f.base_count = f.base->backing()->size();
+    f.base = f.map->current; f.base_count = f.base->size();
     f.dom.clear(); capture(f.doc, f.dom);
     f.structure = f.doc->identity->structure_epoch; f.mutation = f.doc->identity->mutation_epoch;
     f.style_epoch = f.doc->identity->style_tree_epoch;

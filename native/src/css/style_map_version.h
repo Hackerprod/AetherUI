@@ -45,6 +45,7 @@ public:
     const uint64_t& structure_epoch() const noexcept { return structure_epoch_; }
     const uint64_t& input_epoch() const noexcept { return input_epoch_; }
     const uint64_t& style_tree_epoch() const noexcept { return style_tree_epoch_; }
+    size_t size()const noexcept{return backing_?backing_->size():revision_?revision_->directory().size():0;}
     BoundNodeView lookup(const aether_node_s* node) const noexcept {
         if(backing_) {
             if(revision_&&revision_->backing()==backing_)return BoundNodeView::find(revision_,node);

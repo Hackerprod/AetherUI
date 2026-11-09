@@ -166,7 +166,7 @@ struct Fixture {
         }
         REQUIRE(map->current && map->current->mode() == mode);
         base = map->current;
-        base_count = base->backing()->size();
+        base_count = base->size();
         capture(doc, dom);
         structure = doc->identity->structure_epoch;
         mutation = doc->identity->mutation_epoch;
@@ -196,7 +196,7 @@ struct Fixture {
     void intact() const {
         dom_intact();
         REQUIRE(doc->identity->style_tree_epoch == style_epoch);
-        REQUIRE(base->backing()->size() == base_count);
+        REQUIRE(base->size() == base_count);
         if (map) REQUIRE(map->current == base);
     }
     aether_layout_result_t layout() const {
@@ -358,7 +358,7 @@ static void changing_revisions() {
         f.intact();
         for (const auto& saved : retained) {
             REQUIRE(saved.map->current == saved.base);
-            REQUIRE(saved.base->backing()->size() == saved.base_count);
+            REQUIRE(saved.base->size() == saved.base_count);
             REQUIRE(saved.frame->assets->base == saved.base);
             REQUIRE(StyleOperationPin(saved.frame->assets, {}, false).structure_valid());
             intact_boxes(saved.boxes);
@@ -407,7 +407,7 @@ static void changing_revisions() {
                         // not silently acquire the newly resolved style version.
                         f.map = next_map;
                         f.base = next_map->current;
-                        f.base_count = f.base->backing()->size();
+                        f.base_count = f.base->size();
                         auto* frame = f.layout();
                         auto* p = frame->primary_boxes.at(aether_doc_get_element_by_id(f.doc, "p"));
                         auto* c = frame->primary_boxes.at(aether_doc_get_element_by_id(f.doc, "c"));
