@@ -396,9 +396,10 @@ internal sealed partial class NativeDomBinding : IDomBinding, IDisposable
                 if (edit.Kind == DomEditKind.InsertChild && edit.Child is not null && childHandle != IntPtr.Zero)
                 {
                     AddRecords(edit.Child, attach);
+                    if (source is not null || edit.Child.NativeRecordCore!.Attached && !target.Attached)
+                        disconnect.AddRange(attach);
                     if (source is not null)
                     {
-                        disconnect.AddRange(attach);
                         foreach (var wrapper in SelfAndDescendants(edit.Child))
                         {
                             var record = wrapper.NativeRecordCore!;

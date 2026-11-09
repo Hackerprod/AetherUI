@@ -102,15 +102,23 @@ internal static class DomStyleBindingInteropTests
             using var runtime = fixture.Runtime;
             GC.Collect(); GC.WaitForPendingFinalizers(); GC.Collect();
             Check(fixture.Document.IsAlive, "Loaded runtime did not retain its managed document owner.");
-            using (var publication = runtime.PreparePublication(null, 200, 200, 1))
-            { Check(publication.Commit(), "Loaded owner failed publication after GC."); using var map = publication.Publish(); }
+            PublishFinalizable(runtime);
             DisposeFinalizable(fixture.Document);
             Throws<ObjectDisposedException>(() => runtime.PreparePublication(null, 200, 200, 1));
             Check(!runtime.IsCurrent(default), "Disposed loaded document remained certified.");
             runtime.Dispose();
+            Check(typeof(StyleRuntimeInterop).GetField("_loadedDocument", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(runtime) is null,
+                "Disposed runtime still holds its loaded document field.");
             GC.Collect(); GC.WaitForPendingFinalizers(); GC.Collect();
             Check(!fixture.Document.IsAlive, "Disposed runtime retained a loaded document owner.");
         }
+    }
+    [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]
+    private static void PublishFinalizable(StyleRuntimeInterop runtime)
+    {
+        using var publication = runtime.PreparePublication(null, 200, 200, 1);
+        Check(publication.Commit(), "Loaded owner failed publication after GC.");
+        using var map = publication.Publish();
     }
     [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]
     private static (StyleRuntimeInterop Runtime, WeakReference Document) LoadFinalizable(bool bound)

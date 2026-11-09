@@ -3,6 +3,7 @@ namespace AetherUI.Core.Native;
 public sealed unsafe partial class StyleRuntimeInterop
 {
     private IntPtr _domStyleBinding;
+    internal IntPtr DomStyleBindingHandle => _domStyleBinding;
     private readonly int _domBindingOwnerThread = Environment.CurrentManagedThreadId;
 
     private void VerifyDomBindingThread()

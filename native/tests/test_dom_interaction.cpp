@@ -73,7 +73,15 @@ static void adoption_and_stamps(){
 static void destroy_and_retire(){
     {Fixture f;Claim c(acquire(f));aether_doc_destroy(f.doc);f.doc=nullptr;auto l=c.loss();CHECK(l.reason==AETHER_DOM_LOSS_RETIRED&&!f.node->identity->alive);auto e=cleanup(c);CHECK(!applied(e));commit(e);c.ack();}
     {Fixture f;Claim c(acquire(f));ok(aether_doc_parse_html(f.doc,"<body>new document</body>"));auto l=c.loss();CHECK(l.reason==AETHER_DOM_LOSS_RETIRED&&std::string(l.handler.data,l.handler.length)=="handler A");c.ack();}
-    {Fixture f;Claim c(acquire(f));f.node->identity->disconnect_serial=UINT64_MAX;f.doc->owner_control->interaction_serial=UINT64_MAX;aether_doc_destroy(f.doc);f.doc=nullptr;auto l=c.loss();CHECK(l.reason==AETHER_DOM_LOSS_RETIRED_EXHAUSTED&&l.disconnect_serial==UINT64_MAX&&l.record_id&&l.record_serial);c.ack();CHECK(f.node->identity->disconnect_serial==UINT64_MAX);}
+    {Fixture f;Claim c(acquire(f));f.node->identity->disconnect_serial=UINT64_MAX;f.doc->owner_control->interaction_serial=UINT64_MAX;aether_doc_destroy(f.doc);f.doc=nullptr;auto l=c.loss();CHECK(l.reason==AETHER_DOM_LOSS_RETIRED_EXHAUSTED&&l.disconnect_serial==UINT64_MAX&&l.record_id&&l.record_serial);CHECK(aether_dom_interaction_claim_ack_v1(c.handle,l.claim.generation,l.record_id,l.record_serial)==AETHER_ERROR_INVALID_STATE);CHECK(c.loss().record_id==l.record_id&&f.node->identity->disconnect_serial==UINT64_MAX);}
+}
+static void cleanup_ack_exhaustion(){
+    Fixture f;Claim c(acquire(f));ok(aether_node_remove_child(f.body,f.node));const auto l=c.loss();
+    f.doc->owner_control->interaction_serial=UINT64_MAX-1;aether_dom_interaction_edit_t rejected=nullptr;
+    CHECK(aether_dom_interaction_prepare_cleanup_v1(c.handle,l.claim.generation,l.record_id,l.record_serial,&rejected)==AETHER_ERROR_INVALID_STATE&&!rejected);
+    CHECK(c.loss().record_id==l.record_id&&(f.node->state&AETHER_STATE_FOCUS));
+    f.doc->owner_control->interaction_serial=UINT64_MAX-2;auto e=cleanup(c);CHECK(applied(e));commit(e);CHECK(f.doc->owner_control->interaction_serial==UINT64_MAX-1);
+    c.ack();CHECK(f.doc->owner_control->interaction_serial==UINT64_MAX);c.loss(false);
 }
 static void faults_and_limits(){
     Fixture f;const auto base=token(f.node);const auto generation=f.doc->owner_control->next_interaction_generation;const auto serial=f.doc->owner_control->interaction_serial;
@@ -132,4 +140,4 @@ static void prepared_owners_and_claims(){
     ok(aether_dom_interaction_owner_prepare_v1(doc,69,&owner));other=nullptr;CHECK(aether_dom_interaction_owner_prepare_claim_v1(owner,node,AETHER_STATE_FOCUS,90,&other)==AETHER_ERROR_INVALID_STATE&&!other);aether_dom_interaction_owner_release_v1(owner);
     aether_dom_style_binding_destroy_v1(binding);aether_style_runtime_destroy(runtime);aether_doc_destroy(doc);
 }
-int main(){prepared_owners_and_claims();same_owner_detached_parent();route_and_first_loss();continuity_and_new_claim();adoption_and_stamps();destroy_and_retire();faults_and_limits();threads_and_release_only();std::puts("DOM interaction claims PASS");}
+int main(){cleanup_ack_exhaustion();prepared_owners_and_claims();same_owner_detached_parent();route_and_first_loss();continuity_and_new_claim();adoption_and_stamps();destroy_and_retire();faults_and_limits();threads_and_release_only();std::puts("DOM interaction claims PASS");}

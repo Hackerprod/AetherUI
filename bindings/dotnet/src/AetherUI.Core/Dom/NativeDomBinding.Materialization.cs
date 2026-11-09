@@ -28,7 +28,10 @@ internal sealed partial class NativeDomBinding
     private sealed class PreparedMaterialization : IDomPreparedEdit
     {
         private sealed record Domain(NativeDomBinding Owner, Dictionary<ulong, WeakReference<Node>> Nodes,
-            Dictionary<IntPtr, WeakReference<Node>> Handles, IDomPreparedBookkeeping Bookkeeping);
+            Dictionary<IntPtr, WeakReference<Node>> Handles)
+        {
+            internal IDomPreparedBookkeeping? Bookkeeping;
+        }
         private readonly NativeDomBinding _owner;
         private readonly NativeDomEdit _native;
         private readonly Domain[] _domains;
@@ -36,32 +39,36 @@ internal sealed partial class NativeDomBinding
         private readonly (Node Node, NativeDomNodeRecord Record)[] _created, _existing;
         private readonly NativeDomNodeRecord[] _disconnect;
         private readonly IDomHostBookkeeping[] _otherHosts;
+        private readonly bool _document;
         private bool _committed;
         private PreparedMaterialization(NativeDomBinding owner, NativeDomEdit native, Domain[] domains,
             Dictionary<ulong, WeakReference<Node>> global, (Node, NativeDomNodeRecord)[] created,
-            (Node, NativeDomNodeRecord)[] existing, NativeDomNodeRecord[] disconnect)
+            (Node, NativeDomNodeRecord)[] existing, NativeDomNodeRecord[] disconnect, bool document)
         {
             _owner = owner; _native = native; _domains = domains; _global = global;
-            _created = created; _existing = existing; _disconnect = disconnect;
+            _created = created; _existing = existing; _disconnect = disconnect; _document = document;
             _otherHosts = domains.Where(domain => !ReferenceEquals(domain.Owner, owner)).Select(domain => domain.Owner._host).ToArray();
         }
-        internal static PreparedMaterialization Prepare(NativeDomBinding owner, DomEdit edit)
+        internal static IDomPreparedEdit Prepare(NativeDomBinding owner, DomEdit edit)
         {
             if (edit.Kind != DomEditKind.InsertChild || edit.Child is null)
                 throw new InvalidOperationException("Materialization requires a compound insertion.");
             var root = MaterializationRoot(edit.Target);
-            if (root is DocumentNode)
-                throw new NotSupportedException("Creating an implicit native Document owner awaits a finalizable native owner-lifetime contract.");
+            if (root is DocumentNode document) return PrepareImplicitDocument(owner, edit, document);
+            return PrepareCore(owner, edit, root, document: false);
+        }
+        internal static PreparedMaterialization PrepareCore(NativeDomBinding owner, DomEdit edit, Node root, bool document)
+        {
             var specs = new List<NativeDomNodeSpecData>();
             var wrappers = new List<Node>();
             var existingRoots = new List<Node>();
             var owners = new HashSet<NativeDomBinding> { owner };
             var emptyAttributes = new Dictionary<string, string>(StringComparer.Ordinal);
-            Capture(root, -1);
+            if (document) CaptureChildren(root, -1); else Capture(root, -1);
             foreach (var domain in owners)
             {
                 domain.CheckOwner();
-                if (NativeDomSync.ReadToken(domain.Native.Handle) != domain._token)
+                if (NativeDomSync.ReadToken(domain.Native) != domain._token)
                     throw new InvalidOperationException("Materialization inputs were not reconciled before staging.");
             }
             var domains = new List<Domain>();
@@ -72,16 +79,19 @@ internal sealed partial class NativeDomBinding
             foreach (var domain in owners) domain._synchronizing = true;
             try
             {
-                native = NativeDomEdit.Prepare(owner._token, new(NativeDomEditKind.MaterializeForest, owner.Native.Handle, Nodes: specs));
-                var global = new Dictionary<ulong, WeakReference<Node>>(owner._registry.Nodes);
+                using (var borrow = owner.Native.Borrow())
+                    native = NativeDomEdit.Prepare(owner._token, new(document ? NativeDomEditKind.MaterializeDocument : NativeDomEditKind.MaterializeForest,
+                        borrow.Handle, Nodes: specs));
+                var global = new Dictionary<ulong, WeakReference<Node>>(owner._registry.Nodes.Count + wrappers.Count + 1);
+                foreach (var pair in owner._registry.Nodes)
+                    if (pair.Value.TryGetTarget(out _)) global.Add(pair.Key, pair.Value);
+                if (document) global.Add(owner._token.OwnerIdentity, new(root));
                 foreach (var domain in owners)
                 {
                     var nodes = new Dictionary<ulong, WeakReference<Node>>(domain._nodes);
                     var handles = new Dictionary<IntPtr, WeakReference<Node>>(domain._handles);
                     domains.EnsureCapacity(domains.Count + 1);
-                    var bookkeeping = PrepareBookkeeping(domain, edit, materializedRoots: existingRoots);
-                    try { domains.Add(new(domain, nodes, handles, bookkeeping)); }
-                    catch { bookkeeping.Dispose(); throw; }
+                    domains.Add(new(domain, nodes, handles));
                 }
                 var destination = domains.Single(domain => ReferenceEquals(domain.Owner, owner));
                 for (var i = 0; i < wrappers.Count; i++)
@@ -119,12 +129,14 @@ internal sealed partial class NativeDomBinding
                         }
                     }
                 }
-                return new(owner, native, domains.ToArray(), global, created.ToArray(), existing.ToArray(), disconnect.ToArray());
+                foreach (var domain in domains)
+                    domain.Bookkeeping = PrepareBookkeeping(domain.Owner, edit, created, materializedRoots: existingRoots);
+                return new(owner, native, domains.ToArray(), global, created.ToArray(), existing.ToArray(), disconnect.ToArray(), document);
             }
             catch
             {
                 foreach (var domain in owners) domain._synchronizing = false;
-                foreach (var domain in domains) domain.Bookkeeping.Dispose();
+                foreach (var domain in domains) domain.Bookkeeping?.Dispose();
                 foreach (var pair in created) pair.Record.Lease.Dispose();
                 native?.Dispose(); throw;
             }
@@ -150,19 +162,23 @@ internal sealed partial class NativeDomBinding
                     node is TextNode text ? text.TextCore : node is CommentNode comment ? comment.TextCore : string.Empty,
                     element?.RuntimeValueCore, element?.AttributesCore ?? emptyAttributes));
                 wrappers.Add(node);
+                CaptureChildren(node, index);
+            }
+            void CaptureChildren(Node node, int parentIndex)
+            {
                 if (ReferenceEquals(node, edit.Target))
                 {
                     var position = 0;
                     foreach (var child in node.ChildrenCore)
                     {
                         if (ReferenceEquals(child, edit.Child)) continue;
-                        if (position++ == edit.Index) Capture(edit.Child, index);
-                        Capture(child, index);
+                        if (position++ == edit.Index) Capture(edit.Child!, parentIndex);
+                        Capture(child, parentIndex);
                     }
-                    if (position == edit.Index) Capture(edit.Child, index);
+                    if (position == edit.Index) Capture(edit.Child!, parentIndex);
                 }
                 else foreach (var child in node.ChildrenCore)
-                    if (!ReferenceEquals(child, edit.Child)) Capture(child, index);
+                    if (!ReferenceEquals(child, edit.Child)) Capture(child, parentIndex);
             }
         }
         private static IEnumerable<Node> SelfAndDescendants(Node node)
@@ -170,19 +186,22 @@ internal sealed partial class NativeDomBinding
             yield return node;
             foreach (var child in node.DescendantsCore()) yield return child;
         }
+        internal IDomHostBookkeeping[] NotificationsExcept(NativeDomBinding owner) =>
+            _domains.Where(domain => !ReferenceEquals(domain.Owner, owner)).Select(domain => domain.Owner._host).ToArray();
         public void Commit()
         {
             _native.Validate();
-            foreach (var domain in _domains) domain.Bookkeeping.Validate();
+            foreach (var domain in _domains) domain.Bookkeeping!.Validate();
             var token = _native.Commit();
             foreach (var pair in _created)
             {
                 pair.Node.BindingCore = _owner; pair.Node.NativeRecordCore = pair.Record;
+                pair.Record.Attached = _document;
                 pair.Record.StyleNodeId = _owner.Native.GetStyleNodeId(pair.Record.Handle);
             }
             foreach (var pair in _existing)
             {
-                pair.Node.BindingCore = _owner; pair.Record.Owner = _owner; pair.Record.Attached = false;
+                pair.Node.BindingCore = _owner; pair.Record.Owner = _owner; pair.Record.Attached = _document;
                 pair.Record.StyleNodeId = _owner.Native.GetStyleNodeId(pair.Record.Handle);
             }
             foreach (var record in _disconnect) record.DisconnectSerial++;
@@ -190,15 +209,15 @@ internal sealed partial class NativeDomBinding
             foreach (var domain in _domains)
             {
                 domain.Owner._nodes = domain.Nodes; domain.Owner._handles = domain.Handles;
-                domain.Owner._token = ReferenceEquals(domain.Owner, _owner) ? token : NativeDomSync.ReadToken(domain.Owner.Native.Handle);
-                domain.Bookkeeping.Publish();
+                domain.Owner._token = ReferenceEquals(domain.Owner, _owner) ? token : NativeDomSync.ReadToken(domain.Owner.Native);
+                domain.Bookkeeping!.Publish();
             }
             _owner._pendingOtherHosts = _otherHosts;
             _committed = true;
         }
         public void Dispose()
         {
-            foreach (var domain in _domains) { domain.Owner._synchronizing = false; domain.Bookkeeping.Dispose(); }
+            foreach (var domain in _domains) { domain.Owner._synchronizing = false; domain.Bookkeeping?.Dispose(); }
             if (!_committed) foreach (var pair in _created) pair.Record.Lease.Dispose();
             _native.Dispose();
         }

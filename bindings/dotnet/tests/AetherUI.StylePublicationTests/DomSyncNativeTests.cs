@@ -10,6 +10,10 @@ internal static class DomSyncNativeTests
         AdoptionAndRetirement();
         MaterializeAroundCurrentSubtree();
         FinalizableOwnerBorrows();
+        ImplicitDocumentAdoption();
+        ImplicitDocumentFailures();
+        ImplicitDocumentLifetime();
+        ConnectedToBoundDetachedParent();
         Console.WriteLine("PASS native DOM adapter R2, typed inputs, ownership and retirement");
     }
     private static void NativeR2AndTypedWrites()
@@ -127,6 +131,124 @@ internal static class DomSyncNativeTests
         Equal(oldDisconnect, keep.NativeRecordCore.DisconnectSerial); // Detached move, same owner.
         True(ReferenceEquals(detachedTarget, keep.Parent));
     }
+    private static void ImplicitDocumentAdoption()
+    {
+        using var source = DomInterop.Parse("<div id='source'><input id='keep' value='base'></div>");
+        var host = new Bookkeeping(); source.EnableSynchronization(host);
+        var oldParent = source.Document.GetElementById("source")!;
+        var keep = source.Document.GetElementById("keep")!;
+        keep.RuntimeValue = "old override";
+        var identity = keep.NativeRecordCore!.Identity;
+        source.Native.SetAttribute(source.GetNativeHandle(keep), "value", "R2");
+        source.Native.SetAttribute(source.GetNativeHandle(keep), "onclick", "aether:abc");
+        source.Native.SetState(source.GetNativeHandle(keep), (int)ElementState.Invalid);
+        var document = new DocumentNode();
+        var before = new TextNode(""); var ancestor = new ElementNode("section"); var after = new CommentNode("after");
+        var target = new ElementNode("target"); ancestor.AppendChild(target); target.AppendChild(new TextNode("suffix"));
+        document.AppendChild(before); document.AppendChild(ancestor); document.AppendChild(after);
+        var version = document.Version; var sourceNotifications = host.Notifications; var destinationNotifications = 0;
+        Action listener = () =>
+        {
+            destinationNotifications++;
+            True(ReferenceEquals(keep.ParentCore, target)); Equal(0, oldParent.ChildrenCore.Length);
+            Equal(version + 1, document.Version);
+        };
+        document.InputsChanged += listener;
+        target.InsertChild(0, keep);
+        document.InputsChanged -= listener;
+        Equal(version + 1, document.Version); Equal(sourceNotifications + 1, host.Notifications); Equal(1, destinationNotifications);
+        Equal(identity, keep.NativeRecordCore!.Identity); True(ReferenceEquals(document, keep.OwnerDocument));
+        Equal(ElementState.Invalid, keep.State); Equal("R2", keep.GetAttribute("value")!); True(keep.RuntimeValue is null);
+        Equal("aether:abc", keep.GetAttribute("onclick")!); Equal(3, document.Children.Count);
+        True(ReferenceEquals(document.FirstChild, before)); True(ReferenceEquals(document.LastChild, after));
+        var binding = (NativeDomBinding)document.BindingCore!;
+        using (var snapshot = NativeDomSnapshot.Acquire(binding.Native))
+        {
+            var nativeRoot = snapshot.Nodes.Single(n => n.Identity == document.NativeRecordCore!.Identity);
+            Equal(3, nativeRoot.Children.Length);
+            var moved = snapshot.Nodes.Single(n => n.Identity == identity);
+            True(moved.Attached); Equal("R2", moved.Attributes["value"]); Equal("aether:abc", moved.Attributes["onclick"]);
+            Equal(ancestor.NativeRecordCore!.Owner, keep.NativeRecordCore.Owner);
+        }
+        // Root-target variant, preserving original siblings and another canonical identity.
+        var next = new DocumentNode(); var prefix = new CommentNode("prefix"); next.AppendChild(prefix);
+        next.AppendChild(ancestor);
+        True(ReferenceEquals(next, keep.OwnerDocument)); True(ReferenceEquals(prefix, next.FirstChild));
+        Equal(identity, keep.NativeRecordCore!.Identity); Equal(2, document.Children.Count);
+        Equal(2, next.Children.Count);
+    }
+    private static void ImplicitDocumentFailures()
+    {
+        using var source = DomInterop.Parse("<div id='source'><span id='keep'>current</span></div>");
+        var host = new Bookkeeping(); source.EnableSynchronization(host);
+        var parent = source.Document.GetElementById("source")!; var keep = source.Document.GetElementById("keep")!;
+        var handle = source.GetNativeHandle(keep); var identity = keep.NativeRecordCore!.Identity;
+        var document = new DocumentNode(); var sibling = new ElementNode("sibling"); document.AppendChild(sibling);
+        var owners = RegistryCount("Owners"); var nodes = RegistryCount("Nodes");
+        var version = source.Document.Version; var destinationVersion = document.Version;
+        host.FailPrepare = true;
+        Throws<OutOfMemoryException>(() => document.AppendChild(keep));
+        host.FailPrepare = false;
+        True(document.BindingCore is null && document.NativeRecordCore is null && sibling.BindingCore is null);
+        True(ReferenceEquals(parent, keep.Parent)); Equal(identity, keep.NativeRecordCore!.Identity);
+        Equal(version, source.Document.Version); Equal(destinationVersion, document.Version);
+        Equal(owners, RegistryCount("Owners")); Equal(nodes, RegistryCount("Nodes"));
+        // An intervening source-domain write invalidates the entire new-owner edit.
+        host.OnPrepare = () => source.Native.SetState(handle, (int)ElementState.Focus);
+        Throws<InvalidOperationException>(() => document.AppendChild(keep));
+        True(document.BindingCore is null && document.NativeRecordCore is null);
+        Equal(owners, RegistryCount("Owners")); Equal(nodes, RegistryCount("Nodes"));
+        Equal(ElementState.Focus, keep.State); True(ReferenceEquals(parent, keep.Parent));
+        Equal(destinationVersion, document.Version); Equal("current", keep.TextContent);
+        document.AppendChild(keep); True(ReferenceEquals(document, keep.OwnerDocument));
+        var unsupported = new DocumentNode(); unsupported.AppendChild(new DocumentNode());
+        Throws<InvalidOperationException>(() => unsupported.AppendChild(keep));
+        True(unsupported.BindingCore is null); True(ReferenceEquals(document, keep.OwnerDocument));
+    }
+    private static int RegistryCount(string name)
+    {
+        var thread = typeof(NativeDomBinding).GetField("_thread", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static)!.GetValue(null)!;
+        return ((System.Collections.IDictionary)thread.GetType().GetField(name, System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!.GetValue(thread)!).Count;
+    }
+    private static void ImplicitDocumentLifetime()
+    {
+        var retained = CreateImplicitWrapper();
+        GC.Collect(); GC.WaitForPendingFinalizers(); GC.Collect();
+        True(retained.Owner.IsAlive); retained.Node.SetAttribute("after-gc", "live"); Equal("live", retained.Node.GetAttribute("after-gc")!);
+        var leaseOnly = CreateImplicitLease();
+        using var lease = leaseOnly.Lease;
+        GC.Collect(); GC.WaitForPendingFinalizers(); GC.Collect();
+        True(!leaseOnly.Owner.IsAlive); True(lease.ReadToken().OwnerIdentity != 0);
+        GC.KeepAlive(retained.Node);
+    }
+    [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]
+    private static (ElementNode Node, WeakReference Owner) CreateImplicitWrapper()
+    {
+        using var source = DomInterop.Parse("<span id='keep'>retained</span>"); source.EnableSynchronization(new Bookkeeping());
+        var keep = source.Document.GetElementById("keep")!; var document = new DocumentNode(); document.AppendChild(keep);
+        return (keep, new WeakReference(((NativeDomBinding)document.BindingCore!).Native));
+    }
+    [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]
+    private static (NativeDomLease Lease, WeakReference Owner) CreateImplicitLease()
+    {
+        var retained = CreateImplicitWrapper();
+        var record = retained.Node.NativeRecordCore!;
+        using var borrow = record.Owner.Native.Borrow();
+        return (NativeDomLease.Retain(record.Handle), retained.Owner);
+    }
+    private static void ConnectedToBoundDetachedParent()
+    {
+        using var dom = DomInterop.Parse("<div id='source'><span id='keep'>x</span><div id='target'></div></div>");
+        dom.EnableSynchronization(new Bookkeeping());
+        var source = dom.Document.GetElementById("source")!; var keep = dom.Document.GetElementById("keep")!;
+        var target = dom.Document.GetElementById("target")!; source.RemoveChild(target);
+        var before = keep.NativeRecordCore!.DisconnectSerial;
+        target.AppendChild(keep);
+        True(keep.OwnerDocument is null); Equal(before + 1, keep.NativeRecordCore.DisconnectSerial);
+        using var snapshot = NativeDomSnapshot.Acquire(dom.Native);
+        var data = snapshot.Nodes.Single(n => n.Identity == keep.NativeRecordCore.Identity);
+        Equal(before + 1, data.DisconnectSerial); True(!data.Attached);
+    }
     private static void FinalizableOwnerBorrows()
     {
         var retained = CreateOwnerRetainedByNode();
@@ -165,9 +287,11 @@ internal static class DomSyncNativeTests
     {
         internal int Notifications;
         internal bool FailPrepare;
+        internal Action? OnPrepare;
         public IDomPreparedBookkeeping Prepare(DomEdit? edit, bool import)
         {
             if (FailPrepare && !import) throw new OutOfMemoryException("Host prepare fault");
+            if (!import) { var callback = OnPrepare; OnPrepare = null; callback?.Invoke(); }
             return new Prepared();
         }
         public void NotifyMutationCompleted() => Notifications++;

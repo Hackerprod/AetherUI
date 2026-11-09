@@ -164,7 +164,7 @@ internal sealed class NativeDomSnapshot : IDisposable
     public void Dispose() => _handle.Dispose();
 }
 
-internal enum NativeDomEditKind { SetAttribute = 1, RemoveAttribute, SetState, SetRuntimeValue, SetText, InsertChild, RemoveChild, ClearChildren, InsertSubtree, ReplaceChildren, MaterializeForest }
+internal enum NativeDomEditKind { SetAttribute = 1, RemoveAttribute, SetState, SetRuntimeValue, SetText, InsertChild, RemoveChild, ClearChildren, InsertSubtree, ReplaceChildren, MaterializeForest, LegacySetAttribute = 12, MaterializeDocument = 13 }
 internal sealed record NativeDomNodeSpecData(int Type, int State, long ParentIndex, string Tag, string Text,
     string? RuntimeValue, IReadOnlyDictionary<string, string> Attributes, IntPtr ExistingNode = default);
 internal readonly record struct NativeDomEditRequest(NativeDomEditKind Kind, IntPtr Target, IntPtr Child = default,

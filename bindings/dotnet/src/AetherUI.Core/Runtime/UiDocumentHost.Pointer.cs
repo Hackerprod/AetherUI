@@ -51,7 +51,7 @@ public sealed partial class UiDocumentHost
         {
             var target = HitTest(point);
             _currentCursor = CursorFor(target);
-            if (ReferenceEquals(target, _hovered))
+            if (ReferenceEquals(target, _hovered) && HoverChainIsCurrent(target))
             {
                 if (_options.EnableInputWorkCounters)
                 {
@@ -110,70 +110,73 @@ public sealed partial class UiDocumentHost
 
     private bool UpdateHoverTarget(ElementNode? target, PointF point, bool requestRender)
     {
-        if (ReferenceEquals(target, _hovered) && (target is not null || _hoverChain.Count == 0))
-        {
-            return false;
-        }
-
+        if (ReferenceEquals(target, _hovered) && HoverChainIsCurrent(target)) return false;
+        var request = checked(++_hoverRequestSerial);
+        var pointerRequest = _pointerRequestSerial;
+        var document = _document;
         var previous = _hovered;
-        var nextChain = target is null
-            ? Array.Empty<ElementNode>()
-            : target.AncestorsAndSelf().ToArray();
-        var nextSet = nextChain.Length == 0
-            ? null
-            : new HashSet<ElementNode>(nextChain);
-
+        var previousEligible = HasCurrentHoverClaim(previous);
+        var previousContinuity = previous is null ? default : InteractionContinuity.Capture(document, previous);
+        var incomingContinuity = target is null ? default : InteractionContinuity.Capture(document, target);
+        var sameTarget = previousEligible && ReferenceEquals(previous, target);
+        var nextChain = target is null ? Array.Empty<ElementNode>() : target.AncestorsAndSelf().ToArray();
+        var nextSet = new HashSet<ElementNode>(nextChain);
+        _hoverChain.EnsureCapacity(_hoverChain.Count + nextChain.Length);
         var stateChanged = false;
         foreach (var element in _hoverChain.ToArray())
         {
-            if (nextSet is not null && nextSet.Contains(element))
-            {
-                continue;
-            }
-
-            stateChanged |= SetElementState(element, ElementState.Hover, enabled: false);
-            _hoverChain.Remove(element);
+            if (nextSet.Contains(element) && HasCurrentHoverClaim(element)) continue;
+            stateChanged |= ClearHoverClaim(element);
         }
-
         foreach (var element in nextChain)
         {
-            if (_hoverChain.Add(element))
-            {
-                stateChanged |= SetElementState(element, ElementState.Hover, enabled: true);
-            }
+            if (_hoverChain.Contains(element)) continue;
+            var claim = AcquireInteractionClaim(element, ElementState.Hover);
+            _interactionSession!.Hover.Add(element, claim);
+            _hoverChain.Add(element);
+            stateChanged = true;
         }
-
         if (stateChanged) InvalidateVisual(requestRender: false);
-        if (previous is not null)
+        // A same-document atomic move only changes the chain. Chromium's dirty hover
+        // recomputation likewise does not invent a boundary event for the same target.
+        if (sameTarget)
         {
-            // The outgoing handler can hide/replace the incoming target. Resolve
-            // its effects before delivering mouseover to that candidate.
-            _hovered = null;
+            if (stateChanged && requestRender) RequestRender();
+            return stateChanged;
+        }
+        _hovered = null;
+        if (previousEligible && previous is not null && previousContinuity.Matches(this, previous))
+        {
             Dispatch("mouseout", previous, point);
-            EnsureVisualTree();
-            // Only reject a stale/hidden candidate here. Do not broaden the
-            // visibility fix into resettling pointer-events hover semantics.
-            if (target is not null && !IsCurrentlyVisible(target))
-            {
-                _pendingPointerMove = point;
-                _pendingPointerTarget = null;
-                _hasPendingPointerTarget = false;
-                _hasPendingPointerMove = true;
-                _currentCursor = CursorFor(HitTest(point));
+            if (_disposed || !ReferenceEquals(document, _document) || request != _hoverRequestSerial || pointerRequest != _pointerRequestSerial)
                 return true;
-            }
+            EnsureVisualTree();
+            if (_disposed || !ReferenceEquals(document, _document) || request != _hoverRequestSerial || pointerRequest != _pointerRequestSerial)
+                return true;
         }
-
-        _hovered = target;
-        if (_hovered is not null)
+        if (target is not null && (!incomingContinuity.Matches(this, target) || !IsCurrentlyVisible(target)))
         {
-            Dispatch("mouseover", _hovered, point);
+            _pendingPointerMove = point; _pendingPointerTarget = null;
+            _hasPendingPointerTarget = false; _hasPendingPointerMove = true;
+            _currentCursor = CursorFor(HitTest(point));
+            return true;
         }
-
-        // State changes were invalidated before callbacks; do not enqueue a
-        // redundant style pass after the outgoing handler's revalidation.
-        if (stateChanged && requestRender) RequestRender();
+        _hovered = target;
+        if (target is not null) Dispatch("mouseover", target, point);
+        if (stateChanged && requestRender && !_disposed) RequestRender();
         return stateChanged;
+    }
+
+    private bool ClearHoverClaim(ElementNode element)
+    {
+        var changed = false;
+        if (_interactionSession is { } session && session.Hover.TryGetValue(element, out var claim))
+        {
+            changed = ReleaseInteractionClaim(claim);
+            session.Hover.Remove(element);
+        }
+        _hoverChain.Remove(element);
+        return changed;
     }
 
     public void PointerLeft()
@@ -182,81 +185,68 @@ public sealed partial class UiDocumentHost
         ++_pointerRequestSerial;
         if (DeferInput(() => PointerLeft())) return;
         CountPointerBarrier();
+        EnsureDomInputsCurrent();
+        DrainInteractionLosses();
+        if (_disposed) return;
+        checked { ++_hoverRequestSerial; }
         _hasPointerPosition = false;
         _hasPendingPointerMove = false;
         _hasPendingPointerTarget = false;
         _pendingPointerTarget = null;
         _currentCursor = CursorKind.Default;
-        if (_hovered is null)
-        {
-            return;
-        }
-
         var previous = _hovered;
+        var previousEligible = HasCurrentHoverClaim(previous);
+        var continuity = previous is null ? default : InteractionContinuity.Capture(_document, previous);
         _hovered = null;
         var stateChanged = false;
-        foreach (var element in _hoverChain.ToArray())
-        {
-            stateChanged |= SetElementState(element, ElementState.Hover, enabled: false);
-            _hoverChain.Remove(element);
-        }
-        Dispatch("mouseout", previous, default);
-        if (stateChanged)
-        {
-            InvalidateVisual();
-        }
+        foreach (var element in _hoverChain.ToArray()) stateChanged |= ClearHoverClaim(element);
+        if (stateChanged) InvalidateVisual(requestRender: false);
+        if (previousEligible && previous is not null && continuity.Matches(this, previous)) Dispatch("mouseout", previous, default);
+        if (stateChanged && !_disposed) RequestRender();
     }
 
     public void PointerPressed(PointF point)
     {
         ThrowIfDisposed();
         if (DeferInput(() => PointerPressed(point))) return;
+        var request = checked(++_pressRequestSerial);
         CountPointerBarrier();
         EnsureVisualTree();
-        if (TryBeginScrollbarInteraction(point))
-        {
-            return;
-        }
+        if (_disposed || request != _pressRequestSerial) return;
+        if (TryBeginScrollbarInteraction(point)) return;
         var target = HitTest(point);
-        if (target is null || target.IsDisabled)
-        {
-            Focus(null);
-            return;
-        }
-
-        if (_active is not null)
-        {
-            SetElementState(_active, ElementState.Active, enabled: false);
-        }
-
-        _active = target;
-        SetElementState(_active, ElementState.Active, enabled: true);
-        // :active can hide this candidate even on the first press, before any
-        // previous focus exists to trigger blur-time style revalidation.
+        if (target is null || target.IsDisabled) { Focus(null); return; }
+        var document = _document;
+        var continuity = InteractionContinuity.Capture(document, target);
+        if (_activeClaim is { } old) ReleaseInteractionClaim(old);
+        var claim = AcquireInteractionClaim(target, ElementState.Active);
+        _activeClaim = claim; _interactionSession!.Active = claim; _active = target;
         InvalidateVisual(requestRender: false);
         EnsureVisualTree();
+        if (_disposed || request != _pressRequestSerial || !ReferenceEquals(_activeClaim, claim) || !claim.IsCurrent) return;
         Focus(target.IsFocusable ? target : null);
+        if (_disposed || request != _pressRequestSerial || !ReferenceEquals(_activeClaim, claim)) return;
         EnsureVisualTree();
-        if (!IsCurrentlyVisible(target) || target.IsDisabled)
+        if (_disposed || request != _pressRequestSerial || !ReferenceEquals(_activeClaim, claim)) return;
+        if (!claim.IsCurrent || !continuity.Matches(this, target) || !IsCurrentlyVisible(target) || target.IsDisabled)
         {
-            if (ReferenceEquals(_active, target))
-            {
-                SetElementState(target, ElementState.Active, enabled: false);
-                _active = null;
-                InvalidateVisual();
-            }
+            ReleaseInteractionClaim(claim);
+            _activeClaim = null; _interactionSession!.Active = null; _active = null;
+            InvalidateVisual();
             return;
         }
         Dispatch("mousedown", target, point);
-        InvalidateVisual();
+        if (!_disposed) InvalidateVisual();
     }
 
     public void PointerReleased(PointF point)
     {
         ThrowIfDisposed();
         if (DeferInput(() => PointerReleased(point))) return;
+        var request = checked(++_pressRequestSerial);
         CountPointerBarrier();
         EnsureVisualTree();
+        if (_disposed || request != _pressRequestSerial) return;
         if (_scrollbarPointerCaptured)
         {
             _scrollbarDrag = null;
@@ -266,28 +256,33 @@ public sealed partial class UiDocumentHost
         }
         var target = HitTest(point);
         var pressed = _active;
-        if (pressed is not null)
+        var claim = _activeClaim;
+        var continuity = pressed is null ? default : InteractionContinuity.Capture(_document, pressed);
+        var eligible = pressed is not null && claim is not null && claim.IsCurrent;
+        if (claim is not null) ReleaseInteractionClaim(claim);
+        // Retire before user code. A newer press from mouseup/click is never cleared later.
+        if (ReferenceEquals(_activeClaim, claim))
+        { _activeClaim = null; _interactionSession!.Active = null; _active = null; }
+        if (eligible)
         {
-            SetElementState(pressed, ElementState.Active, enabled: false);
             InvalidateVisual(requestRender: false);
-            Dispatch("mouseup", pressed, point);
+            Dispatch("mouseup", pressed!, point);
+            if (_disposed || request != _pressRequestSerial) return;
             EnsureVisualTree();
+            if (_disposed || request != _pressRequestSerial) return;
             target = HitTest(point);
         }
-
-        _active = null;
-        if (pressed is not null && ReferenceEquals(pressed, target) && !pressed.IsDisabled)
+        if (eligible && continuity.Matches(this, pressed!) && ReferenceEquals(pressed, target) && !pressed!.IsDisabled)
         {
             var click = Dispatch("click", pressed, point);
+            if (_disposed || request != _pressRequestSerial) return;
             EnsureVisualTree();
-            if (!click.IsDefaultPrevented && IsCurrentlyVisible(pressed) && !pressed.IsDisabled && pressed.TagName == "button" &&
-                !string.Equals(pressed.GetAttribute("type"), "button", StringComparison.OrdinalIgnoreCase))
-            {
+            if (_disposed || request != _pressRequestSerial) return;
+            if (!click.IsDefaultPrevented && continuity.Matches(this, pressed) && IsCurrentlyVisible(pressed) && !pressed.IsDisabled &&
+                pressed.TagName == "button" && !string.Equals(pressed.GetAttribute("type"), "button", StringComparison.OrdinalIgnoreCase))
                 SubmitClosestForm(pressed);
-            }
         }
-
-        InvalidateVisual();
+        if (!_disposed) InvalidateVisual();
     }
 
     public CursorKind CursorAt(PointF point)
@@ -395,36 +390,44 @@ public sealed partial class UiDocumentHost
 
     private void Focus(ElementNode? target)
     {
-        if (ReferenceEquals(target, _focused))
-        {
-            return;
-        }
-
+        if (_disposed) return;
+        var beforeDrain = _focusRequestSerial;
+        EnsureDomInputsCurrent();
+        DrainInteractionLosses();
+        if (_disposed || beforeDrain != _focusRequestSerial) return;
+        if (!HasCertifiedStyleSnapshot(requireDerived: false) ||
+            (_invalidation & (VisualInvalidation.Style | VisualInvalidation.Layout)) != 0) EnsureVisualTree();
+        if (_disposed || beforeDrain != _focusRequestSerial) return;
+        var request = checked(++_focusRequestSerial);
+        if (ReferenceEquals(target, _focused) && (target is null || _focusClaim?.IsCurrent == true)) return;
+        var document = _document;
+        var incomingContinuity = target is null ? default : InteractionContinuity.Capture(document, target);
         var previous = _focused;
-        // Clear the old identity before callbacks can reenter. Do not install the
-        // new target until blur has resolved its possible DOM/style changes.
-        _focused = null;
+        var previousClaim = _focusClaim;
+        var deliverBlur = previousClaim?.IsCurrent == true;
+        if (previousClaim is not null) ReleaseInteractionClaim(previousClaim);
+        _focused = null; _focusClaim = null;
+        if (_interactionSession is { } session) session.Focus = null;
         if (previous is not null)
         {
-            SetElementState(previous, ElementState.Focus, enabled: false);
             InvalidateVisual(requestRender: false);
-            Dispatch("blur", previous, default);
+            if (deliverBlur) Dispatch("blur", previous, default);
+            if (_disposed || !ReferenceEquals(document, _document) || request != _focusRequestSerial) return;
             EnsureVisualTree();
-            if (_focused is not null) return; // A reentrant handler chose focus.
+            if (_disposed || !ReferenceEquals(document, _document) || request != _focusRequestSerial) return;
         }
-
-        if (target is not null && IsEligibleForFocus(target))
+        if (target is not null && incomingContinuity.Matches(this, target) && IsEligibleForFocus(target))
         {
-            _focused = target;
-            SetElementState(target, ElementState.Focus, enabled: true);
+            var claim = AcquireInteractionClaim(target, ElementState.Focus);
+            _focused = target; _focusClaim = claim; _interactionSession!.Focus = claim;
             InvalidateVisual(requestRender: false);
             Dispatch("focus", target, default);
         }
-
-        InvalidateVisual();
+        if (!_disposed) InvalidateVisual();
     }
 
     private bool IsCurrentlyVisible(ElementNode element) =>
+        ReferenceEquals(element.OwnerDocumentCore, _document) &&
         _styles is not null && _styles.TryGetValue(element, out var style) &&
         style.Visible && style.Display != DisplayKind.None;
 
@@ -489,16 +492,17 @@ public sealed partial class UiDocumentHost
     private void ResetUnstableHover()
     {
         var pointerSerial = _pointerRequestSerial;
+        var request = checked(++_hoverRequestSerial);
         var previous = _hovered;
+        var previousEligible = HasCurrentHoverClaim(previous);
+        var continuity = previous is null ? default : InteractionContinuity.Capture(_document, previous);
         _hovered = null;
-        foreach (var element in _hoverChain)
-            SetElementState(element, ElementState.Hover, enabled: false);
-        _hoverChain.Clear();
+        foreach (var element in _hoverChain.ToArray()) ClearHoverClaim(element);
         InvalidateVisual(requestRender: false);
-        if (previous is not null) Dispatch("mouseout", previous, _lastPointerPosition);
+        if (previousEligible && previous is not null && continuity.Matches(this, previous)) Dispatch("mouseout", previous, _lastPointerPosition);
+        if (_disposed || request != _hoverRequestSerial) return;
         EnsureVisualTree();
-        // The final resolve may have queued a visibility-driven move. Deliberately
-        // discard it only if no new input arrived through the callbacks.
+        if (_disposed || request != _hoverRequestSerial) return;
         if (_pointerRequestSerial == pointerSerial)
         {
             _hasPendingPointerMove = false;

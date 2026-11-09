@@ -237,7 +237,7 @@ AETHER_API aether_status_t aether_dom_interaction_prepare_acquire_v1(aether_dom_
 AETHER_API aether_status_t aether_dom_interaction_prepare_cleanup_v1(aether_dom_interaction_claim_t handle,
     uint64_t generation,uint64_t record_id,uint64_t record_serial,aether_dom_interaction_edit_t* out) {
     if(out)*out=nullptr;if(!handle||!out)return AETHER_ERROR_NULL_ARG;auto c=handle->value;auto r=c->registry.lock();
-    if(!readable(r)||generation!=c->info.generation||c->acknowledged||!exact_loss(*c,record_id,record_serial)||!can_advance(r))return AETHER_ERROR_INVALID_STATE;
+    if(!readable(r)||generation!=c->info.generation||c->acknowledged||!exact_loss(*c,record_id,record_serial)||!can_advance(r)||(c->lost&&r->owner->interaction_serial>UINT64_MAX-2))return AETHER_ERROR_INVALID_STATE;
     try {
         auto e=std::make_unique<aether_dom_interaction_edit_s>();e->registry=r;e->claim=c;e->serial=r->owner->interaction_serial;e->record_id=record_id;e->record_serial=record_serial;
         auto* node=c->node->node.get();const bool applied=live(r)&&c->active&&authority(c)&&node->identity->alive&&node->document_owner.lock()==r->owner&&node->identity->state_bit_write_serial[bit_index(c->info.bit)]==c->info.state_bit_write_serial;
@@ -291,11 +291,11 @@ AETHER_API aether_status_t aether_dom_interaction_claim_read_loss_v1(aether_dom_
     out->handler_present=c->route_present?1:0;out->handler={c->route.data(),c->route.size()};return AETHER_OK;
 }
 AETHER_API aether_status_t aether_dom_interaction_claim_ack_v1(aether_dom_interaction_claim_t handle,uint64_t generation,uint64_t record_id,uint64_t record_serial) {
-    if(!handle)return AETHER_ERROR_NULL_ARG;auto c=handle->value;auto r=c->registry.lock();if(!readable(r)||generation!=c->info.generation||!c->lost||c->acknowledged||!exact_loss(*c,record_id,record_serial))return AETHER_ERROR_INVALID_STATE;
+    if(!handle)return AETHER_ERROR_NULL_ARG;auto c=handle->value;auto r=c->registry.lock();if(!readable(r)||generation!=c->info.generation||!c->lost||c->acknowledged||!exact_loss(*c,record_id,record_serial)||!can_advance(r))return AETHER_ERROR_INVALID_STATE;
     revoke(c);c->acknowledged=true;erase(r,c);advance(r);return AETHER_OK;
 }
 AETHER_API aether_status_t aether_dom_interaction_claim_dispose_v1(aether_dom_interaction_claim_t handle) {
     if(!handle)return AETHER_ERROR_NULL_ARG;auto c=handle->value;auto r=c->registry.lock();if(!readable(r)||(c->lost&&!c->acknowledged))return AETHER_ERROR_INVALID_STATE;
-    if(c->acknowledged)return AETHER_OK;revoke(c);c->acknowledged=true;erase(r,c);advance(r);return AETHER_OK;
+    if(c->acknowledged)return AETHER_OK;if(!can_advance(r))return AETHER_ERROR_INVALID_STATE;revoke(c);c->acknowledged=true;erase(r,c);advance(r);return AETHER_OK;
 }
 AETHER_API void aether_dom_interaction_claim_release_v1(aether_dom_interaction_claim_t handle){delete handle;}

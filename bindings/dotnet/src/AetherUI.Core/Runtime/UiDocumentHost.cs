@@ -250,6 +250,9 @@ public sealed partial class UiDocumentHost : IDisposable
         }
 
         EnsureDomInputsCurrent();
+        DrainInteractionLosses();
+        ThrowIfDisposed();
+        EnsureDomInputsCurrent();
         if (!HasCertifiedStyleSnapshot(requireDerived: false) && (_invalidation & VisualInvalidation.Style) == 0)
             RejectStyleProjection();
 
@@ -490,6 +493,7 @@ public sealed partial class UiDocumentHost : IDisposable
         }
 
         _disposed = true;
+        DisposeInteractionOwner();
         _component.Invalidated -= OnComponentInvalidated;
         if (_document is not null) _document.InputsChanged -= OnManagedInputsChanged;
         if (_imageResolver is not null) _imageResolver.Changed -= OnImageResourceChanged;

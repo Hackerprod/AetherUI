@@ -42,6 +42,7 @@ public sealed partial class UiDocumentHost
         var previousDom = _nativeDom;
         var previousDocument = _document;
         var previousProxy = _componentBookkeepingProxy;
+        var previousInteractions = _interactionSession;
         var previousTransitions = _transitionRuntime;
         var previousTransitionToken = previousTransitions?.ReadToken() ?? default;
         var previousDomToken = previousDom is null ? default : NativeDomSync.ReadToken(previousDom.Native.Handle);
@@ -60,6 +61,7 @@ public sealed partial class UiDocumentHost
         ComponentPublicationProbe?.Invoke("built");
         DomInterop? nextDom = null;
         TransitionRuntimeInterop? nextTransitions = null;
+        InteractionSession? nextInteractions = null;
         var published = false;
         try
         {
@@ -107,6 +109,7 @@ public sealed partial class UiDocumentHost
             var inputVersion = document.InputVersion;
             var bookkeeping = CreateDomHostBookkeeping(nextDom);
             ComponentPublicationProbe?.Invoke("initialized");
+            nextInteractions = PrepareInteractionSession(nextDom, registry, focused, active, hoverChain);
             using var binding = _nativeStyleRuntime.PrepareDomBinding(nextDom.Native);
             ComponentPublicationProbe?.Invoke("slot-prepared");
             var previousLayout = _nativeLayout;
@@ -123,7 +126,9 @@ public sealed partial class UiDocumentHost
                 (previousDom is not null && NativeDomSync.ReadToken(previousDom.Native.Handle) != previousDomToken) ||
                 (previousTransitions is not null && (previousTransitions.TryReadToken(out var currentTransition) != 0 || currentTransition != previousTransitionToken)))
                 throw new InvalidOperationException("Component publication was superseded during preparation.");
+            nextInteractions.Owner.ValidatePrepared();
             binding.Commit();
+            PublishInteractionSession(nextInteractions, _nativeStyleRuntime.DomStyleBindingHandle);
 
             // Native DOM/source binding is now committed. All remaining publication work
             // uses preallocated data. No freshness getter, delegate or retirement is here.
@@ -179,7 +184,7 @@ public sealed partial class UiDocumentHost
 
             // Retire only after publication, still inside the host guard. If notification
             // or cleanup fails, B stays published and more recent user effects stay intact.
-            try { ComponentPublicationProbe?.Invoke("published"); }
+            try { previousInteractions?.Dispose(); ComponentPublicationProbe?.Invoke("published"); }
             finally
             {
                 try { previousLayout?.Dispose(); }
@@ -213,8 +218,12 @@ public sealed partial class UiDocumentHost
         {
             if (!published)
             {
-                try { nextTransitions?.Dispose(); }
-                finally { nextDom?.Dispose(); }
+                try { nextInteractions?.Dispose(); }
+                finally
+                {
+                    try { nextTransitions?.Dispose(); }
+                    finally { nextDom?.Dispose(); }
+                }
             }
         }
     }

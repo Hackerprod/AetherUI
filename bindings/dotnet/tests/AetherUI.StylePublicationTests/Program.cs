@@ -13,6 +13,7 @@ ComponentRenderCandidateTests.Run();
 DomStyleBindingInteropTests.Run();
 ComponentPublicationTests.Run();
 HostDomSyncTests.Run();
+HostInteractionClaimsTests.Run();
 DomSyncManagedTests.Run();
 DomSyncNativeTests.Run();
 TransitionSyncInteropTests.Run();
