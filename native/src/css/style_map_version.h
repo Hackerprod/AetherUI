@@ -50,6 +50,12 @@ public:
     const uint64_t& input_epoch() const noexcept { return input_epoch_; }
     const uint64_t& style_tree_epoch() const noexcept { return style_tree_epoch_; }
     const StyleRevisionRef& projection_source() const noexcept { return projection_source_; }
+    ContextOwnersRef static_context_owners() const noexcept {
+        return projection_source_?projection_source_->static_context_owners():backing_?backing_->context_owners():ContextOwnersRef{};
+    }
+    ContextLineageRef context_topology() const noexcept {
+        return projection_source_?projection_source_->context_topology():backing_?backing_->context_topology():ContextLineageRef{};
+    }
     size_t size()const noexcept{return backing_?backing_->size():revision_?revision_->directory().size():0;}
     BoundNodeView lookup(const aether_node_s* node) const noexcept {
         if(backing_) {

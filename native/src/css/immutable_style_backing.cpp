@@ -6,10 +6,13 @@
 #include <vector>
 namespace aether::style {
 namespace {
+// Source causes are independent of attachment: staged generated nodes become
+// attached only at commit. Effective eligibility is checked by the layout
+// certificate/full helper, never guessed while a preview is still detached.
 ContextOwnerEntry static_owner(const FrozenNodeRef& record) {
     diagnostics::count_work(diagnostics::WorkCounter::context_static_visits);
     ContextOwnerEntry entry{record->node(),record->node_lifetime(),0};
-    if(!entry.identity || entry.identity->owner!=entry.node || !entry.identity->alive || !entry.identity->attached) return entry;
+    if(!entry.identity || entry.identity->owner!=entry.node || !entry.identity->alive) return entry;
     if(entry.node->type!=AETHER_NODE_ELEMENT || entry.node->anonymous_flex_owner) return entry;
     const auto& style=*record->style()->payload_owner();
     entry.causes=(!style.transforms().empty()?StaticTransform:0)|(!style.backdrop_filters().empty()?StaticBackdrop:0);
@@ -93,7 +96,7 @@ aether_status_t freeze_backing(const BackingBuildInput& in, BackingRef& out) noe
         });
         auto root=ImmutableStyleBacking::build_sorted(entries);
         std::vector<ContextOwnerIndex::Entry> owners;
-        for(const auto& item:entries) { auto entry=static_owner(item.second); if(entry.causes) owners.emplace_back(reinterpret_cast<uintptr_t>(entry.identity.get()),std::move(entry)); }
+        for(const auto& item:entries) { auto entry=static_owner(item.second); if(entry.causes) append_context_entry(owners,std::move(entry)); }
         auto context=publish_context_owners({},ContextOwnerIndex::build(std::move(owners)));
         BackingRef result(new const ImmutableStyleBacking(std::move(root),in.entries.size(),std::move(context),make_context_lineage()));
         out=std::move(result); return AETHER_OK;

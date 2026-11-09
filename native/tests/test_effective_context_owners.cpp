@@ -91,9 +91,44 @@ static void compact_provenance_and_context(){
  CHECK(!aether::style::accepts_override(old.get(),out->current.get()) || !old->contextual());
  aether_style_transaction_destroy(tx);aether_computed_style_handle_destroy(new_style);aether_style_map_destroy(out);aether_computed_style_handle_destroy(old_style);
 }
+static void generated_staging_and_contextual() {
+ Fixture f;ok(aether_style_runtime_add_stylesheet(f.styles,"#x::before{content:'generated';transform:translateX(3px)}",0,"generated",nullptr,nullptr));
+ aether_style_transaction_t tx{};ok(aether_style_runtime_prepare_revision(f.styles,f.doc,nullptr,&tx));
+ aether_style_map_t staged{};ok(aether_style_transaction_preview_legacy_map(tx,&staged));
+ size_t generated=0;
+ staged->current->for_each_node([&](const aether::style::BoundNodeView& view){const auto& p=view.payload_owner();
+  if(!p->generated_leaf() || p->style_view().transforms().empty())return;
+  CHECK(!p->node_lifetime()->attached);
+  CHECK(staged->current->static_context_owners()->owners.find(reinterpret_cast<uintptr_t>(p->node_lifetime().get())));++generated;});CHECK(generated==1);
+ aether_style_revision_t revision{};ok(aether_style_runtime_commit_revision(f.styles,tx,&revision));aether_style_transaction_destroy(tx);
+ aether_style_map_destroy(f.map);f.map=staged;aether_style_revision_destroy(f.revision);f.revision=revision;f.prepare(true);f.build();CHECK(f.owners()==1);
+ aether_style_map_t contextual{};ok(aether_style_revision_create_map(f.revision,&contextual));aether_bool_t changed=1;
+ ok(aether_layout_prepare_transition_context(f.engine,f.transitions,contextual,f.layout,&changed));CHECK(!changed);
+ aether_layout_result_t exact{};ok(aether_layout_layout(f.engine,f.doc,contextual,200,200,nullptr,nullptr,&exact));
+#if defined(AETHERUI_ENABLE_CONTEXT_OWNERS)
+ CHECK(exact->effective_context_owners==f.layout->effective_context_owners);
+#else
+ CHECK(exact->effective_context_owners->owners.size()==f.layout->effective_context_owners->owners.size());
+#endif
+ aether_layout_result_destroy(exact);aether_style_map_destroy(contextual);
+}
+static void destroyed_owner() {
+ Fixture f;f.style("transform:translateX(20px)");f.prepare(true);f.build();
+ auto* old_node=f.node;auto token=f.node->identity;auto frozen=f.layout->effective_context_owners;
+ auto base=aether_computed_style_default();aether_transform_operation operation{};auto target=transformed(operation,30);
+ ok(aether_transition_runtime_observe(f.transitions,f.node,&base,&target,0));
+ aether_doc_destroy(f.doc);f.doc=nullptr;f.node=nullptr;CHECK(!token->alive);
+ CHECK(f.layout->effective_fixed_container(old_node)); // Historical lookup must not dereference dead DOM.
+ aether_transform_matrix ignored{};CHECK(!aether_transition_runtime_transform_override(f.transitions,old_node,&ignored));
+ CHECK(!aether_transition_runtime_tick(f.transitions,100));
+ aether_bool_t changed=0;ok(aether_layout_prepare_transition_context(f.engine,f.transitions,f.map,f.layout,&changed));CHECK(changed);
+ CHECK(f.engine->prepared_context_owners->owners.empty());CHECK(frozen->owners.size()==1);
+ aether_layout_result_t rejected=nullptr;CHECK(aether_layout_layout(f.engine,nullptr,f.map,200,200,nullptr,nullptr,&rejected)==AETHER_ERROR_NULL_ARG);
+ CHECK(!f.engine->transition_context_prepared && !f.engine->prepared_context_owners);
+}
 static void persistent_diff(){
  using Index=aether::style::PersistentIndex<int>;Index index;std::map<uintptr_t,int> values;std::mt19937 rng(12345);
  for(int round=0;round<2000;++round){auto next=index;auto expected=values;for(int change=0;change<6;++change){auto key=uintptr_t(rng()%100);if(rng()%3){int value=rng()%20;next=next.set(key,value);expected[key]=value;}else{next=next.erase(key);expected.erase(key);}}
   auto actual=values;index.diff(next,[&](uintptr_t key,const int*,const int* after){if(after)actual[key]=*after;else actual.erase(key);});CHECK(actual==expected);index=std::move(next);values=std::move(expected);}
 }
-int main(){aether_work_counters_set_enabled(AETHER_TRUE);persistent_diff();cause_lifecycle();compact_provenance_and_context();std::printf("PASS D2 owners/compact/provenance %u checks\n",checks);}
+int main(){aether_work_counters_set_enabled(AETHER_TRUE);persistent_diff();cause_lifecycle();compact_provenance_and_context();generated_staging_and_contextual();destroyed_owner();std::printf("PASS D2 owners/compact/provenance %u checks\n",checks);return 0;}

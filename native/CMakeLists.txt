@@ -1671,3 +1671,29 @@ if(AETHERUI_BUILD_TESTS AND AETHERUI_ENABLE_STATE_INCREMENTAL)
     target_link_libraries(aether_state_local_test PRIVATE AetherUI::Core)
     add_test(NAME aether.state-local COMMAND aether_state_local_test)
 endif()
+
+if(AETHERUI_BUILD_TESTS AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    add_executable(aether_effective_context_owners_oom_test
+        tests/test_effective_context_owners_oom.cpp $<TARGET_OBJECTS:aether_publication_test_core>)
+    target_include_directories(aether_effective_context_owners_oom_test PRIVATE include src)
+    target_link_libraries(aether_effective_context_owners_oom_test PRIVATE Threads::Threads)
+    add_test(NAME aether.effective-context-owners-oom COMMAND aether_effective_context_owners_oom_test)
+endif()
+
+if(AETHERUI_BUILD_TESTS AND CMAKE_SYSTEM_NAME STREQUAL "Linux" AND NOT MSVC)
+    target_compile_options(aether_effective_context_owners_test PRIVATE -ffp-contract=off)
+    target_compile_options(aether_effective_context_owners_oom_test PRIVATE -ffp-contract=off)
+endif()
+
+if(AETHERUI_BUILD_TESTS AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    target_compile_definitions(aether_effective_context_owners_test PRIVATE $<TARGET_PROPERTY:aether_core,COMPILE_DEFINITIONS>)
+    target_compile_definitions(aether_effective_context_owners_oom_test PRIVATE $<TARGET_PROPERTY:aether_core,COMPILE_DEFINITIONS>)
+endif()
+
+if(AETHERUI_BUILD_TESTS)
+    # Exact externally supplied failing reproducer from the combined test tree.
+    add_executable(aether_generated_context_staging_test tests/test_generated_context_staging.cpp)
+    target_include_directories(aether_generated_context_staging_test PRIVATE include src)
+    target_link_libraries(aether_generated_context_staging_test PRIVATE AetherUI::Core)
+    add_test(NAME aether.generated-context-staging COMMAND aether_generated_context_staging_test)
+endif()

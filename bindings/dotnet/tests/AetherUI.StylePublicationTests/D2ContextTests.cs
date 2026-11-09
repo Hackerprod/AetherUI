@@ -29,17 +29,21 @@ internal static class D2ContextTests
             for(var i=0;i<520;++i) {host.PointerMoved(new(5,25+(i%2)*20));host.Render();}
             Check(Native.Read(out var counters)==0,"counters");
             Check(counters.Calls>=520,"EnsureVisualTree must call context preparation");
+            Check(Native.ReadLegacy(out var legacy)==0,"legacy counters");
+            Check(legacy.Compute==0 && legacy.StateEntries==0 && legacy.MapCopies==0,"no-op resolver/map work");
+            Check(counters.Calls>=12,"EnsureVisualTree must call context preparation");
             Check(counters.Backing==0 && counters.Active==0 && counters.Static==0 && counters.Builds==0 && counters.Allocations==0 && counters.Fallbacks==0,"no context work after warmup: "+counters);
             Check(host.Metrics.LayoutBuilds==0 && host.Metrics.VisualStyleMapBuilds==0 && host.Metrics.VisualStyleMapUpdates==0 && host.Metrics.DisplayListBuilds==0 && host.Metrics.PaintChunkBuilds==0,"no-op host rebuild");
             Check(host.ProjectedBoxEntriesVisited==boxes && ReferenceEquals(layout,host.Layout) && ReferenceEquals(styles,Field<object>(host,"_styles")),"no box walk or projection replacement");
             Check(renderer.Frames==frames,"hover no-op must not paint");
             Check(Native.Work(out var work)==0 && work.Fallbacks==0 && work.Compute==0 && work.Records==0 && work.Entries==0 && work.MapCopies==0,"sustained no-op must not do periodic full work: "+work);
             Oracle(host);
-            Console.WriteLine($"PASS D2 real hover pipeline cards={size} static={owners}: {counters}");
+            Console.WriteLine($"PASS D2 real hover pipeline cards={size} static={owners}: {counters}; hit_queries={legacy.HitQueries} hit_boxes={legacy.HitBoxes} (E remains unoptimized)");
         }
         SustainedLocalHover();
         TransitionLifecycle();
         SemanticAndVisualDeltas();
+        ReplacedDocumentRetainsOldSnapshot();
     }
     // Test-only combined-tree trace: 520 state batches cross the old 128-entry
     // journal boundary repeatedly. FULL context oracles run outside counters.
@@ -65,11 +69,12 @@ internal static class D2ContextTests
             Check(Native.Read(out var counters)==0,"sustained context counters");
             Check(Native.Work(out var work)==0,"sustained style counters");
             Check(work.Fallbacks==0 && work.Compute==1040 && work.Prepares==520 && work.Publications==520,"local trace must compute two subjects with no periodic FULL: "+work);
-            Check(counters.Calls>=520 && counters.Backing==0 && counters.Active==0 && counters.Static<=1040 && counters.Builds==0 && counters.Allocations==0 && counters.Fallbacks==0,"local hover retains context certificate: "+counters);
+            // The revision and legacy backing each inspect only the two changed subjects.
+            Check(counters.Calls>=520 && counters.Backing==0 && counters.Active==0 && counters.Static<=2080 && counters.Builds==0 && counters.Allocations==0 && counters.Fallbacks==0,"local hover retains context certificate: "+counters);
             Check(host.Metrics.LayoutBuilds==0 && ReferenceEquals(layout,host.Layout) && Snapshot(host)==snapshot,"local paint must preserve geometry and context");
             Check(host.ProjectedBoxEntriesVisited-boxes<=2080 && host.Metrics.StyleUpdatedElements==1040,"local projection must visit indexed subjects only");
             Oracle(host);
-            Console.WriteLine($"PASS combined sustained local cards={size} static={owners} iterations=520: {counters}; {work}");
+            Console.WriteLine($"PASS combined sustained local cards={size} static={owners} iterations=520: {counters}; {work}; displayLists={host.Metrics.DisplayListBuilds} paintChunks={host.Metrics.PaintChunkBuilds}");
         }
     }
     private static ComputedStyle Transform(float x, float delay=.2f) => new()
@@ -122,6 +127,19 @@ internal static class D2ContextTests
             Console.WriteLine("PASS D2 managed semantic/visual causes: "+css);
         }
     }
+    private static void ReplacedDocumentRetainsOldSnapshot()
+    {
+        var cards=new Cards(100,1);using var renderer=new PaintCounter();using var host=new UiDocumentHost(cards,new ApproximateTextMeasurer(),renderer,new UiHostOptions{Width=400,Height=400});
+        host.ExperimentalStyleDeltas=true;host.Render();Check(Snapshot(host).Size==1,"old static owner");
+        Check(Native.Clone(Field<NativeLayoutResult>(host,"_nativeLayout").Handle,out var retained)==0,"retain old native frame");
+        try
+        {
+            cards.RemoveFirst();host.Render();Check(Snapshot(host).Size==0,"destroyed document owner absent");Oracle(host);
+            Check(Native.Info(retained,out _,out var count)==0 && count==1,"old frame retains immutable membership");
+        }
+        finally {Native.Destroy(retained);}
+        Console.WriteLine("PASS D2 managed document replacement destroys owner and preserves retained native frame");
+    }
     internal static T Field<T>(object value,string name)=>(T)value.GetType().GetField(name,BindingFlags.Instance|BindingFlags.NonPublic)!.GetValue(value)!;
     private static void Oracle(UiDocumentHost host)
     {
@@ -139,10 +157,12 @@ internal static class D2ContextTests
     private static void Check(bool value,string message) {if(!value)throw new InvalidOperationException(message);}
     private sealed class Cards(int count,int owners,string extra=""):UiComponent
     {
+        private int _start;
+        internal void RemoveFirst() { _start=1; StateHasChanged(); }
         protected override void BuildRenderTree(MarkupWriter writer)
         {
             writer.WriteLiteral("<style>html,body{margin:0}.card{height:20px;width:120px}.owner{transform:translateX(0px)}"+extra+"</style><body>");
-            for(var i=0;i<count;++i)writer.WriteLiteral($"<div id='c{i}' class='card{(i<owners?" owner":"")}'></div>");
+            for(var i=_start;i<count;++i)writer.WriteLiteral($"<div id='c{i}' class='card{(i<owners?" owner":"")}'></div>");
             writer.WriteLiteral("</body>");
         }
     }
@@ -154,23 +174,31 @@ internal static class D2ContextTests
         public void Dispose() {}
     }
     [StructLayout(LayoutKind.Sequential)]
+    internal struct LegacyCounts
+    {
+        internal ulong Compute,StateEntries,Records,Entries,Prepares,Publications,Fallbacks,MapCopies,ContextEntries,ContextBuilds,HitQueries,HitBoxes,PaintOrderChildren;
+    }
+    [StructLayout(LayoutKind.Sequential)]
     internal struct Counts
     {
         internal ulong Calls,Backing,Active,Updates,Builds,Reuses,Fallbacks,Allocations,Index,Static,Reason;
-        public override readonly string ToString()=>$"calls={Calls} backing={Backing} active={Active} static={Static} builds={Builds} reuse={Reuses} alloc={Allocations} fallback={Fallbacks}/{Reason}";
+        public override readonly string ToString()=>$"calls={Calls} backing={Backing} active={Active} static={Static} builds={Builds} reuse={Reuses} updates={Updates} index={Index} alloc={Allocations} fallback={Fallbacks}/{Reason}";
     }
     [StructLayout(LayoutKind.Sequential)]
     internal struct WorkCounts
     {
         internal ulong Compute,StateVisits,Records,Entries,Prepares,Publications,Fallbacks,MapCopies,LegacyContextVisits,LegacyContextBuilds,HitQueries,HitBoxes,PaintOrder;
-        public override readonly string ToString()=>$"compute={Compute} state={StateVisits} records={Records} entries={Entries} prepare={Prepares} publish={Publications} full={Fallbacks} mapCopies={MapCopies}";
+        public override readonly string ToString()=>$"compute={Compute} state={StateVisits} records={Records} entries={Entries} prepare={Prepares} publish={Publications} full={Fallbacks} mapCopies={MapCopies} hitQueries={HitQueries} hitBoxes={HitBoxes} paintOrder={PaintOrder}";
     }
     private static class Native
     {
         [DllImport("aether_core",EntryPoint="aether_work_counters_set_enabled")] internal static extern int Enable(int enabled);
         [DllImport("aether_core",EntryPoint="aether_work_counters_get_v1")] internal static extern int Work(out WorkCounts counts);
         [DllImport("aether_core",EntryPoint="aether_work_counters_reset")] internal static extern void Reset();
+        [DllImport("aether_core",EntryPoint="aether_work_counters_get_v1")] internal static extern int ReadLegacy(out LegacyCounts counts);
         [DllImport("aether_core",EntryPoint="aether_context_work_counters_get_v1")] internal static extern int Read(out Counts counts);
+        [DllImport("aether_core",EntryPoint="aether_layout_clone_snapshot")] internal static extern int Clone(IntPtr layout,out IntPtr clone);
+        [DllImport("aether_core",EntryPoint="aether_layout_result_destroy")] internal static extern void Destroy(IntPtr layout);
         [DllImport("aether_core",EntryPoint="aether_layout_context_snapshot_info")] internal static extern int Info(IntPtr layout,out ulong serial,out ulong size);
         [DllImport("aether_core",EntryPoint="aether_layout_context_validate_full")] internal static extern int Oracle(IntPtr runtime,IntPtr map,IntPtr layout,out int equal);
     }

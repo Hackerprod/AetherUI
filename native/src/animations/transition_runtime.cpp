@@ -385,14 +385,14 @@ AETHER_API aether_bool_t aether_transition_runtime_opacity_override(
     aether_transition_runtime_t runtime, aether_node_t node, float* out_opacity) {
     if (!runtime || !node || !out_opacity) return AETHER_FALSE;
     for (const auto& transition : runtime->active) {
-        if (transition.node == node && transition.identity==node->identity && transition.identity->alive && transition.identity->attached &&
+        if (transition.node == node && transition.identity->owner==node && transition.identity->alive && transition.identity->attached &&
             transition.property == AETHER_TRANSITION_PROPERTY_OPACITY) {
             *out_opacity = transition.current_opacity;
             return AETHER_TRUE;
         }
     }
     for (const auto& transition : runtime->finished) {
-        if (transition.node == node && transition.identity==node->identity && transition.identity->alive && transition.identity->attached &&
+        if (transition.node == node && transition.identity->owner==node && transition.identity->alive && transition.identity->attached &&
             transition.property == AETHER_TRANSITION_PROPERTY_OPACITY) {
             *out_opacity = transition.opacity;
             return AETHER_TRUE;
@@ -405,14 +405,14 @@ AETHER_API aether_bool_t aether_transition_runtime_transform_override(
     aether_transition_runtime_t runtime, aether_node_t node, aether_transform_matrix* out_matrix) {
     if (!runtime || !node || !out_matrix) return AETHER_FALSE;
     for (const auto& transition : runtime->active) {
-        if (transition.node == node && transition.identity==node->identity && transition.identity->alive && transition.identity->attached &&
+        if (transition.node == node && transition.identity->owner==node && transition.identity->alive && transition.identity->attached &&
             transition.property == AETHER_TRANSITION_PROPERTY_TRANSFORM) {
             *out_matrix = transition.current_matrix;
             return AETHER_TRUE;
         }
     }
     for (const auto& transition : runtime->finished) {
-        if (transition.node == node && transition.identity==node->identity && transition.identity->alive && transition.identity->attached &&
+        if (transition.node == node && transition.identity->owner==node && transition.identity->alive && transition.identity->attached &&
             transition.property == AETHER_TRANSITION_PROPERTY_TRANSFORM) {
             *out_matrix = transition.matrix;
             return AETHER_TRUE;

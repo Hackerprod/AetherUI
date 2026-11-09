@@ -1430,7 +1430,7 @@ static aether::style::ContextOwnersRef effective_fixed_containers(
         const auto style = record->style_view();
         if (node && node->type == AETHER_NODE_ELEMENT && !node->anonymous_flex_owner &&
             (!style.transforms().empty() || !style.backdrop_filters().empty() || active.count(node)))
-            effective.push_back({reinterpret_cast<uintptr_t>(identity.get()),{node,identity,1}});
+            append_context_entry(effective,{node,identity,1});
     });
     return publish_context_owners({},ContextOwnerIndex::build(std::move(effective)));
 }
@@ -1449,8 +1449,8 @@ static aether::style::ContextOwnersRef prepare_context_owners(aether_layout_engi
     using namespace aether::style;
     auto& cache=engine->context_cache;
     const auto active=aether_active_transform_snapshot(runtime);
-    const auto statics=map && map->backing()?map->backing()->context_owners():ContextOwnersRef{};
-    const auto topology=map && map->backing()?map->backing()->context_topology():ContextLineageRef{};
+    const auto statics=map?map->static_context_owners():ContextOwnersRef{};
+    const auto topology=map?map->context_topology():ContextLineageRef{};
     const auto document=map?map->document_lifetime():std::shared_ptr<node_identity_s>{};
     // 1 first use; 2 unknown map/transition coverage; 3 topology/document; 4 disabled.
     uint64_t fallback=4;
@@ -1609,9 +1609,12 @@ AETHER_API aether_status_t aether_layout_layout(
             const bool same_source=prepared && prepared_map && version &&
                 (prepared_map==version || (prepared_map->projection_source() &&
                     prepared_map->projection_source()==version->projection_source()));
-            const bool valid_pin=same_source && structure_valid(prepared_map.get()) &&
+            bool valid_pin=same_source && structure_valid(prepared_map.get()) &&
                 prepared_map->document_lifetime()==document_identity &&
                 prepared_map->style_tree_epoch()==document_identity->style_tree_epoch;
+#if !defined(AETHERUI_ENABLE_CONTEXT_OWNERS)
+            valid_pin=false; // OFF preserves the complete legacy preparation/layout path.
+#endif
             if(valid_pin) result->effective_context_owners=std::move(prepared_owners);
             else {
                 // A one-shot pin for another map is never silently applied.

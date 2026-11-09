@@ -25,7 +25,6 @@ struct ContextOwnersSnapshot {
     const ContextLineageRef lineage;
     const uint64_t membership_serial;
     ContextOwnersSnapshot(ContextOwnerIndex entries,ContextLineageRef source):owners(std::move(entries)),lineage(std::move(source)),membership_serial(next_serial()) {
-        diagnostics::count_work(diagnostics::WorkCounter::context_allocations);
         diagnostics::count_work(diagnostics::WorkCounter::context_builds);
     }
 private:
@@ -38,7 +37,12 @@ inline ContextLineageRef make_context_lineage() {
 }
 inline ContextOwnersRef publish_context_owners(const ContextOwnersRef& previous,ContextOwnerIndex owners) {
     if(previous && previous->owners.shares_root(owners)) return previous;
+    diagnostics::count_work(diagnostics::WorkCounter::context_allocations);
     return std::make_shared<const ContextOwnersSnapshot>(std::move(owners),previous?previous->lineage:make_context_lineage());
+}
+inline void append_context_entry(std::vector<ContextOwnerIndex::Entry>& entries,ContextOwnerEntry entry) {
+    if(entries.size()==entries.capacity()) diagnostics::count_work(diagnostics::WorkCounter::context_allocations);
+    entries.emplace_back(reinterpret_cast<uintptr_t>(entry.identity.get()),std::move(entry));
 }
 inline ContextOwnerIndex erase_context_owner(ContextOwnerIndex index,uintptr_t key) {
     if(index.find(key)) diagnostics::count_work(diagnostics::WorkCounter::context_updates);
