@@ -117,7 +117,10 @@ logical sibling, general-sibling tails and unrelated-subtree exclusion), both
 polarity kinds, every supported state name, lists/nested logicals, :has composition,
 generated host/slot handling, generated/anonymous subtree pruning, duplicate
 batches/rules, authentic token retention, absent-current-match rules and unrelated
-state/rule filters. Long routes/deep logical nesting and unknown internal AST cases
+state/rule filters. Separate differential fixtures cover ASCII-insensitive HTML
+tags, case-sensitive IDs/classes, repeated IDs, decoded Unicode class escapes,
+HTML whitespace versus NBSP/vertical-tab, and multi-bit state occurrences. Batch
+differentials toggle multiple nodes together. Long routes/deep logical nesting and unknown internal AST cases
 exercise both fallback reasons.
 
 The differential matrix toggles every relevant bit in both directions, also a
@@ -133,3 +136,11 @@ storage can match a local compound; the differential domain excludes those nodes
 See the external implementation report for actual run counts, build configuration,
 sanitizer limitations and the full-suite result. This finite corpus is evidence,
 not a proof covering arbitrary malformed input or a performance benchmark.
+
+Chromium cross-check: pinned revision
+`2d4034e6c4e0a2881aa4539c4ba4604e9b45ecc9`,
+`StyleEngine::PseudoStateChangedForElement` separates descendant/sibling scheduling
+from :has ancestor/sibling and logical-combination invalidation;
+`Element::SetHovered` skips unchanged state then performs both local marking and
+pseudo-state invalidation. This foundation preserves that local-plus-relational
+principle without importing Blink flags as proof or extending Aether CSS semantics.

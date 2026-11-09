@@ -142,6 +142,8 @@ void focused() {
     check(a.size() == 2, "generated and anonymous entire subtrees pruned");
     check(agenda(".label:hover", before).empty(), "generated changed input not normalized");
     check(agenda(".label:hover", hidden).empty(), "generated descendant changed input excluded");
+    check(inv::plan(hidden, {inv::compile(42, parse(".label:hover"))}, {{hidden,1}}).empty(),
+        "subtree root below generated boundary excluded");
     a = agenda(".card:hover::before", card);
     check(a.size() == 1 && contains(a, card, aether_pseudo_element_t::before), "host plus before slot");
     const auto p1 = inv::compile(1, parse(".card:hover::before"));
@@ -180,6 +182,41 @@ void focused() {
         PSEUDO_STATE_READ_ONLY,PSEUDO_STATE_SELECTED,PSEUDO_STATE_EXPANDED,
         PSEUDO_STATE_HOVER|PSEUDO_STATE_FOCUS};
     for (const auto& source : cases) differential(tree, source, masks);
+}
+void static_filter_semantics() {
+    Tree tree;
+    auto* n = tree.add(&tree.root, "CARD\tcard\nfoo\rbar\fbaz Qux caf\xc3\xa9", "ArTiClE");
+    n->attributes["id"] = "MiXeD";
+    auto agenda = [&](const std::string& source) {
+        return inv::plan(&tree.root, {inv::compile(42, parse(source))}, {{n,PSEUDO_STATE_HOVER}});
+    };
+    for (const auto* source : {"article:hover", "ARTICLE:hover", "ArTiClE:hover", "#MiXeD:hover",
+                              ".CARD:hover", ".card:hover", ".foo:hover", ".bar:hover", ".baz:hover",
+                              ".Qux:hover", ".caf\\e9:hover", "#MiXeD#MiXeD:hover"}) {
+        check(agenda(source).size()==1, std::string("necessary filter accepted ")+source);
+        differential(tree,source,{PSEUDO_STATE_HOVER,PSEUDO_STATE_HOVER|PSEUDO_STATE_FOCUS});
+    }
+    for (const auto* source : {"#mixed:hover", "#MIXED:hover", ".Card:hover", ".qux:hover", ".FOO:hover",
+                              "#MiXeD#mixed:hover"}) {
+        check(agenda(source).empty(),std::string("case-sensitive filter rejected ")+source);
+        differential(tree,source,{PSEUDO_STATE_HOVER,PSEUDO_STATE_HOVER|PSEUDO_STATE_FOCUS});
+    }
+    n->attributes["class"] = "a\xc2\xa0" "b v\vtab";
+    for (const auto* source : {".a:hover", ".b:hover", ".v:hover", ".tab:hover"}) {
+        check(agenda(source).empty(), std::string("non-HTML whitespace not delimiter ")+source);
+        differential(tree,source,{PSEUDO_STATE_HOVER});
+    }
+    auto ast = parse("article:hover");
+    ast.steps[0].compound.pseudos[0].state = static_cast<style_pseudo_state_t>(PSEUDO_STATE_HOVER|PSEUDO_STATE_FOCUS);
+    auto program = inv::compile(42,ast);
+    check(program.occurrences[0].state_mask==(PSEUDO_STATE_HOVER|PSEUDO_STATE_FOCUS),"full multibit occurrence mask retained");
+    for(const auto bit : {PSEUDO_STATE_HOVER,PSEUDO_STATE_FOCUS}) {
+        n->state=PSEUDO_STATE_HOVER|PSEUDO_STATE_FOCUS;
+        check(selector_match(ast,n),"combined occurrence initial match");
+        n->state ^= bit;
+        check(!selector_match(ast,n) && inv::plan(&tree.root,{program},{{n,static_cast<uint32_t>(bit)}}).size()==1,
+            "each constituent state bit invalidates combined occurrence on leave");
+    }
 }
 void fallback() {
     Tree tree; auto* root = tree.add(&tree.root, "root"); auto* n = root;
@@ -231,6 +268,25 @@ std::string random_selector(std::mt19937& rng, int depth) {
     }
     return out;
 }
+void batch(Tree& tree, const std::string& source) {
+    auto ast=parse(source); const auto program=inv::compile(42,ast);
+    std::vector<bool> before;
+    for(auto* n:tree.elements) before.push_back(selector_match(ast,n));
+    std::vector<inv::StateChange> changes;
+    for(size_t i=0;i<4;++i) {
+        auto* n=tree.elements[i]; const uint32_t mask=PSEUDO_STATE_HOVER|PSEUDO_STATE_FOCUS;
+        changes.push_back({n,mask}); n->state ^= mask;
+    }
+    const auto candidates=inv::plan(&tree.root,{program},changes);
+    for(size_t i=0;i<tree.elements.size();++i) {
+        ++comparisons;
+        if(before[i] == selector_match(ast,tree.elements[i])) continue;
+        ++changed_matches;
+        check(contains(candidates,tree.elements[i],ast.pseudo_element), "batch false negative "+source);
+    }
+    for(const auto& change:changes) change.node->state ^= change.changed_bits;
+    ++transitions;
+}
 void fuzz() {
     std::mt19937 rng(0xC2A37u);
     Tree tree;
@@ -243,11 +299,12 @@ void fuzz() {
         auto source=random_selector(rng,2);
         if(i%9==0) source+="::before";
         differential(tree,source,{PSEUDO_STATE_HOVER,PSEUDO_STATE_FOCUS,PSEUDO_STATE_DISABLED,PSEUDO_STATE_CHECKED});
+        if(i%10==0) batch(tree,source);
     }
 }
 }
 int main() {
-    try { focused(); fallback(); fuzz(); }
+    try { focused(); static_filter_semantics(); fallback(); fuzz(); }
     catch(const std::exception& error) { std::fprintf(stderr,"FAIL: %s\n",error.what()); return 1; }
     std::printf("PASS checks=%zu transitions=%zu matcher comparisons=%zu changed matches covered=%zu seed=0xC2A37\n",
         checks,transitions,comparisons,changed_matches);

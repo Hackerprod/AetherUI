@@ -3,8 +3,8 @@
 #include "../primitives/ascii_text.h"
 #include "../primitives/html_space_tokens.h"
 #include <algorithm>
+#include <functional>
 #include <map>
-#include <tuple>
 #include <unordered_set>
 
 namespace aether::style::invalidation {
@@ -173,8 +173,18 @@ std::vector<Candidate> plan(aether_node_s* root, const std::vector<Program>& pro
                             const std::vector<StateChange>& changes) {
     std::vector<Candidate> result;
     if (!dom_node(root)) return result;
+    // A subtree root cannot make storage under a generated/layout-only ancestor
+    // part of the logical DOM merely by hiding that ancestor from traversal.
+    for (auto* ancestor = root->parent; ancestor; ancestor = ancestor->parent)
+        if (!dom_node(ancestor)) return result;
     using Key = std::pair<const node_identity_s*, aether_pseudo_element_t>;
-    std::map<Key, size_t> index;
+    struct KeyLess {
+        bool operator()(const Key& a, const Key& b) const {
+            if (a.first != b.first) return std::less<const node_identity_s*>{}(a.first, b.first);
+            return a.second < b.second;
+        }
+    };
+    std::map<Key, size_t, KeyLess> index;
     std::vector<aether_node_s*> all;
     bool have_all = false;
     for (const auto& change : changes) {
