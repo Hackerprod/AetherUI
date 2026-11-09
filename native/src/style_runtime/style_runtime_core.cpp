@@ -39,7 +39,7 @@ struct PreparedNodeResult {
     FrozenStyleRef style;
     std::shared_ptr<measure_state_s> measures;
     FrozenScopeRef custom_properties;
-    // Transaction-local computed terminals; never exported or retained by snapshots.
+    // Separate backdrop terminals are preserved in the frozen node payload.
     FrozenScopeRef backdrop_custom_properties;
     FrozenColorRef color_references;
     uint32_t declared_impact=0, declared_inherited_impact=0, inherited_change_impact=0, impact=0;

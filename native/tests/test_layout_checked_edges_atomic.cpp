@@ -50,6 +50,8 @@ static std::vector<uint64_t> snapshot(aether_layout_result_t result) {
 }
 static void overflow_atomic() {
     fixture good("#c{width:20px;height:10px}");const auto before=snapshot(good.layout);
+    aether::style::MapVersionRef source_records;
+    REQUIRE(aether::style::materialize_legacy_revision_map(good.map->current->revision(),source_records)==AETHER_OK);
     for(const char* group:{"margin","padding"})for(const char* side:{"left","top","right","bottom"}) {
         std::string property=std::string(group)+"-"+side;if(std::strcmp(group,"border")==0)property+="-width";
         for(const char* border:{"solid","none","hidden"}) {
@@ -75,7 +77,7 @@ static void overflow_atomic() {
         NodeRecordInput input;input.node=node;input.style=frozen;input.node_lifetime=node->identity;input.node_identity=aether_node_identity(node);
         FrozenNodeRef record;REQUIRE(freeze_node_record(input,record)==AETHER_OK);
         BackingBuildInput backing;
-        for (const auto& entry : good.map->current->backing()->entries()) backing.entries.emplace(entry.first,entry.second);
+        for (const auto& entry : source_records->backing()->entries()) backing.entries.emplace(entry.first,entry.second);
         backing.entries[node]=record;
         MapVersionInput version;REQUIRE(freeze_backing(backing,version.backing)==AETHER_OK);
         aether_style_map_s map;REQUIRE(make_map_version(version,map.current)==AETHER_OK);

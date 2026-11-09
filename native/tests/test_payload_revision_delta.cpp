@@ -72,6 +72,17 @@ int main() {
         in.document_lifetime=std::shared_ptr<node_identity_s>(p->document_lifetime().get(),[](node_identity_s*){});
         need(freeze_node_payload(in,output)==AETHER_ERROR_INVALID_STATE&&output==p,"forged document token owner rejected");
     }
+    {
+        NodeRecordInput in;in.node=f.nodes[0].get();in.style=f.style;
+        in.node_lifetime=in.node->identity;in.node_identity=aether_node_identity(in.node);
+        in.document_lifetime=f.doc.identity;in.document_identity=aether_node_identity(&f.doc);
+        FrozenNodeRef genuine;ok(freeze_node_record(in,genuine));auto output=genuine;
+        in.node_lifetime=std::shared_ptr<node_identity_s>(f.nodes[0]->identity.get(),[](node_identity_s*){});
+        need(freeze_node_record(in,output)==AETHER_ERROR_INVALID_STATE&&output==genuine,"legacy record rejects forged node token owner");
+        in.node_lifetime=f.nodes[0]->identity;
+        in.document_lifetime=std::shared_ptr<node_identity_s>(f.doc.identity.get(),[](node_identity_s*){});
+        need(freeze_node_record(in,output)==AETHER_ERROR_INVALID_STATE&&output==genuine,"legacy record rejects forged document token owner");
+    }
     auto input1=f.input(1);auto first=freeze({},input1);
     need(!first->backing()&&first->entries().size()==512,"payload-only full revision");
     f.doc.identity->style_tree_epoch=first->style_tree_epoch();
