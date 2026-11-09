@@ -88,10 +88,14 @@ std::vector<aether_inline_text_token_s> aether_tokenize_inline_text(
 }
 
 bool aether_inline_text_has_visible_content(const std::string& text, const int32_t white_space) {
-    for (const auto& token : aether_tokenize_inline_text(text, white_space)) {
-        if (token.kind == aether_inline_text_token_kind_e::word ||
-            token.kind == aether_inline_text_token_kind_e::preserved_space ||
-            token.kind == aether_inline_text_token_kind_e::forced_break) return true;
+    if (aether_white_space_preserves_spaces(white_space)) return !text.empty();
+
+    // Only pre-line preserves breaks here. Unknown modes collapse whitespace
+    // just like normal/nowrap, matching the tokenizer without building tokens.
+    const bool preserve_breaks = white_space == AETHER_WHITE_SPACE_PRE_LINE;
+    for (const char value : text) {
+        if ((preserve_breaks && is_line_break(value)) ||
+            !aether::presentation_space_byte(static_cast<unsigned char>(value))) return true;
     }
     return false;
 }

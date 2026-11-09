@@ -379,6 +379,11 @@ if(AETHERUI_BUILD_TESTS)
     target_link_libraries(aether_inline_text_test PRIVATE AetherUI::Core)
     add_test(NAME aether.inline-text COMMAND aether_inline_text_test)
 
+    add_executable(aether_inline_text_visibility_test
+        tests/test_inline_text_visibility.cpp src/layout/inline_text.cpp)
+    target_include_directories(aether_inline_text_visibility_test PRIVATE include src/layout)
+    add_test(NAME aether.inline-text-visibility COMMAND aether_inline_text_visibility_test)
+
     add_executable(aether_margin_adjacency_test tests/test_margin_adjacency.cpp src/layout/margin_adjacency.cpp)
     add_test(NAME aether.margin-adjacency COMMAND aether_margin_adjacency_test)
 
