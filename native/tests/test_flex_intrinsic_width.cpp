@@ -4,6 +4,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <initializer_list>
 #include <string>
 #include <vector>
 #if defined(__unix__)
@@ -19,9 +20,13 @@ static void near(float actual,float expected,const char* what) {
         ++failures; std::fprintf(stderr,"FAIL [%s] %s: actual=%g expected=%g\n",scenario.c_str(),what,actual,expected);
     }
 }
+static bool baseline_metrics = false;
+static bool equal_baselines = false;
 static std::vector<std::string> measurement_trace;
 static aether_text_metrics_t measure(const char*t,const aether_computed_style_t* style,float,void*) {
     if (style && style->font_size == 37) measurement_trace.emplace_back(t);
+    if (baseline_metrics) return {float(std::strlen(t))*10,20,
+        !equal_baselines && (std::strchr(t, 'B') || (style && style->font_size == 38)) ? 2.f : 18.f};
     return {float(std::strlen(t))*10,20,15};
 }
 static const char* cards="<div id='a'></div><div id='b'></div><div id='c'></div>";
@@ -199,6 +204,74 @@ static void collapsed_height_regressions() {
     collapsed_height_case("pre-line CRLF", "<span>aa </span><span style='white-space:pre-line'>\r\n bb</span>", 40, 0, 20, 1);
     collapsed_height_case("break resets state", "aa <br>b <span>bb</span>", 40, 20, 20, 2);
 }
+// Equal heights can still require a taller line when run baselines differ.
+// These public-ABI checks compare the flex automatic minimum with final geometry.
+struct BaselineFragment { const char* text; float x, y; };
+static void baseline_height_case(const char* name, const std::string& content,
+                                 float height, std::initializer_list<BaselineFragment> expected,
+                                 const std::string& extra = "", bool equal = false) {
+    scenario = std::string("inline baseline ") + name;
+    baseline_metrics = true;
+    equal_baselines = equal;
+    Fixture f("#outer{flex-direction:column;width:50px;height:20px;align-items:stretch}"
+              "#inner{display:block;width:auto;height:120px;flex:0 1 auto;white-space:normal;line-height:20px}" + extra, content);
+    baseline_metrics = false;
+    near(f.rect().height, height, "automatic baseline minimum");
+    near(f.rect().width, 50, "baseline child width");
+    const auto host = f.rect();
+    const auto box = f.box("inner");
+    auto next = expected.begin();
+    for (int i = 0; i < aether_layout_box_get_child_count(box); ++i) {
+        auto child = aether_layout_box_get_child(box, i);
+        char* text = aether_layout_box_get_text(child);
+        if (text && *text) {
+            require(next != expected.end(), "no unexpected text fragment");
+            require(std::strcmp(text, next->text) == 0, "fragment text/order");
+            const auto rect = aether_layout_box_get_border_box(child);
+            near(rect.x-host.x, next->x, "baseline fragment x");
+            near(rect.y-host.y, next->y, "baseline fragment y");
+            near(rect.width, float(std::strlen(text))*10, "baseline fragment width");
+            near(rect.height, 20, "baseline fragment height");
+            ++next;
+        }
+        aether_string_free(text);
+    }
+    require(next == expected.end(), "all text fragments present");
+    if (aether_doc_get_element_by_id(f.doc, "atom")) {
+        near(f.rect("atom").y-host.y, 0, "atomic remains top aligned");
+        near(f.rect("atom").height, 40, "atomic height unchanged");
+    }
+}
+static void baseline_height_regressions() {
+    baseline_height_case("different", "<span>A</span><span>B</span>", 36, {{"A",0,0},{"B",10,16}});
+    baseline_height_case("equal", "<span>A</span><span>B</span>", 20, {{"A",0,0},{"B",10,0}}, "", true);
+    baseline_height_case("reversed", "<span>B</span><span>A</span>", 36, {{"B",0,16},{"A",10,0}});
+    baseline_height_case("br resets", "<span>A</span><span>B</span><br><span>B</span>", 56,
+                         {{"A",0,0},{"B",10,16},{"B",0,36}});
+    baseline_height_case("separate lines", "A<br>B", 40, {{"A",0,0},{"B",0,20}});
+    baseline_height_case("wrap before metrics", "<span>AAAA</span><span>BBBB</span>", 40,
+                         {{"AAAA",0,0},{"BBBB",0,20}});
+    baseline_height_case("wrap after tall line", "<span>A</span><span>B</span><span>AAAA</span>", 56,
+                         {{"A",0,0},{"B",10,16},{"AAAA",0,36}});
+    baseline_height_case("leading rejected space", "<span style='font-size:38px'> </span>A", 20, {{"A",0,0}});
+    baseline_height_case("redundant rejected space", "<span>A </span><span style='font-size:38px'> </span>A", 20,
+                         {{"A",0,0},{" ",10,0},{"A",20,0}});
+    baseline_height_case("accepted space baseline", "A<span style='font-size:38px'> </span>A", 36,
+                         {{"A",0,0},{" ",10,16},{"A",20,0}});
+    for (const char* mode : {"nowrap", "pre"}) {
+        baseline_height_case(mode, "<span>AAAA</span><span>BBBB</span>", 36,
+                             {{"AAAA",0,0},{"BBBB",40,16}}, std::string("#inner{white-space:")+mode+"}");
+    }
+    baseline_height_case("pre newline", "A\nB", 40, {{"A",0,0},{"B",0,20}}, "#inner{white-space:pre}");
+    baseline_height_case("min-height zero", "<span>A</span><span>B</span>", 20,
+                         {{"A",0,0},{"B",10,16}}, "#inner{min-height:0}");
+    // Preserve existing atomic intrinsic-height behavior; only text contributes
+    // ascent/descent. The explicit atomic box remains 40px in final geometry.
+    baseline_height_case("atomic mixed", "A<span id='atom' style='display:inline-block;width:10px;height:40px'></span>B", 36,
+                         {{"A",0,0},{"B",20,16}});
+    baseline_height_case("atomic only", "<span id='atom' style='display:inline-block;width:10px;height:40px'></span>", 20, {});
+    baseline_height_case("empty forced line", "A<br><br>B", 60, {{"A",0,0},{"B",0,40}});
+}
 int main(int argc,char**argv) {
 #if defined(__unix__)
     Dl_info info{}; require(dladdr(reinterpret_cast<void*>(&aether_layout_layout),&info)!=0,"dladdr");
@@ -216,6 +289,7 @@ int main(int argc,char**argv) {
     if(group=="all") {
         inline_height_regressions();
         collapsed_height_regressions();
+        baseline_height_regressions();
         {scenario="explicit width";Fixture f("#inner{width:300px}");f.row();}
         for(int outer:{150,80}) {scenario="automatic minimum "+std::to_string(outer);Fixture f("#outer{width:"+std::to_string(outer)+"px}#inner{flex:0 1 auto}");f.lines(outer==80?100:150);}
         {scenario="empty";Fixture f("","");f.width(0);}

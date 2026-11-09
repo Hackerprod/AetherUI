@@ -1277,23 +1277,27 @@ static float measure_inline_items_height(
 {
     const float line_minimum = std::max(1.f, layout_used_line_height(engine, owner, parent_style));
     float line_height = line_minimum;
+    float line_ascent = 0.f, line_descent = 0.f;
     float cursor_x = 0.f;
     float total_height = 0.f;
     bool has_line_content = false;
     bool previous_collapsible_space = false;
 
     auto finish_line = [&](bool forced) {
-        if (has_line_content || forced) total_height += line_height;
+        if (has_line_content || forced)
+            total_height += std::max(line_height, line_ascent + line_descent);
         cursor_x = 0.f;
         line_height = line_minimum;
+        line_ascent = line_descent = 0.f;
         has_line_content = false;
     };
     auto append_fragment = [&](float width, float height, bool whitespace, bool allow_wrap) {
-        if (whitespace && !has_line_content) return;
+        if (whitespace && !has_line_content) return false;
         if (allow_wrap && !whitespace && has_line_content && cursor_x + width > available_width) finish_line(false);
         cursor_x += width;
         line_height = std::max(line_height, height);
         has_line_content = true;
+        return true;
     };
 
     for (const auto& item : items) {
@@ -1328,8 +1332,13 @@ static float measure_inline_items_height(
             const auto metrics = engine_measure_text(engine, token.text.c_str(), &item.style, 0.f, item.element);
             // Match final inline layout: forced breaks remain unconditional, but
             // soft wrapping belongs to the text run rather than its parent.
-            append_fragment(metrics.width, metrics.height, whitespace,
-                            aether_white_space_allows_soft_wrap(item.style.white_space));
+            if (append_fragment(metrics.width, metrics.height, whitespace,
+                                aether_white_space_allows_soft_wrap(item.style.white_space))) {
+                // Accumulate only accepted text on its post-wrap line, using the
+                // same baseline envelope as final layout without remeasurement.
+                line_ascent = std::max(line_ascent, metrics.baseline);
+                line_descent = std::max(line_descent, std::max(0.f, metrics.height - metrics.baseline));
+            }
             if (has_line_content) previous_collapsible_space = collapsible;
         }
     }
