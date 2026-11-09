@@ -2003,7 +2003,7 @@ void builtin_properties_register(style_property_registry_s* reg) {
         "display", "position", "width", "height", "min-width", "min-height", "max-width", "max-height",
         "left", "right", "top", "bottom", "margin-left", "margin-right", "margin-top", "margin-bottom",
         "padding-left", "padding-right", "padding-top", "padding-bottom", "color", "font-size", "font-family",
-        "font-weight", "line-height", "text-align", "text-transform", "white-space", "cursor", "pointer-events",
+        "font-weight", "font-style", "letter-spacing", "text-fill-color", "-webkit-text-fill-color", "line-height", "text-align", "text-transform", "white-space", "cursor", "pointer-events",
         "visibility", "background-color", "background-image", "background-position", "background-size",
         "background-repeat", "border-left-color", "border-right-color", "border-top-color", "border-bottom-color",
         "border-left-width", "border-right-width", "border-top-width", "border-bottom-width",
