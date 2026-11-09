@@ -29,7 +29,15 @@ struct NodeRecordInput {
     std::shared_ptr<node_identity_s> document_lifetime = {};
     std::shared_ptr<aether_node_s> generated_leaf = {};
 };
+// Unknown/imported dependencies conservatively consume every parent input.
+namespace ParentDependencies {
+inline constexpr uint32_t background_color = 1u << 0;
+inline constexpr uint32_t border_colors = 1u << 1;
+inline constexpr uint32_t other = 1u << 2;
+inline constexpr uint32_t all = ~uint32_t{0};
+}
 struct NodePayloadInput {
+    uint32_t parent_dependencies = ParentDependencies::all;
     RecordOrigin origin = RecordOrigin::legacy;
     aether_node_s* node = nullptr;
     FrozenStyleRef style = {};
@@ -56,6 +64,7 @@ aether_status_t freeze_node_record(const NodeRecordInput&, FrozenNodeRef&) noexc
 // Factory-certified, revision-independent node data. It retains identities and
 // generated storage, but never a document measure context or revision.
 class FrozenNodePayload {
+    const uint32_t parent_dependencies_;
     const RecordOrigin origin_;
     aether_node_s* const node_;
     const FrozenStyleRef style_;
@@ -76,6 +85,7 @@ class FrozenNodePayload {
     friend class FrozenNodeRecord;
     friend aether_status_t freeze_node_record(const NodeRecordInput&, FrozenNodeRef&) noexcept;
 public:
+    uint32_t parent_dependencies() const noexcept { return parent_dependencies_; }
     const RecordOrigin& origin() const noexcept { return origin_; }
     aether_node_s* node() const noexcept { return node_; }
     const FrozenStyleRef& style() const noexcept { return style_; }

@@ -98,6 +98,30 @@ struct CompiledStyleInputs {
     std::vector<invalidation::Program> state_programs;
 };
 
+// O(1) pin of the authoritative persistent revision directory. No second N-node
+// cache is copied when a candidate shares untouched payloads with its base.
+class RuntimeStateCache {
+    StyleRevisionRef revision_;
+public:
+    RuntimeStateCache()=default;
+    explicit RuntimeStateCache(StyleRevisionRef revision):revision_(std::move(revision)){}
+    const FrozenNodePayloadRef* find(aether_node_s* node)const noexcept {
+        const auto* entry=revision_?revision_->directory().find(reinterpret_cast<uintptr_t>(node)):nullptr;
+        if(!entry)return nullptr;
+        const auto& token=entry->payload->node_lifetime();
+        if(token&&(!token->alive||!token->attached))return nullptr;
+        return &entry->payload;
+    }
+    const FrozenNodePayloadRef& at(aether_node_s* node)const {
+        const auto* found=find(node);if(!found)throw std::out_of_range("missing runtime state");return *found;
+    }
+    size_t count(aether_node_s* node)const noexcept{return find(node)?1:0;}
+    size_t size()const noexcept{return revision_?revision_->directory().size():0;}
+    bool empty()const noexcept{return size()==0;}
+    void clear()noexcept{revision_.reset();}
+    void swap(RuntimeStateCache& other)noexcept{revision_.swap(other.revision_);}
+};
+
 struct aether_style_runtime_s {
     aether_style_runtime_options_t options{};
     aether_style_environment_t environment{};
@@ -106,7 +130,7 @@ struct aether_style_runtime_s {
     int64_t next_sheet_handle = 1;
     int32_t next_rule_id = 1;
     std::unordered_map<int64_t, std::shared_ptr<const compiled_style_sheet_s>> sheets;
-    std::unordered_map<aether_node_s*, FrozenNodePayloadRef> states;
+    RuntimeStateCache states;
     std::unordered_map<aether_node_s*, std::unique_ptr<PreparedNodeResult>> prepared;
     std::shared_ptr<document_measure_context_s> document_measures;
     std::shared_ptr<const style_revision_s> revision;
@@ -666,8 +690,9 @@ static PreparedNodeResult* compute_node(aether_style_runtime_s* runtime, aether_
         }
     }
 
-    auto found = runtime->states.find(node);
-    const auto previous_style = found==runtime->states.end() ? std::optional<ComputedStyleReadView>{} : std::optional<ComputedStyleReadView>{found->second->style_view()};
+    const auto* found = runtime->states.find(node);
+    if(found)count_work(WorkCounter::state_entries_visited);
+    const auto previous_style = !found ? std::optional<ComputedStyleReadView>{} : std::optional<ComputedStyleReadView>{(*found)->style_view()};
 
     auto apply_property_value = [&](const style_property_definition_s& definition,
                                     aether_computed_style_t& style,
@@ -792,7 +817,7 @@ static PreparedNodeResult* compute_node(aether_style_runtime_s* runtime, aether_
             MutableStyleBuilder probe_builder;
             auto& probe=probe_builder.value;
             if (computed_style_deep_copy(*previous_style, &probe) == AETHER_OK) {
-                color_resolution_state_s probe_references = copy_color_state(*found->second->color_references());
+                color_resolution_state_s probe_references = copy_color_state(*(*found)->color_references());
                 // Read the candidate AFTER the winning declaration, while the
                 // flat and symbolic color references deliberately start at OLD.
                 measure_property_delta_s delta;
@@ -853,8 +878,8 @@ static PreparedNodeResult* compute_node(aether_style_runtime_s* runtime, aether_
     }
 
     measure_recompute_dependencies(*measures);
-    const bool is_new_node = found == runtime->states.end();
-    const auto* old_measures = is_new_node ? nullptr : found->second->measures().get();
+    const bool is_new_node = !found;
+    const auto* old_measures = is_new_node ? nullptr : (*found)->measures().get();
     const bool contextual_geometry_changed = old_measures &&
         (std::memcmp(&old_measures->scalars().row_gap, &measures->row_gap, sizeof(aether_css_length)) != 0 ||
          std::memcmp(&old_measures->scalars().column_gap, &measures->column_gap, sizeof(aether_css_length)) != 0 ||
@@ -863,45 +888,45 @@ static PreparedNodeResult* compute_node(aether_style_runtime_s* runtime, aether_
     if (contextual_geometry_changed) declared_impact |= STYLE_IMPACT_LAYOUT | STYLE_IMPACT_TEXT_LAYOUT;
 
     const uint32_t inherited_symbolic_impact = !is_new_node &&
-        !text_color_flags_equal(*found->second->color_references(), color_references.text_shadow_uses_current_color)
+        !text_color_flags_equal(*(*found)->color_references(), color_references.text_shadow_uses_current_color)
         ? STYLE_IMPACT_PAINT | STYLE_IMPACT_INHERITED : STYLE_IMPACT_NONE;
-    const bool changed = is_new_node || contextual_geometry_changed || !style_equal(found->second->style_view(), next);
+    const bool changed = is_new_node || contextual_geometry_changed || !style_equal((*found)->style_view(), next);
     if (!changed) {
         impact = STYLE_IMPACT_NONE;
         inherited_change_impact = inherited_symbolic_impact;
-        declared_impact=found->second->declared_impact();
-        declared_inherited_impact=found->second->declared_inherited_impact();
+        declared_impact=(*found)->declared_impact();
+        declared_inherited_impact=(*found)->declared_inherited_impact();
     } else if (is_new_node) {
         impact = STYLE_IMPACT_ALL_BITS;
         inherited_change_impact = declared_inherited_impact | inherited_parent_impact;
-    } else if (!transform_origin_equal(found->second->style_view().scalars().transform_origin, next.transform_origin) &&
+    } else if (!transform_origin_equal((*found)->style_view().scalars().transform_origin, next.transform_origin) &&
                [&] {
                    // Removal or computed-invalid origin can occur after any
                    // number of no-op resolves. Compare the final scalar delta,
                    // not historical declaration impacts. This copy only borrows.
-                   auto comparison = found->second->style_view().scalars();
+                   auto comparison = (*found)->style_view().scalars();
                    comparison.transform_origin = next.transform_origin;
-                   return style_equal(found->second->style_view().with_scalars(comparison), next);
+                   return style_equal((*found)->style_view().with_scalars(comparison), next);
                }()) {
         const auto* origin = registry->try_get("transform-origin");
         impact = origin ? origin->impact : STYLE_IMPACT_ALL_BITS;
         inherited_change_impact = STYLE_IMPACT_NONE;
-    } else if (found->second->style_view().scalars().visible != next.visible) {
+    } else if ((*found)->style_view().scalars().visible != next.visible) {
         // Compare the final computed delta, not the declarations still present.
         // Removing visibility can otherwise reuse historical geometric impacts;
         // removing width alongside visibility can miss those same impacts.
         // Copy only scalar values. Payload stays readonly under the old record pin.
-        auto comparison = found->second->style_view().scalars();
+        auto comparison = (*found)->style_view().scalars();
         comparison.visible = next.visible;
         const auto* visibility = registry->try_get("visibility");
-        impact = visibility && style_equal(found->second->style_view().with_scalars(comparison), next)
+        impact = visibility && style_equal((*found)->style_view().with_scalars(comparison), next)
             ? visibility->impact
             : STYLE_IMPACT_ALL_BITS;
         inherited_change_impact = impact;
     } else {
         impact = declared_impact | inherited_parent_impact;
         if (impact == STYLE_IMPACT_NONE) {
-            impact = found->second->declared_impact();
+            impact = (*found)->declared_impact();
         }
         if (impact == STYLE_IMPACT_NONE) {
             // Safety net for computed-style changes produced outside a concrete
@@ -911,17 +936,17 @@ static PreparedNodeResult* compute_node(aether_style_runtime_s* runtime, aether_
         }
         inherited_change_impact = declared_inherited_impact | inherited_parent_impact;
         if (inherited_change_impact == STYLE_IMPACT_NONE)
-            inherited_change_impact = found->second->declared_inherited_impact();
+            inherited_change_impact = (*found)->declared_inherited_impact();
     }
     inherited_change_impact |= inherited_symbolic_impact;
     if (!is_new_node) {
-        const auto previous = found->second->style_view();
+        const auto previous = (*found)->style_view();
         const bool before_context = !previous.transforms().empty() || !previous.backdrop_filters().empty();
         const bool after_context = next.transforms.count > 0 || next.backdrop_filters.count > 0;
         if (before_context != after_context) impact |= STYLE_IMPACT_LAYOUT;
     }
     auto state = std::make_unique<PreparedNodeResult>();
-    if(!changed && complete_background_payload_equal(found->second->style_view(),next)) state->style=found->second->style();
+    if(!changed && complete_background_payload_equal((*found)->style_view(),next)) state->style=(*found)->style();
     else require_style_status(freeze_style(next,state->style));
     state->measures = measures;
     state->custom_properties = std::move(scope);
@@ -1209,14 +1234,9 @@ static aether_status_t prepare_revision_impl(
         staged.document_measures->identity = aether_node_identity(document);
         transaction->diagnostics = std::make_unique<stylesheet_diagnostics_s>(runtime->diag_cb, runtime->diag_user_data);
         staged.diag_cb = transaction->diagnostics->collector(); staged.diag_user_data = transaction->diagnostics.get();
-        // Retain comparable states only while their tokens are still live. Never
-        // dereference a pointer from a retired document generation.
-        for (const auto& entry : runtime->states) {
-            count_work(WorkCounter::state_entries_visited);
-            const auto& token = entry.second->node_lifetime();
-            if (!token || (token->alive && token->attached))
-                staged.states.emplace(entry.first, entry.second);
-        }
+        // Lookup checks retained token liveness before reusing a raw owner.
+        // Sharing this owner is constant work; compute_node counts actual reads.
+        staged.states = runtime->states;
         std::vector<aether_node_s*> order;
         prepare_tree(&staged, document, nullptr, 0, transaction->links, order);
         std::unordered_set<aether_node_s*> current_nodes(order.begin(), order.end());
@@ -1232,7 +1252,6 @@ static aether_status_t prepare_revision_impl(
         revision_input.document_lifetime=document->identity; revision_input.environment=requested_environment;
         std::unordered_map<aether_node_s*,std::shared_ptr<aether_node_s>> leaves;
         for(const auto& link:transaction->links)for(const auto& leaf:link.storage)leaves.emplace(leaf.get(),leaf);
-        std::unordered_map<aether_node_s*,FrozenNodePayloadRef> next_states;
         revision_input.entries.reserve(order.size());
         for(auto* node:order) {
             const auto& prepared=*staged.prepared.at(node);
@@ -1247,7 +1266,6 @@ static aether_status_t prepare_revision_impl(
             input.node_lifetime=node->identity;input.document_lifetime=document->identity;
             if(auto it=leaves.find(node);it!=leaves.end())input.generated_leaf=it->second;
             FrozenNodePayloadRef payload;require_style_status(freeze_node_payload(input,payload));
-            next_states.emplace(node,payload);
             revision_input.entries.push_back({node,payload,prepared.impact});
             count_work(WorkCounter::revision_entries_created);
         }
@@ -1259,7 +1277,6 @@ static aether_status_t prepare_revision_impl(
             if(!current_nodes.count(old.node()))revision_input.retired.push_back({old.node(),old.payload(),STYLE_IMPACT_ALL_BITS});
         require_style_status(certify_full_payload_revision(base,revision_input,certificate));
         StyleRevisionRef revision;require_style_status(freeze_certified_revision(certificate,revision));
-        for(auto& entry:next_states)entry.second=revision->directory().find(reinterpret_cast<uintptr_t>(entry.first))->payload;
         for(const auto& entry:revision_input.entries)if(export_legacy_updates && entry.impact) {
             auto update=std::make_unique<aether_style_update_s>();update->node=entry.node;update->impact=entry.impact;
             FrozenNodeRef record;require_style_status(BoundNodeView::find(revision,entry.node).export_record(record));
@@ -1269,7 +1286,7 @@ static aether_status_t prepare_revision_impl(
             update->current.node_lifetime=record->node_lifetime();update->current.document_lifetime=record->document_lifetime();
             transaction->updates.push_back(std::move(update));
         }
-        staged.states.swap(next_states);staged.prepared.clear();
+        staged.states=RuntimeStateCache(revision);staged.prepared.clear();
         if(transaction->updates.size()>static_cast<size_t>(INT32_MAX))return AETHER_ERROR_INVALID_STATE;
         // Reserve the last outward allocation before publishing any state.
         if (!transaction->updates.empty()) {
@@ -1508,9 +1525,9 @@ AETHER_API aether_status_t aether_style_runtime_update_resolved_style_map(aether
         std::vector<BackingPatchEntry> patch;
         patch.reserve(static_cast<size_t>(node_count));
         for(int32_t i=0;i<node_count;++i){auto* node=nodes[i];if(!node)continue;
-            const auto it=runtime->states.find(node);
+            const auto* current=runtime->states.find(node);
             FrozenNodeRef record;
-            if(it!=runtime->states.end()) {
+            if(current) {
                 const auto view=BoundNodeView::find(runtime->revision,node);
                 const auto old=previous&&previous->backing()?previous->backing()->find_owner(node):FrozenNodeRef{};
                 const auto document=view.document_owner();

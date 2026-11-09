@@ -7,6 +7,7 @@ template<class T> bool same_owner(const std::shared_ptr<T>& a,const std::shared_
 }
 }
 FrozenNodePayload::FrozenNodePayload(const NodePayloadInput& in) :
+    parent_dependencies_(in.parent_dependencies),
     origin_(in.origin),
     node_(in.node),
     style_(in.style),
