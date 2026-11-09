@@ -1,10 +1,11 @@
 # Proposal: acknowledgment of certified incremental publication
 
-Status: design proposal only, awaiting independent review. No ACK implementation
+Status: design proposal revision 2, awaiting independent review. No ACK implementation
 or feature activation is authorized by this document. Code baseline is C3c
 60ee3b70cc6d741df0a64f94a03a3232d4e297af, kept frozen in its original checkout.
-The proposed code change is a later checkpoint after both C3c certificate review
-and this focused protocol review pass. Default incremental option remains OFF.
+C3c60ee3b7 now has independent implementation PASS. The proposed ACK code change
+remains a later checkpoint after this focused protocol review passes, and needs
+its own independent implementation review before use. Default incremental option remains OFF.
 
 ## 1. Purpose and inherited invariants
 
@@ -42,19 +43,55 @@ a factory self-owner seal (the same control-block discipline as revisions and
 certificates), a pin to the exact output revision, authentic document token and
 its immutable generation/input/structure/output-style-tree epoch tuple.
 
-The private certificate records a typed producer origin: complete FULL resolver
-or reconciled self-agenda state resolver. Only the existing private FULL producer
-and StateRevisionPreparation may set that origin. It is not accepted from public
-inputs. The receipt copies it after certificate self-owner/header validation.
-Origin alone is insufficient: the authentic receipt must bind the exact candidate
-revision and all publication guards must pass.
+The private certificate records an immutable typed producer origin with an
+explicit non-authoritative `none` value. Its constructor/seal is not a public
+coverage API. An authentic allocation/self-owner seal proves object provenance,
+not that its supplied styles exhaust the DOM or reflect current CSS inputs.
+
+In particular, certify_full_payload_revision(base, supplied_entries, output) is
+a generic schema/import/test factory. The current implementation validates the
+entries it receives; it does not walk the DOM to prove that none was omitted or
+that an authentic old payload was recomputed for current inputs. It MUST always
+produce origin `none`, even when header.contextual is true, counts match, epochs
+are current or every supplied leaf is individually authentic. Its signature
+accepts no origin/trusted/coverage argument. It cannot emit a receipt or upgrade
+an existing certificate to resolver authority.
+
+Introduce a FullRevisionPreparation class defined only inside the runtime
+implementation, parallel to StateRevisionPreparation. Its entrypoint takes the
+runtime/document/requested operation and itself owns the exhaustive FULL path:
+prepare_tree, the complete order, every prepared output, generated links and
+retirements. Only after that traversal and validation complete may it construct
+a NEW authoritative FULL certificate from its own staging. It never accepts a
+caller-supplied entry list, generic/import certificate, revision handle or
+claimed-complete flag as authority. An imported/generic certificate is never
+relabelled, promoted or upgraded, including one that appears complete.
+
+FullRevisionPreparation and StateRevisionPreparation are the only private
+resolver producers permitted to construct the two authoritative origins. Their
+runtime-only control flow establishes complete FULL or reconciled self-agenda
+coverage, respectively. No external function can select either origin by bool
+or enum. Mechanical leaf validation/diff building may be shared in a helper
+that grants NO authority; generic schema calls always seal origin `none`, while
+the private exhaustive producer seals its own new result after its own complete
+traversal. This sharing must not create an entrypoint that upgrades a supplied
+certificate or infers coverage from a header.
+
+The receipt factory requires both authentic certificate self-owner and an
+authoritative resolver origin; contextual alone is insufficient. It rejects
+origin `none` for receipt issuance, preserving outputs on failure. The receipt
+copies the proven origin after validation. Origin alone is still insufficient:
+the authentic receipt must bind the exact output candidate revision and all
+publication guards must pass.
 
 Factory API details proposed:
 - Keep the existing private freeze_certified_revision(certificate, out_revision)
   operation usable by tests/import compatibility paths without recognition authority.
 - Add an internal overload/output for a receipt. It constructs the revision and
   receipt entirely during preparation, publishes neither output on failure, and
-  issues a receipt only for a genuine contextual certificate.
+  issues a receipt only for a genuine contextual certificate with private
+  resolver authority. An authentic generic certificate with origin `none`
+  cannot receive a receipt through this overload.
 - Existing legacy/import factories do not issue receipts. A legacy/noncontextual
   transaction can still follow its existing publication contract, but cannot ACK.
 - The FULL and incremental runtime preparation paths request and retain the
@@ -76,10 +113,11 @@ legacy import or reconstructed header cannot create a nonempty genuine receipt.
 
 ## 3. Evidence certified by each producer
 
-FULL authority remains the reviewed exhaustive resolver certificate: every
-current entry and retired entry is validated, document/generation/context is
-coherent, and the candidate represents all current input regardless of ordinary
-journal loss. Contextual FULL gets a receipt even if its later ACK must be skipped
+FULL authority comes from the private exhaustive FullRevisionPreparation
+producer described above, NOT from generic certify_full_payload_revision. Its
+complete internally produced traversal validates every current/retired entry,
+document/generation/context and computation from all current inputs, regardless
+of ordinary journal loss. Contextual FULL gets a receipt even if its later ACK must be skipped
 because permanent poison is set.
 
 Incremental receipt issuance requires the complete C3c proof, not just valid
@@ -136,11 +174,17 @@ from the bound receipt BEFORE any diagnostic replay and BEFORE returning the API
 The ACK helper accepts only the transaction's validated private authority; no
 numeric epoch or public status is an alternate authority.
 
-ACK recognizes exactly receipt.input_epoch == the document's current input epoch.
-It sets floor to that epoch, clears the bounded records and ordinary loss, and
-leaves permanent poison untouched. If poison is present or input < existing
-floor, it does nothing and does not lower/reset anything. A FULL publication can
-therefore succeed while leaving the document permanently non-incremental.
+ACK requires the explicit three-way equality for BOTH FULL and incremental:
+
+receipt.input_epoch == document.current_input_epoch == journal.last_epoch().
+
+Only then may it set floor to that epoch and clear bounded records and ordinary
+loss. Permanent poison is never cleared. If any epoch differs, poison is present,
+or input < existing floor, ACK does nothing: it preserves floor, loss and records
+exactly. FULL may still publish its valid current computed result but cannot
+infer missing journal coverage from the input number or repair a disagreeing
+last_epoch. This preserves the reviewed MutationJournal acknowledgment guard,
+not a new recovery rule. A poisoned document remains permanently non-incremental.
 
 For a valid incremental publication, no future record can already exist in this
 serialized callback-free interval. Recognition includes ALL inputs through the
@@ -180,6 +224,13 @@ repeat relevant counters-OFF functional and actual-core ASan/UBSan gates.
 Authority and binding:
 - Real FULL, real empty agenda and real local propagated result each get the
   receipt of their exact revision. No-op with a ledger-only change may ACK.
+- Generic certify_full_payload_revision returns an authentic origin-`none`
+  certificate even when contextual. Supply an otherwise valid list omitting a
+  live DOM entry and another list reusing stale authentic styles with current
+  header epochs: neither can receive a receipt, ACK, or be promoted through a
+  private FULL entrypoint. Even an actually complete generic list has no resolver
+  authority. Existing schema-only freeze may work, but receipt overload rejects
+  with unchanged outputs. There is no public/internal-generic origin parameter.
 - Missing receipt, fake self-owner, alias-control-block forgery, receipt from a
   different candidate/runtime document/generation, public revision clone and
   legacy/noncontextual imports cannot ACK or bypass prepublication rejection.
@@ -203,13 +254,26 @@ Publication and history:
 Loss and boundedness:
 - More than128 ordinary mutations before prepare -> FULL recovery -> next proven
   local/no-op may increment. Complete batches at capacity behave consistently.
-- Unknown loss -> authentic FULL recovery. Overflow -> wrap/gap -> FULL never
+- Journal last_epoch/current_input_epoch disagreement without another mutation:
+  authentic FULL may publish, but ACK preserves records/loss/floor exactly. Test
+  both mismatching directions, including ordinary loss already recorded. No
+  implicit correction from receipt/current epoch is permitted.
+- Unknown loss with matching last/current epoch -> authentic FULL recovery.
+  Overflow -> wrap/gap -> FULL never
   clears poison; floor greater than input never decreases. Gaps hidden behind
   existing loss remain poison. A new document starts a separate valid history.
 - At least10000 sequential no-op and local publishes with old revisions retained:
   no periodic JOURNAL_INCOMPLETE FULL when coverage stays valid, floor equals
-  each successful committed epoch, bounded memory/records, original generations
-  and ledger preserved. FULL shadow audits occur outside measured operations.
+  each successful committed epoch, at most128 journal records, original
+  generations and ledger preserved. Receipts live only as long as their owning
+  transactions; published snapshots must not retain receipts or historical
+  certificate/base chains. FULL shadow audits occur outside measured operations.
+- Memory assertions distinguish intentional snapshot retention from leaks:
+ 10000 retained revisions legitimately retain document contexts and persistent
+  nodes/payloads proportional to the snapshots and differences kept alive. Do
+  NOT require constant total memory while retaining them. Track absence of
+  unintended receipt/base chains and bounded journal storage, then release
+  transactions/snapshots and verify expected owner/destructor reclamation.
 - Work counters distinguish removed overflow FULL work from unchanged O(depth)
   planner work and persistent path allocation. No zero-DOM or global latency
   claim follows from ACK alone.
@@ -220,7 +284,8 @@ This is a narrow extension of the already reviewed journal protocol and the
 private C3b/C3c certificate boundaries. Source anchors in60ee3b7:
 - state_reconciliation.cpp::reconcile_state_inputs;
 - style_runtime_core.cpp::StateRevisionPreparation::prepare_local;
-- style_revision.cpp::freeze_certified_revision;
+- style_revision.cpp::certify_full_payload_revision (schema validation only,
+  no coverage authority) and freeze_certified_revision;
 - aether_style_transaction_s::acknowledge_full_publication and
   aether_style_runtime_commit_revision;
 - dom/mutation_journal.h acknowledgment floor/loss/poison logic.
