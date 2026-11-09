@@ -262,14 +262,35 @@ static void oom_and_thread(int mode=0) {
         ".card { --tone:red } .card:hover { --tone:blue; color:var(--tone); font-size:24px; text-shadow:1px 2px currentColor } span { background-color:currentColor; width:2em; line-height:1.5 }":
         ".card:hover { background-color:red }");f.full();aether_element_set_state(f.a,1);
     const auto floor=f.doc->mutation_journal.floor_epoch();const auto size=f.doc->mutation_journal.size();
+    const auto last=f.doc->mutation_journal.last_epoch();
+    const auto loss=f.doc->mutation_journal.loss();const auto poison=f.doc->mutation_journal.monotonicity_lost();
+    const std::vector<aether::dom::MutationRecord> records(f.doc->mutation_journal.begin(),f.doc->mutation_journal.end());
     const auto generation=aether_style_revision_generation(f.base);
+    aether_computed_style_handle_t original_style=nullptr;
+    ok(aether_style_revision_get_style(f.base,0,nullptr,&original_style,nullptr));
+    const auto original_revision=original_style->revision;aether_computed_style_handle_destroy(original_style);
     bool completed=false;
     for(long i=0;i<20000;++i) {
         fail_after=i;fault_delivered=false;aether_style_transaction_t tx=nullptr;
         const auto status=aether_style_runtime_prepare_state_revision(f.runtime,f.doc,mode==0?nullptr:f.base,nullptr,0,nullptr,&tx);
         fail_after=-1;
         CHECK(f.doc->mutation_journal.floor_epoch()==floor&&f.doc->mutation_journal.size()==size);
+        CHECK(f.doc->mutation_journal.last_epoch()==last&&f.doc->mutation_journal.loss()==loss&&
+            f.doc->mutation_journal.monotonicity_lost()==poison);
+        for(size_t record_index=0;record_index<records.size();++record_index) {
+            const auto& before=records[record_index];const auto& after=f.doc->mutation_journal.begin()[record_index];
+            CHECK(before.subject==after.subject&&!before.subject.owner_before(after.subject)&&!after.subject.owner_before(before.subject));
+            CHECK(before.mutation_epoch==after.mutation_epoch&&before.structure_epoch==after.structure_epoch&&
+                before.kind==after.kind&&before.old_state==after.old_state&&before.new_state==after.new_state);
+        }
         CHECK(aether_style_revision_generation(f.base)==generation);
+        // Query current runtime afresh after disabling injection; a retained old
+        // handle alone would not detect accidental publication during prepare.
+        aether_style_revision_t current=nullptr;ok(aether_style_runtime_retain_revision(f.runtime,&current));
+        aether_computed_style_handle_t current_style=nullptr;
+        ok(aether_style_revision_get_style(current,0,nullptr,&current_style,nullptr));
+        CHECK(current_style->revision==original_revision&&current_style->revision->authentic_owner(current_style->revision));
+        aether_computed_style_handle_destroy(current_style);aether_style_revision_destroy(current);
         if(status==AETHER_OK){CHECK(!fault_delivered);
             const auto info=result(tx);
             if(mode)CHECK(info.incremental||info.fallback==AETHER_STATE_FALLBACK_DISABLED);

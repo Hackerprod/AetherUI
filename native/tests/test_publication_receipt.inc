@@ -145,6 +145,37 @@ static void journal_three_way_guard(){
         aether_style_transaction_destroy(tx);aether_style_revision_destroy(out);
     }
 }
+// Missing observation can leave last behind current without an epoch-gap
+// append. Exercise the three-way ACK guard independently of poison rejection.
+static void journal_lag_without_poison(){
+    for(bool with_loss:{false,true}){
+        ReceiptFixture f;f.full();
+        const auto observed=f.doc->identity->mutation_epoch+1;
+        f.doc->mutation_journal.append(f.node->identity,
+            with_loss?aether::dom::MutationKind::unknown:aether::dom::MutationKind::state,
+            observed,f.doc->identity->structure_epoch,f.node->state,f.node->state);
+        f.doc->identity->mutation_epoch=observed;
+        need(!f.doc->mutation_journal.monotonicity_lost(),"contiguous observed input has no poison");
+        need(f.doc->mutation_journal.loss()==(with_loss?aether::dom::JournalLoss::unknown_mutation:aether::dom::JournalLoss::none),
+             "lag fixture has precisely requested ordinary loss");
+        // Simulate an input observation missing from the journal, rather than
+        // appending a regressive epoch that would independently poison it.
+        ++f.doc->identity->mutation_epoch;
+        const auto input=f.doc->identity->mutation_epoch;
+        need(f.doc->mutation_journal.last_epoch()<input&&!f.doc->mutation_journal.monotonicity_lost(),
+             "journal genuinely lags current without monotonicity poison");
+        JournalSnapshot journal(f.doc->mutation_journal);auto tx=f.prepare();
+        need(tx->publication_receipt&&!tx->publication_receipt->incremental()&&
+             tx->publication_receipt->matches(tx->publication_receipt,tx->revision),
+             "lagged observation still permits authentic exhaustive full preparation");
+        need(journal.matches(f.doc->mutation_journal),"full prepare preserves lagged journal");
+        auto out=f.commit(tx);
+        need(out->value->input_epoch()==input,"full publishes true current input despite journal lag");
+        need(journal.matches(f.doc->mutation_journal)&&!f.doc->mutation_journal.monotonicity_lost(),
+             "full cannot repair lag or clear ordinary loss even without poison");
+        aether_style_transaction_destroy(tx);aether_style_revision_destroy(out);
+    }
+}
 static void stale_receipt(){
     ReceiptFixture f;f.full();auto tx=f.prepare();
     aether_element_set_state(f.node,AETHER_STATE_HOVER);f.rejects(tx);
@@ -244,7 +275,7 @@ static void shared_document_receipts(){
 } // namespace publication_receipt_test
 static void publication_receipt_tests(){
     using namespace publication_receipt_test;
-    generic_has_no_authority();binding_and_status();receipt_lifetime();journal_three_way_guard();stale_receipt();
+    generic_has_no_authority();binding_and_status();receipt_lifetime();journal_three_way_guard();journal_lag_without_poison();stale_receipt();
 #if defined(AETHERUI_ENABLE_STATE_INCREMENTAL)
     incremental_receipt_authority();shared_document_receipts();
 #endif
