@@ -7,11 +7,15 @@ using FrozenDocumentRef = std::shared_ptr<const FrozenDocumentMeasureContext>;
 using FrozenMeasuresRef = std::shared_ptr<const FrozenMeasures>;
 // Borrowed, nullable descriptor. No vector/map/document construction on reads.
 class MeasuresReadView {
-    const FrozenMeasures* frozen_ = nullptr;
+    const FrozenMeasurePayload* frozen_ = nullptr;
+    const FrozenDocumentMeasureContext* document_ = nullptr;
     const std::optional<measure_read_view_s> builder_;
 public:
     MeasuresReadView() noexcept = default;
-    explicit MeasuresReadView(const FrozenMeasures& value) noexcept : frozen_(&value) {}
+    explicit MeasuresReadView(const FrozenMeasures& value) noexcept : frozen_(value.payload_owner().get()), document_(&value.document()) {}
+    // Internal borrowed binding: caller pins both authentic owners. No allocation.
+    MeasuresReadView(const FrozenMeasurePayload& payload, const FrozenDocumentMeasureContext& document) noexcept
+        : frozen_(&payload), document_(&document) {}
     explicit MeasuresReadView(measure_read_view_s value) noexcept : builder_(value) {}
     explicit MeasuresReadView(const measure_state_s& value) noexcept : builder_(measure_read_view_s(value)) {}
     explicit operator bool() const noexcept { return frozen_ || builder_.has_value(); }

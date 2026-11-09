@@ -29,7 +29,7 @@ aether_css_length MeasuresReadView::column_gap() const { return frozen_ ? frozen
 measure_inputs_s MeasuresReadView::inputs() const { return inputs_with_self_font(self_font_size()); }
 measure_inputs_s MeasuresReadView::inputs_with_self_font(float font) const {
     if(!frozen_) return builder_.value().inputs_with_self_font(font);
-    const auto& d=frozen_->document().values();
+    const auto& d=document_->values();
     return {font,d.viewport_width,d.viewport_height,d.initial_font_size,d.root_font_size};
 }
 uint32_t MeasuresReadView::dependency(const std::string& name) const {

@@ -97,23 +97,20 @@ public:
     Utf8ReadView name() const noexcept { return name_.view(); }
     uint32_t flags() const noexcept { return flags_; }
 };
-class FrozenMeasures {
+// Node-local measure data deliberately has no document, generation, or runtime.
+// It can be shared between bound records without retaining an old revision.
+class FrozenMeasurePayload {
     const MeasureScalarValues scalars_;
-    const std::shared_ptr<const FrozenDocumentMeasureContext> document_;
     const ImmutableArray<MeasureBackgroundPosition> positions_;
     const ImmutableArray<MeasureBackgroundSize> sizes_;
     const ImmutableArray<FrozenPropertyDependency> dependencies_;
 public:
-    FrozenMeasures(MeasureScalarValues scalars, std::shared_ptr<const FrozenDocumentMeasureContext> document,
+    FrozenMeasurePayload(MeasureScalarValues scalars,
         ImmutableArray<MeasureBackgroundPosition> positions, ImmutableArray<MeasureBackgroundSize> sizes,
-        ImmutableArray<FrozenPropertyDependency> dependencies)
-        : scalars_(scalars), document_(std::move(document)), positions_(std::move(positions)),
-          sizes_(std::move(sizes)), dependencies_(std::move(dependencies)) {
-        if (!document_) throw std::invalid_argument("missing frozen document context");
-    }
+        ImmutableArray<FrozenPropertyDependency> dependencies) noexcept
+        : scalars_(scalars), positions_(std::move(positions)), sizes_(std::move(sizes)),
+          dependencies_(std::move(dependencies)) {}
     const MeasureScalarValues& scalars() const noexcept { return scalars_; }
-    const FrozenDocumentMeasureContext& document() const noexcept { return *document_; }
-    const std::shared_ptr<const FrozenDocumentMeasureContext>& document_owner() const noexcept { return document_; }
     auto background_positions() const noexcept { return positions_.view(); }
     auto background_sizes() const noexcept { return sizes_.view(); }
     auto property_dependencies() const noexcept { return dependencies_.view(); }
@@ -122,5 +119,32 @@ public:
         return 0;
     }
 };
+using FrozenMeasurePayloadRef = std::shared_ptr<const FrozenMeasurePayload>;
+// Compatibility/export owner: payload plus this operation's immutable document.
+// Never change document identity/generation on a previously published owner.
+class FrozenMeasures {
+    const FrozenMeasurePayloadRef payload_;
+    const std::shared_ptr<const FrozenDocumentMeasureContext> document_;
+public:
+    FrozenMeasures(FrozenMeasurePayloadRef payload,
+        std::shared_ptr<const FrozenDocumentMeasureContext> document)
+        : payload_(std::move(payload)), document_(std::move(document)) {
+        if (!payload_ || !document_) throw std::invalid_argument("missing frozen measure owner");
+    }
+    FrozenMeasures(MeasureScalarValues scalars, std::shared_ptr<const FrozenDocumentMeasureContext> document,
+        ImmutableArray<MeasureBackgroundPosition> positions, ImmutableArray<MeasureBackgroundSize> sizes,
+        ImmutableArray<FrozenPropertyDependency> dependencies)
+        : FrozenMeasures(std::make_shared<const FrozenMeasurePayload>(scalars, std::move(positions),
+            std::move(sizes), std::move(dependencies)), std::move(document)) {}
+    const FrozenMeasurePayloadRef& payload_owner() const noexcept { return payload_; }
+    const MeasureScalarValues& scalars() const noexcept { return payload_->scalars(); }
+    const FrozenDocumentMeasureContext& document() const noexcept { return *document_; }
+    const std::shared_ptr<const FrozenDocumentMeasureContext>& document_owner() const noexcept { return document_; }
+    auto background_positions() const noexcept { return payload_->background_positions(); }
+    auto background_sizes() const noexcept { return payload_->background_sizes(); }
+    auto property_dependencies() const noexcept { return payload_->property_dependencies(); }
+    uint32_t dependency(std::string_view name) const noexcept { return payload_->dependency(name); }
+};
+
 
 } // namespace aether::style

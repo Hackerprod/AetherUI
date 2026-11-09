@@ -1,11 +1,11 @@
 #include "frozen_node_record.h"
 #include "../dom/dom_types.h"
 namespace aether::style {
-FrozenNodeRecord::FrozenNodeRecord(const NodeRecordInput& in) :
+FrozenNodePayload::FrozenNodePayload(const NodeRecordInput& in) :
     origin_(in.origin),
     node_(in.node),
     style_(in.style),
-    measures_(in.measures),
+    measures_(in.measures ? in.measures->payload_owner() : FrozenMeasurePayloadRef{}),
     custom_properties_(in.custom_properties),
     color_references_(in.color_references),
     declared_impact_(in.declared_impact),
@@ -16,6 +16,8 @@ FrozenNodeRecord::FrozenNodeRecord(const NodeRecordInput& in) :
     node_lifetime_(in.node_lifetime),
     document_lifetime_(in.document_lifetime),
     generated_leaf_(in.generated_leaf) {}
+FrozenNodeRecord::FrozenNodeRecord(const NodeRecordInput& in) :
+    payload_(new const FrozenNodePayload(in)), measures_(in.measures) {}
 aether_status_t freeze_node_record(const NodeRecordInput& in, FrozenNodeRef& out) noexcept {
     if (!in.node || !in.style || (in.origin != RecordOrigin::legacy && in.origin != RecordOrigin::runtime)) return AETHER_ERROR_INVALID_STATE;
     if (in.node_lifetime) {

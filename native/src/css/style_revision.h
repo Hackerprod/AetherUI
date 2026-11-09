@@ -1,6 +1,7 @@
 #pragma once
 #include <aether/aether_contextual_style.h>
 #include "immutable_style_backing.h"
+#include "frozen_measure_read.h"
 #include <vector>
 
 class style_revision_s;
@@ -72,3 +73,31 @@ public:
     auto changes() const noexcept { return changes_.view(); }
     auto retired_nodes() const noexcept { return retired_nodes_.view(); }
 };
+
+namespace aether::style {
+// Allocation-free operation-scoped view. Only an authentic revision can bind a
+// payload; the pin protects its document, payload, and generated node storage.
+// Legacy exported records remain bound owners and keep their existing ABI.
+class BoundNodeView {
+    StyleRevisionRef revision_;
+    FrozenNodePayloadRef payload_;
+    BoundNodeView(StyleRevisionRef revision, FrozenNodePayloadRef payload) noexcept
+        : revision_(std::move(revision)), payload_(std::move(payload)) {}
+public:
+    BoundNodeView() noexcept = default;
+    static BoundNodeView find(StyleRevisionRef revision, const aether_node_s* node) noexcept {
+        if (!revision) return {};
+        const auto* record = revision->backing()->find(node);
+        if (!record) return {};
+        auto payload = record->payload_owner();
+        return {std::move(revision), std::move(payload)};
+    }
+    explicit operator bool() const noexcept { return bool(payload_); }
+    const StyleRevisionRef& revision_owner() const noexcept { return revision_; }
+    const FrozenNodePayloadRef& payload_owner() const noexcept { return payload_; }
+    ComputedStyleReadView style_view() const noexcept { return payload_->style_view(); }
+    const FrozenDocumentMeasureContext& document() const noexcept { return *revision_->document(); }
+    MeasuresReadView measures_view() const noexcept { return MeasuresReadView(*payload_->measures(), document()); }
+    uint64_t generation() const noexcept { return revision_->generation(); }
+};
+}

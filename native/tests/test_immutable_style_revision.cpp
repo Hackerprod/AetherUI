@@ -38,6 +38,35 @@ int main() {
     in.document_identity=aether_node_identity(&doc);in.generation=2;in.input_epoch=5;in.structure_epoch=7;in.style_tree_epoch=11;
     in.entries={{&b,rb,0},{&a,ra,17}};in.retired={{rp,31},{rd,31}};
     StyleRevisionRef revision;ok(freeze_style_revision(in,revision));
+    // Revision-independent payload ownership must not keep old measure contexts.
+    static_assert(!std::is_assignable_v<FrozenNodePayload&, FrozenNodePayload>);
+    static_assert(!std::is_assignable_v<FrozenMeasurePayload&, FrozenMeasurePayload>);
+    need(ra->payload_owner()->measures() == ra->measures()->payload_owner(), "node shares local measures");
+    {
+        auto isolated_document=std::make_shared<const FrozenDocumentMeasureContext>(
+            DocumentMeasureValues{320,240,16,19,42,aether_node_identity(&doc)});
+        std::weak_ptr<const FrozenDocumentMeasureContext> weak_document=isolated_document;
+        auto isolated=record(a,doc,isolated_document);
+        auto reusable=isolated->payload_owner();
+        isolated.reset(); isolated_document.reset();
+        need(weak_document.expired(), "payload must not retain previous measure document");
+        auto rebound=std::make_shared<const FrozenMeasures>(reusable->measures(), document);
+        need(rebound->payload_owner()==reusable->measures() &&
+            rebound->document_owner()==document && rebound->document().values().generation==2,
+            "measure binding shares local data with explicit current document");
+    }
+    {
+        fault::arm(fault::Mode::cpp,0);
+        auto bound=BoundNodeView::find(revision,&a);
+        need(bound && bound.generation()==2 && &bound.document()==document.get() &&
+            bound.payload_owner()==ra->payload_owner(), "authentic revision binding");
+        need(!BoundNodeView::find(revision,nullptr) && !BoundNodeView::find({},&a), "absent bound view");
+        need(!fault::hit && fault::calls==0, "bound lookup/read allocates nothing");
+        fault::disarm();
+        std::weak_ptr<const style_revision_s> pinned=revision;
+        auto selected=bound.revision_owner();
+        need(selected==revision && !pinned.expired(), "bound view retains authentic revision");
+    }
     need(revision->entries().size()==2 && revision->changes().size()==4,"complete changes");
     need(revision->changes()[0].node()==&b && revision->changes()[0].impact()==0 && revision->changes()[1].record()==ra,"NONE and order");
     need(!revision->changes()[2].record() && revision->changes()[2].node()==leaf.get() && revision->retired_nodes().size()==2,"retirement");
