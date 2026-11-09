@@ -34,7 +34,7 @@ ContextOwnerEntry declared_context_cause(const FrozenNodePayloadRef& payload) {
 ContextOwnersRef import_context_causes(const StyleRevisionInput& in) {
     std::vector<ContextOwnerIndex::Entry> entries;
     for(const auto& item:in.entries){auto cause=declared_context_cause(item.record->payload_owner());
-        if(cause.causes)entries.emplace_back(reinterpret_cast<uintptr_t>(cause.identity.get()),std::move(cause));}
+        if(cause.causes)append_context_entry(entries,std::move(cause));}
     return publish_context_owners({},ContextOwnerIndex::build(std::move(entries)));
 }
 bool payload_equivalent(const FrozenNodePayload& a,const FrozenNodePayload& b)noexcept {
@@ -69,14 +69,26 @@ style_revision_s::style_revision_s(const CertifiedRevisionDelta& in,PayloadDirec
         const auto base=in.stable_order_?in.base_->static_context_owners():ContextOwnersRef{};
         if(base) {
             auto index=base->owners;
-            for(const auto& item:in.changes_)index=update_context_owner(std::move(index),declared_context_cause(item.payload));
+            for(const auto& item:in.changes_) {
+                const auto* old=in.base_->directory().find(reinterpret_cast<uintptr_t>(item.node));
+                if(old && old->payload->node_lifetime()!=item.payload->node_lifetime())
+                    index=erase_context_owner(std::move(index),reinterpret_cast<uintptr_t>(old->payload->node_lifetime().get()));
+                index=update_context_owner(std::move(index),declared_context_cause(item.payload));
+            }
             return publish_context_owners(base,std::move(index));
         }
         std::vector<ContextOwnerIndex::Entry> entries;
         for(const auto& item:in.changes_){auto cause=declared_context_cause(item.payload);
-            if(cause.causes)entries.emplace_back(reinterpret_cast<uintptr_t>(cause.identity.get()),std::move(cause));}
+            if(cause.causes)append_context_entry(entries,std::move(cause));}
         return publish_context_owners({},ContextOwnerIndex::build(std::move(entries)));
-    }()),context_topology_(in.stable_order_?in.base_->context_topology():make_context_lineage()),
+    }()),context_topology_([&] {
+        if(!in.stable_order_)return make_context_lineage();
+        for(const auto& item:in.changes_) {
+            const auto* old=in.base_->directory().find(reinterpret_cast<uintptr_t>(item.node));
+            if(!old || old->payload->node_lifetime()!=item.payload->node_lifetime())return make_context_lineage();
+        }
+        return in.base_->context_topology();
+    }()),
     contextual_(in.header_.contextual),generation_(in.header_.generation),document_identity_(in.header_.document_identity),
     input_epoch_(in.header_.input_epoch),structure_epoch_(in.header_.structure_epoch),style_tree_epoch_(in.header_.style_tree_epoch),
     environment_(in.header_.environment),document_(in.header_.document),document_lifetime_(in.header_.document_lifetime),

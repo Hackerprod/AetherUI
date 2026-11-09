@@ -1667,3 +1667,13 @@ if(AETHERUI_BUILD_TESTS AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
     target_link_libraries(aether_effective_context_owners_oom_test PRIVATE Threads::Threads)
     add_test(NAME aether.effective-context-owners-oom COMMAND aether_effective_context_owners_oom_test)
 endif()
+
+if(AETHERUI_BUILD_TESTS AND CMAKE_SYSTEM_NAME STREQUAL "Linux" AND NOT MSVC)
+    target_compile_options(aether_effective_context_owners_test PRIVATE -ffp-contract=off)
+    target_compile_options(aether_effective_context_owners_oom_test PRIVATE -ffp-contract=off)
+endif()
+
+if(AETHERUI_BUILD_TESTS AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    target_compile_definitions(aether_effective_context_owners_test PRIVATE $<TARGET_PROPERTY:aether_core,COMPILE_DEFINITIONS>)
+    target_compile_definitions(aether_effective_context_owners_oom_test PRIVATE $<TARGET_PROPERTY:aether_core,COMPILE_DEFINITIONS>)
+endif()

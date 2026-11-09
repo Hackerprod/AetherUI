@@ -30,13 +30,17 @@ private:
         const NodeRef zero, one;
         const std::optional<Entry> value;
         const unsigned bit;
-        explicit Node(const Entry& entry) : value(entry), bit(0) { Observer::allocated(); }
+        explicit Node(const Entry& entry) : value(entry), bit(0) {}
         Node(unsigned selected, NodeRef left, NodeRef right)
             : zero(std::move(left)), one(std::move(right)), bit(selected) {
-            assert(zero && one); Observer::allocated();
+            assert(zero && one);
         }
         bool leaf() const noexcept { return value.has_value(); }
     };
+    template<class... Args> static NodeRef make_node(Args&&... args) {
+        Observer::allocated();
+        return std::make_shared<const Node>(std::forward<Args>(args)...);
+    }
     NodeRef root_;
     size_t size_ = 0;
     PersistentIndex(NodeRef root, size_t size) noexcept : root_(std::move(root)), size_(size) {}
@@ -47,7 +51,7 @@ private:
     }
     static NodeRef build_sorted(std::span<const Entry* const> entries) {
         if (entries.empty()) return {};
-        if (entries.size()==1) return std::make_shared<const Node>(*entries.front());
+        if (entries.size()==1) return make_node(*entries.front());
         const uintptr_t difference = entries.front()->first ^ entries.back()->first;
         assert(difference);
         const unsigned bit = std::bit_width(difference)-1;
@@ -55,18 +59,18 @@ private:
             return !one(entry->first,bit);
         });
         const size_t count = static_cast<size_t>(split-entries.begin());
-        return std::make_shared<const Node>(bit,build_sorted(entries.first(count)),build_sorted(entries.subspan(count)));
+        return make_node(bit,build_sorted(entries.first(count)),build_sorted(entries.subspan(count)));
     }
     static NodeRef replace(const NodeRef& node, uintptr_t key, const T& value) {
-        if (node->leaf()) return std::make_shared<const Node>(Entry{key,value});
-        if (one(key,node->bit)) return std::make_shared<const Node>(node->bit,node->zero,replace(node->one,key,value));
-        return std::make_shared<const Node>(node->bit,replace(node->zero,key,value),node->one);
+        if (node->leaf()) return make_node(Entry{key,value});
+        if (one(key,node->bit)) return make_node(node->bit,node->zero,replace(node->one,key,value));
+        return make_node(node->bit,replace(node->zero,key,value),node->one);
     }
     static NodeRef insert_at(const NodeRef& node, uintptr_t key, unsigned bit, const NodeRef& leaf) {
         if (node->leaf() || node->bit<bit)
-            return one(key,bit) ? std::make_shared<const Node>(bit,node,leaf) : std::make_shared<const Node>(bit,leaf,node);
-        if (one(key,node->bit)) return std::make_shared<const Node>(node->bit,node->zero,insert_at(node->one,key,bit,leaf));
-        return std::make_shared<const Node>(node->bit,insert_at(node->zero,key,bit,leaf),node->one);
+            return one(key,bit) ? make_node(bit,node,leaf) : make_node(bit,leaf,node);
+        if (one(key,node->bit)) return make_node(node->bit,node->zero,insert_at(node->one,key,bit,leaf));
+        return make_node(node->bit,insert_at(node->zero,key,bit,leaf),node->one);
     }
     static NodeRef erase_node(const NodeRef& node, uintptr_t key, bool& removed) {
         if (!node) return {};
@@ -78,12 +82,12 @@ private:
             auto next=erase_node(node->one,key,removed);
             if (!removed) return node;
             if (!next) return node->zero;
-            return std::make_shared<const Node>(node->bit,node->zero,std::move(next));
+            return make_node(node->bit,node->zero,std::move(next));
         }
         auto next=erase_node(node->zero,key,removed);
         if (!removed) return node;
         if (!next) return node->one;
-        return std::make_shared<const Node>(node->bit,std::move(next),node->one);
+        return make_node(node->bit,std::move(next),node->one);
     }
     template<class Fn> static void enumerate_diff(const Node* node, bool removed, Fn& fn) {
         if (!node) return;
@@ -126,6 +130,7 @@ public:
     // need only be copy-constructible, not default-constructible or assignable.
     static PersistentIndex build(std::vector<Entry> entries) {
         std::vector<const Entry*> ordered;
+        if(!entries.empty()) Observer::allocated();
         ordered.reserve(entries.size());
         for (const auto& entry : entries) ordered.push_back(&entry);
         std::sort(ordered.begin(),ordered.end(),[](const Entry* a,const Entry* b) { return a->first<b->first; });
@@ -144,7 +149,7 @@ public:
     PersistentIndex set(uintptr_t key,const T& value) const {
         const auto* old=leaf_for(root_.get(),key);
         if (old && old->value->first==key) return {replace(root_,key,value),size_};
-        auto leaf=std::make_shared<const Node>(Entry{key,value});
+        auto leaf=make_node(Entry{key,value});
         if (!old) return {std::move(leaf),1};
         const unsigned bit=std::bit_width(key ^ old->value->first)-1;
         return {insert_at(root_,key,bit,leaf),size_+1};

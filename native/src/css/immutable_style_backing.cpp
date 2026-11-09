@@ -96,7 +96,7 @@ aether_status_t freeze_backing(const BackingBuildInput& in, BackingRef& out) noe
         });
         auto root=ImmutableStyleBacking::build_sorted(entries);
         std::vector<ContextOwnerIndex::Entry> owners;
-        for(const auto& item:entries) { auto entry=static_owner(item.second); if(entry.causes) owners.emplace_back(reinterpret_cast<uintptr_t>(entry.identity.get()),std::move(entry)); }
+        for(const auto& item:entries) { auto entry=static_owner(item.second); if(entry.causes) append_context_entry(owners,std::move(entry)); }
         auto context=publish_context_owners({},ContextOwnerIndex::build(std::move(owners)));
         BackingRef result(new const ImmutableStyleBacking(std::move(root),in.entries.size(),std::move(context),make_context_lineage()));
         out=std::move(result); return AETHER_OK;

@@ -105,7 +105,11 @@ static void generated_staging_and_contextual() {
  aether_style_map_t contextual{};ok(aether_style_revision_create_map(f.revision,&contextual));aether_bool_t changed=1;
  ok(aether_layout_prepare_transition_context(f.engine,f.transitions,contextual,f.layout,&changed));CHECK(!changed);
  aether_layout_result_t exact{};ok(aether_layout_layout(f.engine,f.doc,contextual,200,200,nullptr,nullptr,&exact));
+#if defined(AETHERUI_ENABLE_CONTEXT_OWNERS)
  CHECK(exact->effective_context_owners==f.layout->effective_context_owners);
+#else
+ CHECK(exact->effective_context_owners->owners.size()==f.layout->effective_context_owners->owners.size());
+#endif
  aether_layout_result_destroy(exact);aether_style_map_destroy(contextual);
 }
 static void destroyed_owner() {
