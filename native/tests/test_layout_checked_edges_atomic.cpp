@@ -74,7 +74,9 @@ static void overflow_atomic() {
         auto* node=aether_doc_get_element_by_id(good.doc,"c");
         NodeRecordInput input;input.node=node;input.style=frozen;input.node_lifetime=node->identity;input.node_identity=aether_node_identity(node);
         FrozenNodeRef record;REQUIRE(freeze_node_record(input,record)==AETHER_OK);
-        BackingBuildInput backing;backing.entries=good.map->current->backing()->entries();backing.entries[node]=record;
+        BackingBuildInput backing;
+        for (const auto& entry : good.map->current->backing()->entries()) backing.entries.emplace(entry.first,entry.second);
+        backing.entries[node]=record;
         MapVersionInput version;REQUIRE(freeze_backing(backing,version.backing)==AETHER_OK);
         aether_style_map_s map;REQUIRE(make_map_version(version,map.current)==AETHER_OK);
         auto output=good.layout;const auto status=aether_layout_layout(good.engine,good.doc,&map,800,600,nullptr,nullptr,&output);if(status!=AETHER_ERROR_INVALID_STATE)std::fprintf(stderr,"border overflow side=%u style=%d sign=%g status=%d\n",side,border,sign,status);REQUIRE(status==AETHER_ERROR_INVALID_STATE);

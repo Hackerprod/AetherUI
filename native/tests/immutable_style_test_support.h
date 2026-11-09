@@ -48,7 +48,7 @@ inline void replace_style(aether_style_map_t map, aether_node_t node,
     aether::style::FrozenNodeRef replacement;
     ok(aether::style::freeze_node_record(in, replacement));
     aether::style::BackingBuildInput input;
-    input.entries = map->current->backing()->entries();
+    for (const auto& entry : map->current->backing()->entries()) input.entries.emplace(entry.first, entry.second);
     input.entries.at(node) = std::move(replacement);
     publish(map, std::move(input));
 }
@@ -68,7 +68,7 @@ template<class Edit> void edit_scalars(aether_style_map_t map, aether_node_t nod
 inline void erase(aether_style_map_t map, aether_node_t node) {
     (void)record(map, node);
     aether::style::BackingBuildInput input;
-    input.entries = map->current->backing()->entries();
+    for (const auto& entry : map->current->backing()->entries()) input.entries.emplace(entry.first, entry.second);
     input.entries.erase(node);
     publish(map, std::move(input));
 }
