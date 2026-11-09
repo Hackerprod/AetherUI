@@ -45,10 +45,10 @@ style_revision_s::style_revision_s(const CertifiedRevisionDelta& in,PayloadDirec
     backing_(),entries_(),changes_(),retired_nodes_(in.retired_),directory_(std::move(directory)),manifest_(std::move(manifest)),impacts_(std::move(impacts)){}
 namespace aether::style {
 CertifiedRevisionDelta::CertifiedRevisionDelta(StyleRevisionRef base,FullPayloadRevisionInput header,bool stable,std::vector<Change> changes,
-    std::vector<std::pair<uintptr_t,int32_t>> states,std::vector<std::pair<uintptr_t,uint32_t>> impacts,ImmutableArray<FrozenRetiredNode> retired):
-    base_(std::move(base)),header_(std::move(header)),stable_order_(stable),captured_mutation_(header_.document_lifetime->mutation_epoch),
+    std::vector<std::pair<uintptr_t,int32_t>> states,std::vector<std::pair<uintptr_t,uint32_t>> impacts,ImmutableArray<FrozenRetiredNode> retired,PublicationOrigin origin):
+    origin_(origin),base_(std::move(base)),header_(std::move(header)),stable_order_(stable),captured_mutation_(header_.document_lifetime->mutation_epoch),
     captured_structure_(header_.document_lifetime->structure_epoch),captured_style_tree_(header_.document_lifetime->style_tree_epoch),changes_(std::move(changes)),state_changes_(std::move(states)),impacts_(std::move(impacts)),retired_(std::move(retired)){}
-aether_status_t certify_full_payload_revision(const StyleRevisionRef& base,const FullPayloadRevisionInput& in,CertifiedRevisionDeltaRef& out)noexcept{
+aether_status_t CertifiedRevisionDelta::build_full_data(const StyleRevisionRef& base,const FullPayloadRevisionInput& in,FullBuildData& out)noexcept{
     if(!in.document||!in.document_lifetime||!in.generation||!in.document_lifetime->alive||!in.document_lifetime->owner||
         in.document_identity!=reinterpret_cast<uintptr_t>(in.document_lifetime.get())||in.document->values().identity!=in.document_identity||
         in.document->values().generation!=in.generation||in.entries.size()>INT32_MAX)return AETHER_ERROR_INVALID_STATE;
@@ -94,8 +94,42 @@ aether_status_t certify_full_payload_revision(const StyleRevisionRef& base,const
         FullPayloadRevisionInput header;header.contextual=in.contextual;header.generation=in.generation;header.document_identity=in.document_identity;
         header.input_epoch=in.input_epoch;header.structure_epoch=in.structure_epoch;header.style_tree_epoch=in.style_tree_epoch;
         header.environment=in.environment;header.document=in.document;header.document_lifetime=in.document_lifetime;
-        CertifiedRevisionDeltaRef result(new const CertifiedRevisionDelta(base,std::move(header),stable,std::move(changes),std::move(states),std::move(impacts),std::move(retired_nodes)));
+        out={std::move(header),stable,std::move(changes),std::move(states),std::move(impacts),std::move(retired_nodes)};
+        return AETHER_OK;
+    }catch(const std::bad_alloc&){return AETHER_ERROR_OUT_OF_MEMORY;}
+}
+aether_status_t certify_full_payload_revision(const StyleRevisionRef& base,const FullPayloadRevisionInput& in,CertifiedRevisionDeltaRef& out)noexcept {
+    // This generic schema factory cannot prove DOM completeness or fresh CSS.
+    // There is no origin argument and no promotion operation for its result.
+    CertifiedRevisionDelta::FullBuildData data;
+    const auto status=CertifiedRevisionDelta::build_full_data(base,in,data);
+    if(status!=AETHER_OK)return status;
+    try {
+        CertifiedRevisionDeltaRef result(new const CertifiedRevisionDelta(base,std::move(data.header),data.stable,
+            std::move(data.changes),std::move(data.states),std::move(data.impacts),std::move(data.retired)));
         result->self_=result;out=std::move(result);return AETHER_OK;
+    }catch(const std::bad_alloc&){return AETHER_ERROR_OUT_OF_MEMORY;}
+}
+CertifiedPublicationReceipt::CertifiedPublicationReceipt(StyleRevisionRef revision,PublicationOrigin origin):
+    revision_(std::move(revision)),origin_(origin),document_(revision_->document_lifetime()),
+    generation_(revision_->generation()),input_epoch_(revision_->input_epoch()),
+    structure_epoch_(revision_->structure_epoch()),style_tree_epoch_(revision_->style_tree_epoch()){}
+bool CertifiedPublicationReceipt::matches(const CertifiedPublicationReceiptRef& owner,const StyleRevisionRef& revision)const noexcept {
+    if(!same_owner(self_.lock(),owner)||origin_==PublicationOrigin::none||!revision||
+        !same_owner(revision_,revision)||!revision->authentic_owner(revision)||!revision->contextual())return false;
+    return same_owner(document_,revision->document_lifetime())&&generation_==revision->generation()&&
+        input_epoch_==revision->input_epoch()&&structure_epoch_==revision->structure_epoch()&&style_tree_epoch_==revision->style_tree_epoch();
+}
+aether_status_t freeze_certified_revision(const CertifiedRevisionDeltaRef& certificate,StyleRevisionRef& out,
+    CertifiedPublicationReceiptRef& receipt)noexcept {
+    if(!certificate||!same_owner(certificate->self_.lock(),certificate)||
+        certificate->origin_==PublicationOrigin::none||!certificate->header_.contextual)return AETHER_ERROR_INVALID_STATE;
+    try {
+        StyleRevisionRef revision;const auto status=freeze_certified_revision(certificate,revision);
+        if(status!=AETHER_OK)return status;
+        CertifiedPublicationReceiptRef authority(new const CertifiedPublicationReceipt(revision,certificate->origin_));
+        authority->self_=authority;
+        out=std::move(revision);receipt=std::move(authority);return AETHER_OK;
     }catch(const std::bad_alloc&){return AETHER_ERROR_OUT_OF_MEMORY;}
 }
 aether_status_t freeze_certified_revision(const CertifiedRevisionDeltaRef& certificate,StyleRevisionRef& out)noexcept{
