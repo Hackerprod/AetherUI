@@ -15,6 +15,8 @@
 namespace {
 
 struct transition_claim {
+    std::shared_ptr<DomNodeOwnerPin> live_owner;
+    std::shared_ptr<EditableNodeStorage> document;
     std::shared_ptr<EditableNodeStorage> lease;
     std::shared_ptr<node_identity_s> identity;
     uint64_t disconnect_serial = 0;
@@ -338,7 +340,8 @@ aether_status_t observe_state(
         }
     };
     const auto install = [&](active_transition_s transition) {
-        transition.claim = {aether_editable_lease(node), node->identity, node->identity->disconnect_serial};
+        const auto owner = node->document_owner.lock();
+        transition.claim = {aether_live_owner_pin(node), owner ? owner->document.lock() : nullptr, aether_editable_lease(node), node->identity, node->identity->disconnect_serial};
         transition.observed_ms = now_ms;
         transition.delay_ms = delay_ms;
         if (sample_transition(transition, now_ms) >= 1.f) {

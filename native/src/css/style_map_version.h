@@ -27,6 +27,8 @@ class MapVersion {
     const MapMode mode_;
     const std::shared_ptr<const style_revision_s> revision_;
     const std::shared_ptr<node_identity_s> document_lifetime_;
+    // Required even for an empty legacy backing: pure epoch queries read DOM.
+    const std::shared_ptr<EditableNodeStorage> document_lease_;
     const uint64_t document_identity_;
     const uint64_t generation_;
     const uint64_t structure_epoch_;

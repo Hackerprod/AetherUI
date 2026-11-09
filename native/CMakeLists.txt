@@ -21,6 +21,7 @@ add_library(aether_core SHARED
     src/dom/node.cpp
     src/dom/dom_snapshot.cpp
     src/dom/dom_edit.cpp
+    src/dom/dom_owner.cpp
     src/dom/dom_style_source.cpp
     src/dom/element_node.cpp
     src/dom/document_node.cpp
@@ -1569,11 +1570,12 @@ endif()
 if(AETHERUI_BUILD_TESTS)
     # Compile the actual DOM mutation boundaries locally for deterministic OOM
     # injection, without adding a public ABI or touching resolver factories.
-    add_executable(aether_dom_mutation_journal_test tests/test_dom_mutation_journal.cpp
-        src/dom/node.cpp src/dom/element_node.cpp src/dom/document_node.cpp src/dom/html_parser.cpp)
+    add_executable(aether_dom_mutation_journal_test tests/test_dom_mutation_journal.cpp)
     target_include_directories(aether_dom_mutation_journal_test PRIVATE include src)
     target_compile_definitions(aether_dom_mutation_journal_test PRIVATE AETHER_EXPORTS)
-    target_link_libraries(aether_dom_mutation_journal_test PRIVATE AetherUI::Core)
+    if(NOT CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        target_link_libraries(aether_dom_mutation_journal_test PRIVATE AetherUI::Core)
+    endif()
     add_test(NAME aether.dom-mutation-journal COMMAND aether_dom_mutation_journal_test)
 endif()
 
@@ -1676,4 +1678,14 @@ if(AETHERUI_BUILD_TESTS AND TARGET aether_publication_test_core)
     target_compile_definitions(aether_dom_style_binding_test PRIVATE AETHER_DOM_STYLE_TESTING)
     target_link_libraries(aether_dom_style_binding_test PRIVATE Threads::Threads)
     add_test(NAME aether.dom-style-binding COMMAND aether_dom_style_binding_test)
+endif()
+
+if(AETHERUI_BUILD_TESTS AND TARGET aether_publication_test_core)
+    # White-box OOM checks must use a single core and its current binding registry.
+    target_sources(aether_dom_mutation_journal_test PRIVATE $<TARGET_OBJECTS:aether_publication_test_core>)
+    target_link_libraries(aether_dom_mutation_journal_test PRIVATE Threads::Threads)
+    add_executable(aether_dom_owner_test tests/test_dom_owner.cpp $<TARGET_OBJECTS:aether_publication_test_core>)
+    target_include_directories(aether_dom_owner_test PRIVATE include src)
+    target_link_libraries(aether_dom_owner_test PRIVATE Threads::Threads)
+    add_test(NAME aether.dom-owner COMMAND aether_dom_owner_test)
 endif()

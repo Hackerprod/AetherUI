@@ -32,6 +32,7 @@ struct aether_dom_edit_s {
     std::vector<std::shared_ptr<EditableNodeStorage>> pins,created,results;
     std::vector<std::pair<aether_node_s*,aether_node_s*>> materialized_parents;
     std::vector<aether_node_s*> disconnect,attach,adopt;
+    std::vector<std::shared_ptr<DomNodeOwnerPin>> adopt_relays;
     aether_node_s* target=nullptr; aether_node_s* child=nullptr;
     aether_node_s* new_parent=nullptr;
     std::optional<decltype(aether_node_s::attributes)> attributes;
@@ -94,10 +95,12 @@ void prepare_materialize(aether_dom_edit_s& e,const aether_dom_edit_spec_v1_t& s
             if(source!=0) {
                 std::vector<aether_node_s*> moving;collect(node,moving);
                 if(!old_parent)add_touch(e,node,aether::dom::MutationKind::structure,true,node);
-                for(auto* moved:moving)if(auto lease=aether_editable_lease(moved)) {
+                for(auto* moved:moving) {
+                    e.adopt.push_back(moved);
+                    if(auto lease=aether_editable_lease(moved)) {
                     if(e.domains[0].next_id==INT64_MAX)throw std::length_error("DOM identity exhausted");
                     e.adopted_ids.emplace_back(moved,e.domains[0].next_id++);registry(e.domains[source]).erase(moved);registry(e.domains[0]).emplace(moved,std::move(lease));
-                    e.adopt.push_back(moved);
+                    }
                 }
             }
             e.materialized_parents.emplace_back(node,parent);
@@ -106,15 +109,15 @@ void prepare_materialize(aether_dom_edit_s& e,const aether_dom_edit_spec_v1_t& s
         } else {
             if(spec.type<AETHER_NODE_ELEMENT||spec.type>AETHER_NODE_COMMENT)throw std::invalid_argument("materialized node type");
             if(e.domains[0].next_id==INT64_MAX)throw std::length_error("DOM identity exhausted");
-            auto node=std::make_unique<aether_node_s>();node->type=static_cast<aether_node_type_t>(spec.type);node->tag_name=aether::ascii_lowercase(read(spec.tag));node->text=read(spec.text);
-            if(node->type==AETHER_NODE_ELEMENT&&node->tag_name.empty())throw std::invalid_argument("DOM tag");
-            node->state=spec.state;node->runtime_value_present=spec.runtime_value_present!=0;node->runtime_value=read(spec.runtime_value);
+            auto created=std::make_unique<aether_node_s>();created->type=static_cast<aether_node_type_t>(spec.type);created->tag_name=aether::ascii_lowercase(read(spec.tag));created->text=read(spec.text);
+            if(created->type==AETHER_NODE_ELEMENT&&created->tag_name.empty())throw std::invalid_argument("DOM tag");
+            created->state=spec.state;created->runtime_value_present=spec.runtime_value_present!=0;created->runtime_value=read(spec.runtime_value);
             if(spec.attribute_count&&!spec.attributes)throw std::invalid_argument("DOM attributes");
-            for(size_t j=0;j<spec.attribute_count;++j){auto name=aether::ascii_lowercase(read(spec.attributes[j].name));if(name.empty())throw std::invalid_argument("DOM attribute name");node->attributes[name]=read(spec.attributes[j].value);}
-            if(auto found=node->attributes.find("value");found!=node->attributes.end()){node->authored_value_present=true;node->authored_value=found->second;}
-            if(node->tag_name=="input"&&node->runtime_value_present)node->attributes["value"]=node->runtime_value;
-            node->style_node_id=e.domains[0].next_id++;node->identity->attached=false;node->unpublished=true;
-            auto storage=std::make_shared<EditableNodeStorage>(std::move(node));auto* raw=storage->node.get();raw->editable_storage=storage;raw->identity->storage=storage;
+            for(size_t j=0;j<spec.attribute_count;++j){auto name=aether::ascii_lowercase(read(spec.attributes[j].name));if(name.empty())throw std::invalid_argument("DOM attribute name");created->attributes[name]=read(spec.attributes[j].value);}
+            if(auto found=created->attributes.find("value");found!=created->attributes.end()){created->authored_value_present=true;created->authored_value=found->second;}
+            if(created->tag_name=="input"&&created->runtime_value_present)created->attributes["value"]=created->runtime_value;
+            created->style_node_id=e.domains[0].next_id++;created->identity->attached=false;created->unpublished=true;
+            auto storage=std::make_shared<EditableNodeStorage>(std::move(created));auto* raw=storage->node.get();raw->editable_storage=storage;raw->identity->storage=storage;
             raw->document_owner=e.domains[0].owner;raw->identity->document_owner=e.domains[0].owner;raw->parent=parent;if(parent)parent->children.push_back(raw);
             registry(e.domains[0]).emplace(raw,storage);e.results.push_back(storage);e.created.push_back(std::move(storage));e.attach.push_back(raw);
             if(!parent)add_touch(e,raw,aether::dom::MutationKind::structure,true);
@@ -201,6 +204,7 @@ AETHER_API aether_status_t aether_dom_prepare_edit_v1(const aether_dom_token_v1_
             add_touch(*e,target,aether::dom::MutationKind::structure,true);
         }else return AETHER_ERROR_INVALID_STATE;
         for(auto* n:e->disconnect){auto* owner=n;while(owner&&!aether_editable_lease(owner))owner=owner->parent;if(!owner)return AETHER_ERROR_INVALID_STATE;pin(*e,owner);} // Generated descendants are retained through their editable host.
+        e->adopt_relays.reserve(e->adopt.size());for(auto* n:e->adopt)e->adopt_relays.push_back(aether_live_owner_pin(n));
         preflight_counters(*e);const auto slots=prepare_slots(*e);if(slots!=AETHER_OK)return slots;*out=e.release();return AETHER_OK;
     }catch(const std::bad_alloc&){return AETHER_ERROR_OUT_OF_MEMORY;}catch(...){return AETHER_ERROR_INVALID_STATE;}
 }
@@ -220,6 +224,7 @@ AETHER_API aether_status_t aether_dom_edit_commit_v1(aether_dom_edit_t e,aether_
     if(!e->materialize)for(auto& node:e->created)if(!node->node->parent)node->node->parent=target;
     for(const auto& [node,parent]:e->materialized_parents)node->parent=parent;
     for(auto* n:e->attach)n->identity->attached=e->materialize?false:target->identity->attached;
+    for(const auto& relay:e->adopt_relays)if(relay)relay->current_root=e->domains[e->adopt_domain].root;
     for(auto* n:e->adopt){n->document_owner=e->domains[e->adopt_domain].owner;n->identity->document_owner=e->domains[e->adopt_domain].owner;}
     for(const auto& [node,id]:e->adopted_ids)node->style_node_id=id;
     for(auto& d:e->domains)if(d.registry){auto* doc=static_cast<aether_doc_s*>(d.root->node.get());doc->editable_nodes.swap(*d.registry);doc->next_style_node_id=d.next_id;}

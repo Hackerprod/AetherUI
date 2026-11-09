@@ -23,7 +23,8 @@ FrozenNodePayload::FrozenNodePayload(const NodePayloadInput& in) :
     node_lifetime_(in.node_lifetime),
     document_lifetime_(in.document_lifetime),
     generated_leaf_(in.generated_leaf), editable_lease_(aether_editable_lease(in.node)),
-    document_lease_(aether_identity_lease(in.document_lifetime)) {
+    document_lease_(aether_identity_lease(in.document_lifetime)),
+    live_owner_pin_(aether_live_owner_pin(in.node)) {
         for(auto* owner=in.node->parent;owner;owner=owner->parent)
             if(auto lease=aether_editable_lease(owner)) owner_leases_.push_back(std::move(lease));
         if(in.node->style_origin && in.node->style_origin!=in.node->parent)
@@ -49,6 +50,7 @@ aether_status_t freeze_node_payload(const NodePayloadInput& in, FrozenNodePayloa
         !in.node_lifetime || !in.document_lifetime)) return AETHER_ERROR_INVALID_STATE;
     try { FrozenNodePayloadRef result(new const FrozenNodePayload(in)); out = std::move(result); return AETHER_OK; }
     catch (const std::bad_alloc&) { return AETHER_ERROR_OUT_OF_MEMORY; }
+    catch (...) { return AETHER_ERROR_INVALID_STATE; }
 }
 aether_status_t freeze_node_record(const NodeRecordInput& in, FrozenNodeRef& out) noexcept {
     if (in.origin == RecordOrigin::runtime && (!in.measures ||

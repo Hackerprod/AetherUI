@@ -83,6 +83,7 @@ class FrozenNodePayload {
     const std::shared_ptr<aether_node_s> generated_leaf_;
     const std::shared_ptr<EditableNodeStorage> editable_lease_;
     const std::shared_ptr<EditableNodeStorage> document_lease_;
+    const std::shared_ptr<DomNodeOwnerPin> live_owner_pin_;
     std::vector<std::shared_ptr<EditableNodeStorage>> owner_leases_;
     explicit FrozenNodePayload(const NodePayloadInput&);
     friend aether_status_t freeze_node_payload(const NodePayloadInput&, FrozenNodePayloadRef&) noexcept;

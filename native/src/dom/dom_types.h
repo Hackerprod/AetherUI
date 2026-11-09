@@ -71,6 +71,8 @@ struct aether_doc_s : aether_node_s {
     std::unordered_map<aether_node_s*, std::shared_ptr<EditableNodeStorage>> editable_nodes;
     // Borrowed reference to the external legacy root lease. Never owned by root.
     LegacyDocumentLease* legacy_lease = nullptr;
+    bool owns_storage_root = false;
+    ~aether_doc_s() override;
     aether_doc_s() { type = AETHER_NODE_DOCUMENT; document_owner = owner_control; identity->document_owner = owner_control; }
 };
 
@@ -79,12 +81,32 @@ struct EditableNodeStorage {
     std::unique_ptr<aether_node_s> node;
     explicit EditableNodeStorage(std::unique_ptr<aether_node_s> value) noexcept : node(std::move(value)) {}
 };
+// External consumers own these relays; DOM identities only hold weak refs.
+// current_root is accessed/mutated on the owner thread, never by finalizers.
+struct DomNodeOwnerPin { std::shared_ptr<EditableNodeStorage> current_root; };
 struct LegacyDocumentLease { std::shared_ptr<EditableNodeStorage> storage; };
 inline std::shared_ptr<EditableNodeStorage> aether_editable_lease(const aether_node_s* node) noexcept {
     return node ? node->editable_storage.lock() : nullptr;
 }
 inline std::shared_ptr<EditableNodeStorage> aether_identity_lease(const std::shared_ptr<node_identity_s>& identity) noexcept {
     return identity ? identity->storage.lock() : nullptr;
+}
+// The caller already protects the incoming node. Generated nodes inherit the
+// ownership domain of their host, but have their own weak relay identity.
+inline std::shared_ptr<DomNodeOwnerPin> aether_live_owner_pin(const aether_node_s* node) {
+    if (!node) return {};
+    if (auto existing=node->identity->live_owner_pin.lock()) return existing;
+    auto* host=node;
+    auto owner=host->document_owner.lock();
+    while (!owner && host->parent) { host=host->parent;owner=host->document_owner.lock(); }
+    if (!owner && node->style_origin) owner=node->style_origin->document_owner.lock();
+    if (!owner) return {}; // Unsupported raw legacy borrower, no storage promise.
+    if (owner->owner_thread!=std::this_thread::get_id()) throw std::invalid_argument("DOM relay owner thread");
+    auto root=owner->document.lock();
+    if (!root) throw std::invalid_argument("DOM relay expired root");
+    auto result=std::make_shared<DomNodeOwnerPin>();result->current_root=std::move(root);
+    node->identity->live_owner_pin=result;
+    return result;
 }
 inline aether_status_t aether_dom_access(const aether_node_s* node) noexcept {
     if (!node) return AETHER_ERROR_NULL_ARG;
@@ -120,10 +142,12 @@ inline void aether_dom_retire_node(aether_node_s* node) noexcept {
 }
 
 struct EditableDomPin {
+    std::vector<std::shared_ptr<DomNodeOwnerPin>> live_owners;
     std::vector<std::shared_ptr<EditableNodeStorage>> editable;
     std::vector<std::shared_ptr<aether_node_s>> generated;
 };
 inline void aether_pin_dom_subtree(aether_node_s* node, EditableDomPin& pin) {
+    if(auto relay=aether_live_owner_pin(node))pin.live_owners.push_back(std::move(relay));
     if(auto lease=aether_editable_lease(node)) pin.editable.push_back(std::move(lease));
     for(const auto& storage:node->generated_storage) pin.generated.push_back(storage);
     for(auto* child:node->children) aether_pin_dom_subtree(child,pin);
@@ -200,4 +224,17 @@ inline void aether_dom_dispose_unmanaged_children(aether_node_s* node) noexcept 
             aether_destroy_dom_subtree(child);it=children.erase(it);
         } else ++it;
     }
+}
+
+inline aether_doc_s::~aether_doc_s() {
+    // Last physical root release can run on a finalizer thread. Every legitimate
+    // live reader holds a root/relay, so none remain here. Explicit retirement
+    // has already cleaned raw links; do not traverse those a second time.
+    if (!owns_storage_root || !owner_control->alive) return;
+    owner_control->alive=false;
+    aether_dom_retire_node(this);
+    for (const auto& [node,storage]:editable_nodes) aether_dom_retire_node(node);
+    aether_dom_dispose_unmanaged_children(this);
+    for (const auto& [node,storage]:editable_nodes) aether_dom_dispose_unmanaged_children(node);
+    editable_nodes.clear();
 }

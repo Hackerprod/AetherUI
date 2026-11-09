@@ -18,6 +18,7 @@ internal static class ComponentRenderCandidateTests
         DisposeOverrideCannotKeepCandidateAlive();
         ExhaustionCannotCertifyOldCandidate();
         WrongThreadCannotChangeBoundAuthority();
+        WrongThreadCannotChangeWriterBeforeOrAfterSeal();
         ValidationAndReferencePublicationDoNotAllocate();
     }
 
@@ -319,6 +320,63 @@ internal static class ComponentRenderCandidateTests
         Check(component.IsRenderCandidateCurrent(candidate), "Wrong-thread call changed authority.");
         using var other = new Component();
         Check(!other.IsRenderCandidateCurrent(candidate), "Candidate identity crossed components.");
+    }
+
+    private static void WrongThreadCannotChangeWriterBeforeOrAfterSeal()
+    {
+        // Include unbound components: writer storage must be private even when the public
+        // standalone component API has not activated a host's owner-thread binding.
+        foreach (var bound in new[] { false, true })
+        {
+            using var component = new Component();
+            if (bound) component.BindRenderOwnerThread();
+            MarkupWriter? retained = null;
+            var formatterCalls = 0;
+            var handlerCalls = 0;
+            void RejectCrossThreadWriterCalls(MarkupWriter writer)
+            {
+                var before = writer.ToString();
+                Exception? failure = null;
+                var thread = new Thread(() =>
+                {
+                    try
+                    {
+                        var text = new Text(() => { ++formatterCalls; return "wrong-thread"; });
+                        var formatted = new Formattable(() => { ++formatterCalls; return "wrong-thread"; });
+                        Throws<InvalidOperationException>(() => writer.WriteLiteral("wrong-thread"));
+                        Throws<InvalidOperationException>(() => writer.Write(text));
+                        Throws<InvalidOperationException>(() => writer.Write(formatted));
+                        Throws<InvalidOperationException>(() => writer.WriteAttribute("title", text));
+                        Throws<InvalidOperationException>(() => writer.WriteAttribute("title", formatted));
+                        Throws<InvalidOperationException>(() => writer.WriteEventAttribute("onclick", () => ++handlerCalls));
+                        Throws<InvalidOperationException>(() => writer.WriteEventAttribute("onblur", _ => ++handlerCalls));
+                        Throws<InvalidOperationException>(writer.Seal);
+                        Throws<InvalidOperationException>(() => writer.CreateEventRegistry(1));
+                        Throws<InvalidOperationException>(() => writer.ToString());
+                    }
+                    catch (Exception error) { failure = error; }
+                });
+                thread.Start();
+                thread.Join();
+                if (failure is not null) throw new Exception("Writer owner-thread checks failed.", failure);
+                Check(before == writer.ToString(), "Wrong-thread writer changed markup.");
+                Check(formatterCalls == 0 && handlerCalls == 0, "Wrong-thread writer executed user code.");
+            }
+
+            component.Build = writer =>
+            {
+                retained = writer;
+                RejectCrossThreadWriterCalls(writer); // Before Seal, while Build is active.
+                Event(writer, () => ++handlerCalls);
+            };
+            using var candidate = component.PrepareRenderCandidate();
+            var registry = candidate.Registry;
+            Check(candidate.Markup.Contains("aether:0", StringComparison.Ordinal), "Wrong-thread write consumed an event id.");
+            RejectCrossThreadWriterCalls(retained!); // After Seal and registry publication.
+            Check(!registry.TryGetEventHandler("aether:1", out _), "Wrong-thread write added a handler to immutable storage.");
+            Dispatch(registry, "aether:0");
+            Check(handlerCalls == 1, "Owner-thread handler registration was damaged.");
+        }
     }
 
     private static void ValidationAndReferencePublicationDoNotAllocate()

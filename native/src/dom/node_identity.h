@@ -4,12 +4,14 @@
 #include <array>
 struct EditableNodeStorage;
 struct DomOwnerControl;
+struct DomNodeOwnerPin;
 /* Retained independently of the raw node. Pointer identity is never recycled
  * while any snapshot retains this token. No global node registry is needed. */
 struct node_identity_s {
     const void* owner = nullptr;
     std::weak_ptr<EditableNodeStorage> storage;
     std::weak_ptr<DomOwnerControl> document_owner;
+    std::weak_ptr<DomNodeOwnerPin> live_owner_pin;
     uint64_t disconnect_serial = 0;
     std::array<uint64_t, 32> state_bit_write_serial{};
     bool alive = true;

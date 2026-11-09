@@ -12,6 +12,7 @@ MapVersion::MapVersion(const MapVersionInput& in) :
     mode_(in.mode),
     revision_(in.revision),
     document_lifetime_(in.document_lifetime),
+    document_lease_(aether_identity_lease(in.document_lifetime)),
     document_identity_(in.document_identity),
     generation_(in.generation),
     structure_epoch_(in.structure_epoch),

@@ -37,7 +37,7 @@ AETHER_API aether_status_t aether_doc_create(aether_doc_t* out_doc) {
         auto storage=std::make_shared<EditableNodeStorage>(std::move(value));
         auto lease=std::make_unique<LegacyDocumentLease>(); lease->storage=storage;
         doc->editable_storage=storage; doc->identity->storage=storage;
-        doc->owner_control->document=storage;
+        doc->owner_control->document=storage;doc->owns_storage_root=true;
         doc->legacy_lease=lease.release(); *out_doc=doc; return AETHER_OK;
     } catch(const std::bad_alloc&) { return AETHER_ERROR_OUT_OF_MEMORY; }
       catch(...) { return AETHER_ERROR_INVALID_STATE; }

@@ -19,6 +19,13 @@ void operator delete[](void* p, std::size_t) noexcept { std::free(p); }
 using aether::dom::MutationKind;
 using aether::dom::JournalLoss;
 
+static bool same_journal(const aether::dom::MutationJournal& a,const aether::dom::MutationJournal& b) {
+    if(a.size()!=b.size()||a.last_epoch()!=b.last_epoch()||a.floor_epoch()!=b.floor_epoch()||a.loss()!=b.loss()||a.monotonicity_lost()!=b.monotonicity_lost())return false;
+    for(size_t i=0;i<a.size();++i){const auto& x=a.begin()[i];const auto& y=b.begin()[i];
+        if(x.subject!=y.subject||x.kind!=y.kind||x.mutation_epoch!=y.mutation_epoch||x.structure_epoch!=y.structure_epoch||x.old_state!=y.old_state||x.new_state!=y.new_state)return false;
+    }return true;
+}
+
 static aether_doc_s* document() {
     aether_doc_t doc = nullptr;
     CHECK(aether_doc_create(&doc) == AETHER_OK);
@@ -124,13 +131,14 @@ int main() {
     const auto exhausted_stamps=child->identity->state_bit_write_serial;
     const auto exhausted_size=doc->mutation_journal.size(), exhausted_floor=doc->mutation_journal.floor_epoch();
     const auto exhausted_last=doc->mutation_journal.last_epoch();
+    const auto exhausted_journal=doc->mutation_journal;
     aether_element_set_state(child, 1);
     // DOMsync v6 deliberately replaces legacy wrap with fail-closed no-write.
     CHECK(doc->identity->mutation_epoch == UINT64_MAX && child->state==exhausted_state);
     CHECK(child->identity->state_bit_write_serial==exhausted_stamps && doc->next_style_node_id==exhausted_ids);
     CHECK(doc->owner_control->observation_serial==exhausted_observation && doc->owner_control->sticky_status==AETHER_ERROR_INVALID_STATE);
     CHECK(doc->mutation_journal.size()==exhausted_size && doc->mutation_journal.floor_epoch()==exhausted_floor && doc->mutation_journal.last_epoch()==exhausted_last);
-    CHECK(!doc->mutation_journal.monotonicity_lost());
+    CHECK(!doc->mutation_journal.monotonicity_lost()&&same_journal(doc->mutation_journal,exhausted_journal));
     // Keep direct journal discontinuity coverage independently of the guarded ABI.
     doc->mutation_journal.append(child->identity,MutationKind::state,0,doc->identity->structure_epoch,0,1);
     CHECK(doc->mutation_journal.monotonicity_lost() && doc->mutation_journal.coverage_lost(0));
@@ -144,13 +152,14 @@ int main() {
     auto old_structure=doc->identity->structure_epoch;auto old_journal_size=doc->mutation_journal.size();
     auto old_journal_last=doc->mutation_journal.last_epoch();auto old_journal_floor=doc->mutation_journal.floor_epoch();
     token=child->identity;auto* old_parent=child->parent;
+    const auto old_journal=doc->mutation_journal;
     fail_alloc = true;
     auto status=aether_element_set_attribute(child, "x", "v");
     fail_alloc = false;
     CHECK(status==AETHER_ERROR_OUT_OF_MEMORY && doc->identity->mutation_epoch==epoch);
     CHECK(child->attributes==old_attributes&&child->children==old_children&&child->parent==old_parent&&child->identity==token&&token->alive&&token->attached);
     CHECK(doc->owner_control->observation_serial==old_observation&&doc->next_style_node_id==old_ids&&doc->identity->structure_epoch==old_structure);
-    CHECK(doc->mutation_journal.size()==old_journal_size&&doc->mutation_journal.last_epoch()==old_journal_last&&doc->mutation_journal.floor_epoch()==old_journal_floor);
+    CHECK(doc->mutation_journal.size()==old_journal_size&&doc->mutation_journal.last_epoch()==old_journal_last&&doc->mutation_journal.floor_epoch()==old_journal_floor&&same_journal(doc->mutation_journal,old_journal));
     fail_alloc = true;
     status=aether_doc_parse_html(doc, "<body>new</body>");
     fail_alloc = false;
@@ -158,7 +167,7 @@ int main() {
     CHECK(doc->children==old_doc_children&&child->children==old_children&&child->parent==old_parent&&child->identity==token&&token->alive&&token->attached);
     for(auto* c:old_children)CHECK(c->parent==child&&c->identity->alive&&c->identity->attached);
     CHECK(child->attributes==old_attributes&&doc->owner_control->observation_serial==old_observation&&doc->next_style_node_id==old_ids&&doc->identity->structure_epoch==old_structure);
-    CHECK(doc->mutation_journal.size()==old_journal_size&&doc->mutation_journal.last_epoch()==old_journal_last&&doc->mutation_journal.floor_epoch()==old_journal_floor);
+    CHECK(doc->mutation_journal.size()==old_journal_size&&doc->mutation_journal.last_epoch()==old_journal_last&&doc->mutation_journal.floor_epoch()==old_journal_floor&&same_journal(doc->mutation_journal,old_journal));
     aether_doc_destroy(doc);
     // Reusing the exact node address cannot reuse the retained authentic token.
     doc = document(); body = aether_doc_get_body(doc);

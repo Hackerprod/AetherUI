@@ -93,6 +93,7 @@ AETHER_API aether_status_t aether_node_append_child(aether_node_t parent, aether
         else if(old_parent) { source_children=old_parent->children; source_children.erase(std::remove(source_children.begin(),source_children.end(),child),source_children.end()); }
         target_children.push_back(child);
         std::vector<aether_node_s*> moving;
+        std::vector<std::shared_ptr<DomNodeOwnerPin>> moving_relays;
         decltype(aether_doc_s::editable_nodes) source_registry, target_registry;
         std::shared_ptr<EditableNodeStorage> source_pin,target_pin;
         aether_doc_s* source_doc=nullptr; aether_doc_s* target_doc=nullptr;
@@ -109,6 +110,7 @@ AETHER_API aether_status_t aether_node_append_child(aether_node_t parent, aether
                 ++next_id; source_registry.erase(node); target_registry.emplace(node,std::move(lease));
             }
         }
+        if(adopt) {moving_relays.reserve(moving.size());for(auto* node:moving)moving_relays.push_back(aether_live_owner_pin(node));}
         // No callback/allocation from this point through the completed links.
         if(old_parent) aether_node_touch_typed(old_parent,aether::dom::MutationKind::structure,true,0,0,child);
         else if(adopt) aether_node_touch_typed(child,aether::dom::MutationKind::structure,true,0,0,child);
@@ -117,6 +119,7 @@ AETHER_API aether_status_t aether_node_append_child(aether_node_t parent, aether
         parent->children.swap(target_children); child->parent=parent;
         if(adopt) {
             disconnect(moving);
+            for(const auto& relay:moving_relays)if(relay)relay->current_root=target_pin;
             int64_t id=target_doc->next_style_node_id;
             for(auto* node:moving) {
                 node->document_owner=target_owner; node->identity->document_owner=target_owner;

@@ -11,6 +11,10 @@ namespace AetherUI.Runtime;
 /// </summary>
 public sealed class MarkupWriter
 {
+    // The writer's mutable storage is adopted by an immutable EventRegistry at Seal.
+    // All writes and sealing share this thread, even for an unbound component. A retained
+    // writer must not begin a cross-thread write that could complete after publication.
+    private readonly int _ownerThreadId = Environment.CurrentManagedThreadId;
     private readonly StringBuilder _builder;
     private readonly Dictionary<string, UiEventHandler> _events = new(StringComparer.Ordinal);
     private long _nextEventId;
@@ -107,18 +111,34 @@ public sealed class MarkupWriter
         }
     }
 
-    internal void Seal() => _sealed = true;
+    internal void Seal()
+    {
+        VerifyOwnerThread();
+        _sealed = true;
+    }
 
     internal UiComponent.EventRegistry CreateEventRegistry(long generation)
     {
+        VerifyOwnerThread();
         if (!_sealed) throw new InvalidOperationException("The render writer is not sealed.");
         return new UiComponent.EventRegistry(_events, generation);
     }
 
     private void VerifyWritable()
     {
+        VerifyOwnerThread();
         if (_sealed) throw new InvalidOperationException("The render writer is sealed.");
     }
 
-    public override string ToString() => _builder.ToString();
+    private void VerifyOwnerThread()
+    {
+        if (_ownerThreadId != Environment.CurrentManagedThreadId)
+            throw new InvalidOperationException("The render writer belongs to another thread.");
+    }
+
+    public override string ToString()
+    {
+        VerifyOwnerThread();
+        return _builder.ToString();
+    }
 }

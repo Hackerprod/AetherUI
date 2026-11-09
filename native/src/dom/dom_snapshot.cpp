@@ -1,8 +1,9 @@
 #include "dom_types.h"
 #include <aether/aether_dom_sync.h>
 #include <unordered_set>
-struct aether_dom_node_lease_s { std::shared_ptr<EditableNodeStorage> storage; std::shared_ptr<node_identity_s> identity; };
+struct aether_dom_node_lease_s { std::shared_ptr<DomNodeOwnerPin> live_owner; std::shared_ptr<EditableNodeStorage> document; std::shared_ptr<EditableNodeStorage> storage; std::shared_ptr<node_identity_s> identity; };
 struct DomSnapshotNode {
+    std::shared_ptr<DomNodeOwnerPin> live_owner;
     std::shared_ptr<EditableNodeStorage> storage;
     std::shared_ptr<node_identity_s> identity;
     aether_dom_snapshot_node_v1_t values{};
@@ -23,7 +24,7 @@ AETHER_API aether_status_t aether_dom_retain_node_v1(aether_node_t node,aether_d
     if(out)*out=nullptr;if(!node||!out)return AETHER_ERROR_NULL_ARG;
     auto owner=node->document_owner.lock();if(!node->identity->alive||!owner||!owner->alive||owner->owner_thread!=std::this_thread::get_id())return AETHER_ERROR_INVALID_STATE;
     auto lease=aether_editable_lease(node);if(!lease)return AETHER_ERROR_INVALID_STATE;
-    try{auto result=std::make_unique<aether_dom_node_lease_s>();result->storage=std::move(lease);result->identity=node->identity;*out=result.release();return AETHER_OK;}
+    try{auto result=std::make_unique<aether_dom_node_lease_s>();result->live_owner=aether_live_owner_pin(node);result->document=owner->document.lock();if(!result->document)return AETHER_ERROR_INVALID_STATE;result->storage=std::move(lease);result->identity=node->identity;*out=result.release();return AETHER_OK;}
     catch(const std::bad_alloc&){return AETHER_ERROR_OUT_OF_MEMORY;}catch(...){return AETHER_ERROR_INVALID_STATE;}
 }
 AETHER_API void aether_dom_node_lease_destroy_v1(aether_dom_node_lease_t lease){delete lease;}
@@ -51,7 +52,7 @@ AETHER_API aether_status_t aether_dom_acquire_snapshot_v1(aether_doc_t doc,const
         for(size_t i=0;i<known_count;++i){if(!known[i])return AETHER_ERROR_NULL_ARG;auto owner=known[i]->storage->node->document_owner.lock();if(owner&&owner->owner_thread!=std::this_thread::get_id())return AETHER_ERROR_INVALID_STATE;leases.push_back(known[i]->storage);}
         std::unordered_map<const aether_node_s*,size_t> positions;
         snapshot->nodes.reserve(leases.size());
-        for(auto& storage:leases){auto* node=storage->node.get();if(positions.contains(node))continue;positions.emplace(node,snapshot->nodes.size());DomSnapshotNode item;item.storage=std::move(storage);item.identity=node->identity;snapshot->nodes.push_back(std::move(item));}
+        for(auto& storage:leases){auto* node=storage->node.get();if(positions.contains(node))continue;positions.emplace(node,snapshot->nodes.size());DomSnapshotNode item;item.live_owner=aether_live_owner_pin(node);item.storage=std::move(storage);item.identity=node->identity;snapshot->nodes.push_back(std::move(item));}
         for(auto& item:snapshot->nodes){auto* node=item.storage->node.get();auto& v=item.values;
             v.node=node;v.identity=aether_node_identity(node);v.disconnect_serial=node->identity->disconnect_serial;
             if(auto owner=node->document_owner.lock())if(auto pin=owner->document.lock())v.owner_identity=aether_node_identity(pin->node.get());
