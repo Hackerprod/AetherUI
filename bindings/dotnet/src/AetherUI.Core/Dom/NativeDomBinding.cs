@@ -9,6 +9,7 @@ internal interface IDomHostBookkeeping
 {
     IDomPreparedBookkeeping Prepare(DomEdit? edit, bool import);
     IDomPreparedBookkeeping PrepareImport(NativeDomSnapshot snapshot) => Prepare(null, import: true);
+    IDomPreparedBookkeeping PrepareStructure(DomEdit edit, IReadOnlyList<IntPtr> elements) => Prepare(edit, import: false);
     void NotifyMutationCompleted();
 }
 internal interface IDomPreparedBookkeeping : IDisposable
@@ -313,6 +314,7 @@ internal sealed partial class NativeDomBinding : IDomBinding, IDisposable
         private readonly Dictionary<IntPtr, WeakReference<Node>>? _handles, _sourceHandles;
         private readonly (Node Node, NativeDomNodeRecord Record)[] _created;
         private readonly NativeDomNodeRecord[] _disconnect, _attach;
+        private readonly Node[] _adoptedWrappers;
         private bool _committed;
         private PreparedEdit(NativeDomBinding owner, DomEdit edit, NativeDomEdit native, NativeDomBinding? source,
             IDomPreparedBookkeeping bookkeeping, IDomPreparedBookkeeping? sourceBookkeeping,
@@ -322,6 +324,7 @@ internal sealed partial class NativeDomBinding : IDomBinding, IDisposable
             NativeDomNodeRecord[] disconnect, NativeDomNodeRecord[] attach)
         {
             _owner = owner; _edit = edit; _native = native; _source = source; _bookkeeping = bookkeeping;
+            _adoptedWrappers = source is not null && edit.Child is not null ? SelfAndDescendants(edit.Child).ToArray() : [];
             _otherHosts = source is null ? [] : [source._host];
             _sourceBookkeeping = sourceBookkeeping; _global = global; _nodes = nodes; _handles = handles;
             _sourceNodes = sourceNodes; _sourceHandles = sourceHandles; _created = created; _disconnect = disconnect; _attach = attach;
@@ -405,8 +408,8 @@ internal sealed partial class NativeDomBinding : IDomBinding, IDisposable
                     }
                 }
                 foreach (var record in disconnect) if (record.DisconnectSerial == ulong.MaxValue) throw new OverflowException("DOM disconnect serial exhausted.");
-                bookkeeping = owner._host.Prepare(edit, import: false);
-                sourceBookkeeping = source?._host.Prepare(edit, import: false);
+                bookkeeping = PrepareBookkeeping(owner, edit, created);
+                sourceBookkeeping = source is null ? null : PrepareBookkeeping(source, edit, created);
                 return new(owner, edit, native, source, bookkeeping, sourceBookkeeping, global, nodes, handles,
                     sourceNodes, sourceHandles, created.ToArray(), disconnect.ToArray(), attach.ToArray());
 
@@ -463,9 +466,9 @@ internal sealed partial class NativeDomBinding : IDomBinding, IDisposable
             }
             if (_source is not null && _edit.Child is not null)
             {
-                // Prepared arrays contain every node; dictionary enumeration does not allocate.
-                foreach (var weak in _nodes!.Values)
-                    if (weak.TryGetTarget(out var wrapper) && ReferenceEquals(wrapper.NativeRecordCore?.Owner, _owner)) wrapper.BindingCore = _owner;
+                // The moved wrapper array is staged before native commit. Dictionary.Values
+                // would lazily allocate its collection on the newly prepared dictionary.
+                foreach (var wrapper in _adoptedWrappers) wrapper.BindingCore = _owner;
             }
             if (_edit.Kind == DomEditKind.SetState && _edit.Target is ElementNode element)
             {

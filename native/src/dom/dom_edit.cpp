@@ -18,7 +18,8 @@ struct Domain {
     std::shared_ptr<EditableNodeStorage> root;
     std::shared_ptr<DomOwnerControl> owner;
     aether_dom_token_v1_t token{};
-    uint64_t style_tree_epoch=0;
+    uint64_t style_tree_epoch=0,interaction_serial=0;
+    std::shared_ptr<DomInteractionRegistry> interaction;
     std::optional<Registry> registry;
     int64_t next_id=0;
 };
@@ -27,6 +28,7 @@ struct Touch { aether_node_s* node; aether::dom::MutationKind kind;bool structur
 }
 struct aether_dom_edit_s {
     DomStyleSlotBatchRef style_batch;
+    std::vector<DomInteractionStageRef> interaction_stages;
     std::vector<Domain> domains;
     std::vector<Links> links;
     std::vector<Touch> touches;
@@ -49,7 +51,7 @@ namespace {
 size_t domain(aether_dom_edit_s& edit,aether_node_s* node){
     auto control=node->document_owner.lock();if(!control||aether_dom_access(node)!=AETHER_OK)throw std::invalid_argument("DOM domain");
     for(size_t i=0;i<edit.domains.size();++i)if(edit.domains[i].owner==control)return i;
-    Domain d;d.owner=control;d.root=control->document.lock();if(!d.root)throw std::invalid_argument("DOM root expired");
+    Domain d;d.owner=control;d.interaction=control->interaction.lock();d.interaction_serial=control->interaction_serial;d.root=control->document.lock();if(!d.root)throw std::invalid_argument("DOM root expired");
     if(aether_dom_read_token_v1(node,&d.token)!=AETHER_OK)throw std::invalid_argument("DOM token");d.style_tree_epoch=d.root->node->identity->style_tree_epoch;d.next_id=static_cast<aether_doc_s*>(d.root->node.get())->next_style_node_id;
     edit.domains.push_back(std::move(d));return edit.domains.size()-1;
 }
@@ -233,12 +235,18 @@ AETHER_API aether_status_t aether_dom_prepare_edit_v1(const aether_dom_token_v1_
         }else return AETHER_ERROR_INVALID_STATE;
         for(auto* n:e->disconnect){auto* owner=n;while(owner&&!aether_editable_lease(owner))owner=owner->parent;if(!owner)return AETHER_ERROR_INVALID_STATE;pin(*e,owner);} // Retain editable owners; old generated allocations are pinned separately below.
         e->adopt_relays.reserve(e->adopt.size());for(auto* n:e->adopt)e->adopt_relays.push_back(aether_live_owner_pin(n));
-        pin_staged_generated(*e);preflight_counters(*e);const auto slots=prepare_slots(*e);if(slots!=AETHER_OK)return slots;*out=e.release();return AETHER_OK;
+        pin_staged_generated(*e);preflight_counters(*e);
+        for(const auto& d:e->domains) {
+            DomInteractionStageRef stage;
+            const auto status=aether_dom_interaction_prepare_stage(d.owner,e->disconnect,e->target,e->attributes?&*e->attributes:nullptr,stage);
+            if(status!=AETHER_OK)return status;if(stage)e->interaction_stages.push_back(std::move(stage));
+        }
+        const auto slots=prepare_slots(*e);if(slots!=AETHER_OK)return slots;*out=e.release();return AETHER_OK;
     }catch(const std::bad_alloc&){return AETHER_ERROR_OUT_OF_MEMORY;}catch(...){return AETHER_ERROR_INVALID_STATE;}
 }
 AETHER_API aether_status_t aether_dom_edit_created_node_v1(aether_dom_edit_t e,size_t index,aether_node_t* out){if(out)*out=nullptr;if(!e||!out)return AETHER_ERROR_NULL_ARG;if(index>=e->results.size())return AETHER_ERROR_INVALID_STATE;*out=e->results[index]->node.get();return AETHER_OK;}
-AETHER_API aether_status_t aether_dom_edit_validate_v1(aether_dom_edit_t e){if(!e)return AETHER_ERROR_NULL_ARG;if(e->committed)return AETHER_ERROR_INVALID_STATE;if(e->style_batch&&!aether_dom_style_validate_batch(e->style_batch))return AETHER_ERROR_INVALID_STATE;
-    for(const auto& d:e->domains){aether_dom_token_v1_t now{};if(aether_dom_read_token_v1(d.root->node.get(),&now)!=AETHER_OK||!token_equal(now,d.token)||d.root->node->identity->style_tree_epoch!=d.style_tree_epoch)return AETHER_ERROR_INVALID_STATE;}return AETHER_OK;}
+AETHER_API aether_status_t aether_dom_edit_validate_v1(aether_dom_edit_t e){if(!e)return AETHER_ERROR_NULL_ARG;if(e->committed)return AETHER_ERROR_INVALID_STATE;for(const auto& stage:e->interaction_stages)if(!aether_dom_interaction_validate_stage(stage))return AETHER_ERROR_INVALID_STATE;if(e->style_batch&&!aether_dom_style_validate_batch(e->style_batch))return AETHER_ERROR_INVALID_STATE;
+    for(const auto& d:e->domains){aether_dom_token_v1_t now{};if(aether_dom_read_token_v1(d.root->node.get(),&now)!=AETHER_OK||!token_equal(now,d.token)||d.root->node->identity->style_tree_epoch!=d.style_tree_epoch||d.owner->interaction_serial!=d.interaction_serial||d.owner->interaction.lock()!=d.interaction)return AETHER_ERROR_INVALID_STATE;}return AETHER_OK;}
 AETHER_API aether_status_t aether_dom_edit_commit_v1(aether_dom_edit_t e,aether_dom_token_v1_t* out){if(out)*out={};if(!e||!out)return AETHER_ERROR_NULL_ARG;auto status=aether_dom_edit_validate_v1(e);if(status!=AETHER_OK)return status;
     for(auto& n:e->created)n->node->unpublished=false;
     for(const auto& t:e->touches)aether_node_touch_typed(t.node,t.kind,t.structure,t.before,t.after,t.subject);
@@ -247,6 +255,7 @@ AETHER_API aether_status_t aether_dom_edit_commit_v1(aether_dom_edit_t e,aether_
     if(e->write_runtime){target->runtime_value.swap(*e->runtime);target->runtime_value_present=e->runtime_present;}
     if(e->state){for(unsigned i=0;i<32;++i)if((uint32_t(target->state)^uint32_t(*e->state))&(uint32_t{1}<<i))++target->identity->state_bit_write_serial[i];target->state=*e->state;}
     for(auto& l:e->links)l.node->children.swap(l.children);
+    for(const auto& stage:e->interaction_stages)aether_dom_interaction_commit_stage(stage);
     for(auto* n:e->disconnect){++n->identity->disconnect_serial;n->identity->attached=false;if(n->parent==target)n->parent=nullptr;}
     if(e->reparent)e->child->parent=e->new_parent;
     if(!e->materialize)for(auto& node:e->created)if(!node->node->parent)node->node->parent=target;

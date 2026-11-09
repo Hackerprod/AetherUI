@@ -52,6 +52,10 @@ internal static class HostDomSyncTests
         Check(runtime.ReadDomSourceSlot().Handle == slot.Handle, "Changing source moved its chronological slot.");
         var added = new ElementNode("span"); added.SetAttribute("id", "added"); added.AppendChild(new TextNode("typed"));
         host.Document.GetElementById("parent")!.AppendChild(added);
+        var expectedIndex = host.Document.DescendantElements().Select(dom.GetNativeHandle).ToArray();
+        Check(Field<List<IntPtr>>(runtime, "_elements").SequenceEqual(expectedIndex), "Typed insertion left the public runtime element index stale.");
+        runtime.ResolveStateChanges(new[] { dom.GetNativeHandle(added) }, new[] { (int)ElementState.Invalid });
+        Check(added.State == ElementState.Invalid, "Public native state resolution ignored a newly inserted element.");
         host.Render();
         Check(ReferenceEquals(transition, Field<object>(host, "_transitionRuntime")) && ReferenceEquals(added, host.Document.GetElementById("added")), "DOM sync reset transitions or rebuilt wrappers.");
         Check(!host.ManagedProjectionOutOfDate, "Structural/source edit failed to recover.");

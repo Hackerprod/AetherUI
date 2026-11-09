@@ -22,6 +22,7 @@ public sealed partial class UiDocumentHost
         private static readonly EmptyBookkeeping Empty = new();
         public IDomPreparedBookkeeping Prepare(DomEdit? edit, bool import) => Target?.Prepare(edit, import) ?? Empty;
         public IDomPreparedBookkeeping PrepareImport(NativeDomSnapshot snapshot) => Target?.PrepareImport(snapshot) ?? Empty;
+        public IDomPreparedBookkeeping PrepareStructure(DomEdit edit, IReadOnlyList<IntPtr> elements) => Target?.PrepareStructure(edit, elements) ?? Empty;
         public void NotifyMutationCompleted() => Target?.NotifyMutationCompleted();
         private sealed class EmptyBookkeeping : IDomPreparedBookkeeping
         {

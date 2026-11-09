@@ -824,7 +824,12 @@ std::shared_ptr<const CompiledStyleInputs> aether_style_runtime_s::prepare_rule_
         std::vector<const compiled_rule_s*> ordered;
         ordered.reserve(sheet->rules.size());
         for (const auto& rule : sheet->rules) ordered.push_back(&rule);
-        std::stable_sort(ordered.begin(), ordered.end(), [](const auto* a, const auto* b) { return a->source_order < b->source_order; });
+        // std::stable_sort may silently recover from a failed temporary-buffer
+        // allocation. Sorting unique rule identities needs no scratch allocation;
+        // equal source-order selectors receive the same cascade position below.
+        std::sort(ordered.begin(), ordered.end(), [](const auto* a, const auto* b) {
+            return a->source_order != b->source_order ? a->source_order < b->source_order : a->rule_id < b->rule_id;
+        });
         int32_t previous = 0; bool first = true;
         for (const auto* rule : ordered) {
             if (first || rule->source_order != previous) {

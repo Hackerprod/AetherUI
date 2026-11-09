@@ -2,6 +2,7 @@
 #include <aether/aether.h>
 #include "pseudo_element.h"
 #include "node_identity.h"
+#include "dom_interaction.h"
 #include "mutation_journal.h"
 #include <memory>
 #include <string>
@@ -26,6 +27,11 @@ struct DomOwnerControl {
     aether_status_t sticky_status = AETHER_OK;
     bool alive = true;
     std::weak_ptr<DomStyleBinding> binding;
+    std::weak_ptr<DomInteractionRegistry> interaction;
+    uint64_t interaction_serial = 0, next_interaction_generation = 1;
+    // Internal allocation-free hook, not a user callback. Installed only by
+    // the interaction registry so standalone DOM tests need no new link unit.
+    void (*interaction_retire)(aether_node_s*,bool) noexcept = nullptr;
 };
 
 struct aether_node_s {
@@ -137,6 +143,14 @@ inline std::shared_ptr<EditableNodeStorage> aether_make_editable_node(aether_doc
     return result;
 }
 inline void aether_dom_retire_node(aether_node_s* node) noexcept {
+    if(node->identity->alive) {
+        const bool exhausted=node->identity->disconnect_serial==UINT64_MAX;
+        if(!exhausted)++node->identity->disconnect_serial;
+        if(auto owner=node->document_owner.lock()) {
+            if(exhausted)owner->sticky_status=AETHER_ERROR_INVALID_STATE;
+            if(owner->interaction_retire)owner->interaction_retire(node,exhausted);
+        }
+    }
     node->identity->alive=false; node->identity->attached=false;
     for (auto* child : node->children) if (child->snapshot_owned || !aether_editable_lease(child)) aether_dom_retire_node(child);
 }

@@ -146,10 +146,13 @@ Run("component replacement in replay uses current markup", () =>
 Run("direct managed DOM mutation recovers current native inputs in place", () =>
 {
     using var r=new Renderer();using var host=New(new Component(),r);host.Render();
-    var once=true;host.StylePublicationProbe=p=>{if(p=="managed-staged"&&once){once=false;host.Document!.GetElementById("a")!.SetAttribute("style","width:177px");}};
+    var preserved=host.Document!.GetElementById("a")!;var nativeDom=Field<DomInterop>(host,"_nativeDom");var preservedHandle=nativeDom.GetNativeHandle(preserved);
+    var once=true;host.StylePublicationProbe=p=>{if(p=="managed-staged"&&once){once=false;host.Document!.GetElementById("a")!.SetAttribute("style","width:177px");Eq(CursorKind.Default,host.CursorAt(new(10,10)));}};
     State(host,host.Document!.GetElementById("a")!,ElementState.Invalid,true);
     host.Render();Eq(2,r.Frames);True(!host.ManagedProjectionOutOfDate);Eq(177f,Style(host).Width.Value);
     Eq("width:177px",host.Document!.GetElementById("a")!.GetAttribute("style"));
+    True(ReferenceEquals(preserved,host.Document.GetElementById("a")));Eq(preservedHandle,nativeDom.GetNativeHandle(preserved));
+    Eq(CursorKind.Pointer,host.CursorAt(new(10,10)));
 });
 Run("marshalling fault keeps previous projection and pending batch", () =>
 {
@@ -254,6 +257,7 @@ Run("direct managed State is published without losing its input", () =>
     element.State=ElementState.Invalid;True(host.HostInputSerial>serial);True(host.NeedsRender);
     host.Render();Eq(2,r.Frames);True(Field<long>(host,"_knownManagedInputVersion")>known);
     True(element.State==ElementState.Invalid);Eq(1f,Style(host).BackgroundColor.G);True(!host.ManagedProjectionOutOfDate);
+    True(ReferenceEquals(element,host.Document.GetElementById("a")));Eq(CursorKind.Pointer,host.CursorAt(new(10,10)));
 });
 Run("RuntimeValue to null is visible to serial guard; same null is a no-op", () =>
 {

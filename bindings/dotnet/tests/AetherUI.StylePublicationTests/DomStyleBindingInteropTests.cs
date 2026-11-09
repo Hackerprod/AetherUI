@@ -14,6 +14,7 @@ internal static class DomStyleBindingInteropTests
     {
         AbortAndStaleBasesPreservePublishedRuntime();
         RebindPreservesForeignSheetsAndRemovedSource();
+        LoadedFinalizableDocumentRemainsBorrowed();
         Console.WriteLine("PASS native DOM style rebind, cache staging and foreign sheets");
     }
 
@@ -92,6 +93,37 @@ internal static class DomStyleBindingInteropTests
         Check(Field<IntPtr>(runtime, "_runtime") == handle, "Rebind replaced the native runtime.");
         Check(NativeMethods.StyleRuntimeRemoveStyleSheet(handle, foreign) != 0, "Rebind removed a foreign stylesheet.");
     }
+
+    private static void LoadedFinalizableDocumentRemainsBorrowed()
+    {
+        foreach (var bound in new[] { false, true })
+        {
+            var fixture = LoadFinalizable(bound);
+            using var runtime = fixture.Runtime;
+            GC.Collect(); GC.WaitForPendingFinalizers(); GC.Collect();
+            Check(fixture.Document.IsAlive, "Loaded runtime did not retain its managed document owner.");
+            using (var publication = runtime.PreparePublication(null, 200, 200, 1))
+            { Check(publication.Commit(), "Loaded owner failed publication after GC."); using var map = publication.Publish(); }
+            DisposeFinalizable(fixture.Document);
+            Throws<ObjectDisposedException>(() => runtime.PreparePublication(null, 200, 200, 1));
+            Check(!runtime.IsCurrent(default), "Disposed loaded document remained certified.");
+            runtime.Dispose();
+            GC.Collect(); GC.WaitForPendingFinalizers(); GC.Collect();
+            Check(!fixture.Document.IsAlive, "Disposed runtime retained a loaded document owner.");
+        }
+    }
+    [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]
+    private static (StyleRuntimeInterop Runtime, WeakReference Document) LoadFinalizable(bool bound)
+    {
+        var document = NativeDomDocument.CreateEmpty();
+        document.Reparse("<body><button>owned</button></body>");
+        var runtime = new StyleRuntimeInterop(200, 200, 1);
+        if (bound) { using var candidate = runtime.PrepareDomBinding(document); candidate.Commit(); }
+        else runtime.Load(document, "", "button{height:20px}");
+        return (runtime, new WeakReference(document));
+    }
+    [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]
+    private static void DisposeFinalizable(WeakReference document) => ((NativeDomDocument)document.Target!).Dispose();
 
     private static T Field<T>(object value, string name) => (T)(value.GetType()
         .GetField(name, BindingFlags.Instance | BindingFlags.NonPublic)?.GetValue(value)

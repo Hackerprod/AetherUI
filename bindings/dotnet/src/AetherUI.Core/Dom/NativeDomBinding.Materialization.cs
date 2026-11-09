@@ -79,7 +79,7 @@ internal sealed partial class NativeDomBinding
                     var nodes = new Dictionary<ulong, WeakReference<Node>>(domain._nodes);
                     var handles = new Dictionary<IntPtr, WeakReference<Node>>(domain._handles);
                     domains.EnsureCapacity(domains.Count + 1);
-                    var bookkeeping = domain._host.Prepare(edit, import: false);
+                    var bookkeeping = PrepareBookkeeping(domain, edit, materializedRoots: existingRoots);
                     try { domains.Add(new(domain, nodes, handles, bookkeeping)); }
                     catch { bookkeeping.Dispose(); throw; }
                 }

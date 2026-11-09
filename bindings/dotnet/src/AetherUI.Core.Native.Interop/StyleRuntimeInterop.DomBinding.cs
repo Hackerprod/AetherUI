@@ -49,6 +49,7 @@ public sealed unsafe partial class StyleRuntimeInterop
     }
 
     internal PreparedDomIndex PrepareDomIndex(NativeDomSnapshot snapshot) => new(this, snapshot);
+    internal PreparedDomIndex PrepareDomIndex(NativeDomDocument document, IReadOnlyList<IntPtr> elements) => new(this, document, elements);
 
     internal sealed class PreparedDomIndex
     {
@@ -68,6 +69,15 @@ public sealed unsafe partial class StyleRuntimeInterop
             if (snapshot.Nodes[root].Handle != _document)
                 throw new InvalidOperationException("The index snapshot belongs to another document.");
             BuildDomIndex(snapshot, root, _elements, _index);
+        }
+        internal PreparedDomIndex(StyleRuntimeInterop owner, NativeDomDocument document, IReadOnlyList<IntPtr> elements)
+        {
+            owner.VerifyDomBindingThread(); owner.ThrowIfDisposed();
+            using var borrow = document.Borrow();
+            if (!ReferenceEquals(owner._loadedDocument, document) || owner._document != borrow.Handle)
+                throw new InvalidOperationException("The staged index belongs to another loaded document.");
+            _owner = owner; _document = borrow.Handle; _baseIndex = owner._elementIndex;
+            foreach (var element in elements) { _index.Add(element, _elements.Count); _elements.Add(element); }
         }
         internal void Validate()
         {
@@ -120,6 +130,8 @@ public sealed unsafe partial class StyleRuntimeInterop
         private readonly IntPtr _runtime;
         private readonly IntPtr _previousBinding;
         private readonly IntPtr _previousDocument;
+        private NativeDomDocument? _previousDocumentOwner;
+        private NativeDomDocument? _documentOwner;
         private readonly IntPtr _document;
         private readonly Dictionary<IntPtr, NativeComputedStyle> _styles = [];
         private readonly Dictionary<IntPtr, int> _index = [];
@@ -137,12 +149,15 @@ public sealed unsafe partial class StyleRuntimeInterop
             _runtime = owner._runtime;
             _previousBinding = owner._domStyleBinding;
             _previousDocument = owner._document;
-            _document = document.Handle;
+            _previousDocumentOwner = owner._loadedDocument;
+            _documentOwner = document;
+            using var documentBorrow = document.Borrow();
+            _document = documentBorrow.Handle;
             try
             {
                 // Snapshot pins all storage until validation/publication finishes. A disposed
                 // NativeDomDocument can invalidate this stage but cannot leave a dangling root.
-                _snapshot = NativeDomSnapshot.Acquire(_document);
+                _snapshot = NativeDomSnapshot.Acquire(document);
                 BuildDomIndex(_snapshot, FindSnapshotRoot(_snapshot), _elements, _index);
                 if (_previousBinding != IntPtr.Zero)
                     NativeDomSync.Throw(NativeMethods.DomStyleBindingPrepareRebind(_previousBinding, _document, out _transaction));
@@ -158,7 +173,11 @@ public sealed unsafe partial class StyleRuntimeInterop
             if (_committed || _owner._disposed || _owner._runtime != _runtime ||
                 _owner._domStyleBinding != _previousBinding || _owner._document != _previousDocument)
                 throw new InvalidOperationException("The DOM binding base changed during preparation.");
-            if (NativeDomSync.ReadToken(_document) != _snapshot!.Token)
+            using var documentBorrow = _documentOwner!.Borrow();
+            using var previousBorrow = _previousDocumentOwner?.Borrow() ?? default;
+            if (!ReferenceEquals(_owner._loadedDocument, _previousDocumentOwner))
+                throw new InvalidOperationException("The loaded document owner changed during preparation.");
+            if (NativeDomSync.ReadToken(documentBorrow.Handle) != _snapshot!.Token)
                 throw new InvalidOperationException("The candidate document changed during preparation.");
             if (_transaction != IntPtr.Zero)
                 NativeDomSync.Throw(NativeMethods.DomStyleBindingValidateRebind(_transaction));
@@ -167,6 +186,8 @@ public sealed unsafe partial class StyleRuntimeInterop
         internal void Commit()
         {
             Validate();
+            using var documentBorrow = _documentOwner!.Borrow();
+            using var previousBorrow = _previousDocumentOwner?.Borrow() ?? default;
             IntPtr binding;
             // Initial create is the last fallible operation before the first publication.
             // It has the native strong guarantee. Replacement commit uses only preallocated
@@ -179,6 +200,7 @@ public sealed unsafe partial class StyleRuntimeInterop
             _retiredRevision = _owner._managedPublicationRevision;
             _owner._domStyleBinding = binding;
             _owner._document = _document;
+            _owner._loadedDocument = _documentOwner;
             _owner._elements = _elements;
             _owner._elementIndex = _index;
             _owner._styles = _styles;
@@ -197,6 +219,7 @@ public sealed unsafe partial class StyleRuntimeInterop
             _transaction = _retiredBinding = _retiredRevision = IntPtr.Zero;
             _snapshot?.Dispose();
             _snapshot = null;
+            _documentOwner = _previousDocumentOwner = null;
         }
     }
 }

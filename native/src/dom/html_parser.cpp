@@ -530,9 +530,17 @@ AETHER_API aether_status_t aether_doc_parse_html(aether_doc_t doc, const char* h
         }
         std::vector<aether_node_s*> retiring;
         retiring.reserve(doc->editable_nodes.size());
-        for (const auto& [node, storage] : doc->editable_nodes) retiring.push_back(node);
+        for (const auto& [node, storage] : doc->editable_nodes) {
+            if(node->identity->disconnect_serial==UINT64_MAX)return AETHER_ERROR_INVALID_STATE;
+            retiring.push_back(node);
+        }
+        DomInteractionStageRef interactions;
+        auto interaction_status=aether_dom_interaction_prepare_stage(doc->owner_control,retiring,nullptr,nullptr,interactions,true);
+        if(interaction_status!=AETHER_OK)return interaction_status;
+        if(!aether_dom_interaction_validate_stage(interactions))return AETHER_ERROR_INVALID_STATE;
         if(style_stage&&!aether_dom_style_validate_slot(style_stage))return AETHER_ERROR_INVALID_STATE;
         // All allocations above; below this point only swaps and scalar stores.
+        aether_dom_interaction_commit_stage(interactions);
         for (auto* node : retiring) aether_dom_retire_node(node);
         for (auto& [node, storage] : candidate.editable_nodes) {
             node->document_owner=doc->owner_control; node->identity->document_owner=doc->owner_control;

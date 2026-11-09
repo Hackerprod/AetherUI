@@ -22,6 +22,7 @@ add_library(aether_core SHARED
     src/dom/dom_snapshot.cpp
     src/dom/dom_edit.cpp
     src/dom/dom_owner.cpp
+    src/dom/dom_interaction.cpp
     src/dom/dom_style_source.cpp
     src/dom/element_node.cpp
     src/dom/document_node.cpp
@@ -1688,4 +1689,11 @@ if(AETHERUI_BUILD_TESTS AND TARGET aether_publication_test_core)
     target_include_directories(aether_dom_owner_test PRIVATE include src)
     target_link_libraries(aether_dom_owner_test PRIVATE Threads::Threads)
     add_test(NAME aether.dom-owner COMMAND aether_dom_owner_test)
+endif()
+
+if(AETHERUI_BUILD_TESTS AND TARGET aether_publication_test_core)
+    add_executable(aether_dom_interaction_test tests/test_dom_interaction.cpp $<TARGET_OBJECTS:aether_publication_test_core>)
+    target_include_directories(aether_dom_interaction_test PRIVATE include src)
+    target_link_libraries(aether_dom_interaction_test PRIVATE Threads::Threads)
+    add_test(NAME aether.dom-interaction COMMAND aether_dom_interaction_test)
 endif()

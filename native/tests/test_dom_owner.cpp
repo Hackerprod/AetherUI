@@ -169,6 +169,29 @@ int main() {
         release_elsewhere(oa);release_elsewhere(ob);CHECK(!wa.expired()&&!wb.expired()&&retired->node_lifetime()->alive);
         retired.reset();CHECK(wa.expired()&&wb.expired());
     }
+    // A retired pseudo is no longer in the adopted live subtree. Its retained
+    // origin/ancestor storage must still pin the origin's NEW owner through relay.
+    {
+        aether_doc_t a=nullptr,b=nullptr;auto oa=make(a),ob=make(b);
+        auto wa=a->editable_storage,wb=b->editable_storage;auto* host=aether_doc_get_element_by_id(a,"a");
+        auto pseudo=std::make_shared<aether_node_s>();pseudo->type=AETHER_NODE_ELEMENT;
+        pseudo->is_generated=true;pseudo->snapshot_owned=true;pseudo->parent=host;pseudo->style_origin=host;
+        host->generated_storage.push_back(pseudo);host->children.push_back(pseudo.get());
+        std::unique_ptr<aether::style::FrozenRetiredNode> retired;
+        {
+            aether::style::NodePayloadInput input;input.node=pseudo.get();input.node_lifetime=pseudo->identity;
+            input.document_lifetime=a->identity;input.node_identity=aether_node_identity(pseudo.get());
+            input.document_identity=aether_node_identity(a);input.generated_leaf=pseudo;
+            auto flat=aether_computed_style_default();CHECK(aether::style::freeze_style(flat,input.style)==AETHER_OK);
+            aether::style::FrozenNodePayloadRef payload;CHECK(aether::style::freeze_node_payload(input,payload)==AETHER_OK);
+            retired=std::make_unique<aether::style::FrozenRetiredNode>(payload,0);
+        }
+        host->children.pop_back();host->generated_storage.clear();pseudo->identity->attached=false;
+        CHECK(aether_node_append_child(aether_doc_get_body(b),host)==AETHER_OK);
+        release_elsewhere(oa);release_elsewhere(ob);CHECK(!wa.expired()&&!wb.expired());
+        CHECK(pseudo->style_origin==host&&host->identity->alive&&host->parent->identity->alive);
+        pseudo.reset();retired.reset();CHECK(wa.expired()&&wb.expired());
+    }
     // Contextual batches independently pin entries after inputs/runtime die.
     {
         aether_doc_t a=nullptr,b=nullptr;auto oa=make(a),ob=make(b);

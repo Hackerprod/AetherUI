@@ -25,10 +25,12 @@ FrozenNodePayload::FrozenNodePayload(const NodePayloadInput& in) :
     generated_leaf_(in.generated_leaf), editable_lease_(aether_editable_lease(in.node)),
     document_lease_(aether_identity_lease(in.document_lifetime)),
     live_owner_pin_(aether_live_owner_pin(in.node)) {
-        for(auto* owner=in.node->parent;owner;owner=owner->parent)
+        auto retain_owner = [&](aether_node_s* owner) {
             if(auto lease=aether_editable_lease(owner)) owner_leases_.push_back(std::move(lease));
-        if(in.node->style_origin && in.node->style_origin!=in.node->parent)
-            if(auto lease=aether_editable_lease(in.node->style_origin)) owner_leases_.push_back(std::move(lease));
+            if(auto relay=aether_live_owner_pin(owner)) owner_relays_.push_back(std::move(relay));
+        };
+        for(auto* owner=in.node->parent;owner;owner=owner->parent) retain_owner(owner);
+        if(in.node->style_origin && in.node->style_origin!=in.node->parent) retain_owner(in.node->style_origin);
     }
 aether_status_t freeze_node_payload(const NodePayloadInput& in, FrozenNodePayloadRef& out) noexcept {
     const auto document_pin=aether_identity_lease(in.document_lifetime);

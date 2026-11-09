@@ -52,16 +52,22 @@ public sealed unsafe partial class StyleRuntimeInterop
     /// <summary>Pure owner-thread inspection. No diagnostics, allocation, or implicit resolve.</summary>
     public bool IsCurrent(NativeStylePublicationToken expected)
     {
-        if (_disposed) return false;
-        var current = NativeStylePublicationToken.Empty;
-        return NativeMethods.StyleReadPublicationToken(_runtime, ref current) == 0 &&
-            current.InputsCurrent != 0 && current == expected;
+        if (_disposed || _loadedDocument is null) return false;
+        try
+        {
+            using var documentBorrow = BorrowLoadedDocument();
+            var current = NativeStylePublicationToken.Empty;
+            return NativeMethods.StyleReadPublicationToken(_runtime, ref current) == 0 &&
+                current.InputsCurrent != 0 && current == expected;
+        }
+        catch (ObjectDisposedException) { return false; }
     }
 
     /// <summary>Full, fallible staging. Never enables the experimental state resolver.</summary>
     public PreparedPublication PreparePublication(IReadOnlyList<int>? states, float width, float height, float dpiScale, NativeStyleMap? previousMap = null)
     {
         ThrowIfDisposed();
+        using var documentBorrow = BorrowLoadedDocument();
         if (states is not null && states.Count != _elements.Count)
             throw new InvalidOperationException("Managed and native DOM element counts differ.");
         if (states is not null)
@@ -76,6 +82,7 @@ public sealed unsafe partial class StyleRuntimeInterop
     public sealed class PreparedPublication : IDisposable
     {
         private readonly StyleRuntimeInterop _owner;
+        private NativeDomDocument? _documentOwner;
         private IntPtr _transaction;
         private IntPtr _preview;
         private IntPtr _committed;
@@ -91,6 +98,7 @@ public sealed unsafe partial class StyleRuntimeInterop
         internal PreparedPublication(StyleRuntimeInterop owner, IntPtr transaction, NativeStyleMap? previousMap)
         {
             _owner = owner;
+            _documentOwner = owner._loadedDocument!;
             // The caller owns transaction until construction succeeds.
             try
             {
@@ -140,6 +148,9 @@ public sealed unsafe partial class StyleRuntimeInterop
         {
             ObjectDisposedException.ThrowIf(_transaction == IntPtr.Zero, this);
             if (_committed != IntPtr.Zero) throw new InvalidOperationException("Style publication was already committed.");
+            _owner.ThrowIfDisposed();
+            using var documentBorrow = _documentOwner!.Borrow();
+            if (!ReferenceEquals(_owner._loadedDocument, _documentOwner)) return false;
             var status = NativeMethods.StyleCommitRevision(_owner._runtime, _transaction, out _committed);
             if (status == -2) return false; // Inputs/base changed. Host retains B and permits one recovery.
             Throw(status); // Allocation/marshalling failures never become zero updates or automatic retries.
@@ -166,6 +177,7 @@ public sealed unsafe partial class StyleRuntimeInterop
             if (_preview != IntPtr.Zero) NativeMethods.StyleRevisionDestroy(_preview);
             if (_transaction != IntPtr.Zero) NativeMethods.StyleTransactionDestroy(_transaction);
             _committed = _preview = _transaction = IntPtr.Zero;
+            _documentOwner = null;
         }
     }
 }

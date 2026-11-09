@@ -43,6 +43,7 @@ public sealed partial class UiDocumentHost
     {
         public IDomPreparedBookkeeping Prepare(DomEdit? edit, bool import) => new Prepared(host, dom, edit, null);
         public IDomPreparedBookkeeping PrepareImport(NativeDomSnapshot snapshot) => new Prepared(host, dom, null, snapshot);
+        public IDomPreparedBookkeeping PrepareStructure(DomEdit edit, IReadOnlyList<IntPtr> elements) => new Prepared(host, dom, edit, null, elements);
         public void NotifyMutationCompleted()
         {
             if (host._disposed || !ReferenceEquals(host._nativeDom, dom)) return;
@@ -63,7 +64,7 @@ public sealed partial class UiDocumentHost
             private readonly bool _affectsHost, _full;
             private readonly StyleRuntimeInterop.PreparedDomIndex? _index;
 
-            internal Prepared(UiDocumentHost host, DomInterop dom, DomEdit? edit, NativeDomSnapshot? snapshot)
+            internal Prepared(UiDocumentHost host, DomInterop dom, DomEdit? edit, NativeDomSnapshot? snapshot, IReadOnlyList<IntPtr>? elements = null)
             {
                 _host = host; _dom = dom;
                 if (host._disposed || !ReferenceEquals(host._nativeDom, dom))
@@ -84,6 +85,7 @@ public sealed partial class UiDocumentHost
                 {
                     _nextDirty = new(host._stateDirtyElements) { element };
                 }
+                if (_affectsHost && elements is not null) _index = host._nativeStyleRuntime.PrepareDomIndex(dom.Native, elements);
                 // Preserve historical ids. Only the current effective value is saved;
                 // never use this cache to reinstall an override during synchronization.
                 if (_affectsHost && snapshot is not null)
