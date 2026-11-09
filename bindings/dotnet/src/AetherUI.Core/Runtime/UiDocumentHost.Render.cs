@@ -20,6 +20,7 @@ public sealed partial class UiDocumentHost
     {
         ThrowIfDisposed();
         if (_styleOperationDepth != 0 || _renderDepth != 0) { _renderDeferred = true; return; }
+        using var interactionEntry = EnterInteractionEntry();
         _styleRetryBlocked = false; // An explicit call permits one new bounded attempt.
         ++_renderDepth;
         try { RenderCore(); }

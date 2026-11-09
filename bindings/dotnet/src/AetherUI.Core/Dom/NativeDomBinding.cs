@@ -81,6 +81,7 @@ internal sealed partial class NativeDomBinding : IDomBinding, IDisposable
         { [token.OwnerIdentity] = new(this) };
         // Retain original wrappers from exact initial parse; no reparse or serializer.
         var aliases = interop.InitialNodesCore;
+        NativeDomWorkCounters.RecordImportFallback(NativeDomImportFallback.InitialBinding);
         Import(new[] { this }, aliases);
         _registry.Owners = owners;
     }
@@ -101,6 +102,7 @@ internal sealed partial class NativeDomBinding : IDomBinding, IDisposable
         foreach (var weak in _registry.Owners.Values)
             if (weak.TryGetTarget(out var owner) && !ReferenceEquals(owner, this) && !owner._disposed &&
                 NativeDomSync.ReadToken(owner.Native) != owner._token) owners.Add(owner);
+        NativeDomWorkCounters.RecordImportFallback(NativeDomImportFallback.TokenChanged);
         Import(owners, null);
     }
 
@@ -193,6 +195,8 @@ internal sealed partial class NativeDomBinding : IDomBinding, IDisposable
                     Node? parent = data.ParentIndex < 0 || (!data.Alive && payload[(int)data.ParentIndex].Alive)
                         ? null : Resolve(payload[(int)data.ParentIndex].Identity);
                     imported.Add(new(node, data, stage.Owner, record, parent, children));
+                    NativeDomWorkCounters.RecordNodesImported(1);
+                    NativeDomWorkCounters.RecordTraversal((ulong)data.Attributes.Count, (ulong)data.Children.Length);
                 }
             }
             foreach (var stage in stages)

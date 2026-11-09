@@ -129,7 +129,8 @@ int main() {
     const auto exhausted_state=child->state; const auto exhausted_ids=doc->next_style_node_id;
     const auto exhausted_observation=doc->owner_control->observation_serial;
     const auto exhausted_stamps=child->identity->state_bit_write_serial;
-    const auto exhausted_size=doc->mutation_journal.size(), exhausted_floor=doc->mutation_journal.floor_epoch();
+    const auto exhausted_size=doc->mutation_journal.size();
+    const auto exhausted_floor=doc->mutation_journal.floor_epoch();
     const auto exhausted_last=doc->mutation_journal.last_epoch();
     const auto exhausted_journal=doc->mutation_journal;
     aether_element_set_state(child, 1);

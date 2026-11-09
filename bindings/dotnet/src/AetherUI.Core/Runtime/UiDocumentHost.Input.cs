@@ -22,6 +22,7 @@ public sealed partial class UiDocumentHost
     {
         ThrowIfDisposed();
         if (DeferInput(() => TextInput(character))) return;
+        using var interactionEntry = EnterInteractionEntry();
         EnsureVisualTree();
         if (_focused is not { TagName: "input" } input || _focusClaim?.IsCurrent != true || input.IsDisabled || char.IsControl(character))
         {
@@ -53,6 +54,7 @@ public sealed partial class UiDocumentHost
     {
         ThrowIfDisposed();
         if (DeferInput(() => KeyPressed(key))) return;
+        using var interactionEntry = EnterInteractionEntry();
         EnsureVisualTree();
         var target = _focused;
         var claim = _focusClaim;

@@ -37,6 +37,7 @@ public sealed partial class UiDocumentHost
         ThrowIfDisposed();
         ++_pointerRequestSerial;
         if (DeferInput(() => PointerMoved(point))) return CursorKind.Default;
+        using var interactionEntry = EnterInteractionEntry();
         if (_options.EnableInputWorkCounters) Interlocked.Increment(ref _pointerMovesReceived);
         _lastPointerPosition = point;
         _hasPointerPosition = true;
@@ -184,6 +185,7 @@ public sealed partial class UiDocumentHost
         ThrowIfDisposed();
         ++_pointerRequestSerial;
         if (DeferInput(() => PointerLeft())) return;
+        using var interactionEntry = EnterInteractionEntry();
         CountPointerBarrier();
         EnsureDomInputsCurrent();
         DrainInteractionLosses();
@@ -209,6 +211,7 @@ public sealed partial class UiDocumentHost
     {
         ThrowIfDisposed();
         if (DeferInput(() => PointerPressed(point))) return;
+        using var interactionEntry = EnterInteractionEntry();
         var request = checked(++_pressRequestSerial);
         CountPointerBarrier();
         EnsureVisualTree();
@@ -243,6 +246,7 @@ public sealed partial class UiDocumentHost
     {
         ThrowIfDisposed();
         if (DeferInput(() => PointerReleased(point))) return;
+        using var interactionEntry = EnterInteractionEntry();
         var request = checked(++_pressRequestSerial);
         CountPointerBarrier();
         EnsureVisualTree();
@@ -288,6 +292,7 @@ public sealed partial class UiDocumentHost
     public CursorKind CursorAt(PointF point)
     {
         ThrowIfDisposed();
+        using var interactionEntry = EnterInteractionEntry();
         if (_options.EnableInputWorkCounters) Interlocked.Increment(ref _cursorQueries);
         if (_styleOperationDepth != 0 || !HasCertifiedStyleSnapshot()) return CursorKind.Default;
         if (_hasPendingPointerMove)
@@ -391,6 +396,7 @@ public sealed partial class UiDocumentHost
     private void Focus(ElementNode? target)
     {
         if (_disposed) return;
+        using var interactionEntry = EnterInteractionEntry();
         var beforeDrain = _focusRequestSerial;
         EnsureDomInputsCurrent();
         DrainInteractionLosses();

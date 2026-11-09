@@ -27,6 +27,12 @@ internal static class HostInteractionClaimsTests
         ScrollCaptureSurvivesDisconnect();
         ReplacementDiscardsOldLossAndRestoresClaims();
         ClaimPreparationFailurePreservesAuthority();
+        CallbackLossesWaitForTheNextHostEntry();
+        OneBatchCanDeliverSeveralPriorLosses();
+        ThrowingLossCallbackRestoresEntryBudget();
+        InternalHoverDoesNotRequestAnotherFrame();
+        InteractionCommitPreservesPriorAndPreparedNotifications();
+        LaterCallbackNotificationSurvivesInteractionCommit();
         Console.WriteLine("PASS host interaction claims, exact losses, continuity, reentry and capture");
     }
 
@@ -213,6 +219,122 @@ internal static class HostInteractionClaimsTests
         Check(test.Host.FocusedElement is null && test.A.State == state && NativeDomSync.ReadToken(test.Dom.Native) == token, "Failed claim preparation published state or focus.");
     }
 
+    private static void CallbackLossesWaitForTheNextHostEntry()
+    {
+        using var test = new Fixture();
+        var a = test.A; var b = test.B; var left = test.Left; var right = test.Right;
+        var deliveries = 0;
+        void ReplaceFocusWithDisconnected(ElementNode next, ElementNode parent)
+        {
+            if (++deliveries > 5) throw new InvalidOperationException("Lifecycle callbacks escaped their host-entry batch.");
+            if (next.Parent is null) parent.AppendChild(next);
+            Focus(test.Host, next);
+            parent.RemoveChild(next);
+        }
+        test.Component.Blur = _ => ReplaceFocusWithDisconnected(b, right);
+        test.Component.BlurB = _ => ReplaceFocusWithDisconnected(a, left);
+        Focus(test.Host, a); left.RemoveChild(a);
+        for (var entry = 1; entry <= 4; entry++)
+        {
+            test.Host.Render();
+            Check(deliveries == entry, "A callback-created loss was drained again in the same outer Render entry.");
+            Check(test.Host.FocusedElement is null, "A newly disconnected focus remained eligible after the entry.");
+            var beforeQuery = deliveries;
+            Check(test.Host.NeedsRender && deliveries == beforeQuery, "The next batch was hidden or NeedsRender delivered it.");
+        }
+        Check(Field<int>(test.Host, "_interactionEntryDepth") == 0, "Lifecycle entry scope did not unwind.");
+    }
+
+    private static void OneBatchCanDeliverSeveralPriorLosses()
+    {
+        using var test = new Fixture();
+        var a = test.A; var b = test.B; var left = test.Left; var right = test.Right;
+        var generated = false;
+        test.Component.Blur = _ =>
+        {
+            if (generated) return;
+            generated = true;
+            Focus(test.Host, b); right.RemoveChild(b);
+            left.AppendChild(a); Focus(test.Host, a); left.RemoveChild(a);
+        };
+        Focus(test.Host, a); left.RemoveChild(a);
+        test.Host.Render();
+        Check(test.Component.Trace.Count(x => x.EndsWith(":blur", StringComparison.Ordinal)) == 1,
+            "New records extended the first batch.");
+        Check(test.Host.NeedsRender, "Two legitimate pending records were hidden.");
+        test.Host.Render();
+        Check(test.Component.Trace.Count(x => x == "a:blur") == 2 && test.Component.Trace.Count(x => x == "b:blur") == 1,
+            "The next batch was incorrectly limited to a single blur instead of all prior records.");
+        Check(!test.Component.Trace.Contains("left:blur"), "Batched loss delivery bubbled.");
+    }
+
+    private static void ThrowingLossCallbackRestoresEntryBudget()
+    {
+        using var test = new Fixture();
+        var a = test.A; var b = test.B; var left = test.Left; var right = test.Right;
+        test.Component.Blur = _ =>
+        {
+            Focus(test.Host, b); right.RemoveChild(b);
+            throw new FormatException("after acknowledged loss");
+        };
+        Focus(test.Host, a); left.RemoveChild(a);
+        try { test.Host.Render(); throw new InvalidOperationException("Expected callback failure."); }
+        catch (FormatException) { }
+        Check(Field<int>(test.Host, "_interactionEntryDepth") == 0 && !Field<bool>(test.Host, "_drainingInteractionLosses"),
+            "A throwing callback leaked the outer entry or drain guard.");
+        Check(!test.Host.NeedsRender, "Callback failure incorrectly enabled automatic retry.");
+        test.Host.Render();
+        Check(test.Component.Trace.Count(x => x == "a:blur") == 1 && test.Component.Trace.Count(x => x == "b:blur") == 1,
+            "Explicit next entry failed to deliver its own pending batch or repeated an acknowledged loss.");
+    }
+
+    private static void InternalHoverDoesNotRequestAnotherFrame()
+    {
+        using var test = new Fixture();
+        var requests = 0;
+        test.Host.RenderRequested += (_, _) => requests++;
+        Hover(test.Host, test.A);
+        Check(!Field<bool>(test.Host, "_domNotificationPending"), "Internal hover produced a public DOM trampoline notification.");
+        test.Host.Render();
+        Check(requests == 0, "A settled internal hover requested another frame.");
+        test.A.State |= ElementState.Invalid;
+        Check(requests == 1, "Suppressing an internal claim notification suppressed the public mutator trampoline.");
+    }
+
+    private static void InteractionCommitPreservesPriorAndPreparedNotifications()
+    {
+        using (var test = new Fixture())
+        {
+            test.Dom.Native.SetAttribute(test.Dom.GetNativeHandle(test.A), "data-before", "native");
+            Check(test.A.GetAttribute("data-before") == "native" && Field<bool>(test.Host, "_domNotificationPending"),
+                "Native import did not set up the prior pending notification.");
+            Focus(test.Host, test.A);
+            Check(Field<bool>(test.Host, "_domNotificationPending"), "An interaction commit consumed a prior import notification.");
+        }
+        using (var test = new Fixture())
+        {
+            // The preparation probe is before the first publication. A pending flag
+            // produced here must be captured after staging, not at helper entry.
+            test.Host.DomSynchronizationProbe = () => Set(test.Host, "_domNotificationPending", true);
+            Focus(test.Host, test.A);
+            test.Host.DomSynchronizationProbe = null;
+            Check(Field<bool>(test.Host, "_domNotificationPending"), "The interaction helper restored a pre-preparation notification bit.");
+        }
+    }
+
+    private static void LaterCallbackNotificationSurvivesInteractionCommit()
+    {
+        using var test = new Fixture();
+        test.Component.MouseOver = _ =>
+        {
+            test.Dom.Native.SetAttribute(test.Dom.GetNativeHandle(test.A), "data-callback", "newer");
+            test.A.GetAttribute("data-callback");
+        };
+        Hover(test.Host, test.A);
+        Check(test.A.GetAttribute("data-callback") == "newer" && Field<bool>(test.Host, "_domNotificationPending"),
+            "An old interaction commit consumed a newer callback notification.");
+    }
+
     private static void Focus(UiDocumentHost host, ElementNode element) => Invoke(host, "Focus", element);
     private static void Hover(UiDocumentHost host, ElementNode element) => Invoke(host, "UpdateHoverTarget", element, new PointF(10, 10), false);
     private static void Invoke(object value, string method, params object?[] args)
@@ -244,7 +366,7 @@ internal static class HostInteractionClaimsTests
     private sealed class Component : UiComponent
     {
         internal readonly List<string> Trace = [];
-        internal Action<UiEvent>? Blur, MouseUp;
+        internal Action<UiEvent>? Blur, BlurB, MouseUp, MouseOver;
         internal void Invalidate() => StateHasChanged();
         protected override void BuildRenderTree(MarkupWriter writer)
         {
@@ -252,12 +374,12 @@ internal static class HostInteractionClaimsTests
             writer.WriteEventAttribute("onblur", () => Trace.Add("left:blur"));
             writer.WriteLiteral("><button id='a' type='button'");
             writer.WriteEventAttribute("onblur", e => { Trace.Add("a:blur"); Blur?.Invoke(e); });
-            writer.WriteEventAttribute("onmouseover", () => Trace.Add("a:over"));
+            writer.WriteEventAttribute("onmouseover", e => { Trace.Add("a:over"); MouseOver?.Invoke(e); });
             writer.WriteEventAttribute("onmouseout", () => Trace.Add("a:out"));
             writer.WriteEventAttribute("onmouseup", e => { Trace.Add("a:up"); MouseUp?.Invoke(e); });
             writer.WriteEventAttribute("onclick", () => Trace.Add("a:click"));
             writer.WriteLiteral(">A</button></div><div id='right'><button id='b' type='button'");
-            writer.WriteEventAttribute("onblur", () => Trace.Add("b:blur"));
+            writer.WriteEventAttribute("onblur", e => { Trace.Add("b:blur"); BlurB?.Invoke(e); });
             writer.WriteLiteral(">B</button></div><div id='scroll'><div id='content'>scroll</div></div></body>");
         }
     }

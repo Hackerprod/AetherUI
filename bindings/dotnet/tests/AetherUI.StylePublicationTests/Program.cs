@@ -14,6 +14,7 @@ DomStyleBindingInteropTests.Run();
 ComponentPublicationTests.Run();
 HostDomSyncTests.Run();
 HostInteractionClaimsTests.Run();
+DomSyncWorkCostTests.Run();
 DomSyncManagedTests.Run();
 DomSyncNativeTests.Run();
 TransitionSyncInteropTests.Run();

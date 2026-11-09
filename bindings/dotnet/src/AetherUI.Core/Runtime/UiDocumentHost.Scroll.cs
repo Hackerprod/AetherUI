@@ -70,6 +70,7 @@ public sealed partial class UiDocumentHost
         ArgumentNullException.ThrowIfNull(element);
         ThrowIfDisposed();
         if (DeferInput(() => SetScrollOffset(element, offset))) return;
+        using var interactionEntry = EnterInteractionEntry();
         EnsureVisualTree();
         if (_layout?.FindPrimaryBox(element) is not { } box || !IsScrollContainer(box)) return;
         var clamped = new ScrollOffset(
@@ -120,6 +121,7 @@ public sealed partial class UiDocumentHost
     {
         ThrowIfDisposed();
         if (DeferInput(() => MouseWheelScrolled(point, notches))) return;
+        using var interactionEntry = EnterInteractionEntry();
         ScrollByWheel(point, ScrollAxis.Vertical, -notches * 48f);
     }
 
@@ -128,6 +130,7 @@ public sealed partial class UiDocumentHost
     {
         ThrowIfDisposed();
         if (DeferInput(() => MouseHorizontalWheelScrolled(point, notches))) return;
+        using var interactionEntry = EnterInteractionEntry();
         // WM_MOUSEHWHEEL reports positive deltas for motion towards the right.
         ScrollByWheel(point, ScrollAxis.Horizontal, notches * 48f);
     }

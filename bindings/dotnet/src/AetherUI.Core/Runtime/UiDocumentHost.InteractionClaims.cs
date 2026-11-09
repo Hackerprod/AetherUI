@@ -16,6 +16,24 @@ public sealed partial class UiDocumentHost
     private InteractionSession? _interactionSession;
     private InteractionClaim? _focusClaim, _activeClaim;
     private bool _drainingInteractionLosses;
+    private int _interactionEntryDepth;
+    private bool _interactionBatchConsumed;
+
+    // One finite snapshot belongs to the outer host entry, not to each nested
+    // EnsureVisualTree or Focus call. Callback-created losses remain for the next
+    // entry even when the current entry resolves/hit-tests more than once.
+    private InteractionEntry EnterInteractionEntry()
+    {
+        var nextDepth = checked(_interactionEntryDepth + 1);
+        if (_interactionEntryDepth == 0) _interactionBatchConsumed = false;
+        _interactionEntryDepth = nextDepth;
+        return new(this);
+    }
+
+    private readonly struct InteractionEntry(UiDocumentHost owner) : IDisposable
+    {
+        public void Dispose() => --owner._interactionEntryDepth;
+    }
     private long _focusRequestSerial, _pressRequestSerial, _hoverRequestSerial;
 
     private static ulong NewInteractionHostIdentity()
@@ -126,9 +144,20 @@ public sealed partial class UiDocumentHost
         if (bit == ElementState.Hover) session.Hover.EnsureCapacity(session.Hover.Count + 1);
         using var edit = binding.PrepareInteractionAcquire(session.Owner, element, bit, (ulong)session.Registry.Generation);
         var claim = new InteractionClaim(session, element, bit, edit.Claim);
-        edit.Commit();
+        CommitInteractionInputs(edit);
         session.Claims.Add(claim); // Capacity and absence were prepared before commit.
         return claim;
+    }
+
+    private void CommitInteractionInputs(NativeDomBinding.PreparedInteraction edit)
+    {
+        // Preparation/import/probes may already have produced an unrelated notification.
+        // Preserve that exact prior pending bit. Host-internal state work is scheduled by
+        // its caller and must not request another frame after the current frame settles it.
+        // Native + mirror publication has no callbacks, so no later effect is acknowledged.
+        var notificationPending = _domNotificationPending;
+        edit.Commit();
+        _domNotificationPending = notificationPending;
     }
 
     private bool ReleaseInteractionClaim(InteractionClaim claim)
@@ -140,7 +169,7 @@ public sealed partial class UiDocumentHost
         var info = claim.Native.Read();
         using var edit = claim.Session.Dom.BindingCore!.PrepareInteractionCleanup(claim.Element, claim.Native, info.Generation);
         var changed = edit.StateChanged;
-        edit.Commit();
+        CommitInteractionInputs(edit);
         claim.Session.Claims.Remove(claim);
         claim.Native.Dispose();
         return changed;
@@ -169,9 +198,24 @@ public sealed partial class UiDocumentHost
     private sealed record LossDelivery(InteractionClaim Claim, NativeInteractionLoss Loss, string? Handler,
         UiEvent Event);
 
+    // A pending record is native metadata, not a dirty DOM snapshot. This check is
+    // safe from NeedsRender and also sees disconnects made through the native API.
+    private bool HasPendingInteractionLosses()
+    {
+        if (_disposed || _interactionSession is not { IsDisposed: false } session) return false;
+        for (var i = 0; i < session.Claims.Count; i++)
+            if (session.Claims[i].Native.HasPendingLoss) return true;
+        return false;
+    }
+
     private void DrainInteractionLosses()
     {
-        if (_disposed || _drainingInteractionLosses || _styleOperationDepth != 0 || _interactionSession is not { } session) return;
+        using var interactionEntry = EnterInteractionEntry();
+        if (_disposed || _drainingInteractionLosses || _interactionBatchConsumed ||
+            _styleOperationDepth != 0 || _interactionSession is not { } session) return;
+        _interactionBatchConsumed = true;
+        // An empty snapshot consumes the entry's budget too. A later callback may
+        // create a loss, but nested resolution must not extend this entry's batch.
         // Snapshot before any callback. Decode every borrowed handler while native owns
         // it, then retain only managed strings, exact record scalars and registry pins.
         List<LossDelivery>? pending = null;
@@ -212,7 +256,7 @@ public sealed partial class UiDocumentHost
                 {
                     using (var edit = session.Dom.BindingCore!.PrepareInteractionCleanup(claim.Element, claim.Native,
                         delivery.Loss.Claim.Generation, delivery.Loss.RecordId, delivery.Loss.RecordSerial))
-                        edit.Commit();
+                        CommitInteractionInputs(edit);
                     claim.Native.Acknowledge(delivery.Loss);
                     session.Claims.Remove(claim);
                     if (ReferenceEquals(_focusClaim, claim))

@@ -128,7 +128,7 @@ public sealed partial class UiDocumentHost : IDisposable
     public DocumentNode? Document => _document;
     public LayoutResult? Layout => _layout;
     public ElementNode? FocusedElement => _focused;
-    public bool NeedsRender => !_disposed && !_styleRetryBlocked && (_markupDirty || _invalidation != VisualInvalidation.None || _hasPendingPointerMove || _deferredInput.Count != 0 || _renderDeferred || TransitionProjectionNeedsRender() || DomInputsNeedImport());
+    public bool NeedsRender => !_disposed && !_styleRetryBlocked && (_markupDirty || _invalidation != VisualInvalidation.None || _hasPendingPointerMove || _deferredInput.Count != 0 || _renderDeferred || TransitionProjectionNeedsRender() || DomInputsNeedImport() || HasPendingInteractionLosses());
     /// <summary>True while the CSS transition runtime is animating one or more properties.</summary>
     public bool HasActiveTransitions => _transitionRuntime?.HasActive == true;
 
@@ -243,6 +243,7 @@ public sealed partial class UiDocumentHost : IDisposable
     private void EnsureVisualTree()
     {
         if (_styleOperationDepth != 0) { _renderDeferred = true; return; }
+        using var interactionEntry = EnterInteractionEntry();
         ThrowIfDisposed();
         if (_markupDirty)
         {
