@@ -115,12 +115,18 @@ bool scopes_equal(const FrozenCustomPropertyScope* a,const FrozenCustomPropertyS
     }
     return true;
 }
-bool colors_equal(const FrozenColorMetadata& a,const FrozenColorMetadata& b)noexcept{
-    if(a.background()!=b.background()||a.text_shadow_count()!=b.text_shadow_count()||a.box_shadow_count()!=b.box_shadow_count())return false;
-    for(size_t i=0;i<4;++i)if(a.border(i)!=b.border(i))return false;
-    for(size_t i=0;i<a.text_shadow_count();++i)if(a.text_shadow_at(i)!=b.text_shadow_at(i))return false;
-    for(size_t i=0;i<a.box_shadow_count();++i)if(a.box_shadow_at(i)!=b.box_shadow_at(i))return false;
-    return true;
+// Background/border reference flags are consumed by the matching explicit
+// inherit hooks, just like their concrete colors. Text/box shadow metadata and
+// any absent owner remain conservative: they can affect other inherited inputs.
+uint32_t color_propagation(const FrozenColorRef& a,const FrozenColorRef& b) noexcept {
+    if(a==b)return 0;
+    if(!a||!b)return ParentDependencies::all;
+    if(a->text_shadow_count()!=b->text_shadow_count()||a->box_shadow_count()!=b->box_shadow_count())return ParentDependencies::all;
+    for(size_t i=0;i<a->text_shadow_count();++i)if(a->text_shadow_at(i)!=b->text_shadow_at(i))return ParentDependencies::all;
+    for(size_t i=0;i<a->box_shadow_count();++i)if(a->box_shadow_at(i)!=b->box_shadow_at(i))return ParentDependencies::all;
+    uint32_t result=a->background()!=b->background()?ParentDependencies::background_color:0;
+    for(size_t i=0;i<4;++i)if(a->border(i)!=b->border(i))result|=ParentDependencies::border_colors;
+    return result;
 }
 bool measures_equal(const FrozenMeasurePayload& a,const FrozenMeasurePayload& b) noexcept {
     return eq(a.scalars(),b.scalars())&&arrays_equal(a.background_positions(),b.background_positions())&&
@@ -143,18 +149,18 @@ StateSemanticDelta compare_node_semantics(const FrozenNodePayload& a,const Froze
     const bool context_same=identity_equal(a,b)&&
         owners_equal(a.measures(),b.measures(),measures_equal)&&
         scopes_equal(a.custom_properties().get(),b.custom_properties().get())&&
-        scopes_equal(a.backdrop_custom_properties().get(),b.backdrop_custom_properties().get())&&
-        owners_equal(a.color_references(),b.color_references(),colors_equal);
+        scopes_equal(a.backdrop_custom_properties().get(),b.backdrop_custom_properties().get());
     // Historical impact fields are observable through records and must prevent
     // equivalence/reuse. They are not parent inputs and never trigger propagation.
     const bool metadata_same=a.parent_dependencies()==b.parent_dependencies()&&
         a.declared_impact()==b.declared_impact()&&a.declared_inherited_impact()==b.declared_inherited_impact()&&
         a.inherited_change_impact()==b.inherited_change_impact();
     if(!context_same||!a.style()||!b.style())return {true,ParentDependencies::all};
-    if(style_equal(*a.style(),*b.style(),false))return {!metadata_same,0};
+    const uint32_t colors=color_propagation(a.color_references(),b.color_references());
+    if(style_equal(*a.style(),*b.style(),false))return {!metadata_same||colors!=0,colors};
     if(!style_equal(*a.style(),*b.style(),true))return {true,ParentDependencies::all};
     const auto& x=a.style_view().scalars();const auto& y=b.style_view().scalars();
-    uint32_t propagation=0;
+    uint32_t propagation=colors;
     if(!eq(x.background_color,y.background_color))propagation|=ParentDependencies::background_color;
     if(!eq(x.border_color,y.border_color)||!eq(x.border_colors,y.border_colors))propagation|=ParentDependencies::border_colors;
     return {true,propagation};

@@ -31,8 +31,8 @@ int main(){
     };
     auto copy=in;copy.style=style();copy.measures=measure();copy.color_references=colors();
     expect(copy,false,0,"new owners same complete content");
-    copy=in;copy.color_references=colors(true);expect(copy,true,ParentDependencies::all,"currentColor background same RGBA");
-    copy=in;copy.color_references=colors(false,{true,false,false,false});expect(copy,true,ParentDependencies::all,"currentColor border same RGBA");
+    copy=in;copy.color_references=colors(true);expect(copy,true,ParentDependencies::background_color,"currentColor background same RGBA");
+    copy=in;copy.color_references=colors(false,{true,false,false,false});expect(copy,true,ParentDependencies::border_colors,"currentColor border same RGBA");
     copy=in;copy.color_references=std::make_shared<const FrozenColorMetadata>(std::array<bool,4>{},
         ImmutableArray<uint8_t>::generate(1,[](size_t){return uint8_t{1};}),ImmutableArray<uint8_t>{},false);
     expect(copy,true,ParentDependencies::all,"text shadow currentColor metadata");
