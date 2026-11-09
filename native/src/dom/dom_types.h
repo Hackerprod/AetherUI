@@ -12,10 +12,31 @@
 #include <functional>
 #include <cstdlib>
 #include <cstring>
+#include <thread>
+#include <limits>
+#include <stdexcept>
+
+struct EditableNodeStorage;
+struct LegacyDocumentLease;
+struct DomOwnerControl {
+    const std::thread::id owner_thread = std::this_thread::get_id();
+    std::weak_ptr<EditableNodeStorage> document;
+    uint64_t observation_serial = 0;
+    aether_status_t sticky_status = AETHER_OK;
+    bool alive = true;
+    const void* binding = nullptr;
+};
 
 struct aether_node_s {
     aether_node_type_t type;
     std::shared_ptr<node_identity_s> identity = std::make_shared<node_identity_s>();
+    std::weak_ptr<EditableNodeStorage> editable_storage;
+    std::weak_ptr<DomOwnerControl> document_owner;
+    // Authored value is separate from the legacy effective attribute map.
+    bool authored_value_present = false;
+    std::string authored_value;
+    bool runtime_value_present = false;
+    std::string runtime_value;
     bool snapshot_owned = false;
     // Current DOM ownership of generated nodes, also retained by style revisions.
     std::vector<std::shared_ptr<aether_node_s>> generated_storage;
@@ -44,8 +65,56 @@ struct aether_doc_s : aether_node_s {
     std::unordered_map<std::string, aether_node_s*> id_index;
     int64_t next_style_node_id = 1;
 
-    aether_doc_s() { type = AETHER_NODE_DOCUMENT; }
+    std::shared_ptr<DomOwnerControl> owner_control = std::make_shared<DomOwnerControl>();
+    std::unordered_map<aether_node_s*, std::shared_ptr<EditableNodeStorage>> editable_nodes;
+    // Borrowed reference to the external legacy root lease. Never owned by root.
+    LegacyDocumentLease* legacy_lease = nullptr;
+    aether_doc_s() { type = AETHER_NODE_DOCUMENT; document_owner = owner_control; identity->document_owner = owner_control; }
 };
+
+// Storage owns exactly one editable object; links never own children/parents.
+struct EditableNodeStorage {
+    std::unique_ptr<aether_node_s> node;
+    explicit EditableNodeStorage(std::unique_ptr<aether_node_s> value) noexcept : node(std::move(value)) {}
+};
+struct LegacyDocumentLease { std::shared_ptr<EditableNodeStorage> storage; };
+inline std::shared_ptr<EditableNodeStorage> aether_editable_lease(const aether_node_s* node) noexcept {
+    return node ? node->editable_storage.lock() : nullptr;
+}
+inline std::shared_ptr<EditableNodeStorage> aether_identity_lease(const std::shared_ptr<node_identity_s>& identity) noexcept {
+    return identity ? identity->storage.lock() : nullptr;
+}
+inline aether_status_t aether_dom_access(const aether_node_s* node) noexcept {
+    if (!node) return AETHER_ERROR_NULL_ARG;
+    if (!node->identity->alive) return AETHER_ERROR_DISPOSED;
+    const auto owner = node->document_owner.lock();
+    if (owner && (!owner->alive || owner->owner_thread != std::this_thread::get_id())) return AETHER_ERROR_INVALID_STATE;
+    return owner ? owner->sticky_status : AETHER_OK;
+}
+// Caller reserves every required advance before the first write.
+inline bool aether_dom_can_touch(const aether_node_s* node, uint64_t count=1, bool structure=false) noexcept {
+    if (aether_dom_access(node) != AETHER_OK) return false;
+    const auto owner=node->document_owner.lock();
+    if (owner && owner->observation_serial > UINT64_MAX-count) return false;
+    auto* root=node; while(root && root->parent) root=root->parent;
+    return root && root->identity->mutation_epoch <= UINT64_MAX-count &&
+        (!structure || root->identity->structure_epoch <= UINT64_MAX-count);
+}
+inline std::shared_ptr<EditableNodeStorage> aether_make_editable_node(aether_doc_s* doc, aether_node_type_t type) {
+    if (doc->next_style_node_id == INT64_MAX) throw std::length_error("DOM identity exhausted");
+    auto node=std::make_unique<aether_node_s>(); node->type=type;
+    auto result=std::make_shared<EditableNodeStorage>(std::move(node));
+    auto* value=result->node.get();
+    value->editable_storage=result; value->identity->storage=result;
+    value->document_owner=doc->owner_control; value->identity->document_owner=doc->owner_control;
+    value->style_node_id=doc->next_style_node_id;
+    doc->editable_nodes.emplace(value,result); ++doc->next_style_node_id;
+    return result;
+}
+inline void aether_dom_retire_node(aether_node_s* node) noexcept {
+    node->identity->alive=false; node->identity->attached=false;
+    for (auto* child : node->children) if (child->snapshot_owned || !aether_editable_lease(child)) aether_dom_retire_node(child);
+}
 
 inline uint64_t aether_node_identity(const aether_node_s* node) noexcept {
     return node ? static_cast<uint64_t>(reinterpret_cast<uintptr_t>(node->identity.get())) : 0;
@@ -61,6 +130,11 @@ inline void aether_node_touch_typed(aether_node_s* node, aether::dom::MutationKi
                                    int32_t new_state = 0, aether_node_s* subject = nullptr) noexcept {
     auto* root = aether_dom_root(node);
     if (!root) return;
+    if (!aether_dom_can_touch(node, 1, structure)) {
+        if (auto owner=node->document_owner.lock()) owner->sticky_status=AETHER_ERROR_INVALID_STATE;
+        return;
+    }
+    if (auto owner=node->document_owner.lock()) ++owner->observation_serial;
     ++root->identity->mutation_epoch;
     if (structure) ++root->identity->structure_epoch;
     if (root->type == AETHER_NODE_DOCUMENT) {
@@ -93,6 +167,7 @@ inline void aether_node_mark_attached(aether_node_s* node, bool attached) noexce
 inline void aether_destroy_dom_subtree(aether_node_s* node) noexcept {
     if (!node) return;
     node->identity->attached = false;
+    if (aether_editable_lease(node)) { aether_dom_retire_node(node); return; }
     if (node->snapshot_owned) { aether_node_mark_attached(node, false); return; } // Host and revision share generated ownership.
     for (auto* child : node->children) aether_destroy_dom_subtree(child);
     delete node;
