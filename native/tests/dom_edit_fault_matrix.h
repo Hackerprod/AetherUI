@@ -85,12 +85,9 @@ struct Fixture {
     }
     ~Fixture(){aether_dom_interaction_owner_dispose_v1(owner);aether_dom_interaction_claim_release_v1(claim);aether_dom_interaction_owner_release_v1(owner);aether_dom_style_binding_destroy_v1(binding);aether_style_runtime_destroy(runtime);aether_doc_destroy(doc);aether_doc_destroy(destination);aether_doc_destroy(empty);}
 };
-static void all_prepare_families(){
-    // A fresh fixture per family keeps its successful commit cold with respect
-    // to that input, while each failed allocation index leaves the same base.
-    for(int mode=0;mode<17;++mode){
-        Fixture f;aether_dom_edit_spec_v1_t s{};s.target=f.input;s.index=-1;
-        aether_dom_node_spec_v1_t nodes[2]{};nodes[0].type=AETHER_NODE_ELEMENT;nodes[0].tag=str("section");nodes[0].parent_index=-1;
+static aether_dom_edit_spec_v1_t configure(Fixture& f,int mode,aether_dom_node_spec_v1_t (&nodes)[2]){
+    aether_dom_edit_spec_v1_t s{};s.target=f.input;s.index=-1;
+        nodes[0].type=AETHER_NODE_ELEMENT;nodes[0].tag=str("section");nodes[0].parent_index=-1;
         nodes[1].type=AETHER_NODE_TEXT;nodes[1].text=str("text requiring dynamic allocation beyond small string capacity");nodes[1].parent_index=0;
         switch(mode){
         case 0:s.kind=AETHER_DOM_SET_STATE;s.state=AETHER_STATE_FOCUS|AETHER_STATE_HOVER;break;
@@ -110,7 +107,70 @@ static void all_prepare_families(){
         default:s.kind=AETHER_DOM_SET_RUNTIME_VALUE;s.value_present=0;break;
         }
         if(mode==13||mode==15||mode==16){aether_dom_edit_spec_v1_t initial{};initial.target=f.input;initial.kind=AETHER_DOM_SET_RUNTIME_VALUE;initial.value_present=1;initial.value=str("existing override");edit(initial);}
+    return s;
+}
+// Typed values, not HTML serialization. Raw identities are independently
+// verified by DocumentImage; cross-fixture equality uses per-document local IDs.
+struct ValueImage {
+    int32_t type,state,alive,attached,authored_present,runtime_present;
+    int64_t parent;
+    uint64_t disconnect;
+    std::string tag,text,authored,runtime;
+    std::map<std::string,std::string> attributes;
+    std::vector<int64_t> children;
+    bool operator==(const ValueImage&) const = default;
+};
+static std::string copied(aether_dom_string_v1_t value){CHECK(value.data);return {value.data,value.length};}
+static std::map<int64_t,ValueImage> values(aether_doc_t doc){
+    aether_dom_snapshot_t snapshot=nullptr;CHECK(aether_dom_acquire_snapshot_v1(doc,nullptr,0,&snapshot)==AETHER_OK);
+    size_t count=0;CHECK(aether_dom_snapshot_count_v1(snapshot,&count)==AETHER_OK);
+    std::vector<aether_dom_snapshot_node_v1_t> nodes(count);
+    for(size_t i=0;i<count;++i)CHECK(aether_dom_snapshot_node_v1(snapshot,i,&nodes[i])==AETHER_OK);
+    std::map<int64_t,ValueImage> result;
+    for(size_t i=0;i<count;++i){const auto& n=nodes[i];ValueImage image{n.type,n.state,n.alive,n.attached,n.authored_value_present,n.runtime_value_present,
+        n.parent_index<0?-1:nodes[size_t(n.parent_index)].style_node_id,n.disconnect_serial,copied(n.tag),copied(n.text),
+        n.authored_value_present?copied(n.authored_value):"",n.runtime_value_present?copied(n.runtime_value):"",{}, {}};
+        for(size_t a=0;a<n.attribute_count;++a){aether_dom_attribute_v1_t attribute{};CHECK(aether_dom_snapshot_attribute_v1(snapshot,i,a,&attribute)==AETHER_OK);image.attributes.emplace(copied(attribute.name),copied(attribute.value));}
+        for(size_t c=0;c<n.child_count;++c){size_t child=0;CHECK(aether_dom_snapshot_child_v1(snapshot,i,c,&child)==AETHER_OK);image.children.push_back(nodes[child].style_node_id);}
+        CHECK(result.emplace(n.style_node_id,std::move(image)).second);
+    }
+    aether_dom_snapshot_destroy_v1(snapshot);return result;
+}
+using BoxImage=std::tuple<int64_t,int32_t,float,float,float,float,int32_t>;
+static void boxes(aether_layout_box_t box,std::vector<BoxImage>& output){
+    if(!box)return;auto node=aether_layout_box_get_element(box);const auto count=aether_layout_box_get_child_count(box);
+    output.emplace_back(node?node->style_node_id:-1,aether_layout_box_get_kind(box),aether_layout_box_get_x(box),aether_layout_box_get_y(box),aether_layout_box_get_width(box),aether_layout_box_get_height(box),count);
+    for(int32_t i=0;i<count;++i)boxes(aether_layout_box_get_child(box,i),output);
+}
+struct FrameImage {
+    std::map<int64_t,std::tuple<float,int32_t,int32_t,float,int32_t,float>> styles;
+    std::vector<BoxImage> layout;
+    bool operator==(const FrameImage&) const = default;
+};
+static FrameImage full_frame(aether_style_runtime_t runtime,aether_doc_t doc){
+    aether_style_transaction_t transaction=nullptr;aether_style_revision_t revision=nullptr;
+    const aether_style_environment_t environment{400,300,1,16,0,0,0};
+    CHECK(aether_style_runtime_prepare_revision(runtime,doc,&environment,&transaction)==AETHER_OK);
+    CHECK(aether_style_runtime_commit_revision(runtime,transaction,&revision)==AETHER_OK);
+    FrameImage result;
+    for(int32_t i=0;i<aether_style_revision_style_count(revision);++i){aether_node_t node=nullptr;aether_computed_style_handle_t handle=nullptr;
+        CHECK(aether_style_revision_get_style(revision,i,&node,&handle,nullptr)==AETHER_OK);aether_computed_style_t style{};
+        CHECK(aether_computed_style_copy(handle,&style)==AETHER_OK);result.styles.emplace(node->style_node_id,std::tuple{style.opacity,int32_t(style.display),int32_t(style.width.unit),style.width.value,int32_t(style.height.unit),style.height.value});
+        aether_computed_style_free(&style);aether_computed_style_handle_destroy(handle);
+    }
+    aether_style_map_t map=nullptr;CHECK(aether_style_revision_create_map(revision,&map)==AETHER_OK);
+    aether_layout_engine_t engine=nullptr;aether_layout_result_t layout=nullptr;CHECK(aether_layout_create(nullptr,nullptr,&engine)==AETHER_OK);
+    CHECK(aether_layout_layout(engine,doc,map,400,300,nullptr,nullptr,&layout)==AETHER_OK);boxes(aether_layout_result_get_root(layout),result.layout);
+    aether_layout_result_destroy(layout);aether_layout_destroy(engine);aether_style_map_destroy(map);aether_style_revision_destroy(revision);aether_style_transaction_destroy(transaction);return result;
+}
+using Lifetimes=std::vector<std::weak_ptr<EditableNodeStorage>>;
+static void remember(const Fixture& f,Lifetimes& lifetimes){
+    for(auto doc:{f.doc,f.destination,f.empty}){lifetimes.push_back(doc->editable_storage);for(const auto& entry:doc->editable_nodes)lifetimes.push_back(entry.second);}
+}
+static bool prepare_attempt(int mode,long point,Lifetimes& lifetimes){
+        Fixture f;aether_dom_node_spec_v1_t nodes[2]{};auto s=configure(f,mode,nodes);
         full_style(f.runtime,f.doc);
+        remember(f,lifetimes);
         const DocumentImage before(f.doc),destination(f.destination),empty(f.empty);
         int64_t slot_handle=0;int32_t slot_present=0;uint64_t slot_epoch=0;
         CHECK(aether_dom_style_binding_read_slot_v1(f.binding,&slot_handle,&slot_present,&slot_epoch)==AETHER_OK);
@@ -124,13 +184,30 @@ static void all_prepare_families(){
             CHECK(aether_style_runtime_read_publication_token(f.runtime,&current)==AETHER_OK&&current.inputs_current);
             CHECK(current.revision_identity==publication.revision_identity&&current.generation==publication.generation&&current.sheet_epoch==publication.sheet_epoch&&current.registry_identity==publication.registry_identity);
             int32_t present=0;aether_dom_interaction_loss_v1_t loss{};CHECK(aether_dom_interaction_claim_read_loss_v1(f.claim,&present,&loss)==AETHER_OK&&!present);aether_dom_interaction_claim_info_v1_t info{};CHECK(aether_dom_interaction_claim_read_v1(f.claim,&info)==AETHER_OK&&info.current);};
-        bool succeeded=false;long failures=0;
-        for(long point=0;point<3000;++point){auto t=token(s.target);aether_dom_edit_t candidate=nullptr;failure=point;
-            const auto status=aether_dom_prepare_edit_v1(&t,&s,&candidate);failure=-1;
-            if(status==AETHER_OK){CHECK(candidate);unchanged();aether_dom_edit_destroy_v1(candidate);unchanged();commit(prepare(s));succeeded=true;break;}
-            CHECK(status==AETHER_ERROR_OUT_OF_MEMORY&&!candidate);++failures;unchanged();
+        auto t=token(s.target);aether_dom_edit_t candidate=nullptr;failure=point;
+        const auto status=aether_dom_prepare_edit_v1(&t,&s,&candidate);failure=-1;
+        if(status!=AETHER_OK){CHECK(status==AETHER_ERROR_OUT_OF_MEMORY&&!candidate);unchanged();return false;}
+        CHECK(candidate);unchanged();aether_dom_edit_destroy_v1(candidate);unchanged();commit(prepare(s));
+        Fixture twin;aether_dom_node_spec_v1_t twin_nodes[2]{};auto reference=configure(twin,mode,twin_nodes);
+        full_style(twin.runtime,twin.doc);commit(prepare(reference));
+        CHECK(values(f.doc)==values(twin.doc)&&values(f.destination)==values(twin.destination)&&values(f.empty)==values(twin.empty));
+        CHECK(full_frame(f.runtime,f.doc)==full_frame(twin.runtime,twin.doc));
+        CHECK(full_frame(f.runtime,f.destination)==full_frame(twin.runtime,twin.destination));
+        CHECK(full_frame(f.runtime,f.empty)==full_frame(twin.runtime,twin.empty));
+        CHECK(f.callbacks==twin.callbacks);
+        remember(f,lifetimes);remember(twin,lifetimes);
+        return true;
+}
+static void all_prepare_families(){
+    for(int mode=0;mode<17;++mode){bool success=false;long failures=0;
+        for(long point=0;point<3000;++point){Lifetimes lifetimes;const auto completed=prepare_attempt(mode,point,lifetimes);
+            // No oracle or fixture pins remain here. Every initial/final known
+            // editable storage must have died after its final owner is released.
+            for(const auto& weak:lifetimes)CHECK(weak.expired());
+            if(completed){success=true;break;}++failures;
         }
-        CHECK(succeeded&&failures>0);std::printf("typed prepare allocation sweep family %d: %ld injected failures, abort intact\n",mode,failures);
+        CHECK(success&&failures>0);
+        std::printf("typed cold prepare sweep family %d: %ld failures; no-write, last leases, typed values and next FULL/layout match clean twin\n",mode,failures);
     }
 }
 static void snapshot_allocations(){

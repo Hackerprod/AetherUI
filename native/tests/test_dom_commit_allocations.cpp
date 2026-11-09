@@ -102,6 +102,21 @@ static void controls(size_t size){
     std::thread worker([size]{CHECK(!ledger::depth&&ledger::counts.requests==0);ledger::reset();{ledger::Scope scope;void* p=positive(0,size);std::free(p);}CHECK(ledger::counts.requests==1);});worker.join();CHECK(ledger::counts.requests==0);
     ledger::reset();{ledger::Scope scope;}zero("empty scope");
 }
+// This must run before Fixture's compatibility create route: its first commit
+// resolves the exact initial publication path, with all work prepared beforehand.
+static void initial_binding_case(){
+    aether_doc_t doc=nullptr;ok(aether_doc_create(&doc));ok(aether_doc_parse_html(doc,"<body><style>#x{opacity:.2}</style><input id='x'></body>"));
+    aether_style_runtime_t runtime=nullptr;ok(aether_style_runtime_create(nullptr,nullptr,nullptr,nullptr,&runtime));
+    aether_dom_style_create_t stage=nullptr;ok(aether_dom_style_binding_prepare_create_v1(doc,runtime,&stage));
+    aether_dom_style_binding_t binding=nullptr;aether_status_t status;
+    ledger::reset();{ledger::Scope scope;status=aether_dom_style_binding_validate_create_v1(stage);if(status==AETHER_OK)status=aether_dom_style_binding_commit_create_v1(stage,&binding);}zero("cold initial style binding");ok(status);CHECK(binding);
+    int64_t handle=0;int32_t present=0;uint64_t epoch=0;ok(aether_dom_style_binding_read_slot_v1(binding,&handle,&present,&epoch));CHECK(present);
+    aether_dom_style_binding_t repeated=nullptr;
+    ledger::reset();{ledger::Scope scope;status=aether_dom_style_binding_commit_create_v1(stage,&repeated);}zero("repeated initial style binding");CHECK(status==AETHER_ERROR_INVALID_STATE&&!repeated);
+    ledger::reset();{ledger::Scope scope;aether_dom_style_binding_create_destroy_v1(stage);}CHECK(!ledger::counts.invalid);
+    std::printf("DOM cold initial style binding validate+commit: requests=0; teardown requests=%llu (separate)\n",(unsigned long long)ledger::counts.requests);
+    aether_dom_style_binding_destroy_v1(binding);aether_style_runtime_destroy(runtime);aether_doc_destroy(doc);
+}
 struct Fixture {
     aether_doc_t doc=nullptr;aether_style_runtime_t runtime=nullptr;aether_dom_style_binding_t binding=nullptr;aether_dom_interaction_owner_t owner=nullptr;
     aether_node_t node=nullptr,other=nullptr,style=nullptr;
@@ -160,7 +175,7 @@ static void rebind_case(){
     ledger::reset();{ledger::Scope scope;status=aether_dom_style_binding_validate_rebind_v1(edit);if(status==AETHER_OK)status=aether_dom_style_binding_commit_rebind_v1(edit,&replacement);}zero("cold style binding rebind");ok(status);CHECK(replacement);
     int64_t handle=0;int32_t present=0;uint64_t epoch=0;ok(aether_dom_style_binding_read_slot_v1(replacement,&handle,&present,&epoch));CHECK(present&&aether_style_runtime_remove_stylesheet(f.runtime,foreign));
     aether_dom_style_binding_rebind_destroy_v1(edit);aether_dom_style_binding_destroy_v1(replacement);aether_doc_destroy(next);
-    std::puts("DOM style binding replacement validate+commit: requests=0 (initial create remains outside this gate)");
+    std::puts("DOM style binding replacement validate+commit: requests=0 (separate from initial create)");
 }
 static aether_transition_token_t transition_token(aether_transition_runtime_t runtime){aether_transition_token_t t{};ok(aether_transition_runtime_read_token(runtime,&t));return t;}
 static void transition_commit(aether_transition_candidate_t candidate,const char* label){
@@ -189,7 +204,7 @@ static void transition_cases(){
 int main(int argc,char**){
     // Before any calibration/warmup of the commit entry point. Cold allocations
     // fail identically to warm allocations; only ledger TLS itself is initialized.
-    ledger::reset();scalar_cases();
+    ledger::reset();initial_binding_case();scalar_cases();
     controls(257u+unsigned(argc));structural_cases();interaction_cases();rebind_case();transition_cases();
     std::printf("PASS DOM commit allocation oracle: %u typed commits plus interaction, Linux product link-unit + static C++ runtime; libc-private/CLR/Windows/macOS/whole host publication UNMEASURED\n",commits);
 }
