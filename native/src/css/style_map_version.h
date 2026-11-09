@@ -46,12 +46,15 @@ public:
     const uint64_t& input_epoch() const noexcept { return input_epoch_; }
     const uint64_t& style_tree_epoch() const noexcept { return style_tree_epoch_; }
     BoundNodeView lookup(const aether_node_s* node) const noexcept {
-        if(revision_)return BoundNodeView::find(revision_,node);
-        return backing_?BoundNodeView::from_legacy(backing_->find_owner(node)):BoundNodeView{};
+        if(backing_) {
+            if(revision_&&revision_->backing()==backing_)return BoundNodeView::find(revision_,node);
+            return BoundNodeView::from_legacy(backing_->find_owner(node));
+        }
+        return revision_?BoundNodeView::find(revision_,node):BoundNodeView{};
     }
     template<class Fn> void for_each_node(Fn&& fn) const {
-        if(revision_) {for(const auto& entry:revision_->directory().entries())fn(BoundNodeView::find(revision_,entry.second.payload->node()));}
-        else if(backing_) {for(const auto& entry:backing_->entries())fn(BoundNodeView::from_legacy(entry.second));}
+        if(backing_) {for(const auto& entry:backing_->entries())fn(lookup(entry.first));}
+        else if(revision_) {for(const auto& entry:revision_->directory().entries())fn(BoundNodeView::find(revision_,entry.second.payload->node()));}
     }
     bool contextual() const noexcept { return mode_==MapMode::contextual; }
 };

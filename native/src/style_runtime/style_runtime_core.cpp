@@ -96,7 +96,7 @@ struct aether_style_runtime_s {
     int64_t next_sheet_handle = 1;
     int32_t next_rule_id = 1;
     std::unordered_map<int64_t, std::unique_ptr<compiled_style_sheet_s>> sheets;
-    std::unordered_map<aether_node_s*, FrozenNodeRef> states;
+    std::unordered_map<aether_node_s*, FrozenNodePayloadRef> states;
     std::unordered_map<aether_node_s*, std::unique_ptr<PreparedNodeResult>> prepared;
     std::shared_ptr<document_measure_context_s> document_measures;
     std::shared_ptr<const style_revision_s> revision;
@@ -1150,7 +1150,7 @@ static bool valid_measure_environment(const aether_style_environment_t& env) noe
 AETHER_API uint32_t aether_contextual_style_version(void) { return 1; }
 static aether_status_t prepare_revision_impl(
     aether_style_runtime_t runtime, aether_node_t root,
-    const aether_style_environment_t* environment, aether_style_transaction_t* out_transaction, bool isolate_legacy_root) {
+    const aether_style_environment_t* environment, aether_style_transaction_t* out_transaction, bool isolate_legacy_root, bool export_legacy_updates) {
     if (out_transaction) *out_transaction = nullptr;
     if (!runtime || !root || !out_transaction) return AETHER_ERROR_NULL_ARG;
     if (runtime->preparing || runtime->owner_thread != std::this_thread::get_id()) return AETHER_ERROR_INVALID_STATE;
@@ -1193,7 +1193,7 @@ static aether_status_t prepare_revision_impl(
         prepare_tree(&staged, document, nullptr, 0, transaction->links, order);
         std::unordered_set<aether_node_s*> current_nodes(order.begin(), order.end());
         // Freeze document once, only after root-font bootstrap and complete traversal.
-        StyleRevisionInput revision_input;
+        FullPayloadRevisionInput revision_input;
         revision_input.contextual=staged.legacy_inheritance_root==nullptr;
         const auto& d=*staged.document_measures;
         require_style_status(freeze_document({d.viewport_width,d.viewport_height,d.initial_font_size,d.root_font_size,d.generation,d.identity},revision_input.document));
@@ -1204,33 +1204,37 @@ static aether_status_t prepare_revision_impl(
         revision_input.document_lifetime=document->identity; revision_input.environment=requested_environment;
         std::unordered_map<aether_node_s*,std::shared_ptr<aether_node_s>> leaves;
         for(const auto& link:transaction->links)for(const auto& leaf:link.storage)leaves.emplace(leaf.get(),leaf);
-        BackingBuildInput backing;
-        std::unordered_map<aether_node_s*,FrozenNodeRef> next_states;
+        std::unordered_map<aether_node_s*,FrozenNodePayloadRef> next_states;
         revision_input.entries.reserve(order.size());
         for(auto* node:order) {
             const auto& prepared=*staged.prepared.at(node);
-            NodeRecordInput input;
+            NodePayloadInput input;
             input.origin=RecordOrigin::runtime; input.node=node; input.style=prepared.style;
-            require_style_status(freeze_runtime_measures(*prepared.measures,revision_input.document,input.measures));
+            require_style_status(freeze_runtime_measure_payload(*prepared.measures,input.measures));
             input.custom_properties=prepared.custom_properties;input.color_references=prepared.color_references;
+            input.backdrop_custom_properties=prepared.backdrop_custom_properties;
             input.declared_impact=prepared.declared_impact;input.declared_inherited_impact=prepared.declared_inherited_impact;
             input.inherited_change_impact=prepared.inherited_change_impact;
             input.document_identity=d.identity;input.node_identity=aether_node_identity(node);
             input.node_lifetime=node->identity;input.document_lifetime=document->identity;
             if(auto it=leaves.find(node);it!=leaves.end())input.generated_leaf=it->second;
-            FrozenNodeRef record;require_style_status(freeze_node_record(input,record));
-            count_work(WorkCounter::revision_records_created);
-            next_states.emplace(node,record);backing.entries.emplace(node,record);
-            revision_input.entries.push_back({node,record,prepared.impact});
+            FrozenNodePayloadRef payload;require_style_status(freeze_node_payload(input,payload));
+            next_states.emplace(node,payload);
+            revision_input.entries.push_back({node,payload,prepared.impact});
             count_work(WorkCounter::revision_entries_created);
         }
-        require_style_status(freeze_backing(backing,revision_input.backing));
-        if(runtime->revision)for(const auto& old:runtime->revision->entries())
-            if(!current_nodes.count(old.node()))revision_input.retired.push_back({old.record(),STYLE_IMPACT_ALL_BITS});
-        StyleRevisionRef revision;require_style_status(freeze_style_revision(revision_input,revision));
-        for(const auto& entry:revision_input.entries)if(entry.impact) {
+        // The full resolver supplies every current output; certification never
+        // infers unchanged styles from DOM epochs or a caller-supplied flag.
+        CertifiedRevisionDeltaRef certificate;
+        const auto base=runtime->revision && runtime->revision->document_identity()==d.identity ? runtime->revision : StyleRevisionRef{};
+        if(!base&&runtime->revision)for(const auto& old:runtime->revision->entries())
+            if(!current_nodes.count(old.node()))revision_input.retired.push_back({old.node(),old.payload(),STYLE_IMPACT_ALL_BITS});
+        require_style_status(certify_full_payload_revision(base,revision_input,certificate));
+        StyleRevisionRef revision;require_style_status(freeze_certified_revision(certificate,revision));
+        for(auto& entry:next_states)entry.second=revision->directory().find(reinterpret_cast<uintptr_t>(entry.first))->payload;
+        for(const auto& entry:revision_input.entries)if(export_legacy_updates && entry.impact) {
             auto update=std::make_unique<aether_style_update_s>();update->node=entry.node;update->impact=entry.impact;
-            const auto& record=entry.record;
+            FrozenNodeRef record;require_style_status(BoundNodeView::find(revision,entry.node).export_record(record));
             require_style_status(computed_style_deep_copy(record->style_view(),&update->current.style));
             update->current.record=record;update->current.measures=record->measures();update->current.revision=revision;
             update->current.document_identity=record->document_identity();update->current.node_identity=record->node_identity();
@@ -1258,7 +1262,7 @@ static aether_status_t prepare_revision_impl(
 AETHER_API aether_status_t aether_style_runtime_prepare_revision(
     aether_style_runtime_t runtime, aether_node_t root,
     const aether_style_environment_t* environment, aether_style_transaction_t* out_transaction) {
-    return prepare_revision_impl(runtime, root, environment, out_transaction, false);
+    return prepare_revision_impl(runtime, root, environment, out_transaction, false, false);
 }
 AETHER_API aether_status_t aether_style_runtime_commit_revision(
     aether_style_runtime_t runtime, aether_style_transaction_t transaction, aether_style_revision_t* out_revision) {
@@ -1296,7 +1300,7 @@ static int32_t resolve_legacy_atomic(aether_style_runtime_t runtime, aether_node
     if (out_updates) *out_updates = nullptr;
     if (!runtime || !root || !out_updates) return 0;
     aether_style_transaction_t raw = nullptr;
-    if (prepare_revision_impl(runtime, root, environment, &raw, isolate_legacy_root) != AETHER_OK) return 0;
+    if (prepare_revision_impl(runtime, root, environment, &raw, isolate_legacy_root, true) != AETHER_OK) return 0;
     std::unique_ptr<aether_style_transaction_s> transaction(raw);
     aether_style_revision_t revision = nullptr;
     if (aether_style_runtime_commit_revision(runtime, transaction.get(), &revision) != AETHER_OK) return 0;
@@ -1324,7 +1328,7 @@ AETHER_API uint64_t aether_style_revision_generation(aether_style_revision_t rev
 AETHER_API uint64_t aether_style_revision_document_identity(aether_style_revision_t revision) { return revision ? revision->value->document_identity() : 0; }
 AETHER_API int32_t aether_style_revision_style_count(aether_style_revision_t revision) { return revision ? static_cast<int32_t>(revision->value->entries().size()) : 0; }
 AETHER_API int32_t aether_style_revision_change_count(aether_style_revision_t revision) { return revision ? static_cast<int32_t>(revision->value->changes().size()) : 0; }
-static aether_status_t revision_get_entry(aether_style_revision_t revision, ReadOnlyArrayView<FrozenRevisionEntry> entries,
+static aether_status_t revision_get_entry(aether_style_revision_t revision, RevisionEntriesView entries,
     int32_t index,aether_node_t* out_node,aether_computed_style_handle_t* out_style,uint32_t* out_impact) {
     if(out_node)*out_node=nullptr;
     if(out_style)*out_style=nullptr;
@@ -1332,10 +1336,11 @@ static aether_status_t revision_get_entry(aether_style_revision_t revision, Read
     if(!revision)return AETHER_ERROR_NULL_ARG;
     if(index<0||static_cast<size_t>(index)>=entries.size())return AETHER_ERROR_INVALID_STATE;
     const auto& entry=entries[static_cast<size_t>(index)];
-    if(out_style&&entry.record()) {
+    if(out_style&&entry.payload()) {
         auto handle=std::unique_ptr<aether_computed_style_handle_s>(new(std::nothrow)aether_computed_style_handle_s());
         if(!handle)return AETHER_ERROR_OUT_OF_MEMORY;
-        const auto& record=entry.record();
+        FrozenNodeRef record;auto bind_status=BoundNodeView::find(revision->value,entry.node()).export_record(record);
+        if(bind_status!=AETHER_OK)return bind_status;
         auto status=computed_style_deep_copy(record->style_view(),&handle->style);if(status!=AETHER_OK)return status;
         handle->record=record;handle->measures=record->measures();handle->revision=revision->value;
         handle->document_identity=record->document_identity();handle->node_identity=record->node_identity();
@@ -1348,17 +1353,21 @@ static aether_status_t revision_get_entry(aether_style_revision_t revision, Read
 }
 AETHER_API aether_status_t aether_style_revision_get_style(aether_style_revision_t revision, int32_t index,
     aether_node_t* node, aether_computed_style_handle_t* style, uint32_t* impact) {
-    return revision_get_entry(revision, revision ? revision->value->entries() : ReadOnlyArrayView<FrozenRevisionEntry>{}, index, node, style, impact);
+    return revision_get_entry(revision, revision ? revision->value->entries() : RevisionEntriesView{}, index, node, style, impact);
 }
 AETHER_API aether_status_t aether_style_revision_get_change(aether_style_revision_t revision, int32_t index,
     aether_node_t* node, aether_computed_style_handle_t* style, uint32_t* impact) {
-    return revision_get_entry(revision, revision ? revision->value->changes() : ReadOnlyArrayView<FrozenRevisionEntry>{}, index, node, style, impact);
+    return revision_get_entry(revision, revision ? revision->value->changes() : RevisionEntriesView{}, index, node, style, impact);
 }
 static aether_status_t create_revision_map(aether_style_revision_t revision,aether_style_map_t* out_map,bool legacy=false) {
     if(out_map)*out_map=nullptr;
     if(!revision||!out_map)return AETHER_ERROR_NULL_ARG;
     try {
         auto map=std::make_unique<aether_style_map_s>();const auto& r=*revision->value;
+        if(legacy||!r.contextual()) {
+            const auto status=materialize_legacy_revision_map(revision->value,map->current);
+            if(status!=AETHER_OK)return status;*out_map=map.release();return AETHER_OK;
+        }
         MapVersionInput input;input.backing=r.backing();input.revision=revision->value;
         input.mode=legacy||!r.contextual()?MapMode::legacy_complete:MapMode::contextual;
         input.document_identity=r.document_identity();input.generation=r.generation();input.document_lifetime=r.document_lifetime();
@@ -1391,7 +1400,16 @@ AETHER_API aether_status_t aether_style_runtime_update_resolved_style_map(aether
         patch.reserve(static_cast<size_t>(node_count));
         for(int32_t i=0;i<node_count;++i){auto* node=nodes[i];if(!node)continue;
             const auto it=runtime->states.find(node);
-            patch.push_back({node,it==runtime->states.end()?FrozenNodeRef{}:it->second});
+            FrozenNodeRef record;
+            if(it!=runtime->states.end()) {
+                const auto view=BoundNodeView::find(runtime->revision,node);
+                const auto old=previous&&previous->backing()?previous->backing()->find_owner(node):FrozenNodeRef{};
+                const auto document=view.document_owner();
+                if(old&&old->payload_owner()==view.payload_owner()&&old->measures()&&old->measures()->document_owner()==document&&
+                    !old->measures()->document_owner().owner_before(document)&&!document.owner_before(old->measures()->document_owner()))record=old;
+                else {const auto status=view.export_record(record);if(status!=AETHER_OK)return status;}
+            }
+            patch.push_back({node,std::move(record)});
         }
         MapVersionInput input;input.mode=MapMode::legacy_partial;
         if(previous){input.document_lifetime=previous->document_lifetime();input.document_identity=previous->document_identity();

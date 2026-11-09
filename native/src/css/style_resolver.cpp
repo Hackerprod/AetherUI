@@ -47,10 +47,19 @@ AETHER_API aether_computed_style_handle_t aether_style_map_get(aether_style_map_
     if (!map || !element) return nullptr;
     const auto version = aether::style::pin_style_map(map);
     if (!version) return nullptr;
-    const auto record = version->backing()->find_owner(element);
-    if (!record) return nullptr;
-    aether_computed_style_handle_t result = nullptr;
-    return aether::style::export_style_handle(*version, record, &result) == AETHER_OK ? result : nullptr;
+    const auto view = version->lookup(element);
+    if(!view)return nullptr;
+    aether::style::FrozenNodeRef record;
+    if(view.export_record(record)!=AETHER_OK)return nullptr;
+    try {
+        auto result=std::make_unique<aether_computed_style_handle_s>();
+        if(aether::style::export_owned_flat(record->style_view(),&result->style)!=AETHER_OK)return nullptr;
+        result->record=record;result->measures=record->measures();result->revision=version->revision();
+        result->document_identity=version->document_identity();result->document_lifetime=version->document_lifetime();
+        result->node_identity=record->node_identity();result->node_lifetime=record->node_lifetime();
+        return result.release();
+    }catch(const std::bad_alloc&){return nullptr;}
+
 }
 
 AETHER_API aether_status_t aether_computed_style_copy(aether_computed_style_handle_t handle, aether_computed_style_t* out) {

@@ -80,13 +80,16 @@ style_revision_s::style_revision_s(const CertifiedRevisionDelta& in,PayloadDirec
 namespace aether::style {
 CertifiedRevisionDelta::CertifiedRevisionDelta(StyleRevisionRef base,FullPayloadRevisionInput header,bool stable,std::vector<Change> changes,
     std::vector<std::pair<uintptr_t,uint32_t>> impacts,ImmutableArray<FrozenRetiredNode> retired):
-    base_(std::move(base)),header_(std::move(header)),stable_order_(stable),changes_(std::move(changes)),impacts_(std::move(impacts)),retired_(std::move(retired)){}
+    base_(std::move(base)),header_(std::move(header)),stable_order_(stable),captured_mutation_(header_.document_lifetime->mutation_epoch),
+    captured_structure_(header_.document_lifetime->structure_epoch),captured_style_tree_(header_.document_lifetime->style_tree_epoch),changes_(std::move(changes)),impacts_(std::move(impacts)),retired_(std::move(retired)){}
 aether_status_t certify_full_payload_revision(const StyleRevisionRef& base,const FullPayloadRevisionInput& in,CertifiedRevisionDeltaRef& out)noexcept{
     if(!in.document||!in.document_lifetime||!in.generation||!in.document_lifetime->alive||!in.document_lifetime->owner||
         in.document_identity!=reinterpret_cast<uintptr_t>(in.document_lifetime.get())||in.document->values().identity!=in.document_identity||
         in.document->values().generation!=in.generation||in.entries.size()>INT32_MAX)return AETHER_ERROR_INVALID_STATE;
     if(static_cast<const aether_node_s*>(in.document_lifetime->owner)->identity!=in.document_lifetime)return AETHER_ERROR_INVALID_STATE;
-    if(base&&(!same_owner(base->document_lifetime(),in.document_lifetime)||base->document_identity()!=in.document_identity||in.generation<=base->generation()))return AETHER_ERROR_INVALID_STATE;
+    if(base&&(!base->authentic_owner(base)||!same_owner(base->document_lifetime(),in.document_lifetime)||base->document_identity()!=in.document_identity||in.generation<=base->generation()))return AETHER_ERROR_INVALID_STATE;
+    if(in.input_epoch!=in.document_lifetime->mutation_epoch||in.structure_epoch!=in.document_lifetime->structure_epoch||
+        in.style_tree_epoch!=in.document_lifetime->style_tree_epoch+1|| (base&&!in.retired.empty()))return AETHER_ERROR_INVALID_STATE;
     try {
         std::unordered_set<aether_node_s*> seen;seen.reserve(in.entries.size());
         bool stable=base&&base->entries().size()==in.entries.size();
@@ -109,6 +112,12 @@ aether_status_t certify_full_payload_revision(const StyleRevisionRef& base,const
         }
         std::vector<FrozenNodePayloadRef> retired;
         if(base)for(const auto& item:base->manifest().entries())if(!seen.count(item.second.node))retired.push_back(item.second.payload);
+        if(!base)for(const auto& old:in.retired){const auto& p=old.payload;
+            if(!p||p->node()!=old.node||p->origin()!=RecordOrigin::runtime||!p->node_lifetime()||
+                p->node_lifetime()->owner!=old.node||p->node_identity()!=reinterpret_cast<uintptr_t>(p->node_lifetime().get())||
+                seen.count(old.node)||!seen.insert(old.node).second)return AETHER_ERROR_INVALID_STATE;
+            retired.push_back(p);
+        }
         if(retired.size()>static_cast<size_t>(INT32_MAX)-in.entries.size())return AETHER_ERROR_INVALID_STATE;
         constexpr uint32_t all=AETHER_STYLE_IMPACT_LAYOUT|AETHER_STYLE_IMPACT_PAINT|AETHER_STYLE_IMPACT_HITTEST|
             AETHER_STYLE_IMPACT_COMPOSITE|AETHER_STYLE_IMPACT_TEXT_LAYOUT|AETHER_STYLE_IMPACT_CURSOR|AETHER_STYLE_IMPACT_INHERITED;
@@ -117,13 +126,16 @@ aether_status_t certify_full_payload_revision(const StyleRevisionRef& base,const
         header.input_epoch=in.input_epoch;header.structure_epoch=in.structure_epoch;header.style_tree_epoch=in.style_tree_epoch;
         header.environment=in.environment;header.document=in.document;header.document_lifetime=in.document_lifetime;
         CertifiedRevisionDeltaRef result(new const CertifiedRevisionDelta(base,std::move(header),stable,std::move(changes),std::move(impacts),std::move(retired_nodes)));
-        out=std::move(result);return AETHER_OK;
+        result->self_=result;out=std::move(result);return AETHER_OK;
     }catch(const std::bad_alloc&){return AETHER_ERROR_OUT_OF_MEMORY;}
 }
 aether_status_t freeze_certified_revision(const CertifiedRevisionDeltaRef& certificate,StyleRevisionRef& out)noexcept{
     if(!certificate)return AETHER_ERROR_INVALID_STATE;
     const auto& in=*certificate;
-    if(!in.header_.document_lifetime->alive)return AETHER_ERROR_INVALID_STATE;
+    if(!same_owner(in.self_.lock(),certificate))return AETHER_ERROR_INVALID_STATE;
+    if(!in.header_.document_lifetime->alive||in.header_.document_lifetime->mutation_epoch!=in.captured_mutation_||
+        in.header_.document_lifetime->structure_epoch!=in.captured_structure_||
+        in.header_.document_lifetime->style_tree_epoch!=in.captured_style_tree_)return AETHER_ERROR_INVALID_STATE;
     try {
         PayloadDirectory directory;PayloadManifest manifest;
         if(in.stable_order_){directory=in.base_->directory();manifest=in.base_->manifest();
@@ -138,7 +150,7 @@ aether_status_t freeze_certified_revision(const CertifiedRevisionDeltaRef& certi
         }
         auto impacts=PersistentIndex<uint32_t>::build(in.impacts_);
         StyleRevisionRef result(new const style_revision_s(in,std::move(directory),std::move(manifest),std::move(impacts)));
-        out=std::move(result);return AETHER_OK;
+        result->self_=result;out=std::move(result);return AETHER_OK;
     }catch(const std::bad_alloc&){return AETHER_ERROR_OUT_OF_MEMORY;}
 }
 aether_status_t freeze_style_revision(const StyleRevisionInput& in, StyleRevisionRef& out) noexcept {
@@ -177,7 +189,7 @@ aether_status_t freeze_style_revision(const StyleRevisionInput& in, StyleRevisio
                 return AETHER_ERROR_INVALID_STATE;
         }
         StyleRevisionRef result(new const style_revision_s(in));
-        out = std::move(result);
+        result->self_=result;out = std::move(result);
         return AETHER_OK;
     } catch (const std::bad_alloc&) { return AETHER_ERROR_OUT_OF_MEMORY; }
 }

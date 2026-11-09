@@ -3,6 +3,7 @@
 #include "immutable_style_backing.h"
 #include "frozen_measure_read.h"
 #include "persistent_index.h"
+#include "../diagnostics/work_counters.h"
 #include <vector>
 class style_revision_s;
 namespace aether::style {
@@ -61,6 +62,7 @@ struct FullPayloadRevisionInput {
     FrozenDocumentRef document;
     std::shared_ptr<node_identity_s> document_lifetime;
     std::vector<PayloadRevisionEntry> entries;
+    std::vector<PayloadRevisionEntry> retired; // Full cross-document import only; never dereference retired nodes.
 };
 class CertifiedRevisionDelta;
 using CertifiedRevisionDeltaRef=std::shared_ptr<const CertifiedRevisionDelta>;
@@ -68,10 +70,12 @@ aether_status_t certify_full_payload_revision(const StyleRevisionRef&,const Full
 aether_status_t freeze_certified_revision(const CertifiedRevisionDeltaRef&,StyleRevisionRef&) noexcept;
 aether_status_t freeze_style_revision(const StyleRevisionInput&,StyleRevisionRef&) noexcept;
 class CertifiedRevisionDelta {
+    mutable std::weak_ptr<const CertifiedRevisionDelta> self_;
     struct Change { size_t position; aether_node_s* node; FrozenNodePayloadRef payload; };
     const StyleRevisionRef base_;
     const FullPayloadRevisionInput header_; // entries deliberately empty: no retained N-vector on stable-order delta.
     const bool stable_order_;
+    const uint64_t captured_mutation_,captured_structure_,captured_style_tree_;
     const std::vector<Change> changes_;
     const std::vector<std::pair<uintptr_t,uint32_t>> impacts_;
     const ImmutableArray<FrozenRetiredNode> retired_;
@@ -109,6 +113,7 @@ public:
 };
 }
 class style_revision_s final {
+    mutable std::weak_ptr<const style_revision_s> self_;
     const bool contextual_;
     const uint64_t generation_,document_identity_,input_epoch_,structure_epoch_,style_tree_epoch_;
     const aether_style_environment_t environment_;
@@ -129,6 +134,9 @@ class style_revision_s final {
     friend aether_status_t aether::style::freeze_certified_revision(const aether::style::CertifiedRevisionDeltaRef&,aether::style::StyleRevisionRef&) noexcept;
     friend class aether::style::RevisionEntriesView;
 public:
+    bool authentic_owner(const aether::style::StyleRevisionRef& owner)const noexcept{
+        const auto actual=self_.lock();return actual==owner&&!actual.owner_before(owner)&&!owner.owner_before(actual);
+    }
     bool contextual()const noexcept{return contextual_;}
     uint64_t generation()const noexcept{return generation_;}
     uint64_t document_identity()const noexcept{return document_identity_;}
@@ -163,7 +171,7 @@ class BoundNodeView {
 public:
     BoundNodeView()noexcept=default;
     static BoundNodeView find(StyleRevisionRef revision,const aether_node_s* node)noexcept{
-        if(!revision)return {};const auto* entry=revision->directory().find(reinterpret_cast<uintptr_t>(node));
+        if(!revision||!revision->authentic_owner(revision))return {};const auto* entry=revision->directory().find(reinterpret_cast<uintptr_t>(node));
         if(!entry)return {};auto legacy=revision->backing()?revision->backing()->find_owner(node):FrozenNodeRef{};
         return {std::move(revision),entry->payload,std::move(legacy)};
     }
@@ -184,7 +192,8 @@ public:
         if(!payload_)return AETHER_ERROR_INVALID_STATE;
         if(legacy_){out=legacy_;return AETHER_OK;}
         try {auto measures=std::make_shared<const FrozenMeasures>(payload_->measures(),document_owner());
-            FrozenNodeRef result(new const FrozenNodeRecord(payload_,std::move(measures)));out=std::move(result);return AETHER_OK;}
+            FrozenNodeRef result(new const FrozenNodeRecord(payload_,std::move(measures)));
+            diagnostics::count_work(diagnostics::WorkCounter::revision_records_created);out=std::move(result);return AETHER_OK;}
         catch(const std::bad_alloc&){return AETHER_ERROR_OUT_OF_MEMORY;}
     }
 };

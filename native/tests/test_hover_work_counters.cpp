@@ -61,8 +61,8 @@ int main(){
   if(supported){
    require(c.compute_nodes==uint64_t(f.elements),"full computation count");
    require(c.state_entries_visited==uint64_t(f.elements),"full old state traversal");
-   require(c.revision_records_created==uint64_t(f.elements),"full record allocation");
-   require(c.revision_entries_created==uint64_t(f.elements),"full manifest construction");
+   require(c.revision_records_created==0,"full no-op creates no bound records");
+   require(c.revision_entries_created==uint64_t(f.elements),"full preparation visits all logical manifest entries");
    require(c.revision_prepares==1&&c.revision_publications==1&&c.state_full_fallbacks==1,"full commit counted");
   }else require(c.compute_nodes==0,"unsupported build remains empty");
   std::printf("cards=%d elements=%d updates=%d compute=%llu records=%llu entries=%llu\n",n,f.elements,count,(unsigned long long)c.compute_nodes,(unsigned long long)c.revision_records_created,(unsigned long long)c.revision_entries_created);

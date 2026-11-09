@@ -13,6 +13,7 @@ MapVersion::MapVersion(const MapVersionInput& in) :
     input_epoch_(in.input_epoch),
     style_tree_epoch_(in.style_tree_epoch) {}
 aether_status_t make_map_version(const MapVersionInput& in, MapVersionRef& out) noexcept {
+    if(in.revision&&!in.revision->authentic_owner(in.revision))return AETHER_ERROR_INVALID_STATE;
     if (!in.backing && (!in.revision || in.mode!=MapMode::contextual || in.revision->backing())) return AETHER_ERROR_INVALID_STATE;
     if (in.mode==MapMode::legacy_partial) {
         if (in.revision || in.generation) return AETHER_ERROR_INVALID_STATE;
@@ -35,7 +36,7 @@ aether_status_t make_map_version(const MapVersionInput& in, MapVersionRef& out) 
     catch (const std::bad_alloc&) { return AETHER_ERROR_OUT_OF_MEMORY; }
 }
 aether_status_t materialize_legacy_revision_map(const StyleRevisionRef& revision,MapVersionRef& out) noexcept {
-    if(!revision)return AETHER_ERROR_INVALID_STATE;
+    if(!revision||!revision->authentic_owner(revision))return AETHER_ERROR_INVALID_STATE;
     try {
         MapVersionInput input;input.mode=MapMode::legacy_complete;input.revision=revision;
         input.document_lifetime=revision->document_lifetime();input.document_identity=revision->document_identity();

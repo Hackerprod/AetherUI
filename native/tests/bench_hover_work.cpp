@@ -84,13 +84,18 @@ void bench_replacing_records(Fixture& f,int cards,bool counters_supported){
   aether_work_counters_v1_t counters{};ok(aether_work_counters_get_v1(&counters));
   if(counters_supported)require(counters.map_entries_copied==previous_copies+nodes.size(),"every measured patch replaces exactly K records");
   else require(counters.map_entries_copied==0,"disabled build keeps work counters zero");
-  require(counters.compute_nodes==0&&counters.revision_records_created==0&&counters.revision_publications==0,"no resolve or record preparation inside patch benchmark");
+  require(counters.compute_nodes==0&&counters.revision_publications==0,"no resolve or publication inside patch benchmark");
+  if(counters_supported)require(counters.revision_records_created==previous_copies+nodes.size(),"K bound records exported for legacy patch");
   const auto current=pin_style_map(f.map);
   require(current->document_identity()==initial->document_identity()&&current->input_epoch()==initial->input_epoch()&&
    current->structure_epoch()==initial->structure_epoch()&&current->style_tree_epoch()==initial->style_tree_epoch(),"legacy patch preserves provenance and epochs");
   for(size_t i=0;i<nodes.size();++i){
    const auto actual=current->backing()->find_owner(nodes[i]);const auto& wanted=expected[selected][i];
-   require(actual==wanted&&!actual.owner_before(wanted)&&!wanted.owner_before(actual),"alternating output has exact expected record owner");
+   const auto& payload=actual->payload_owner();const auto& expected_payload=wanted->payload_owner();
+   const auto& document=actual->measures()->document_owner();const auto& expected_document=wanted->measures()->document_owner();
+   require(payload==expected_payload&&!payload.owner_before(expected_payload)&&!expected_payload.owner_before(payload)&&
+    document==expected_document&&!document.owner_before(expected_document)&&!expected_document.owner_before(document),
+    "alternating legacy output has exact expected payload and document owners");
   }
  };
  aether_work_counters_reset();
