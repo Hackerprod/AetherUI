@@ -41,9 +41,20 @@ public sealed class ElementNode : Node
             var binding = BindingCore;
             using (var prepared = binding?.PrepareEdit(new(DomEditKind.SetState, this, State: value)))
             {
+#if AETHER_DOM_COMMIT_ALLOCATION_TESTING
+                DomCommitAllocationLedger.Begin(DomCommitAllocationKind.State);
+                var allocationCommitSucceeded = false;
+                try
+                {
+#endif
                 prepared?.Commit();
                 _state = value;
                 change.Publish();
+#if AETHER_DOM_COMMIT_ALLOCATION_TESTING
+                    allocationCommitSucceeded = true;
+                }
+                finally { DomCommitAllocationLedger.End(allocationCommitSucceeded); }
+#endif
             }
             CompleteMutation(binding, change.Document);
         }
@@ -59,9 +70,20 @@ public sealed class ElementNode : Node
             var binding = BindingCore;
             using (var prepared = binding?.PrepareEdit(new(DomEditKind.SetRuntimeValue, this, Text: value)))
             {
+#if AETHER_DOM_COMMIT_ALLOCATION_TESTING
+                DomCommitAllocationLedger.Begin(DomCommitAllocationKind.RuntimeValue);
+                var allocationCommitSucceeded = false;
+                try
+                {
+#endif
                 prepared?.Commit();
                 _runtimeValue = value;
                 change.Publish();
+#if AETHER_DOM_COMMIT_ALLOCATION_TESTING
+                    allocationCommitSucceeded = true;
+                }
+                finally { DomCommitAllocationLedger.End(allocationCommitSucceeded); }
+#endif
             }
             CompleteMutation(binding, change.Document);
         }
@@ -89,9 +111,20 @@ public sealed class ElementNode : Node
         var binding = BindingCore;
         using (var prepared = binding?.PrepareEdit(new(DomEditKind.SetAttribute, this, Name: name, Text: value)))
         {
+#if AETHER_DOM_COMMIT_ALLOCATION_TESTING
+            DomCommitAllocationLedger.Begin(DomCommitAllocationKind.SetAttribute);
+            var allocationCommitSucceeded = false;
+            try
+            {
+#endif
             prepared?.Commit();
             _attributes = attributes;
             change.Publish();
+#if AETHER_DOM_COMMIT_ALLOCATION_TESTING
+                allocationCommitSucceeded = true;
+            }
+            finally { DomCommitAllocationLedger.End(allocationCommitSucceeded); }
+#endif
         }
         CompleteMutation(binding, change.Document);
     }
@@ -106,9 +139,20 @@ public sealed class ElementNode : Node
         var binding = BindingCore;
         using (var prepared = binding?.PrepareEdit(new(DomEditKind.RemoveAttribute, this, Name: name)))
         {
+#if AETHER_DOM_COMMIT_ALLOCATION_TESTING
+            DomCommitAllocationLedger.Begin(DomCommitAllocationKind.RemoveAttribute);
+            var allocationCommitSucceeded = false;
+            try
+            {
+#endif
             prepared?.Commit();
             _attributes = attributes;
             change.Publish();
+#if AETHER_DOM_COMMIT_ALLOCATION_TESTING
+                allocationCommitSucceeded = true;
+            }
+            finally { DomCommitAllocationLedger.End(allocationCommitSucceeded); }
+#endif
         }
         CompleteMutation(binding, change.Document);
         return true;

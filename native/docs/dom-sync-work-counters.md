@@ -78,3 +78,79 @@ It returns for unchanged hover, updates user-action state and declares style
 invalidation based on hover dependency. It does not rebuild/import the document.
 That separation motivates the Aether bridge work gate. Chromium was not executed,
 and this does not claim Blink implements Aether's snapshot, rollback or ABI.
+
+## Separate test-only allocation gates
+
+The production counter above still reports unavailable. Real allocation measurement
+is deliberately in test harnesses, not an observer API invoked by product commit.
+
+### Native link-unit oracle
+
+`aether_dom_commit_allocations_test`, registered as CTest
+`aether.dom-commit-allocations`, is supported on Linux GCC 64-bit without LTO or
+allocator sanitizer interposition and with static libstdc++ available. Other
+configurations return 77 and print `UNAVAILABLE`. The dedicated Linux CI job
+requires an actual test result; a skip is not an approved allocation gate.
+
+The executable links every object of `aether_publication_test_core`, whose source
+list is obtained from all `aether_core` product sources. It does not link the
+product DSO. It statically links the C++ runtime. Build-time `nm`/`readelf` checks
+require exactly one DOM commit implementation, all replacement-new/wrapper
+symbols, and no `libaether_core`, `libstdc++` or `libgcc_s` DSO dependency. A generated
+source/object manifest and symbol/dependency report are retained as CI artifacts.
+
+The harness wraps malloc, calloc, realloc, aligned_alloc and posix_memalign. All
+scalar/array, throwing/nothrow, aligned/unaligned new variants call precisely one
+wrapped C primitive; matching delete forms free the allocation. Only the primitive
+wrapper counts the request, so new plus malloc is not double-counted. TLS counters
+contain scalar data only. Wrappers call `__real_*` and do not log, allocate metadata,
+invoke an observer, or call user code. Recursion, imbalance or counter exhaustion
+marks a sample invalid, never zero. Thread isolation, nesting, disabled collection,
+all thirteen C/C++ positive-control families, and real product preparation are
+checked independently. Setup and teardown have separate measurement boundaries.
+
+The first typed commit is measured before commit warmup. Cold allocation is a test
+failure, not an exemption. Subsequent cases exercise attributes, State, runtime
+value, text/style slots, structure, adoption, forest/document materialization and
+interaction claims. Invalid and repeated commits are checked separately for zero
+requests and preserved inputs. The unit is allocator requests, including failed
+requests, not net memory use.
+
+Coverage is the linked product and static C++ runtime. It excludes private libc,
+loader and other external-library allocations, the CLR and other threads. The
+commit call-path audit covers `dom_edit.cpp` commit/validate, typed touch and journal
+append in `dom_types.h`, interaction stage swaps, and style-source batch swaps in
+`style_runtime_core.cpp`; these paths do not intentionally delegate allocation to
+an unwrapped external allocator. A new such call requires extending or invalidating
+coverage. This Linux test does not establish Windows/macOS or whole-process coverage.
+
+### Managed publication intervals
+
+Run `bindings/dotnet/tests/run-dom-commit-allocation-tests.sh DOTNET NATIVE_LIBRARY`.
+It builds isolated artifacts with `AetherDomCommitAllocationTesting=true`, defining
+`AETHER_DOM_COMMIT_ALLOCATION_TESTING` only for Core and StylePublicationTests. The
+ordinary build omits both the ledger type and call sites, and its runner checks the
+type is absent. Product feature defaults are unchanged.
+
+The internal test-only ledger reads `GC.GetAllocatedBytesForCurrentThread` directly.
+It has no delegate, observer, event, collection, formatted string, logging or throw
+inside a measured interval. It measures the nine existing public Node/Element
+mutation commit-plus-mirror/version segments, the certified import-publication
+segment, and the interaction commit. It counts successful/failed scopes and their
+bytes separately; nesting counts bytes once. Tests demand a nonzero, exact expected
+scope count so missing instrumentation cannot pass as zero.
+
+Staging, prepared-object disposal and notification are outside these publication
+intervals; their whole-operation allocation is reported separately, never claimed
+zero. Staging errors must enter no commit scope and preserve inputs. A rejected
+commit remains a failed scope with measured exception bytes. A notification error
+after publication leaves a successful commit and is not rollback. Positive GC
+allocation, empty scope, disabled collection, imbalance, nesting and TLS controls
+validate the measurement. Cold publication paths are measured first; every cold
+allocation inside a successful commit fails just like a warm allocation.
+
+The managed measurement covers GC-attributed allocation on the calling thread,
+not native allocation, JIT internals or another thread. Component and transition
+publication and any other segments outside the explicitly listed intervals remain
+**unmeasured** by these gates. Full transactional, OOM, lifetime and sanitizer tests
+remain independent requirements; allocator counts do not replace their oracles.

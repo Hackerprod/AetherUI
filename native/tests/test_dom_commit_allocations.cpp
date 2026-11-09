@@ -5,10 +5,13 @@
 int main() { std::puts("UNAVAILABLE DOM commit allocation coverage: unsupported toolchain/runtime/linkage"); return 77; }
 #else
 #include <aether/aether_dom_interaction.h>
+#include <aether/aether_transition_sync.h>
+#include "../src/animations/transition_runtime.h"
 #include "../src/dom/dom_types.h"
 #include <cstdlib>
 #include <new>
 #include <limits>
+#include <cmath>
 #include <thread>
 
 namespace ledger {
@@ -149,11 +152,45 @@ static void interaction_cases(){
     ok(aether_dom_interaction_prepare_cleanup_v1(claim,loss.claim.generation,loss.record_id,loss.record_serial,&edit));aether_dom_interaction_claim_t none=nullptr;
     ledger::reset();{ledger::Scope scope;status=aether_dom_interaction_edit_commit_v1(edit,&none,&out);}zero("interaction cleanup");ok(status);CHECK(!none&&!(f.node->state&AETHER_STATE_FOCUS));aether_dom_interaction_edit_release_v1(edit);aether_dom_interaction_claim_release_v1(claim);
 }
+static void rebind_case(){
+    Fixture f;aether_doc_t next=nullptr;ok(aether_doc_create(&next));ok(aether_doc_parse_html(next,"<body><style>#x{opacity:.7}</style><div id='x'></div></body>"));
+    int64_t foreign=0;ok(aether_style_runtime_add_stylesheet(f.runtime,"#x{height:37px}",2,"foreign",&foreign,nullptr));
+    aether_dom_style_rebind_t edit=nullptr;ok(aether_dom_style_binding_prepare_rebind_v1(f.binding,next,&edit));
+    aether_dom_style_binding_t replacement=nullptr;aether_status_t status;
+    ledger::reset();{ledger::Scope scope;status=aether_dom_style_binding_validate_rebind_v1(edit);if(status==AETHER_OK)status=aether_dom_style_binding_commit_rebind_v1(edit,&replacement);}zero("cold style binding rebind");ok(status);CHECK(replacement);
+    int64_t handle=0;int32_t present=0;uint64_t epoch=0;ok(aether_dom_style_binding_read_slot_v1(replacement,&handle,&present,&epoch));CHECK(present&&aether_style_runtime_remove_stylesheet(f.runtime,foreign));
+    aether_dom_style_rebind_destroy_v1(edit);aether_dom_style_binding_destroy_v1(replacement);aether_doc_destroy(next);
+    std::puts("DOM style binding replacement validate+commit: requests=0 (initial create remains outside this gate)");
+}
+static aether_transition_token_t transition_token(aether_transition_runtime_t runtime){aether_transition_token_t t{};ok(aether_transition_runtime_read_token(runtime,&t));return t;}
+static void transition_commit(aether_transition_candidate_t candidate,const char* label){
+    aether_transition_token_t out{};aether_status_t status;
+    ledger::reset();{ledger::Scope scope;status=aether_transition_candidate_validate(candidate);if(status==AETHER_OK)status=aether_transition_candidate_commit(candidate,&out);}zero(label);ok(status);
+    ledger::reset();{ledger::Scope scope;status=aether_transition_candidate_commit(candidate,&out);}zero("repeated transition commit");CHECK(status==AETHER_ERROR_INVALID_STATE);
+    ledger::reset();{ledger::Scope scope;aether_transition_candidate_destroy(candidate);}CHECK(!ledger::counts.invalid);
+    std::printf("Transition %s validate+swap: requests=0; teardown requests=%llu (separate)\n",label,(unsigned long long)ledger::counts.requests);
+}
+static void transition_cases(){
+    Fixture f;aether_transition_runtime_t runtime=nullptr;ok(aether_transition_runtime_create(&runtime));
+    auto before=aether_computed_style_default();auto after=before;after.opacity=0;after.transition_properties=AETHER_TRANSITION_PROPERTY_OPACITY;after.transition_duration=1;after.transition_timing=AETHER_TRANSITION_TIMING_LINEAR;
+    aether_transition_observation_t observation{f.node,&before,&after};aether_transition_candidate_t candidate=nullptr;
+    ok(aether_transition_runtime_prepare(runtime,&observation,1,nullptr,0,100,&candidate));transition_commit(candidate,"cold nonempty");
+    aether_bool_t active=0;ok(aether_transition_runtime_try_tick(runtime,600,&active));CHECK(active);float opacity=-1;CHECK(aether_transition_runtime_opacity_override(runtime,f.node,&opacity)&&std::fabs(opacity-.5f)<.001f);
+    const auto serial=transition_token(runtime).mutation_serial;
+    ok(aether_transition_runtime_prepare(runtime,nullptr,0,nullptr,0,600,&candidate));transition_commit(candidate,"active no-op");CHECK(transition_token(runtime).mutation_serial==serial);
+    ok(aether_transition_runtime_try_tick(runtime,1200,&active));CHECK(!active);ok(aether_transition_runtime_prepare(runtime,nullptr,0,nullptr,0,1200,&candidate));transition_commit(candidate,"finished no-op");
+    after.opacity=.7f;ok(aether_transition_runtime_prepare(runtime,&observation,1,nullptr,0,1200,&candidate));transition_commit(candidate,"retarget");
+    ok(aether_transition_runtime_prepare(runtime,nullptr,0,nullptr,0,1200,&candidate));ok(aether_transition_runtime_try_tick(runtime,1400,&active));const auto current=transition_token(runtime);aether_transition_token_t out{};aether_status_t status;
+    ledger::reset();{ledger::Scope scope;status=aether_transition_candidate_commit(candidate,&out);}zero("stale transition candidate");CHECK(status==AETHER_ERROR_INVALID_STATE&&transition_token(runtime).mutation_serial==current.mutation_serial);aether_transition_candidate_destroy(candidate);
+    const aether_node_t retired[]={f.node};ok(aether_transition_runtime_prepare(runtime,nullptr,0,retired,1,1400,&candidate));transition_commit(candidate,"retire");CHECK(!aether_transition_runtime_has_active(runtime));
+    ok(aether_transition_runtime_prepare(runtime,nullptr,0,nullptr,0,1400,&candidate));aether_transition_runtime_destroy(runtime);
+    ledger::reset();{ledger::Scope scope;status=aether_transition_candidate_commit(candidate,&out);}zero("disposed transition candidate");CHECK(status==AETHER_ERROR_DISPOSED);aether_transition_candidate_destroy(candidate);
+}
 int main(int argc,char**){
     // Before any calibration/warmup of the commit entry point. Cold allocations
     // fail identically to warm allocations; only ledger TLS itself is initialized.
     ledger::reset();scalar_cases();
-    controls(257u+unsigned(argc));structural_cases();interaction_cases();
-    std::printf("PASS DOM commit allocation oracle: %u typed commits plus interaction, Linux product link-unit + static C++ runtime; libc-private/CLR/Windows/macOS/component/transition publication UNMEASURED\n",commits);
+    controls(257u+unsigned(argc));structural_cases();interaction_cases();rebind_case();transition_cases();
+    std::printf("PASS DOM commit allocation oracle: %u typed commits plus interaction, Linux product link-unit + static C++ runtime; libc-private/CLR/Windows/macOS/whole host publication UNMEASURED\n",commits);
 }
 #endif

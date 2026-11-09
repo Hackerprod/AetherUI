@@ -57,11 +57,22 @@ public abstract class Node
             var binding = BindingCore;
             using (var prepared = binding?.PrepareEdit(new(DomEditKind.ReplaceText, this, Child: replacement.FirstOrDefault(), Text: text)))
             {
+#if AETHER_DOM_COMMIT_ALLOCATION_TESTING
+                DomCommitAllocationLedger.Begin(DomCommitAllocationKind.ReplaceText);
+                var allocationCommitSucceeded = false;
+                try
+                {
+#endif
                 prepared?.Commit();
                 foreach (var child in _children) child._parent = null;
                 _children = replacement;
                 foreach (var child in replacement) child._parent = this;
                 change.Publish();
+#if AETHER_DOM_COMMIT_ALLOCATION_TESTING
+                    allocationCommitSucceeded = true;
+                }
+                finally { DomCommitAllocationLedger.End(allocationCommitSucceeded); }
+#endif
             }
             CompleteMutation(binding, change.Document);
         }
@@ -122,12 +133,23 @@ public abstract class Node
         var binding = BindingCore ?? child.BindingCore;
         using (var prepared = binding?.PrepareEdit(new(DomEditKind.InsertChild, this, child, source, index)))
         {
+#if AETHER_DOM_COMMIT_ALLOCATION_TESTING
+            DomCommitAllocationLedger.Begin(DomCommitAllocationKind.InsertChild);
+            var allocationCommitSucceeded = false;
+            try
+            {
+#endif
             prepared?.Commit();
             if (sourceChildren is not null) source!._children = sourceChildren;
             _children = destination;
             child._parent = this;
             destinationChange.Publish();
             sourceChange.Publish();
+#if AETHER_DOM_COMMIT_ALLOCATION_TESTING
+                allocationCommitSucceeded = true;
+            }
+            finally { DomCommitAllocationLedger.End(allocationCommitSucceeded); }
+#endif
         }
         CompleteMutation(binding, destinationDocument, sourceChange.Document);
     }
@@ -142,10 +164,21 @@ public abstract class Node
         var binding = BindingCore;
         using (var prepared = binding?.PrepareEdit(new(DomEditKind.RemoveChild, this, child, this)))
         {
+#if AETHER_DOM_COMMIT_ALLOCATION_TESTING
+            DomCommitAllocationLedger.Begin(DomCommitAllocationKind.RemoveChild);
+            var allocationCommitSucceeded = false;
+            try
+            {
+#endif
             prepared?.Commit();
             _children = replacement;
             child._parent = null;
             change.Publish();
+#if AETHER_DOM_COMMIT_ALLOCATION_TESTING
+                allocationCommitSucceeded = true;
+            }
+            finally { DomCommitAllocationLedger.End(allocationCommitSucceeded); }
+#endif
         }
         CompleteMutation(binding, change.Document);
         return true;
@@ -158,10 +191,21 @@ public abstract class Node
         var binding = BindingCore;
         using (var prepared = binding?.PrepareEdit(new(DomEditKind.ClearChildren, this)))
         {
+#if AETHER_DOM_COMMIT_ALLOCATION_TESTING
+            DomCommitAllocationLedger.Begin(DomCommitAllocationKind.ClearChildren);
+            var allocationCommitSucceeded = false;
+            try
+            {
+#endif
             prepared?.Commit();
             foreach (var child in _children) child._parent = null;
             _children = [];
             change.Publish();
+#if AETHER_DOM_COMMIT_ALLOCATION_TESTING
+                allocationCommitSucceeded = true;
+            }
+            finally { DomCommitAllocationLedger.End(allocationCommitSucceeded); }
+#endif
         }
         CompleteMutation(binding, change.Document);
     }
@@ -240,9 +284,20 @@ public sealed class TextNode : Node
             var binding = BindingCore;
             using (var prepared = binding?.PrepareEdit(new(DomEditKind.SetText, this, Text: text)))
             {
+#if AETHER_DOM_COMMIT_ALLOCATION_TESTING
+                DomCommitAllocationLedger.Begin(DomCommitAllocationKind.Text);
+                var allocationCommitSucceeded = false;
+                try
+                {
+#endif
                 prepared?.Commit();
                 _text = text;
                 change.Publish();
+#if AETHER_DOM_COMMIT_ALLOCATION_TESTING
+                    allocationCommitSucceeded = true;
+                }
+                finally { DomCommitAllocationLedger.End(allocationCommitSucceeded); }
+#endif
             }
             CompleteMutation(binding, change.Document);
         }

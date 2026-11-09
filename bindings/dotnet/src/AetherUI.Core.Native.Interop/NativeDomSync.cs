@@ -43,7 +43,7 @@ internal static class NativeDomCodec
     internal static byte[] Encode(string value) { Validate(value); return Strict.GetBytes(value); }
     internal static unsafe string Decode(NativeDomString value)
     {
-        if (value.Length > int.MaxValue || (value.Length != 0 && value.Data == IntPtr.Zero))
+        if (value.Length > int.MaxValue || value.Data == IntPtr.Zero)
             throw new InvalidOperationException("Invalid native DOM string buffer.");
         var result = Strict.GetString(new ReadOnlySpan<byte>((void*)value.Data, (int)value.Length));
         Validate(result);

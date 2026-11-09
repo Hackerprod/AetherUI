@@ -8,6 +8,19 @@ using AetherUI.Primitives;
 using AetherUI.Rendering;
 using AetherUI.Runtime;
 
+#if AETHER_DOM_COMMIT_ALLOCATION_TESTING
+if (args.Contains("--commit-allocations"))
+{
+    DomCommitAllocationTests.Run();
+    return;
+}
+#else
+if (typeof(Node).Assembly.GetType("AetherUI.Dom.DomCommitAllocationLedger") is not null)
+    throw new InvalidOperationException("Production assembly unexpectedly contains the test allocation ledger.");
+if (args.Contains("--commit-allocations"))
+    throw new InvalidOperationException("Allocation test requires AetherDomCommitAllocationTesting=true.");
+#endif
+
 CssDiagnosticsTransactionTests.Run();
 ComponentRenderCandidateTests.Run();
 DomStyleBindingInteropTests.Run();

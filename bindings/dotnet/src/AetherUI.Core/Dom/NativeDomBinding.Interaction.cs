@@ -64,6 +64,12 @@ internal sealed partial class NativeDomBinding
         }
         internal void Commit()
         {
+#if AETHER_DOM_COMMIT_ALLOCATION_TESTING
+            DomCommitAllocationLedger.Begin(DomCommitAllocationKind.Interaction);
+            var allocationCommitSucceeded = false;
+            try
+            {
+#endif
             _native.Validate(); _bookkeeping?.Validate();
             if (_owner._token != _baseToken || (_mirror && (_element.StateCore != _before ||
                 !ReferenceEquals(_element.NativeRecordCore, _record) || !ReferenceEquals(_record!.Owner, _owner))))
@@ -83,6 +89,11 @@ internal sealed partial class NativeDomBinding
                 }
                 _owner._token = token;
             }
+#if AETHER_DOM_COMMIT_ALLOCATION_TESTING
+                allocationCommitSucceeded = true;
+            }
+            finally { DomCommitAllocationLedger.End(allocationCommitSucceeded); }
+#endif
         }
         public void Dispose()
         {

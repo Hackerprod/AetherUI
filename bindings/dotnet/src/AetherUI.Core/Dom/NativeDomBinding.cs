@@ -216,6 +216,12 @@ internal sealed partial class NativeDomBinding : IDomBinding, IDisposable
                     throw new InvalidOperationException("Native DOM changed during snapshot preparation.");
                 stage.Bookkeeping.Validate();
             }
+#if AETHER_DOM_COMMIT_ALLOCATION_TESTING
+            DomCommitAllocationLedger.Begin(DomCommitAllocationKind.Import);
+            var allocationCommitSucceeded = false;
+            try
+            {
+#endif
             // No callbacks, allocations, virtual node methods or fallible lookups below.
             foreach (var item in imported)
             {
@@ -240,6 +246,11 @@ internal sealed partial class NativeDomBinding : IDomBinding, IDisposable
                 stage.Version.Publish(); stage.Bookkeeping.Publish();
             }
             committed = true;
+#if AETHER_DOM_COMMIT_ALLOCATION_TESTING
+                allocationCommitSucceeded = true;
+            }
+            finally { DomCommitAllocationLedger.End(allocationCommitSucceeded); }
+#endif
 
             Node Resolve(ulong identity) => all.TryGetValue(identity, out var found) ? found.Node :
                 throw new InvalidOperationException("Snapshot references an uncoordinated native owner.");

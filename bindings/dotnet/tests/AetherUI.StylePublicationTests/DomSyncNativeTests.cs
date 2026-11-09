@@ -5,6 +5,7 @@ internal static class DomSyncNativeTests
 {
     internal static void Run()
     {
+        CertifiedOutputStringsRejectNull();
         NativeR2AndTypedWrites();
         TypedNonRoundtripAndDomain();
         AdoptionAndRetirement();
@@ -16,6 +17,33 @@ internal static class DomSyncNativeTests
         ConnectedToBoundDetachedParent();
         Console.WriteLine("PASS native DOM adapter R2, typed inputs, ownership and retirement");
     }
+    private static void CertifiedOutputStringsRejectNull()
+    {
+        Throws<InvalidOperationException>(() => NativeDomCodec.Decode(default));
+        Throws<InvalidOperationException>(() => NativeDomCodec.Decode(new() { Data = IntPtr.Zero, Length = 1 }));
+        var bytes = System.Runtime.InteropServices.Marshal.AllocHGlobal(1);
+        try
+        {
+            System.Runtime.InteropServices.Marshal.WriteByte(bytes, 0);
+            Equal(string.Empty, NativeDomCodec.Decode(new() { Data = bytes, Length = 0 }));
+            Throws<ArgumentException>(() => NativeDomCodec.Decode(new() { Data = bytes, Length = 1 }));
+            System.Runtime.InteropServices.Marshal.WriteByte(bytes, 0xff);
+            Throws<System.Text.DecoderFallbackException>(() => NativeDomCodec.Decode(new() { Data = bytes, Length = 1 }));
+        }
+        finally { System.Runtime.InteropServices.Marshal.FreeHGlobal(bytes); }
+        // Absent optional values are never decoded; empty present values have a
+        // real non-null span, including empty tags/text of document/non-elements.
+        using var document = NativeDomDocument.Parse("<input value=''><i></i>");
+        using var snapshot = NativeDomSnapshot.Acquire(document);
+        var input = snapshot.Nodes.Single(node => node.Tag == "input");
+        var other = snapshot.Nodes.Single(node => node.Tag == "i");
+        Equal(string.Empty, input.AuthoredValue!); True(input.RuntimeValue is null);
+        True(other.AuthoredValue is null && other.RuntimeValue is null);
+        True(snapshot.Nodes.Any(node => node.Tag == string.Empty));
+        // Native status is checked before reading any returned snapshot/string.
+        Throws<InvalidOperationException>(() => { using var invalid = NativeDomSnapshot.Acquire(IntPtr.Zero); });
+    }
+
     private static void NativeR2AndTypedWrites()
     {
         using var dom = DomInterop.Parse("<html><body><input id='a' value='base'></body></html>");
