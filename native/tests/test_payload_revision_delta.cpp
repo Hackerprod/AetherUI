@@ -56,6 +56,23 @@ static MapVersionRef map(const StyleRevisionRef& revision) {
     MapVersionRef result;ok(make_map_version(in,result));return result;
 }
 int main() {
+    {
+        Fixture ledger(3);
+        const auto first=freeze({},ledger.input(1));
+        ledger.doc.identity->style_tree_epoch=first->style_tree_epoch();
+        ledger.nodes[1]->state=AETHER_STATE_HOVER;
+        ++ledger.doc.identity->mutation_epoch;
+        const auto input=ledger.input(2);
+        CertifiedRevisionDeltaRef certificate;ok(certify_full_payload_revision(first,input,certificate));
+        need(certificate->changed_payloads()==0,"input-only state does not invent a payload delta");
+        StyleRevisionRef second;ok(freeze_certified_revision(certificate,second));
+        const auto key=reinterpret_cast<uintptr_t>(ledger.nodes[1].get());
+        const auto* old=first->directory().find(key);const auto* current=second->directory().find(key);
+        need(old->has_committed_state&&old->committed_state==0,"old committed ledger immutable");
+        need(current->has_committed_state&&current->committed_state==AETHER_STATE_HOVER,"new state committed separately");
+        need(old->payload==current->payload,"input-only ledger shares semantic payload");
+        need(second->entries()[1].impact()==0,"input-only ledger has no visual impact");
+    }
     Fixture f(512);
     // Equal raw token addresses with unrelated control blocks are not owners.
     // Rejection is checked while the real DOM and tokens are still alive.

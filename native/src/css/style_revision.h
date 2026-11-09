@@ -49,7 +49,14 @@ struct StyleRevisionInput {
     std::vector<RetiredEntryInput> retired;
 };
 struct PayloadRevisionEntry { aether_node_s* node=nullptr; FrozenNodePayloadRef payload; uint32_t impact=0; };
-struct PayloadDirectoryEntry { FrozenNodePayloadRef payload; size_t position=0; };
+// Committed input is deliberately independent from style payload equality.
+// A state bit with no matching rule updates only this persistent directory leaf.
+struct PayloadDirectoryEntry {
+    FrozenNodePayloadRef payload;
+    size_t position=0;
+    int32_t committed_state=0;
+    bool has_committed_state=false; // Imported snapshots cannot certify input history.
+};
 struct PayloadManifestEntry { aether_node_s* node=nullptr; FrozenNodePayloadRef payload; };
 using PayloadDirectory=PersistentIndex<PayloadDirectoryEntry>;
 using PayloadManifest=PersistentIndex<PayloadManifestEntry>;
@@ -71,16 +78,17 @@ aether_status_t freeze_certified_revision(const CertifiedRevisionDeltaRef&,Style
 aether_status_t freeze_style_revision(const StyleRevisionInput&,StyleRevisionRef&) noexcept;
 class CertifiedRevisionDelta {
     mutable std::weak_ptr<const CertifiedRevisionDelta> self_;
-    struct Change { size_t position; aether_node_s* node; FrozenNodePayloadRef payload; };
+    struct Change { size_t position; aether_node_s* node; FrozenNodePayloadRef payload; int32_t state; };
     const StyleRevisionRef base_;
     const FullPayloadRevisionInput header_; // entries deliberately empty: no retained N-vector on stable-order delta.
     const bool stable_order_;
     const uint64_t captured_mutation_,captured_structure_,captured_style_tree_;
     const std::vector<Change> changes_;
+    const std::vector<std::pair<uintptr_t,int32_t>> state_changes_;
     const std::vector<std::pair<uintptr_t,uint32_t>> impacts_;
     const ImmutableArray<FrozenRetiredNode> retired_;
     CertifiedRevisionDelta(StyleRevisionRef,FullPayloadRevisionInput,bool,std::vector<Change>,
-        std::vector<std::pair<uintptr_t,uint32_t>>,ImmutableArray<FrozenRetiredNode>);
+        std::vector<std::pair<uintptr_t,int32_t>>,std::vector<std::pair<uintptr_t,uint32_t>>,ImmutableArray<FrozenRetiredNode>);
     friend aether_status_t certify_full_payload_revision(const StyleRevisionRef&,const FullPayloadRevisionInput&,CertifiedRevisionDeltaRef&) noexcept;
     friend aether_status_t freeze_certified_revision(const CertifiedRevisionDeltaRef&,StyleRevisionRef&) noexcept;
     friend class ::style_revision_s;

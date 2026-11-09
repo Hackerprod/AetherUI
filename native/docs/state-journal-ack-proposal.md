@@ -51,3 +51,13 @@ Interleaved two-runtime FULL/state publications; same-epoch and older-epoch base
 ## Trade-off
 
 The single floor sacrifices cross-runtime incremental hit rate in exchange for bounded memory and a simple proof. It does not promise a multi-consumer retention protocol. A future per-runtime watermark scheme would need a separate reviewed design.
+
+## Revision 2: monotonicity poison and synchronization
+
+`floor_epoch` is monotonic for the lifetime of a document identity. There is no epoch era/reset in this change. The journal gains a separate sticky `monotonicity_lost` bit, checked on EVERY append, even when the first visible loss is already overflow or unknown. Any zero epoch, noncontiguous epoch (including forward discontinuity), or wrap from UINT64_MAX poisons monotonicity permanently. Ordinary overflow and unknown mutation remain recoverable through successful FULL; epoch discontinuity is not.
+
+Acknowledgment additionally requires `!monotonicity_lost`, captured input epoch equal to current/last epoch, and input epoch >= existing floor. If any check fails, it does not clear records/loss or lower the floor. A valid FULL publication may still finish, but the journal remains unusable for incremental resolution for that document identity. A new document identity starts a new journal. No amount of FULL publications repairs an old poisoned identity. This intentionally sacrifices optimization after internal epoch corruption rather than attempting to infer a new era.
+
+Tests must separately cover overflow → subsequent wrap → FULL, because preserving only the first JournalLoss would miss the wrap. Also cover floor already greater than candidate input, zero epoch, UINT64_MAX→0, forward gap, and repeated FULL after poison; verify floor never decreases and no incremental certificate can be produced.
+
+The document is not concurrently accessed. The existing native ABI contract (README lines 251–255) requires callers to serialize access to one document externally. Runtime owner-thread checks remain in addition to this contract; they are not a document mutex. Interleaved runtimes in this proposal mean serialized calls, including reentrancy after publication, not simultaneous mutation from multiple threads. Introducing concurrent document access is outside scope.

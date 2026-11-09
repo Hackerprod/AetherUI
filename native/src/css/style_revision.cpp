@@ -83,9 +83,9 @@ style_revision_s::style_revision_s(const CertifiedRevisionDelta& in,PayloadDirec
     backing_(),entries_(),changes_(),retired_nodes_(in.retired_),directory_(std::move(directory)),manifest_(std::move(manifest)),impacts_(std::move(impacts)){}
 namespace aether::style {
 CertifiedRevisionDelta::CertifiedRevisionDelta(StyleRevisionRef base,FullPayloadRevisionInput header,bool stable,std::vector<Change> changes,
-    std::vector<std::pair<uintptr_t,uint32_t>> impacts,ImmutableArray<FrozenRetiredNode> retired):
+    std::vector<std::pair<uintptr_t,int32_t>> states,std::vector<std::pair<uintptr_t,uint32_t>> impacts,ImmutableArray<FrozenRetiredNode> retired):
     base_(std::move(base)),header_(std::move(header)),stable_order_(stable),captured_mutation_(header_.document_lifetime->mutation_epoch),
-    captured_structure_(header_.document_lifetime->structure_epoch),captured_style_tree_(header_.document_lifetime->style_tree_epoch),changes_(std::move(changes)),impacts_(std::move(impacts)),retired_(std::move(retired)){}
+    captured_structure_(header_.document_lifetime->structure_epoch),captured_style_tree_(header_.document_lifetime->style_tree_epoch),changes_(std::move(changes)),state_changes_(std::move(states)),impacts_(std::move(impacts)),retired_(std::move(retired)){}
 aether_status_t certify_full_payload_revision(const StyleRevisionRef& base,const FullPayloadRevisionInput& in,CertifiedRevisionDeltaRef& out)noexcept{
     if(!in.document||!in.document_lifetime||!in.generation||!in.document_lifetime->alive||!in.document_lifetime->owner||
         in.document_identity!=reinterpret_cast<uintptr_t>(in.document_lifetime.get())||in.document->values().identity!=in.document_identity||
@@ -108,10 +108,13 @@ aether_status_t certify_full_payload_revision(const StyleRevisionRef& base,const
         const bool same_context=base&&context_equal(base->document()->values(),in.document->values())&&
             std::memcmp(&base->environment(),&in.environment,sizeof(in.environment))==0;
         std::vector<CertifiedRevisionDelta::Change> changes;
+        std::vector<std::pair<uintptr_t,int32_t>> states;
         std::vector<std::pair<uintptr_t,uint32_t>> impacts;
         for(size_t i=0;i<in.entries.size();++i){const auto& entry=in.entries[i];
             const auto* old=stable?base->directory().find(reinterpret_cast<uintptr_t>(entry.node)):nullptr;
-            if(!old||!same_context||!payload_equivalent(*old->payload,*entry.payload))changes.push_back({i,entry.node,entry.payload});
+            if(!old||!same_context||!payload_equivalent(*old->payload,*entry.payload))changes.push_back({i,entry.node,entry.payload,entry.node->state});
+            else if(!old->has_committed_state||old->committed_state!=entry.node->state)
+                states.push_back({reinterpret_cast<uintptr_t>(entry.node),entry.node->state});
             if(entry.impact)impacts.push_back({i,entry.impact});
         }
         std::vector<FrozenNodePayloadRef> retired;
@@ -129,7 +132,7 @@ aether_status_t certify_full_payload_revision(const StyleRevisionRef& base,const
         FullPayloadRevisionInput header;header.contextual=in.contextual;header.generation=in.generation;header.document_identity=in.document_identity;
         header.input_epoch=in.input_epoch;header.structure_epoch=in.structure_epoch;header.style_tree_epoch=in.style_tree_epoch;
         header.environment=in.environment;header.document=in.document;header.document_lifetime=in.document_lifetime;
-        CertifiedRevisionDeltaRef result(new const CertifiedRevisionDelta(base,std::move(header),stable,std::move(changes),std::move(impacts),std::move(retired_nodes)));
+        CertifiedRevisionDeltaRef result(new const CertifiedRevisionDelta(base,std::move(header),stable,std::move(changes),std::move(states),std::move(impacts),std::move(retired_nodes)));
         result->self_=result;out=std::move(result);return AETHER_OK;
     }catch(const std::bad_alloc&){return AETHER_ERROR_OUT_OF_MEMORY;}
 }
@@ -143,12 +146,19 @@ aether_status_t freeze_certified_revision(const CertifiedRevisionDeltaRef& certi
     try {
         PayloadDirectory directory;PayloadManifest manifest;
         if(in.stable_order_){directory=in.base_->directory();manifest=in.base_->manifest();
-            for(const auto& change:in.changes_){directory=directory.set(reinterpret_cast<uintptr_t>(change.node),{change.payload,change.position});
-                manifest=manifest.set(change.position,{change.node,change.payload});}}
+            for(const auto& change:in.changes_){directory=directory.set(reinterpret_cast<uintptr_t>(change.node),{change.payload,change.position,change.state,true});
+                manifest=manifest.set(change.position,{change.node,change.payload});}
+            for(const auto& change:in.state_changes_) {
+                const auto* old=directory.find(change.first);
+                if(!old)return AETHER_ERROR_INVALID_STATE;
+                auto updated=*old;updated.committed_state=change.second;updated.has_committed_state=true;
+                directory=directory.set(change.first,updated);
+            }
+        }
         else {
             std::vector<PayloadDirectory::Entry> nodes;std::vector<PayloadManifest::Entry> order;
             nodes.reserve(in.changes_.size());order.reserve(in.changes_.size());
-            for(const auto& change:in.changes_){nodes.push_back({reinterpret_cast<uintptr_t>(change.node),{change.payload,change.position}});
+            for(const auto& change:in.changes_){nodes.push_back({reinterpret_cast<uintptr_t>(change.node),{change.payload,change.position,change.state,true}});
                 order.push_back({change.position,{change.node,change.payload}});}
             directory=PayloadDirectory::build(std::move(nodes));manifest=PayloadManifest::build(std::move(order));
         }
