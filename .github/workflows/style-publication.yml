@@ -1,6 +1,8 @@
 name: Managed style publication contracts
 on:
   push:
+    branches-ignore:
+      - 'backup/**'
   pull_request:
   workflow_dispatch:
 permissions:
