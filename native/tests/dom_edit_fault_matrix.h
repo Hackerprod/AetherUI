@@ -4,6 +4,7 @@
 // exercise each preparation family. Capture is outside the injected interval.
 #include <aether/aether_dom_interaction.h>
 #include <aether/aether_state_style.h>
+#include "dom_lifetime_check.h"
 
 namespace dom_fault_matrix {
 #if defined(AETHER_DOM_FAULT_LINK_UNIT)
@@ -69,22 +70,22 @@ struct Fixture {
     aether_doc_t doc=nullptr,destination=nullptr,empty=nullptr;
     aether_style_runtime_t runtime=nullptr,destination_runtime=nullptr;
     aether_dom_style_binding_t binding=nullptr,destination_binding=nullptr;
-    aether_dom_interaction_owner_t owner=nullptr;
-    aether_dom_interaction_claim_t claim=nullptr;
+    aether_dom_interaction_owner_t owner=nullptr,destination_owner=nullptr;
+    aether_dom_interaction_claim_t claim=nullptr,destination_claim=nullptr;
     aether_node_t input=nullptr,other=nullptr,style=nullptr,target=nullptr;
     int callbacks=0;
     static void diagnostic(const char*,const char*,const char*,const char*,void* data){++*static_cast<int*>(data);}
     explicit Fixture(int mode=0){
         CHECK(aether_doc_create(&doc)==AETHER_OK&&aether_doc_create(&destination)==AETHER_OK&&aether_doc_create(&empty)==AETHER_OK);
         CHECK(aether_doc_parse_html(doc,"<body><style id='sheet'>#x{opacity:.2}</style><input id='x' value='base' onblur='old route'><div id='other'><span>child</span></div></body>")==AETHER_OK);
-        CHECK(aether_doc_parse_html(destination,mode==17||mode==18?"<body><style>section{opacity:.6}</style><section id='target'><input id='x'></section></body>":"<body><section id='target'></section></body>")==AETHER_OK);
+        CHECK(aether_doc_parse_html(destination,(mode==17||mode==18||mode==21||mode==22)?"<body><style>section{opacity:.6}</style><section id='target'><input id='x'></section></body>":"<body><section id='target'></section></body>")==AETHER_OK);
         input=aether_doc_get_element_by_id(doc,"x");other=aether_doc_get_element_by_id(doc,"other");style=aether_doc_get_element_by_id(doc,"sheet");target=aether_doc_get_element_by_id(destination,"target");
         CHECK(aether_style_runtime_create(nullptr,nullptr,nullptr,nullptr,&runtime)==AETHER_OK);
         aether_style_runtime_set_diagnostics_callback(runtime,diagnostic,&callbacks);
         CHECK(aether_dom_style_binding_create_v1(doc,runtime,&binding)==AETHER_OK);
-        if(mode==17||mode==18){
+        if(mode==17||mode==18||mode==21||mode==22){
             destination_runtime=runtime;
-            if(mode==18){CHECK(aether_style_runtime_create(nullptr,nullptr,nullptr,nullptr,&destination_runtime)==AETHER_OK);aether_style_runtime_set_diagnostics_callback(destination_runtime,diagnostic,&callbacks);}
+            if(mode==18||mode==22){CHECK(aether_style_runtime_create(nullptr,nullptr,nullptr,nullptr,&destination_runtime)==AETHER_OK);aether_style_runtime_set_diagnostics_callback(destination_runtime,diagnostic,&callbacks);}
             int64_t foreign=0;CHECK(aether_style_runtime_add_stylesheet(runtime,"section{width:37px}",2,"foreign",&foreign,nullptr)==AETHER_OK);
             CHECK(aether_dom_style_binding_create_v1(destination,destination_runtime,&destination_binding)==AETHER_OK);
             CHECK(aether_style_runtime_add_stylesheet(destination_runtime,"section{height:23px}",2,"foreign-destination",&foreign,nullptr)==AETHER_OK);
@@ -93,8 +94,17 @@ struct Fixture {
         aether_dom_interaction_edit_t e=nullptr;auto t=token(input);aether_dom_token_v1_t out{};
         CHECK(aether_dom_interaction_prepare_acquire_v1(owner,&t,input,AETHER_STATE_FOCUS,11,&e)==AETHER_OK);
         CHECK(aether_dom_interaction_edit_commit_v1(e,&claim,&out)==AETHER_OK);aether_dom_interaction_edit_release_v1(e);
+        if(destination_binding){
+            CHECK(aether_dom_interaction_owner_create_v1(destination,destination_binding,2,&destination_owner)==AETHER_OK);
+            auto* focused=aether_doc_get_element_by_id(destination,"x");
+            CHECK(aether_element_set_attribute(focused,"onblur","destination frozen route must survive source failure")==AETHER_OK);
+            e=nullptr;t=token(focused);
+            CHECK(aether_dom_interaction_prepare_acquire_v1(destination_owner,&t,focused,AETHER_STATE_FOCUS,22,&e)==AETHER_OK);
+            CHECK(aether_dom_interaction_edit_commit_v1(e,&destination_claim,&out)==AETHER_OK);aether_dom_interaction_edit_release_v1(e);
+            if(mode==21||mode==22){CHECK(aether_node_remove_child(target,focused)==AETHER_OK);CHECK(aether_node_append_child(target,focused)==AETHER_OK);}
+        }
     }
-    ~Fixture(){aether_dom_interaction_owner_dispose_v1(owner);aether_dom_interaction_claim_release_v1(claim);aether_dom_interaction_owner_release_v1(owner);aether_dom_style_binding_destroy_v1(binding);aether_dom_style_binding_destroy_v1(destination_binding);if(destination_runtime&&destination_runtime!=runtime)aether_style_runtime_destroy(destination_runtime);aether_style_runtime_destroy(runtime);aether_doc_destroy(doc);aether_doc_destroy(destination);aether_doc_destroy(empty);}
+    ~Fixture(){aether_dom_interaction_owner_dispose_v1(destination_owner);aether_dom_interaction_claim_release_v1(destination_claim);aether_dom_interaction_owner_release_v1(destination_owner);aether_dom_interaction_owner_dispose_v1(owner);aether_dom_interaction_claim_release_v1(claim);aether_dom_interaction_owner_release_v1(owner);aether_dom_style_binding_destroy_v1(binding);aether_dom_style_binding_destroy_v1(destination_binding);if(destination_runtime&&destination_runtime!=runtime)aether_style_runtime_destroy(destination_runtime);aether_style_runtime_destroy(runtime);aether_doc_destroy(doc);aether_doc_destroy(destination);aether_doc_destroy(empty);}
 };
 static aether_dom_edit_spec_v1_t configure(Fixture& f,int mode,aether_dom_node_spec_v1_t (&nodes)[2]){
     aether_dom_edit_spec_v1_t s{};s.target=f.input;s.index=-1;
@@ -116,7 +126,7 @@ static aether_dom_edit_spec_v1_t configure(Fixture& f,int mode,aether_dom_node_s
         case 14:s.kind=AETHER_DOM_SET_ATTRIBUTE;s.name=str("onblur");s.value=str("new route requiring allocation before disconnect");break;
         case 15:s.kind=AETHER_DOM_REMOVE_ATTRIBUTE;s.name=str("value");break;
         case 16:s.kind=AETHER_DOM_SET_RUNTIME_VALUE;s.value_present=0;break;
-        case 17:case 18:s.kind=AETHER_DOM_INSERT_CHILD;s.target=f.target;s.child=f.style;break;
+        case 17:case 18:case 21:case 22:s.kind=AETHER_DOM_INSERT_CHILD;s.target=f.target;s.child=f.style;break;
         case 19:case 20:
             {auto parent=f.input->parent;CHECK(aether_node_remove_child(parent,f.input)==AETHER_OK);
             if(mode==20){CHECK(aether_node_append_child(parent,f.input)==AETHER_OK);s.kind=AETHER_DOM_INSERT_CHILD;s.target=f.target;s.child=f.input;}
@@ -186,7 +196,35 @@ using Lifetimes=std::vector<std::weak_ptr<EditableNodeStorage>>;
 static void remember(const Fixture& f,Lifetimes& lifetimes){
     for(auto doc:{f.doc,f.destination,f.empty}){lifetimes.push_back(doc->editable_storage);for(const auto& entry:doc->editable_nodes)lifetimes.push_back(entry.second);}
 }
+struct ClaimImage {
+    aether_dom_interaction_claim_t handle;
+    int32_t pending=0;
+    aether_dom_interaction_claim_info_v1_t claim{};
+    aether_dom_interaction_loss_v1_t loss{};
+    std::string handler;
+    explicit ClaimImage(aether_dom_interaction_claim_t value):handle(value){
+        if(!handle)return;
+        CHECK(aether_dom_interaction_claim_read_v1(handle,&claim)==AETHER_OK);
+        CHECK(aether_dom_interaction_claim_read_loss_v1(handle,&pending,&loss)==AETHER_OK);
+        if(pending&&loss.handler_present)handler=copied(loss.handler);
+    }
+    static void same(const aether_dom_interaction_claim_info_v1_t& a,const aether_dom_interaction_claim_info_v1_t& b){
+        CHECK(a.node==b.node&&a.node_identity==b.node_identity&&a.owner_identity==b.owner_identity&&a.host_identity==b.host_identity&&
+            a.binding_identity==b.binding_identity&&a.generation==b.generation&&a.registry_identity==b.registry_identity&&
+            a.disconnect_serial==b.disconnect_serial&&a.state_bit_write_serial==b.state_bit_write_serial&&a.bit==b.bit&&a.current==b.current);
+    }
+    void unchanged() const {
+        if(!handle)return;int32_t now_pending=0;aether_dom_interaction_claim_info_v1_t now{};aether_dom_interaction_loss_v1_t record{};
+        CHECK(aether_dom_interaction_claim_read_v1(handle,&now)==AETHER_OK);same(claim,now);
+        CHECK(aether_dom_interaction_claim_read_loss_v1(handle,&now_pending,&record)==AETHER_OK&&now_pending==pending);
+        if(!pending)return;same(loss.claim,record.claim);
+        CHECK(loss.record_id==record.record_id&&loss.record_serial==record.record_serial&&loss.disconnect_serial==record.disconnect_serial&&
+            loss.state_bit_write_serial==record.state_bit_write_serial&&loss.reason==record.reason&&loss.handler_present==record.handler_present);
+        CHECK(!record.handler_present||copied(record.handler)==handler);
+    }
+};
 static bool prepare_attempt(int mode,long point,Lifetimes& lifetimes){
+        const DomLifetimeCheck instances;
         Fixture f(mode);aether_dom_node_spec_v1_t nodes[2]{};auto s=configure(f,mode,nodes);
         full_style(f.runtime,f.doc);
         remember(f,lifetimes);
@@ -195,10 +233,7 @@ static bool prepare_attempt(int mode,long point,Lifetimes& lifetimes){
         CHECK(aether_dom_style_binding_read_slot_v1(f.binding,&slot_handle,&slot_present,&slot_epoch)==AETHER_OK);
         int64_t destination_handle=0;int32_t destination_present=0;uint64_t destination_epoch=0;
         if(f.destination_binding)CHECK(aether_dom_style_binding_read_slot_v1(f.destination_binding,&destination_handle,&destination_present,&destination_epoch)==AETHER_OK);
-        int32_t pending=0;aether_dom_interaction_loss_v1_t prior_loss{};aether_dom_interaction_claim_info_v1_t prior_claim{};
-        CHECK(aether_dom_interaction_claim_read_loss_v1(f.claim,&pending,&prior_loss)==AETHER_OK);
-        CHECK(aether_dom_interaction_claim_read_v1(f.claim,&prior_claim)==AETHER_OK);
-        const std::string prior_handler=pending&&prior_loss.handler_present?copied(prior_loss.handler):"";
+        const ClaimImage source_claim(f.claim),destination_claim(f.destination_claim);
         aether_style_publication_token_t publication{};publication.struct_size=sizeof(publication);
         CHECK(aether_style_runtime_read_publication_token(f.runtime,&publication)==AETHER_OK&&publication.inputs_current);
         auto unchanged=[&]{before.unchanged();destination.unchanged();empty.unchanged();
@@ -209,11 +244,7 @@ static bool prepare_attempt(int mode,long point,Lifetimes& lifetimes){
             CHECK(aether_style_runtime_read_publication_token(f.runtime,&current)==AETHER_OK&&current.inputs_current);
             CHECK(current.revision_identity==publication.revision_identity&&current.generation==publication.generation&&current.sheet_epoch==publication.sheet_epoch&&current.registry_identity==publication.registry_identity);
             if(f.destination_binding){CHECK(aether_dom_style_binding_read_slot_v1(f.destination_binding,&handle,&present_slot,&epoch)==AETHER_OK);CHECK(handle==destination_handle&&present_slot==destination_present&&epoch==destination_epoch);}
-            int32_t present=0;aether_dom_interaction_loss_v1_t loss{};CHECK(aether_dom_interaction_claim_read_loss_v1(f.claim,&present,&loss)==AETHER_OK&&present==pending);
-            aether_dom_interaction_claim_info_v1_t info{};CHECK(aether_dom_interaction_claim_read_v1(f.claim,&info)==AETHER_OK);
-            CHECK(info.current==prior_claim.current&&info.generation==prior_claim.generation&&info.registry_identity==prior_claim.registry_identity&&info.state_bit_write_serial==prior_claim.state_bit_write_serial);
-            if(pending){CHECK(loss.record_id==prior_loss.record_id&&loss.record_serial==prior_loss.record_serial&&loss.disconnect_serial==prior_loss.disconnect_serial&&loss.state_bit_write_serial==prior_loss.state_bit_write_serial&&loss.reason==prior_loss.reason&&loss.handler_present==prior_loss.handler_present&&loss.claim.generation==prior_loss.claim.generation&&loss.claim.registry_identity==prior_loss.claim.registry_identity);
-                CHECK(!loss.handler_present||copied(loss.handler)==prior_handler);}
+            source_claim.unchanged();destination_claim.unchanged();
         };
         auto t=token(s.target);aether_dom_edit_t candidate=nullptr;failure=point;
         const auto status=aether_dom_prepare_edit_v1(&t,&s,&candidate);failure=-1;
@@ -234,7 +265,7 @@ static bool prepare_attempt(int mode,long point,Lifetimes& lifetimes){
 }
 static void all_prepare_families(){
 #if defined(AETHER_DOM_FAULT_LINK_UNIT)
-    for(int mode=0;mode<21;++mode){Lifetimes initial;CHECK(prepare_attempt(mode,LONG_MAX,initial));
+    for(int mode=0;mode<23;++mode){Lifetimes initial;CHECK(prepare_attempt(mode,LONG_MAX,initial));
         const auto count=last_attempt_counts.requests;CHECK(count>0&&!last_attempt_counts.injected_failures);
         for(const auto& weak:initial)CHECK(weak.expired());uint64_t failures=0,recovered=0;
         for(uint64_t point=0;point<count;++point){Lifetimes lifetimes;const bool completed=prepare_attempt(mode,static_cast<long>(point),lifetimes);
@@ -245,7 +276,7 @@ static void all_prepare_families(){
             (unsigned long long)count,(unsigned long long)failures,(unsigned long long)recovered);
     }
 #else
-    for(int mode=0;mode<21;++mode){bool success=false;long failures=0;
+    for(int mode=0;mode<23;++mode){bool success=false;long failures=0;
         for(long point=0;point<3000;++point){Lifetimes lifetimes;const auto completed=prepare_attempt(mode,point,lifetimes);
             // No oracle or fixture pins remain here. Every initial/final known
             // editable storage must have died after its final owner is released.
@@ -311,11 +342,11 @@ static bool snapshot_attempt(int mode,long point,Lifetimes& lifetimes,aether_dom
 }
 static void snapshot_allocations(){
 #if defined(AETHER_DOM_FAULT_LINK_UNIT)
-    for(int mode=0;mode<3;++mode){Lifetimes initial;aether_dom_snapshot_t calibration=nullptr;
+    for(int mode=0;mode<3;++mode){const DomLifetimeCheck calibration_instances;Lifetimes initial;aether_dom_snapshot_t calibration=nullptr;
         CHECK(snapshot_attempt(mode,LONG_MAX,initial,calibration));const auto count=last_attempt_counts.requests;
         CHECK(count>0&&!last_attempt_counts.injected_failures);aether_dom_snapshot_destroy_v1(calibration);
         for(const auto& weak:initial)CHECK(weak.expired());uint64_t failures=0,recovered=0;
-        for(uint64_t point=0;point<count;++point){Lifetimes lifetimes;aether_dom_snapshot_t snapshot=nullptr;
+        for(uint64_t point=0;point<count;++point){const DomLifetimeCheck instances;Lifetimes lifetimes;aether_dom_snapshot_t snapshot=nullptr;
             const bool complete=snapshot_attempt(mode,static_cast<long>(point),lifetimes,snapshot);
             CHECK(last_attempt_counts.injected_failures==1&&last_attempt_counts.failed_ordinal==point);
             if(complete){CHECK(snapshot&&!lifetimes.front().expired());(void)snapshot_records(snapshot);aether_dom_snapshot_destroy_v1(snapshot);++recovered;}else ++failures;
@@ -326,7 +357,7 @@ static void snapshot_allocations(){
     }
 #else
     for(int mode=0;mode<3;++mode){bool succeeded=false;long failures=0;
-        for(long point=0;point<1000;++point){Lifetimes lifetimes;aether_dom_snapshot_t snapshot=nullptr;
+        for(long point=0;point<1000;++point){const DomLifetimeCheck instances;Lifetimes lifetimes;aether_dom_snapshot_t snapshot=nullptr;
             const bool complete=snapshot_attempt(mode,point,lifetimes,snapshot);
             if(complete){CHECK(snapshot&&!lifetimes.front().expired());(void)snapshot_records(snapshot);aether_dom_snapshot_destroy_v1(snapshot);}
             for(const auto& weak:lifetimes)CHECK(weak.expired());
@@ -336,5 +367,30 @@ static void snapshot_allocations(){
     }
 #endif
 }
-static void run(){all_prepare_families();snapshot_allocations();}
+static void lifetime_positive_controls(){
+#if defined(AETHER_DOM_LIFETIME_TESTING)
+    using namespace aether::dom::lifetime_test;
+    const DomLifetimeCheck instances;
+    const auto before=snapshot();
+    {
+        Fixture fixture(17);const auto live=snapshot();CHECK(live.valid);
+        // Every declared family is represented by real product objects here,
+        // including private claims/registries and the externally owned relays.
+        for(unsigned i=0;i<family_count;++i)CHECK(live.live[i]>before.live[i]);
+        const auto nodes=live.live[node];
+        auto generated=std::make_shared<aether_node_s>();generated->is_generated=true;generated->snapshot_owned=true;
+        CHECK(snapshot().live[node]==nodes+1);generated.reset();CHECK(snapshot()==live);
+        const auto identities=live.live[identity];
+        {
+            node_identity_s original;node_identity_s copy(original);node_identity_s moved(std::move(copy));
+            CHECK(snapshot().live[identity]==identities+3);
+            copy=original;moved=std::move(original);CHECK(snapshot().live[identity]==identities+3);
+        }
+        CHECK(snapshot()==live);
+    }
+    CHECK(snapshot()==before);
+    std::puts("lifetime ledger real eight-family, generated, copy/move construction and assignment controls PASS");
+#endif
+}
+static void run(){lifetime_positive_controls();all_prepare_families();snapshot_allocations();}
 }

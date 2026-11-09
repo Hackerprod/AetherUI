@@ -134,3 +134,54 @@ approved v6 contract rather than a claim of exact equivalence to the former part
 
 Component/style publication allocation scope and the initial binding staging
 boundary still need complete measured evidence. These findings keep D1 open.
+
+
+## Measured publication and fault-injection checkpoints
+
+The unresolved cold figures above are historical failures, not current results:
+
+- `ba7396c` adds a prepared initial binding stage; legacy create composes the same
+  prepare/validate/commit operation. Abort never deregisters a published result.
+- `d0e2d48` independently passes 11 cold/warm managed commit categories and explicit
+  prelink retry/reentry/concurrency controls. The old 96 bytes were two cold native
+  import-resolution stubs. `950dda7` stages their linking before candidate capture,
+  using retryable CAS initialization rather than a fallible static constructor or
+  executing dummy commits. Unsupported metadata/linking fails explicitly.
+- `5703965` independently passes 14 categories plus two fresh-process host bootstrap
+  tests. Initial/replacement binding, owner activation, renderer assignment,
+  styles/maps/transitions and old-revision retirement remain inside their original
+  measured scopes. All scopes measured zero managed allocation bytes; whole-operation
+  preparation costs remain nonzero and reported. The intermediate 192-byte host
+  result was retained as a failure until those host imports were prepared early.
+- `4df3530` independently passes all three native link-unit allocator targets. C
+  wrappers plus all new families observe cold commit requests and inject one failed
+  successful-path request per fresh fixture. That cut covers 860 typed, 86 snapshot
+  and 50 transition fault ordinals, with no-write checks, current-input FULL/layout
+  comparisons, transition twin samples and known-last-storage checks. FULL style
+  comparisons cover the fixture-relevant properties, not every computed CSS field.
+- `4df3530` full Release default-OFF CTest passes **249/249**. Focused ASan/UBSan
+  passes **6/6** (edit, snapshot, owner, interaction, binding and transition).
+  Leak detection is disabled in that ASan run and is not claimed: a separate direct
+  `detect_leaks=1` execution still exits with LeakSanitizer's fatal ptrace diagnostic.
+- `753f598` local six-target check passes. It adds current and pending destination
+  claims to both shared-runtime and separate-runtime adoption sweeps. A test-only,
+  uniformly compiled eight-family object-instance ledger returns to baseline after
+  every typed/snapshot fault fixture and owner/retirement/adoption scenario. It counts
+  objects including generated nodes, not shared_ptr control blocks or arbitrary
+  memory. Overflow/underflow invalidate the ledger permanently. Normal product
+  compilation does not enable it. Independent execution and full-suite refresh for
+  this additional instrumentation remain pending.
+
+Managed source-operation fault injection is a separate, compile-time-erased test
+configuration. It injects before identified fallible source operations, not inside
+all CLR/BCL allocations. `5897a80` corrects artificial capacity hooks in `f40d9c5`:
+1432 selected site/occurrence failures pass across 28 families, with 161/189 IDs
+reached and the remaining IDs explicitly listed. Later fixtures extend cold initial
+registries, claims, large materialization and FULL/layout comparisons; those results
+must be attributed to their own archived source. Component and host boundaries
+13.4–13.6 have separate suites and are not closed by the earlier DOM site numbers.
+
+The next acceptance cut must collect these scopes, the host source-site recovery
+sweeps, normal publication/input-trace/general-managed regressions, complete native
+ON/OFF suites and independent source review on frozen inputs. No global D1 PASS,
+all-platform allocation proof, LSan success or Windows CPU claim is inferred here.

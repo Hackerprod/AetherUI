@@ -10,6 +10,7 @@ int main() { std::puts("UNAVAILABLE transition allocator sweep: unsupported prod
 #include <cmath>
 
 #define CHECK(x) do { if(!(x)) { std::fprintf(stderr,"FAIL transition allocator line %d: %s\n",__LINE__,#x); std::abort(); } } while(0)
+#include "dom_lifetime_check.h"
 static void ok(aether_status_t status) { CHECK(status==AETHER_OK); }
 static aether_transition_token_t token(aether_transition_runtime_t r) {
     aether_transition_token_t result{}; ok(aether_transition_runtime_read_token(r,&result)); return result;
@@ -179,6 +180,7 @@ static void future_samples(Fixture& f,uint64_t status_offset) {
 }
 static uint64_t failures=0;
 static void one(Operation op,uint64_t ordinal,uint64_t expected_requests) {
+    const DomLifetimeCheck instances;
     std::array<std::weak_ptr<EditableNodeStorage>,node_count+1> weak;
     {
         Fixture f; weak=f.weak; twins(f,0);
@@ -228,6 +230,7 @@ static void one(Operation op,uint64_t ordinal,uint64_t expected_requests) {
     for(const auto& lease:weak) CHECK(lease.expired());
 }
 static void sweep(Operation op) {
+    const DomLifetimeCheck instances;
     uint64_t requests=0;
     {
         Fixture f; fault_alloc::reset(); Outcome out;
@@ -241,6 +244,7 @@ static void sweep(Operation op) {
         name(op),static_cast<unsigned long long>(requests),static_cast<unsigned long long>(requests));
 }
 int main() {
+    const DomLifetimeCheck instances;
     fault_alloc::positive_controls();
     for(auto operation:{Operation::batch,Operation::batch_new_active,Operation::retire,Operation::cancel,
         Operation::observe_retarget,Operation::observe_install,Operation::observe_cancel,

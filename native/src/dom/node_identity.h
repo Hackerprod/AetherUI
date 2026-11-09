@@ -1,5 +1,6 @@
 #pragma once
 #include <cstdint>
+#include "dom_lifetime_testing.h"
 #include <memory>
 #include <array>
 struct EditableNodeStorage;
@@ -9,6 +10,7 @@ struct DomInteractionClaim;
 /* Retained independently of the raw node. Pointer identity is never recycled
  * while any snapshot retains this token. No global node registry is needed. */
 struct node_identity_s {
+    AETHER_DOM_COUNT_INSTANCE(identity)
     const void* owner = nullptr;
     std::weak_ptr<EditableNodeStorage> storage;
     std::weak_ptr<DomOwnerControl> document_owner;

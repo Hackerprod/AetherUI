@@ -1788,3 +1788,19 @@ if(AETHERUI_BUILD_TESTS)
     add_test(NAME aether.dom-edit-allocations COMMAND aether_dom_edit_allocations_test)
     set_tests_properties(aether.dom-edit-allocations PROPERTIES SKIP_RETURN_CODE 77)
 endif()
+
+# Uniform test-only struct representation in the full core link unit and every
+# consumer. TARGET_OBJECTS alone does not propagate compile definitions. Never
+# enable this in the normal shared library or a consumer linked to that library.
+if(TARGET aether_publication_test_core)
+    target_compile_definitions(aether_publication_test_core PRIVATE AETHER_DOM_LIFETIME_TESTING)
+    add_test(NAME aether.dom-lifetime-overflow COMMAND aether_dom_owner_test --lifetime-overflow)
+    add_test(NAME aether.dom-lifetime-underflow COMMAND aether_dom_owner_test --lifetime-underflow)
+    get_property(dom_lifetime_targets DIRECTORY PROPERTY BUILDSYSTEM_TARGETS)
+    foreach(dom_lifetime_target IN LISTS dom_lifetime_targets)
+        get_target_property(dom_lifetime_sources ${dom_lifetime_target} SOURCES)
+        if("$<TARGET_OBJECTS:aether_publication_test_core>" IN_LIST dom_lifetime_sources)
+            target_compile_definitions(${dom_lifetime_target} PRIVATE AETHER_DOM_LIFETIME_TESTING)
+        endif()
+    endforeach()
+endif()

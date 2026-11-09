@@ -21,6 +21,7 @@ struct EditableNodeStorage;
 struct LegacyDocumentLease;
 struct DomStyleBinding;
 struct DomOwnerControl {
+    AETHER_DOM_COUNT_INSTANCE(owner_control)
     const std::thread::id owner_thread = std::this_thread::get_id();
     std::weak_ptr<EditableNodeStorage> document;
     uint64_t observation_serial = 0;
@@ -35,6 +36,7 @@ struct DomOwnerControl {
 };
 
 struct aether_node_s {
+    AETHER_DOM_COUNT_INSTANCE(node)
     aether_node_type_t type;
     std::shared_ptr<node_identity_s> identity = std::make_shared<node_identity_s>();
     std::weak_ptr<EditableNodeStorage> editable_storage;
@@ -84,13 +86,14 @@ struct aether_doc_s : aether_node_s {
 
 // Storage owns exactly one editable object; links never own children/parents.
 struct EditableNodeStorage {
+    AETHER_DOM_COUNT_INSTANCE(storage)
     std::unique_ptr<aether_node_s> node;
     explicit EditableNodeStorage(std::unique_ptr<aether_node_s> value) noexcept : node(std::move(value)) {}
 };
 // External consumers own these relays; DOM identities only hold weak refs.
 // current_root is accessed/mutated on the owner thread, never by finalizers.
-struct DomNodeOwnerPin { std::shared_ptr<EditableNodeStorage> current_root; };
-struct LegacyDocumentLease { std::shared_ptr<EditableNodeStorage> storage; };
+struct DomNodeOwnerPin { std::shared_ptr<EditableNodeStorage> current_root; AETHER_DOM_COUNT_INSTANCE(owner_relay) };
+struct LegacyDocumentLease { std::shared_ptr<EditableNodeStorage> storage; AETHER_DOM_COUNT_INSTANCE(legacy_cell) };
 inline std::shared_ptr<EditableNodeStorage> aether_editable_lease(const aether_node_s* node) noexcept {
     return node ? node->editable_storage.lock() : nullptr;
 }

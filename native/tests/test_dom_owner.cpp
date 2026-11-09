@@ -21,6 +21,7 @@ void* operator new(std::size_t n,const std::nothrow_t&)noexcept{try{return ::ope
 void* operator new[](std::size_t n,const std::nothrow_t&)noexcept{try{return ::operator new[](n);}catch(...){return nullptr;}}
 void operator delete(void* p,const std::nothrow_t&)noexcept{std::free(p);}void operator delete[](void* p,const std::nothrow_t&)noexcept{std::free(p);}
 #define CHECK(x) do { if(!(x)){std::fprintf(stderr,"line %d: %s\n",__LINE__,#x);std::abort();} } while(0)
+#include "dom_lifetime_check.h"
 static aether_dom_owner_t make(aether_doc_t& doc) {
     aether_dom_owner_t owner=nullptr;
     CHECK(aether_dom_owner_create_v1(&owner,&doc)==AETHER_OK);
@@ -30,9 +31,22 @@ static aether_dom_owner_t make(aether_doc_t& doc) {
 static void release_elsewhere(aether_dom_owner_t owner) {
     std::thread release([=]{aether_dom_owner_release_v1(owner);});release.join();
 }
-int main() {
+int main(int argc,char** argv) {
+#if defined(AETHER_DOM_LIFETIME_TESTING)
+    using namespace aether::dom::lifetime_test;
+    if(argc==2){
+        CHECK(snapshot().valid);
+        if(std::strcmp(argv[1],"--lifetime-overflow")==0){ledger.live[legacy_cell].store(UINT64_MAX);add(legacy_cell);CHECK(!snapshot().valid&&snapshot().live[legacy_cell]==UINT64_MAX);}
+        else if(std::strcmp(argv[1],"--lifetime-underflow")==0){remove(legacy_cell);CHECK(!snapshot().valid&&snapshot().live[legacy_cell]==0);}
+        else CHECK(false);
+        {Instance<identity> temporary;}CHECK(!snapshot().valid);
+        std::puts("lifetime invalidity is sticky PASS");return 0;
+    }
+    const DomLifetimeCheck total_instances;
+#endif
     bool success=false;
     for(long n=0;n<20;++n) {
+        const DomLifetimeCheck instances;
         auto owner=reinterpret_cast<aether_dom_owner_t>(1);auto doc=reinterpret_cast<aether_doc_t>(1);
         fail_after=n;const auto status=aether_dom_owner_create_v1(&owner,&doc);fail_after=-1;
         if(status==AETHER_OK){aether_dom_owner_release_v1(owner);success=true;break;}
@@ -40,6 +54,7 @@ int main() {
     }
     CHECK(success);
     {
+        const DomLifetimeCheck instances;
         aether_doc_t doc=nullptr;auto owner=make(doc);auto weak=doc->editable_storage;
         auto* node=aether_doc_get_element_by_id(doc,"a");auto token=node->identity;
         aether_dom_node_lease_t lease=nullptr;CHECK(aether_dom_retain_node_v1(node,&lease)==AETHER_OK);
@@ -49,6 +64,7 @@ int main() {
         aether_dom_node_lease_destroy_v1(lease);CHECK(weak.expired()&&token->storage.expired()&&!token->alive);
     }
     {
+        const DomLifetimeCheck instances;
         aether_doc_t doc=nullptr;auto owner=make(doc);auto weak=doc->editable_storage;
         aether::style::MapVersionRef map;
         {
@@ -63,6 +79,7 @@ int main() {
         map.reset();CHECK(weak.expired());
     }
     {
+        const DomLifetimeCheck instances;
         aether_doc_t doc=nullptr;auto owner=make(doc);auto weak=doc->editable_storage;
         auto* text=aether_doc_get_element_by_id(doc,"a")->children.front();auto textweak=text->editable_storage;
         auto assets=std::make_shared<aether::layout::LayoutAssets>(nullptr,nullptr,nullptr,
@@ -71,6 +88,7 @@ int main() {
         assets.reset();CHECK(weak.expired()&&textweak.expired());
     }
     {
+        const DomLifetimeCheck instances;
         aether_doc_t doc=nullptr;auto owner=make(doc);auto weak=doc->editable_storage;
         auto* node=aether_doc_get_element_by_id(doc,"a");
         aether_transition_runtime_t runtime=nullptr;CHECK(aether_transition_runtime_create(&runtime)==AETHER_OK);
@@ -87,6 +105,7 @@ int main() {
         aether_transition_candidate_destroy(candidate);CHECK(weak.expired());
     }
     {
+        const DomLifetimeCheck instances;
         aether_doc_t doc=nullptr;auto owner=make(doc);auto weak=doc->editable_storage;
         auto* node=aether_doc_get_element_by_id(doc,"a");auto token=node->identity;
         aether_dom_node_lease_t lease=nullptr;CHECK(aether_dom_retain_node_v1(node,&lease)==AETHER_OK);
@@ -99,6 +118,7 @@ int main() {
     // The native node lease alone follows two ownership changes. Historical A
     // remains pinned independently, but the live relay must retain B then C.
     {
+        const DomLifetimeCheck instances;
         aether_doc_t a=nullptr,b=nullptr,c=nullptr;auto oa=make(a),ob=make(b),oc=make(c);
         auto wa=a->editable_storage,wb=b->editable_storage,wc=c->editable_storage;
         auto* node=aether_doc_get_element_by_id(a,"a");auto identity=node->identity;
@@ -118,6 +138,7 @@ int main() {
     // Generated descendants have no editable storage of their own. Their
     // relays follow the host, while the historical generated owner is pinned.
     {
+        const DomLifetimeCheck instances;
         aether_doc_t a=nullptr,b=nullptr;auto oa=make(a),ob=make(b);
         auto wa=a->editable_storage,wb=b->editable_storage;
         auto* host=aether_doc_get_element_by_id(a,"a");
@@ -136,6 +157,7 @@ int main() {
     {
         bool completed=false;
         for(long n=0;n<160&&!completed;++n) {
+            const DomLifetimeCheck instances;
             aether_doc_t a=nullptr,b=nullptr;auto oa=make(a),ob=make(b);
             auto* node=aether_doc_get_element_by_id(a,"a");auto* parent=node->parent;
             auto relay=aether_live_owner_pin(node);auto original=relay->current_root;
@@ -154,6 +176,7 @@ int main() {
     }
     // Retired payloads preserve both immutable A provenance and current B life.
     {
+        const DomLifetimeCheck instances;
         aether_doc_t a=nullptr,b=nullptr;auto oa=make(a),ob=make(b);
         auto wa=a->editable_storage,wb=b->editable_storage;auto* node=aether_doc_get_element_by_id(a,"a");
         std::unique_ptr<aether::style::FrozenRetiredNode> retired;
@@ -172,6 +195,7 @@ int main() {
     // A retired pseudo is no longer in the adopted live subtree. Its retained
     // origin/ancestor storage must still pin the origin's NEW owner through relay.
     {
+        const DomLifetimeCheck instances;
         aether_doc_t a=nullptr,b=nullptr;auto oa=make(a),ob=make(b);
         auto wa=a->editable_storage,wb=b->editable_storage;auto* host=aether_doc_get_element_by_id(a,"a");
         auto pseudo=std::make_shared<aether_node_s>();pseudo->type=AETHER_NODE_ELEMENT;
@@ -194,6 +218,7 @@ int main() {
     }
     // Contextual batches independently pin entries after inputs/runtime die.
     {
+        const DomLifetimeCheck instances;
         aether_doc_t a=nullptr,b=nullptr;auto oa=make(a),ob=make(b);
         auto wa=a->editable_storage,wb=b->editable_storage;auto* node=aether_doc_get_element_by_id(a,"a");
         aether_contextual_transition_runtime_t runtime=nullptr;
@@ -218,6 +243,7 @@ int main() {
     // Preflight owns both domains and relay objects while finalizers drop the
     // external owner handles. Commit only swaps refs on the owner thread.
     {
+        const DomLifetimeCheck instances;
         aether_doc_t a=nullptr,b=nullptr;auto oa=make(a),ob=make(b);
         auto wa=a->editable_storage,wb=b->editable_storage;
         auto* node=aether_doc_get_element_by_id(a,"a");
@@ -233,6 +259,15 @@ int main() {
         finalizer.join();aether_dom_edit_destroy_v1(edit);
         CHECK(!wb.expired());CHECK(aether_dom_read_token_v1(node,&token)==AETHER_OK);
         aether_dom_node_lease_destroy_v1(lease);CHECK(wa.expired()&&wb.expired());
+    }
+    {
+        const DomLifetimeCheck instances;
+        aether_doc_t doc=nullptr;auto owner=make(doc);
+        const auto weak=doc->editable_storage;
+        aether_dom_node_lease_t lease=nullptr;CHECK(aether_dom_retain_node_v1(aether_doc_get_element_by_id(doc,"a"),&lease)==AETHER_OK);
+        release_elsewhere(owner);CHECK(!weak.expired());
+        std::thread final_release([=]{aether_dom_node_lease_destroy_v1(lease);});final_release.join();
+        CHECK(weak.expired());
     }
     std::puts("DOM owner lifetime tests PASS");
 }

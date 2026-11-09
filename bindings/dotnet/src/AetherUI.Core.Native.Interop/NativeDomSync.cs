@@ -330,7 +330,7 @@ internal sealed class NativeDomArena : IDisposable
     private IntPtr Allocate(int length)
     {
 #if AETHER_DOM_FAULT_TESTING
-        ManagedDomFault.Before("interop.arena.ensure-capacity");
+        ManagedDomFault.BeforeListAdd(_allocations, "interop.arena.ensure-capacity");
 #endif
         _allocations.EnsureCapacity(_allocations.Count + 1);
 #if AETHER_DOM_FAULT_TESTING

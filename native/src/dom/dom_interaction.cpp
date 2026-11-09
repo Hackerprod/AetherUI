@@ -4,6 +4,7 @@
 #include <aether/aether_dom_interaction.h>
 
 struct DomInteractionRegistry {
+    AETHER_DOM_COUNT_INSTANCE(interaction_registry)
     std::shared_ptr<EditableNodeStorage> document;
     std::shared_ptr<DomOwnerControl> owner;
     DomStyleBindingRef binding;
@@ -15,6 +16,7 @@ struct DomInteractionRegistry {
     std::vector<std::shared_ptr<DomInteractionClaim>> claims;
 };
 struct DomInteractionClaim {
+    AETHER_DOM_COUNT_INSTANCE(interaction_claim)
     std::weak_ptr<DomInteractionRegistry> registry;
     std::shared_ptr<EditableNodeStorage> node;
     std::shared_ptr<DomNodeOwnerPin> live_owner;

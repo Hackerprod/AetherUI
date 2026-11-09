@@ -141,7 +141,7 @@ internal sealed partial class NativeDomBinding
 #endif
                     var handles = new Dictionary<IntPtr, WeakReference<Node>>(domain._handles);
 #if AETHER_DOM_FAULT_TESTING
-                    AetherUI.Core.Native.ManagedDomFault.Before("dom.materialize.domains-capacity");
+                    AetherUI.Core.Native.ManagedDomFault.BeforeListAdd(domains, "dom.materialize.domains-capacity");
 #endif
                     domains.EnsureCapacity(domains.Count + 1);
 #if AETHER_DOM_FAULT_TESTING
@@ -155,7 +155,7 @@ internal sealed partial class NativeDomBinding
                     if (specs[i].ExistingNode != IntPtr.Zero) continue;
                     var wrapper = wrappers[i];
 #if AETHER_DOM_FAULT_TESTING
-                    AetherUI.Core.Native.ManagedDomFault.Before("dom.materialize.created-capacity");
+                    AetherUI.Core.Native.ManagedDomFault.BeforeListAdd(created, "dom.materialize.created-capacity");
 #endif
                     created.EnsureCapacity(created.Count + 1);
                     var handle = native.CreatedNode(i);

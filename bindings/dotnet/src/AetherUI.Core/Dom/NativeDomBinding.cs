@@ -307,7 +307,7 @@ internal sealed partial class NativeDomBinding : IDomBinding, IDisposable
                         if (record is null || record.Identity != data.Identity)
                         {
 #if AETHER_DOM_FAULT_TESTING
-                            AetherUI.Core.Native.ManagedDomFault.Before("dom.import.lease-capacity");
+                            AetherUI.Core.Native.ManagedDomFault.BeforeListAdd(newLeases, "dom.import.lease-capacity");
 #endif
                             newLeases.EnsureCapacity(newLeases.Count + 1);
                             var lease = NativeDomLease.Retain(data.Handle); newLeases.Add(lease);
@@ -610,7 +610,7 @@ internal sealed partial class NativeDomBinding : IDomBinding, IDisposable
                 foreach (var wrapper in wrappers)
                 {
 #if AETHER_DOM_FAULT_TESTING
-                    AetherUI.Core.Native.ManagedDomFault.Before("dom.edit.created-capacity");
+                    AetherUI.Core.Native.ManagedDomFault.BeforeListAdd(created, "dom.edit.created-capacity");
 #endif
                     created.EnsureCapacity(created.Count + 1);
                     var handle = native.CreatedNode(created.Count);

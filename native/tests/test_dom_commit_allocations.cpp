@@ -74,6 +74,7 @@ void operator delete(void* p,std::align_val_t)noexcept{std::free(p);}void operat
 void operator delete(void* p,size_t,std::align_val_t)noexcept{std::free(p);}void operator delete[](void* p,size_t,std::align_val_t)noexcept{std::free(p);}
 void operator delete(void* p,std::align_val_t,const std::nothrow_t&)noexcept{std::free(p);}void operator delete[](void* p,std::align_val_t,const std::nothrow_t&)noexcept{std::free(p);}
 #define CHECK(x) do{if(!(x)){std::fprintf(stderr,"FAIL DOM commit allocations %d: %s\n",__LINE__,#x);std::abort();}}while(0)
+#include "dom_lifetime_check.h"
 static void ok(aether_status_t s){CHECK(s==AETHER_OK);}
 static void zero(const char* label){CHECK(!ledger::counts.invalid&&!ledger::depth&&!ledger::wrapper_depth);if(ledger::counts.requests){std::fprintf(stderr,"%s: allocation requests=%llu\n",label,(unsigned long long)ledger::counts.requests);std::abort();}}
 static aether_dom_string_v1_t str(const char* s){return {s,std::strlen(s)};}
@@ -235,6 +236,7 @@ static void transition_cases(){
     ledger::reset();{ledger::Scope scope;status=aether_transition_candidate_commit(candidate,&out);}zero("disposed transition candidate");CHECK(status==AETHER_ERROR_DISPOSED);aether_transition_candidate_destroy(candidate);
 }
 int main(int argc,char**){
+    const DomLifetimeCheck instances;
     // Before any calibration/warmup of the commit entry point. Cold allocations
     // fail identically to warm allocations; only ledger TLS itself is initialized.
     ledger::reset();initial_binding_case();scalar_cases();
