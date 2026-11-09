@@ -64,6 +64,15 @@ but exclude reading/printing counters. The same original fixture uses 18, 100,
 500 and 1000 cards, two changed styles, child hover with no visual change, map
 patching and first-card hit testing with and without explicit z-index.
 
+`update_two_node_style_map` preserves the original baseline workload: after
+warmup its records are unchanged, so B2 measures a no-op patch there. The added
+`update_two_node_style_map_replacements` alternates two visibly distinct record
+sets prepared by separate runtimes of the same document before timing. It checks
+exact ownership and output after every call, outside wall/CPU timing. ON builds
+require K=2 changed leaves per iteration (100 over 50 samples) and zero style
+computation/publications; OFF builds require zero counters while still checking
+alternating output. Neither case measures whole-pipeline hover CPU.
+
 `aether.hover-work-counters` asserts the current complete oracle's structural work
 at 100/500/1000 cards, disabled behavior, thread isolation, and counter saturation.
 Resolver assertions retain the phase A full-oracle baseline; the B2 map-patch
