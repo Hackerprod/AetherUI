@@ -1,5 +1,6 @@
 #include <aether/aether.h>
 #include <aether/aether_state_style.h>
+#include <aether/aether_transition_sync.h>
 #include <aether/aether_contextual_layout.h>
 #include <aether/aether_context_owners_diagnostics.h>
 #include <aether/aether_work_counters.h>
@@ -66,6 +67,21 @@ static void cause_lifecycle(){
  f.style("");f.prepare(true);f.build();CHECK(!f.owners());
  // Failed/invalid preparation must never change old frames.
  auto retained=f.layout->effective_context_owners;CHECK(aether_layout_prepare_transition_context(f.engine,f.transitions,nullptr,f.layout,nullptr)==AETHER_ERROR_NULL_ARG);CHECK(f.layout->effective_context_owners==retained);
+}
+// DOM transaction and D2 membership must use the identical sampled boundary.
+static void rounded_transition_membership() {
+ for(int mode=0;mode<2;++mode){
+  Fixture f;auto before=aether_computed_style_default();aether_transform_operation operation{};
+  auto after=transformed(operation,20,mode?-1000000.0625f:0.f);
+  after.transition_duration=mode?1000000.0625f:1000000.0f;
+  ok(aether_transition_runtime_observe(f.transitions,f.node,&before,&after,0));
+  if(!mode){f.prepare(true);f.build();CHECK(f.owners()==1);
+   aether_bool_t active=1;ok(aether_transition_runtime_try_tick(f.transitions,999999999,&active));CHECK(!active);}
+  CHECK(!aether_transition_runtime_has_active(f.transitions));
+  CHECK(aether_active_transform_owners(f.transitions).empty());
+  CHECK(aether_active_transform_snapshot(f.transitions)->owners.empty());
+  f.prepare(!mode);f.build();CHECK(f.owners()==0);f.oracle();
+ }
 }
 static void compact_provenance_and_context(){
  Fixture f;auto old=f.map->current;auto old_style=aether_style_map_get(f.map,f.node);CHECK(old_style);
@@ -179,4 +195,4 @@ static void persistent_diff(){
  for(int round=0;round<2000;++round){auto next=index;auto expected=values;for(int change=0;change<6;++change){auto key=uintptr_t(rng()%100);if(rng()%3){int value=rng()%20;next=next.set(key,value);expected[key]=value;}else{next=next.erase(key);expected.erase(key);}}
   auto actual=values;index.diff(next,[&](uintptr_t key,const int*,const int* after){if(after)actual[key]=*after;else actual.erase(key);});CHECK(actual==expected);index=std::move(next);values=std::move(expected);}
 }
-int main(){aether_work_counters_set_enabled(AETHER_TRUE);persistent_diff();cause_lifecycle();compact_provenance_and_context();generated_staging_and_contextual();destroyed_owner();unbound_legacy_fallback();std::printf("PASS D2 owners/compact/provenance %u checks\n",checks);return 0;}
+int main(){rounded_transition_membership();aether_work_counters_set_enabled(AETHER_TRUE);persistent_diff();cause_lifecycle();compact_provenance_and_context();generated_staging_and_contextual();destroyed_owner();unbound_legacy_fallback();std::printf("PASS D2 owners/compact/provenance %u checks\n",checks);return 0;}

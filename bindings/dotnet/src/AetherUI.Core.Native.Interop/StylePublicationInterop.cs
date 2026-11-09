@@ -70,10 +70,15 @@ public sealed unsafe partial class StyleRuntimeInterop
     /// <summary>Pure owner-thread inspection. No diagnostics, allocation, or implicit resolve.</summary>
     public bool IsCurrent(NativeStylePublicationToken expected)
     {
-        if (_disposed) return false;
-        var current = NativeStylePublicationToken.Empty;
-        return NativeMethods.StyleReadPublicationToken(_runtime, ref current) == 0 &&
-            current.InputsCurrent != 0 && current == expected;
+        if (_disposed || _loadedDocument is null) return false;
+        try
+        {
+            using var documentBorrow = BorrowLoadedDocument();
+            var current = NativeStylePublicationToken.Empty;
+            return NativeMethods.StyleReadPublicationToken(_runtime, ref current) == 0 &&
+                current.InputsCurrent != 0 && current == expected;
+        }
+        catch (ObjectDisposedException) { return false; }
     }
 
     /// <summary>Fallible staging. The default uses the full resolver; the internal opt-in
@@ -81,16 +86,26 @@ public sealed unsafe partial class StyleRuntimeInterop
     public PreparedPublication PreparePublication(IReadOnlyList<int>? states, float width, float height, float dpiScale, NativeStyleMap? previousMap = null, bool experimentalDelta = false)
     {
         ThrowIfDisposed();
+        using var documentBorrow = BorrowLoadedDocument();
         if (states is not null && states.Count != _elements.Count)
             throw new InvalidOperationException("Managed and native DOM element counts differ.");
         if (states is not null)
             for (var i = 0; i < states.Count; ++i) NativeMethods.ElementSetState(_elements[i], states[i]);
         var environment = new RuntimeEnvironment(width, height, dpiScale, 16, 0, 0, 0);
+#if AETHER_DOM_FAULT_TESTING
+        ManagedDomFault.Before("style.preview.native-prepare-call-aggregate");
+#endif
         IntPtr transaction;
         if (experimentalDelta && states is null && _managedPublicationRevision != IntPtr.Zero)
             Throw(NativeMethods.StylePrepareStateRevision(_runtime, _document, _managedPublicationRevision, IntPtr.Zero, 0, in environment, out transaction));
         else Throw(NativeMethods.StylePrepareRevision(_runtime, _document, in environment, out transaction));
-        try { return new PreparedPublication(this, transaction, previousMap, experimentalDelta); }
+        try
+        {
+#if AETHER_DOM_FAULT_TESTING
+            ManagedDomFault.Before("style.preview.wrapper");
+#endif
+            return new PreparedPublication(this, transaction, previousMap, experimentalDelta);
+        }
         catch { NativeMethods.StyleTransactionDestroy(transaction); throw; }
     }
 
@@ -98,6 +113,7 @@ public sealed unsafe partial class StyleRuntimeInterop
     public sealed class PreparedPublication : IDisposable
     {
         private readonly StyleRuntimeInterop _owner;
+        private NativeDomDocument? _documentOwner;
         private IntPtr _transaction;
         private IntPtr _preview;
         private IntPtr _committed;
@@ -115,6 +131,7 @@ public sealed unsafe partial class StyleRuntimeInterop
         internal PreparedPublication(StyleRuntimeInterop owner, IntPtr transaction, NativeStyleMap? previousMap, bool experimentalDelta)
         {
             _owner = owner;
+            _documentOwner = owner._loadedDocument!;
             // The caller owns transaction until construction succeeds.
             try
             {
@@ -127,7 +144,13 @@ public sealed unsafe partial class StyleRuntimeInterop
                     Throw(NativeMethods.StylePublicationDelta(transaction, previousMap.Handle, ref delta));
                 Compact = delta.Compact != 0;
                 var count = Compact ? delta.SemanticCount : NativeMethods.StyleRevisionCount(_preview);
+#if AETHER_DOM_FAULT_TESTING
+                ManagedDomFault.Before("style.preview.updates-array");
+#endif
                 var updates = new NativeStyleUpdate[count];
+#if AETHER_DOM_FAULT_TESTING
+                ManagedDomFault.Before("style.preview.styles-map");
+#endif
                 _styles = Compact ? owner._styles : ImmutableDictionary<IntPtr, NativeComputedStyle>.Empty;
                 var aggregate = Compact ? (NativeStyleImpact)delta.Impact : NativeStyleImpact.None;
                 for (var i = 0; i < count; ++i)
@@ -138,9 +161,19 @@ public sealed unsafe partial class StyleRuntimeInterop
                     try
                     {
                         var changed = handle != IntPtr.Zero;
+#if AETHER_DOM_FAULT_TESTING
+                        if (changed) ManagedDomFault.Before("style.preview.style-read-call-aggregate");
+#endif
                         var style = changed ? ReadStyle(handle) : owner._styles[node];
                         if (changed) ++ChangedStyleCount;
+#if AETHER_DOM_FAULT_TESTING
+                        AetherUI.Core.Native.ManagedDomFault.Before("style.preview.update-record");
+#endif
                         updates[i] = new NativeStyleUpdate(node, style, (NativeStyleImpact)impact) { ProjectionChanged = changed };
+#if AETHER_DOM_FAULT_TESTING
+                        // Immutable insertion/update may allocate a persistent path, not a capacity growth.
+                        ManagedDomFault.Before("style.preview.styles-growth");
+#endif
                         _styles = _styles.SetItem(node, style);
                         aggregate |= (NativeStyleImpact)impact;
                         StackingOrderChanged |= owner._styles.TryGetValue(node, out var previous) && previous.ZIndex != style.ZIndex;
@@ -160,7 +193,13 @@ public sealed unsafe partial class StyleRuntimeInterop
                 else if (previousMap is null) Throw(NativeMethods.StyleTransactionPreviewLegacyMap(transaction, out map));
                 else Throw(NativeMethods.StyleTransactionPreviewLegacyPatch(transaction, previousMap.Handle, out map));
                 MapPatched = previousMap is not null;
-                try { _map = new NativeStyleMap(map); }
+                try
+                {
+#if AETHER_DOM_FAULT_TESTING
+                    ManagedDomFault.Before("style.preview.map-wrapper");
+#endif
+                    _map = new NativeStyleMap(map);
+                }
                 catch { NativeMethods.StyleMapDestroy(map); throw; }
                 _transaction = transaction;
             }
@@ -171,6 +210,9 @@ public sealed unsafe partial class StyleRuntimeInterop
         {
             ObjectDisposedException.ThrowIf(_transaction == IntPtr.Zero, this);
             if (_committed != IntPtr.Zero) throw new InvalidOperationException("Style publication was already committed.");
+            _owner.ThrowIfDisposed();
+            using var documentBorrow = _documentOwner!.Borrow();
+            if (!ReferenceEquals(_owner._loadedDocument, _documentOwner)) return false;
             var status = NativeMethods.StyleCommitRevision(_owner._runtime, _transaction, out _committed);
             if (status == -2) return false; // Inputs/base changed. Host retains B and permits one recovery.
             Throw(status); // Allocation/marshalling failures never become zero updates or automatic retries.
@@ -197,6 +239,7 @@ public sealed unsafe partial class StyleRuntimeInterop
             if (_preview != IntPtr.Zero) NativeMethods.StyleRevisionDestroy(_preview);
             if (_transaction != IntPtr.Zero) NativeMethods.StyleTransactionDestroy(_transaction);
             _committed = _preview = _transaction = IntPtr.Zero;
+            _documentOwner = null;
         }
     }
 }

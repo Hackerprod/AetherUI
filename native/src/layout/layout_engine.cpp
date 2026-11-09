@@ -5,6 +5,7 @@ using aether::diagnostics::WorkCounter;
 #include "layout_internal.h"
 #include <aether/aether_contextual_transitions.h>
 #include "input_hit_test.h"
+#include "hit_acceleration.h"
 #include "../animations/transition_runtime.h"
 #include <utility>
 
@@ -1584,13 +1585,14 @@ AETHER_API aether_status_t aether_layout_layout(
     result->abandoned = true;
     struct measure_scope_s { aether_layout_engine_s* e; ~measure_scope_s() { e->measure_styles = nullptr; e->measure_document.reset(); } } measure_scope{engine};
     try {
+    const auto dom_pin=aether_pin_dom_snapshot(doc);
     aether::style::FrozenStyleRef defaults;
     const auto default_flat = aether_computed_style_default();
     const auto default_status = aether::style::freeze_style(default_flat, defaults);
     if (default_status == AETHER_ERROR_OUT_OF_MEMORY) throw std::bad_alloc();
     if (default_status != AETHER_OK) throw std::runtime_error("Invalid default style");
     result->build_overlay = std::make_unique<aether::layout::MutableLayoutOverlay>();
-    result->assets = std::make_shared<const aether::layout::LayoutAssets>(version, nullptr, defaults, document_identity, document_structure_epoch);
+    result->assets = std::make_shared<const aether::layout::LayoutAssets>(version, nullptr, defaults, document_identity, document_structure_epoch, dom_pin);
     const StyleLookup build_lookup(version, result->build_overlay.get(), defaults);
     const auto* styles = &build_lookup;
     engine->measure_styles = styles;
@@ -1601,7 +1603,7 @@ AETHER_API aether_status_t aether_layout_layout(
             throw std::runtime_error("Layout viewport differs from style document");
     }
     const auto freeze_assets = [&]() {
-        auto assets = std::make_shared<const aether::layout::LayoutAssets>(version, result->build_overlay->freeze(), defaults, document_identity, document_structure_epoch);
+        auto assets = std::make_shared<const aether::layout::LayoutAssets>(version, result->build_overlay->freeze(), defaults, document_identity, document_structure_epoch, dom_pin);
         result->assets = std::move(assets);
         result->build_overlay.reset();
     };
@@ -1764,6 +1766,21 @@ static aether_node_t hit_with_pin(aether_layout_result_t result, aether_style_ma
     if (!pin.structure_valid() || !pin.accepts_override()) return nullptr;
     const auto policy = styles ? BoxStylePolicy::effective_map : BoxStylePolicy::snapshot;
     input_callback_context_s context(pin.lookup(), offsets, user_data);
+#if defined(AETHERUI_ENABLE_HIT_ACCELERATION)
+    if (offsets) aether::layout::count_hit_fallback(aether::layout::HitFallback::callback);
+    else if (auto accelerator = aether::layout::prepare_hit_acceleration(*result, pin.lookup(), policy, x, y)) {
+        aether::diagnostics::count_work(aether::diagnostics::WorkCounter::hit_queries);
+        const auto cached = accelerator->cached(x, y);
+        aether::diagnostics::count_work(cached ? aether::diagnostics::WorkCounter::hit_cache_hits :
+            aether::diagnostics::WorkCounter::hit_cache_misses);
+        auto* hit = cached ? *cached : accelerator->query(x, y, pin.lookup());
+        if (!pin.structure_valid() || !context.valid() || !live_input_owner(pin.lookup(), hit) ||
+            !accelerator->matches(*result, pin.lookup(), policy)) return nullptr;
+        accelerator->remember(x, y, hit, pin.lookup());
+        result->hit_acceleration = std::move(accelerator);
+        return hit;
+    }
+#endif
     auto* hit = geometry.geometry()->hit_test(x, y, pin.lookup(), policy,
         offsets ? checked_input_offsets : nullptr, offsets ? &context : user_data);
     return pin.structure_valid() && context.valid() && live_input_owner(pin.lookup(), hit) ? hit : nullptr;

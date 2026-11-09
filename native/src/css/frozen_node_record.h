@@ -1,6 +1,7 @@
 #pragma once
 #include "frozen_style.h"
 #include "../dom/node_identity.h"
+#include <vector>
 struct aether_node_s;
 namespace aether::style {
 class FrozenCustomPropertyScope;
@@ -80,6 +81,11 @@ class FrozenNodePayload {
     const std::shared_ptr<node_identity_s> node_lifetime_;
     const std::shared_ptr<node_identity_s> document_lifetime_;
     const std::shared_ptr<aether_node_s> generated_leaf_;
+    const std::shared_ptr<EditableNodeStorage> editable_lease_;
+    const std::shared_ptr<EditableNodeStorage> document_lease_;
+    const std::shared_ptr<DomNodeOwnerPin> live_owner_pin_;
+    std::vector<std::shared_ptr<EditableNodeStorage>> owner_leases_;
+    std::vector<std::shared_ptr<DomNodeOwnerPin>> owner_relays_;
     explicit FrozenNodePayload(const NodePayloadInput&);
     friend aether_status_t freeze_node_payload(const NodePayloadInput&, FrozenNodePayloadRef&) noexcept;
     friend class FrozenNodeRecord;
@@ -101,6 +107,11 @@ public:
     const std::shared_ptr<node_identity_s>& node_lifetime() const noexcept { return node_lifetime_; }
     const std::shared_ptr<node_identity_s>& document_lifetime() const noexcept { return document_lifetime_; }
     const std::shared_ptr<aether_node_s>& generated_leaf() const noexcept { return generated_leaf_; }
+    const std::shared_ptr<EditableNodeStorage>& editable_lease() const noexcept { return editable_lease_; }
+    const std::shared_ptr<EditableNodeStorage>& document_lease() const noexcept { return document_lease_; }
+    const std::shared_ptr<DomNodeOwnerPin>& live_owner_pin() const noexcept { return live_owner_pin_; }
+    const std::vector<std::shared_ptr<EditableNodeStorage>>& owner_leases() const noexcept { return owner_leases_; }
+    const std::vector<std::shared_ptr<DomNodeOwnerPin>>& owner_relays() const noexcept { return owner_relays_; }
     ComputedStyleReadView style_view() const noexcept { return style_->view(); }
 };
 

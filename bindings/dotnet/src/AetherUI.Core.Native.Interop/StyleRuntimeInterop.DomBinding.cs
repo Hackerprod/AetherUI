@@ -1,0 +1,279 @@
+using System.Collections.Immutable;
+using System.Runtime.InteropServices;
+
+namespace AetherUI.Core.Native;
+
+// The wrapper exists before acquisition. Its finalizer only destroys staging,
+// never a published binding or its registration. Both stage kinds share the
+// same allocation-free borrowed-handle protocol.
+internal sealed class NativeDomBindingStageHandle : SafeHandle
+{
+    private readonly bool _initial;
+    internal NativeDomBindingStageHandle(bool initial) : base(IntPtr.Zero, true) => _initial = initial;
+    public override bool IsInvalid => handle == IntPtr.Zero;
+    internal void Initialize(IntPtr value) => SetHandle(value);
+    internal BorrowedStage Borrow() => new(this);
+    protected override bool ReleaseHandle()
+    {
+        if (_initial) NativeMethods.DomStyleBindingCreateDestroy(handle);
+        else NativeMethods.DomStyleBindingRebindDestroy(handle);
+        return true;
+    }
+    internal readonly ref struct BorrowedStage
+    {
+        private readonly NativeDomBindingStageHandle _owner;
+        internal IntPtr Handle { get; }
+        internal BorrowedStage(NativeDomBindingStageHandle owner)
+        {
+            var acquired = false;
+            owner.DangerousAddRef(ref acquired);
+            if (!acquired) throw new ObjectDisposedException(nameof(NativeDomBindingStageHandle));
+            _owner = owner;
+            Handle = owner.DangerousGetHandle();
+        }
+        public void Dispose() => _owner.DangerousRelease();
+    }
+}
+
+public sealed unsafe partial class StyleRuntimeInterop
+{
+    private IntPtr _domStyleBinding;
+    internal IntPtr DomStyleBindingHandle => _domStyleBinding;
+    private readonly int _domBindingOwnerThread = Environment.CurrentManagedThreadId;
+
+    private void VerifyDomBindingThread()
+    {
+        if (Environment.CurrentManagedThreadId != _domBindingOwnerThread)
+            throw new InvalidOperationException("The DOM style binding belongs to another thread.");
+    }
+
+    private void RejectLoadWithDomBinding()
+    {
+        if (_domStyleBinding != IntPtr.Zero)
+            throw new InvalidOperationException("A bound DOM must be replaced through a prepared binding transaction.");
+    }
+
+    /// <summary>
+    /// Prepares the exact document's source slot, element index and empty projection cache.
+    /// Replacement preserves the runtime and sheets not owned by this binding. The host must
+    /// stage all other state, validate its inputs, then call Commit immediately before its
+    /// own no-callback reference swaps. Dispose retires old resources after that segment.
+    /// </summary>
+    internal PreparedDomBinding PrepareDomBinding(NativeDomDocument document)
+    {
+        NativeMethods.BindingPublication.EnsurePrepared();
+        // A first loader resolution can run application code. Revalidate the
+        // owner after linking and before capturing any native/managed bases.
+        VerifyDomBindingThread();
+        ThrowIfDisposed();
+        ArgumentNullException.ThrowIfNull(document);
+        if (_domStyleBinding == IntPtr.Zero && _document != IntPtr.Zero)
+            throw new InvalidOperationException("A legacy-loaded runtime cannot acquire a DOM source binding.");
+        EnsureDomDefaults();
+        return new PreparedDomBinding(this, document);
+    }
+
+    // Persistent initialization, separate from candidate publication. The host calls this
+    // before capturing its input bases, so any explicit stylesheet diagnostics are accounted for.
+    internal void EnsureDomDefaults()
+    {
+        VerifyDomBindingThread();
+        ThrowIfDisposed();
+        if (_defaults != 0) return;
+        long defaults = 0;
+        Utf8(ReadDefaultsCss(), source => Utf8("aether-defaults.css", name =>
+            NativeDomSync.Throw(NativeMethods.StyleRuntimeAddStyleSheet(
+                _runtime, source, 0, name, out defaults, out _))));
+        _defaults = defaults;
+    }
+
+    internal PreparedDomIndex PrepareDomIndex(NativeDomSnapshot snapshot) => new(this, snapshot);
+    internal PreparedDomIndex PrepareDomIndex(NativeDomDocument document, IReadOnlyList<IntPtr> elements) => new(this, document, elements);
+
+    internal sealed class PreparedDomIndex
+    {
+        private readonly StyleRuntimeInterop _owner;
+        private readonly IntPtr _document;
+        private readonly Dictionary<IntPtr, int> _baseIndex;
+        private readonly List<IntPtr> _elements = [];
+        private readonly Dictionary<IntPtr, int> _index = [];
+        internal PreparedDomIndex(StyleRuntimeInterop owner, NativeDomSnapshot snapshot)
+        {
+            owner.VerifyDomBindingThread();
+            owner.ThrowIfDisposed();
+            _owner = owner;
+            _document = owner._document;
+            _baseIndex = owner._elementIndex;
+            var root = FindSnapshotRoot(snapshot);
+            if (snapshot.Nodes[root].Handle != _document)
+                throw new InvalidOperationException("The index snapshot belongs to another document.");
+            BuildDomIndex(snapshot, root, _elements, _index);
+        }
+        internal PreparedDomIndex(StyleRuntimeInterop owner, NativeDomDocument document, IReadOnlyList<IntPtr> elements)
+        {
+            owner.VerifyDomBindingThread(); owner.ThrowIfDisposed();
+            using var borrow = document.Borrow();
+            if (!ReferenceEquals(owner._loadedDocument, document) || owner._document != borrow.Handle)
+                throw new InvalidOperationException("The staged index belongs to another loaded document.");
+            _owner = owner; _document = borrow.Handle; _baseIndex = owner._elementIndex;
+            foreach (var element in elements) { _index.Add(element, _elements.Count); _elements.Add(element); }
+        }
+        internal void Validate()
+        {
+            _owner.VerifyDomBindingThread();
+            if (_owner._disposed || _owner._document != _document || !ReferenceEquals(_owner._elementIndex, _baseIndex))
+                throw new InvalidOperationException("The runtime index base changed during preparation.");
+        }
+        // Only called in the binding's owner-thread commit after Validate. No late checks.
+        internal void Publish()
+        {
+            _owner._elements = _elements;
+            _owner._elementIndex = _index;
+        }
+    }
+
+    private static int FindSnapshotRoot(NativeDomSnapshot snapshot)
+    {
+        for (var i = 0; i < snapshot.Nodes.Length; i++)
+            if (snapshot.Nodes[i].Identity == snapshot.Token.OwnerIdentity) return i;
+        throw new InvalidOperationException("DOM snapshot has no root.");
+    }
+
+    private static void BuildDomIndex(NativeDomSnapshot snapshot, int root,
+        List<IntPtr> elements, Dictionary<IntPtr, int> index)
+    {
+        foreach (var child in snapshot.Nodes[root].Children)
+        {
+            var node = snapshot.Nodes[child];
+            if (!node.Alive || !node.Attached) continue;
+            if (node.Type == 1)
+            {
+                index.Add(node.Handle, elements.Count);
+                elements.Add(node.Handle);
+            }
+            BuildDomIndex(snapshot, child, elements, index);
+        }
+    }
+
+    internal (long Handle, bool Present, ulong SheetEpoch) ReadDomSourceSlot()
+    {
+        VerifyDomBindingThread();
+        ThrowIfDisposed();
+        NativeDomSync.Throw(NativeMethods.DomStyleBindingReadSlot(_domStyleBinding, out var handle, out var present, out var epoch));
+        return (handle, present != 0, epoch);
+    }
+
+    internal sealed class PreparedDomBinding : IDisposable
+    {
+        private readonly StyleRuntimeInterop _owner;
+        private readonly IntPtr _runtime;
+        private readonly IntPtr _previousBinding;
+        private readonly IntPtr _previousDocument;
+        private NativeDomDocument? _previousDocumentOwner;
+        private NativeDomDocument? _documentOwner;
+        private readonly IntPtr _document;
+        private readonly ImmutableDictionary<IntPtr, NativeComputedStyle> _styles = ImmutableDictionary<IntPtr, NativeComputedStyle>.Empty;
+        private readonly Dictionary<IntPtr, int> _index = [];
+        private readonly List<IntPtr> _elements = [];
+        private NativeDomSnapshot? _snapshot;
+        private NativeDomBindingStageHandle? _transaction;
+        private IntPtr _retiredBinding;
+        private IntPtr _retiredRevision;
+        private bool _committed;
+        private bool _disposed;
+
+        internal PreparedDomBinding(StyleRuntimeInterop owner, NativeDomDocument document)
+        {
+            _owner = owner;
+            _runtime = owner._runtime;
+            _previousBinding = owner._domStyleBinding;
+            _previousDocument = owner._document;
+            _previousDocumentOwner = owner._loadedDocument;
+            _documentOwner = document;
+            _transaction = new NativeDomBindingStageHandle(_previousBinding == IntPtr.Zero);
+            try
+            {
+                using var documentBorrow = document.Borrow();
+                _document = documentBorrow.Handle;
+                // Snapshot pins all storage until validation/publication finishes. A disposed
+                // NativeDomDocument can invalidate this stage but cannot leave a dangling root.
+                _snapshot = NativeDomSnapshot.Acquire(document);
+                BuildDomIndex(_snapshot, FindSnapshotRoot(_snapshot), _elements, _index);
+                if (_previousBinding != IntPtr.Zero)
+                {
+                    NativeDomWorkCounters.RecordRebind();
+                    var status = NativeMethods.DomStyleBindingPrepareRebind(_previousBinding, _document, out var transaction);
+                    _transaction.Initialize(transaction);
+                    NativeDomSync.Throw(status);
+                }
+                else
+                {
+                    var status = NativeMethods.DomStyleBindingPrepareCreate(_document, _runtime, out var transaction);
+                    _transaction.Initialize(transaction);
+                    NativeDomSync.Throw(status);
+                }
+                Validate();
+            }
+            catch { Dispose(); throw; }
+        }
+
+        internal void Validate()
+        {
+            _owner.VerifyDomBindingThread();
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            if (_committed || _owner._disposed || _owner._runtime != _runtime ||
+                _owner._domStyleBinding != _previousBinding || _owner._document != _previousDocument)
+                throw new InvalidOperationException("The DOM binding base changed during preparation.");
+            using var documentBorrow = _documentOwner!.Borrow();
+            using var previousBorrow = _previousDocumentOwner?.Borrow() ?? default;
+            if (!ReferenceEquals(_owner._loadedDocument, _previousDocumentOwner))
+                throw new InvalidOperationException("The loaded document owner changed during preparation.");
+            if (NativeDomSync.ReadToken(documentBorrow.Handle) != _snapshot!.Token)
+                throw new InvalidOperationException("The candidate document changed during preparation.");
+            using var transactionBorrow = _transaction!.Borrow();
+            NativeDomSync.Throw(_previousBinding == IntPtr.Zero
+                ? NativeMethods.BindingPublication.ValidateCreate(transactionBorrow.Handle)
+                : NativeMethods.BindingPublication.ValidateRebind(transactionBorrow.Handle));
+        }
+
+        internal void Commit()
+        {
+            Validate();
+            using var documentBorrow = _documentOwner!.Borrow();
+            using var previousBorrow = _previousDocumentOwner?.Borrow() ?? default;
+            IntPtr binding;
+            using var transactionBorrow = _transaction!.Borrow();
+            // Both paths were prepared before host validation. This segment only
+            // validates native bases, publishes prepared storage, and swaps refs.
+            var status = _previousBinding == IntPtr.Zero
+                ? NativeMethods.BindingPublication.CommitCreate(transactionBorrow.Handle, out binding)
+                : NativeMethods.BindingPublication.CommitRebind(transactionBorrow.Handle, out binding);
+            NativeDomSync.Throw(status);
+            _retiredBinding = _owner._domStyleBinding;
+            _retiredRevision = _owner._managedPublicationRevision;
+            _owner._domStyleBinding = binding;
+            _owner._document = _document;
+            _owner._loadedDocument = _documentOwner;
+            _owner._elements = _elements;
+            _owner._elementIndex = _index;
+            _owner._styles = _styles;
+            _owner._managedPublicationRevision = IntPtr.Zero;
+            _committed = true;
+        }
+
+        public void Dispose()
+        {
+            if (_disposed) return;
+            _owner.VerifyDomBindingThread();
+            _disposed = true;
+            _transaction?.Dispose();
+            _transaction = null;
+            if (_retiredBinding != IntPtr.Zero) NativeMethods.DomStyleBindingDestroy(_retiredBinding);
+            if (_retiredRevision != IntPtr.Zero) NativeMethods.StyleRevisionDestroy(_retiredRevision);
+            _retiredBinding = _retiredRevision = IntPtr.Zero;
+            _snapshot?.Dispose();
+            _snapshot = null;
+            _documentOwner = _previousDocumentOwner = null;
+        }
+    }
+}

@@ -7,6 +7,7 @@
 #include <cstdlib>
 #include <new>
 #include <thread>
+#include <atomic>
 static long fail_after=-1;
 static bool fault_delivered=false;
 void* operator new(std::size_t n) {
@@ -94,6 +95,19 @@ static void contract_and_ledger() {
     aether_style_state_result_t short_result{};
     tx=f.prepare();CHECK(aether_style_transaction_state_result(tx,&short_result)==AETHER_ERROR_INVALID_STATE);
     aether_style_transaction_destroy(tx);
+}
+// A journal-only identity is not a live-node ownership pin. Reject a foreign
+// control block before reading liveness, even if its immutable pointer aliases
+// an authentic base key. Under TSan the writer makes an accidental read visible.
+static void journal_membership_before_liveness() {
+    Fixture f;f.full();auto foreign=std::make_shared<node_identity_s>();foreign->owner=f.a;
+    ++f.doc->identity->mutation_epoch;
+    f.doc->mutation_journal.append(foreign,aether::dom::MutationKind::state,
+        f.doc->identity->mutation_epoch,f.doc->identity->structure_epoch,0,1);
+    std::atomic<bool> stop=false;
+    std::thread finalizer([&]{while(!stop.load(std::memory_order_relaxed)){foreign->alive=false;foreign->attached=false;foreign->alive=true;foreign->attached=true;}});
+    for(int i=0;i<100;++i){auto tx=f.prepare();CHECK(result(tx).fallback==AETHER_STATE_FALLBACK_IDENTITY);aether_style_transaction_destroy(tx);}
+    stop.store(true,std::memory_order_relaxed);finalizer.join();
 }
 // The compact semantic API must not report previous-operation bookkeeping.
 // Retain all three public snapshot forms across a real inherited change and a
@@ -186,8 +200,11 @@ static void overflow_and_poison() {
     CHECK(f.doc->mutation_journal.size()==0&&f.doc->mutation_journal.floor_epoch()>old_floor);
     // An earlier overflow must not hide a later wrap/discontinuity.
     for(int i=0;i<130;++i)aether_element_set_state(f.a,1000+i);
-    f.doc->identity->mutation_epoch=UINT64_MAX;
-    aether_element_set_state(f.a,0);
+    // Public DOM boundaries no longer wrap. Inject the adversarial journal
+    // discontinuity directly so poison/floor coverage stays independent.
+    f.doc->identity->mutation_epoch=0;
+    f.doc->mutation_journal.append(f.a->identity,aether::dom::MutationKind::state,0,
+        f.doc->identity->structure_epoch,f.a->state,f.a->state);
     CHECK(f.doc->mutation_journal.monotonicity_lost());
     CHECK(f.doc->mutation_journal.loss()==aether::dom::JournalLoss::overflow);
     const auto floor=f.doc->mutation_journal.floor_epoch();
@@ -311,4 +328,4 @@ static void oom_and_thread(int mode=0) {
     CHECK(commit_status==AETHER_OK&&!fault_delivered&&next);
     aether_style_revision_destroy(f.base);f.base=next;aether_style_transaction_destroy(tx);
 }
-int main(){contract_and_ledger();inherited_noop_contract();failed_commit_keeps_journal();overflow_and_poison();multiple_runtimes();callback_after_ack();local_callback_preserves_newer_input();oom_and_thread();oom_and_thread(1);oom_and_thread(2);oom_and_thread(3);std::printf("state prepare foundation: %zu checks passed\n",checks);}
+int main(){contract_and_ledger();journal_membership_before_liveness();inherited_noop_contract();failed_commit_keeps_journal();overflow_and_poison();multiple_runtimes();callback_after_ack();local_callback_preserves_newer_input();oom_and_thread();oom_and_thread(1);oom_and_thread(2);oom_and_thread(3);std::printf("state prepare foundation: %zu checks passed\n",checks);}

@@ -1,4 +1,7 @@
 #include "dom_types.h"
+#include "dom_style_source.h"
+#include "dom_strings.h"
+#include "../style_runtime/aether_dom_style_binding.h"
 #include "html_attribute_name.h"
 #include "../abi/aether_abi.h"
 #include <cctype>
@@ -94,26 +97,23 @@ class HtmlParser {
     /* ── Node creation helpers ─────────────────────────────── */
 
     aether_node_s* create_text(const std::string& text, aether_doc_s* doc) {
-        auto* n = new aether_node_s();
-        n->type = AETHER_NODE_TEXT;
+        auto lease = aether_make_editable_node(doc, AETHER_NODE_TEXT);
+        auto* n = lease->node.get();
         n->text = text;
-        n->style_node_id = doc->next_style_node_id++;
         return n;
     }
 
     aether_node_s* create_comment(const std::string& text, aether_doc_s* doc) {
-        auto* n = new aether_node_s();
-        n->type = AETHER_NODE_COMMENT;
+        auto lease = aether_make_editable_node(doc, AETHER_NODE_COMMENT);
+        auto* n = lease->node.get();
         n->text = text;
-        n->style_node_id = doc->next_style_node_id++;
         return n;
     }
 
-    std::unique_ptr<aether_node_s> create_element(const std::string& tag, aether_doc_s* doc) {
-        auto n = std::make_unique<aether_node_s>();
-        n->type = AETHER_NODE_ELEMENT;
+    aether_node_s* create_element(const std::string& tag, aether_doc_s* doc) {
+        auto lease = aether_make_editable_node(doc, AETHER_NODE_ELEMENT);
+        auto* n = lease->node.get();
         n->tag_name = tag;
-        n->style_node_id = doc->next_style_node_id++;
         return n;
     }
 
@@ -441,10 +441,13 @@ class HtmlParser {
 
         auto pending = create_element(tag_name, doc);
         pending->attributes = std::move(attributes);
-        stack.back()->children.push_back(pending.get());
+        if (auto value=pending->attributes.find("value"); value!=pending->attributes.end()) {
+            pending->authored_value_present=true; pending->authored_value=value->second;
+        }
+        stack.back()->children.push_back(pending);
         pending->parent = stack.back();
         // The tree takes ownership only after push_back succeeds.
-        aether_node_s* element = pending.release();
+        aether_node_s* element = pending;
 
         // HTML ignores the self-closing flag for these non-void elements.
         // This path owns its close/EOF and never exposes RCDATA to dispatch.
@@ -509,22 +512,47 @@ public:
 AETHER_API aether_status_t aether_doc_parse_html(aether_doc_t doc, const char* html) {
     if (!doc || !html) return AETHER_ERROR_NULL_ARG;
 
-    // Parsing is replacement, not append.  Reusing a document handle is the normal
-    // path for the native style bridge during component rebuilds, so retaining the
-    // previous children here would leak an entire DOM snapshot and make selectors
-    // operate over stale nodes.
-    // A single coarse structural record covers the whole replacement, including
-    // its text/attribute writes and any partially completed parse on allocation
-    // failure. Those writes are never candidates for state-only reconciliation.
-    aether_node_touch_typed(doc, aether::dom::MutationKind::structure, true);
-    for (auto* child : doc->children) aether_destroy_dom_subtree(child);
-    doc->children.clear();
-    doc->id_index.clear();
-    doc->next_style_node_id = 1;
-
-    size_t length = std::strlen(html);
-    HtmlParser parser(html, length);
-    parser.parse_document(doc);
-    doc->version++;
-    return AETHER_OK;
+    const bool bound=!doc->owner_control->binding.expired();
+    if(bound&&!aether_dom_valid_string(html))return AETHER_ERROR_INVALID_STATE;
+    if (!aether_dom_can_touch(doc, 1, true) || doc->version == INT64_MAX) return AETHER_ERROR_INVALID_STATE;
+    try {
+        // Parse into private ownership. No published input, ID or epoch changes on failure.
+        aether_doc_s candidate;
+        HtmlParser parser(html, std::strlen(html)); parser.parse_document(&candidate);
+        if(bound)for(const auto& [node,storage]:candidate.editable_nodes) {
+            if(!aether_dom_valid_string(node->tag_name)||!aether_dom_valid_string(node->text))return AETHER_ERROR_INVALID_STATE;
+            for(const auto& [name,value]:node->attributes)if(!aether_dom_valid_string(name)||!aether_dom_valid_string(value))return AETHER_ERROR_INVALID_STATE;
+        }
+        DomStyleSlotStageRef style_stage;
+        if(auto binding=doc->owner_control->binding.lock()) {
+            std::string source;auto status=aether_dom_collect_style_source(&candidate,source);if(status!=AETHER_OK)return status;
+            status=aether_dom_style_prepare_slot(binding,source,style_stage);if(status!=AETHER_OK)return status;
+        }
+        std::vector<aether_node_s*> retiring;
+        retiring.reserve(doc->editable_nodes.size());
+        for (const auto& [node, storage] : doc->editable_nodes) {
+            if(node->identity->disconnect_serial==UINT64_MAX)return AETHER_ERROR_INVALID_STATE;
+            retiring.push_back(node);
+        }
+        DomInteractionStageRef interactions;
+        auto interaction_status=aether_dom_interaction_prepare_stage(doc->owner_control,retiring,nullptr,nullptr,interactions,true);
+        if(interaction_status!=AETHER_OK)return interaction_status;
+        if(!aether_dom_interaction_validate_stage(interactions))return AETHER_ERROR_INVALID_STATE;
+        if(style_stage&&!aether_dom_style_validate_slot(style_stage))return AETHER_ERROR_INVALID_STATE;
+        // All allocations above; below this point only swaps and scalar stores.
+        aether_dom_interaction_commit_stage(interactions);
+        for (auto* node : retiring) aether_dom_retire_node(node);
+        for (auto& [node, storage] : candidate.editable_nodes) {
+            node->document_owner=doc->owner_control; node->identity->document_owner=doc->owner_control;
+        }
+        for (auto* node : candidate.children) node->parent=doc;
+        doc->children.swap(candidate.children); doc->editable_nodes.swap(candidate.editable_nodes);
+        doc->id_index.swap(candidate.id_index); doc->next_style_node_id=candidate.next_style_node_id;
+        aether_dom_dispose_unmanaged_children(&candidate);
+        for (auto& [node, storage] : candidate.editable_nodes) aether_dom_dispose_unmanaged_children(node);
+        ++doc->version; aether_node_touch_typed(doc, aether::dom::MutationKind::structure, true);
+        if(style_stage)aether_dom_style_commit_slot(style_stage);
+        return AETHER_OK;
+    } catch(const std::bad_alloc&) { return AETHER_ERROR_OUT_OF_MEMORY; }
+      catch(...) { return AETHER_ERROR_INVALID_STATE; }
 }

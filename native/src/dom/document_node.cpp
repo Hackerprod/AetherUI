@@ -2,20 +2,21 @@
 #include "../abi/aether_abi.h"
 
 static void rebuild_id_index(aether_doc_s* doc) {
-    doc->id_index.clear();
+    decltype(doc->id_index) candidate;
     std::function<void(aether_node_s*)> walk = [&](aether_node_s* node) {
         for (auto* child : node->children) {
             if (!child->is_generated && child->type == AETHER_NODE_ELEMENT) {
                 auto it = child->attributes.find("id");
                 if (it != child->attributes.end() && !it->second.empty()) {
                     // Preorder visits the first connected match before duplicates.
-                    doc->id_index.try_emplace(it->second, child);
+                    candidate.try_emplace(it->second, child);
                 }
             }
             walk(child);
         }
     };
     walk(doc);
+    doc->id_index.swap(candidate);
 }
 
 static aether_node_s* find_body(aether_node_s* node) {
@@ -29,13 +30,31 @@ static aether_node_s* find_body(aether_node_s* node) {
 
 AETHER_API aether_status_t aether_doc_create(aether_doc_t* out_doc) {
     if (!out_doc) return AETHER_ERROR_NULL_ARG;
-    *out_doc = new aether_doc_s();
-    return AETHER_OK;
+    *out_doc = nullptr;
+    try {
+        auto value=std::make_unique<aether_doc_s>();
+        auto* doc=value.get();
+        auto storage=std::make_shared<EditableNodeStorage>(std::move(value));
+        auto lease=std::make_unique<LegacyDocumentLease>(); lease->storage=storage;
+        doc->editable_storage=storage; doc->identity->storage=storage;
+        doc->owner_control->document=storage;doc->owns_storage_root=true;
+        doc->legacy_lease=lease.release(); *out_doc=doc; return AETHER_OK;
+    } catch(const std::bad_alloc&) { return AETHER_ERROR_OUT_OF_MEMORY; }
+      catch(...) { return AETHER_ERROR_INVALID_STATE; }
 }
 
 AETHER_API void aether_doc_destroy(aether_doc_t doc) {
     if (!doc) return;
-    aether_destroy_dom_subtree(doc);
+    if (doc->owner_control->owner_thread != std::this_thread::get_id()) return;
+    auto root_pin=aether_editable_lease(doc);
+    doc->owner_control->alive=false; aether_dom_retire_node(doc);
+    for (const auto& [node, storage] : doc->editable_nodes) aether_dom_retire_node(node);
+    aether_dom_dispose_unmanaged_children(doc);
+    for (const auto& [node, storage] : doc->editable_nodes) aether_dom_dispose_unmanaged_children(node);
+    doc->editable_nodes.clear();
+    auto* lease=doc->legacy_lease; doc->legacy_lease=nullptr;
+    if (lease) delete lease;
+    else if (!root_pin) aether_destroy_dom_subtree(doc);
 }
 
 AETHER_API int64_t aether_doc_get_version(aether_doc_t doc) {
@@ -57,7 +76,10 @@ AETHER_API aether_node_t aether_doc_get_document_element(aether_doc_t doc) {
 
 AETHER_API aether_node_t aether_doc_get_element_by_id(aether_doc_t doc, const char* id) {
     if (!doc || !id) return nullptr;
-    rebuild_id_index(doc);
-    auto it = doc->id_index.find(id);
-    return (it != doc->id_index.end()) ? it->second : nullptr;
+    if (aether_dom_access(doc) != AETHER_OK) return nullptr;
+    try {
+        rebuild_id_index(doc);
+        auto it = doc->id_index.find(id);
+        return (it != doc->id_index.end()) ? it->second : nullptr;
+    } catch(...) { return nullptr; }
 }

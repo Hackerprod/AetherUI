@@ -36,7 +36,21 @@ public sealed partial class UiDocumentHost
         Vertical,
     }
 
-    private sealed record ScrollbarDrag(ElementNode Container, ScrollAxis Axis, float GrabOffset);
+    private sealed record ScrollbarDrag(ElementNode Container, ScrollAxis Axis, float GrabOffset)
+    {
+        internal readonly NativeDomBinding? Binding = Container.NativeRecordCore?.Owner;
+        internal readonly ulong Identity = Container.NativeRecordCore?.Identity ?? 0;
+        internal readonly ulong DisconnectSerial = Container.NativeRecordCore?.DisconnectSerial ?? 0;
+    }
+
+    private void ValidateScrollbarContinuity()
+    {
+        if (_scrollbarDrag is not { } drag) return;
+        var record = drag.Container.NativeRecordCore;
+        if (drag.Binding is not null && (record is not { Attached: true } ||
+            !ReferenceEquals(record.Owner, drag.Binding) || !ReferenceEquals(drag.Container.BindingCore, drag.Binding) ||
+            record.Identity != drag.Identity || record.DisconnectSerial != drag.DisconnectSerial)) CancelScrollbarDrag();
+    }
 
     private ScrollOffset ScrollOffsetFor(ElementNode element) =>
         _scrollOffsets.TryGetValue(element, out var offset) ? offset : default;
@@ -56,6 +70,7 @@ public sealed partial class UiDocumentHost
         ArgumentNullException.ThrowIfNull(element);
         ThrowIfDisposed();
         if (DeferInput(() => SetScrollOffset(element, offset))) return;
+        using var interactionEntry = EnterInteractionEntry();
         EnsureVisualTree();
         if (_layout?.FindPrimaryBox(element) is not { } box || !IsScrollContainer(box)) return;
         var clamped = new ScrollOffset(
@@ -70,6 +85,7 @@ public sealed partial class UiDocumentHost
     private void RebuildScrollBoxIndex()
     {
         _scrollBoxesByStyleNode.Clear();
+        _scrollOffsetsByStyleNode.Clear();
         var liveScrollElements = new HashSet<ElementNode>();
         if (_layout is null) return;
         foreach (var box in _layout.Root.DescendantsAndSelf())
@@ -93,7 +109,6 @@ public sealed partial class UiDocumentHost
         foreach (var element in _scrollOffsets.Keys.Where(element => !liveScrollElements.Contains(element)).ToArray())
         {
             _scrollOffsets.Remove(element);
-            if (_nativeDom is not null) _scrollOffsetsByStyleNode.Remove(_nativeDom.GetStyleNodeId(element));
         }
     }
 
@@ -106,6 +121,7 @@ public sealed partial class UiDocumentHost
     {
         ThrowIfDisposed();
         if (DeferInput(() => MouseWheelScrolled(point, notches))) return;
+        using var interactionEntry = EnterInteractionEntry();
         ScrollByWheel(point, ScrollAxis.Vertical, -notches * 48f);
     }
 
@@ -114,6 +130,7 @@ public sealed partial class UiDocumentHost
     {
         ThrowIfDisposed();
         if (DeferInput(() => MouseHorizontalWheelScrolled(point, notches))) return;
+        using var interactionEntry = EnterInteractionEntry();
         // WM_MOUSEHWHEEL reports positive deltas for motion towards the right.
         ScrollByWheel(point, ScrollAxis.Horizontal, notches * 48f);
     }
@@ -183,6 +200,7 @@ public sealed partial class UiDocumentHost
 
     private void UpdateScrollbarDrag(PointF point)
     {
+        ValidateScrollbarContinuity();
         var drag = _scrollbarDrag;
         if (drag is null || !IsCurrentlyVisible(drag.Container) ||
             _layout?.FindPrimaryBox(drag.Container) is not { } box)

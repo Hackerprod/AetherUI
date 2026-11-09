@@ -71,6 +71,8 @@ public sealed partial class UiDocumentHost : IDisposable
     /// <see cref="TickTransitions"/> while <see cref="HasActiveTransitions"/> is true.
     /// </summary>
     private TransitionRuntimeInterop? _transitionRuntime;
+    private NativeTransitionToken _publishedTransitionToken;
+    private NativeTransitionToken _derivedTransitionToken;
 
     /// <summary>
     /// Pre-rebuild computed styles keyed by stable element identity. RebuildDocument clears
@@ -104,6 +106,7 @@ public sealed partial class UiDocumentHost : IDisposable
         UiHostOptions? options = null)
     {
         _component = component ?? throw new ArgumentNullException(nameof(component));
+        _component.BindRenderOwnerThread();
         ArgumentNullException.ThrowIfNull(textMeasurer);
         _renderer = renderer ?? throw new ArgumentNullException(nameof(renderer));
         _options = options ?? new UiHostOptions();
@@ -125,7 +128,7 @@ public sealed partial class UiDocumentHost : IDisposable
     public DocumentNode? Document => _document;
     public LayoutResult? Layout => _layout;
     public ElementNode? FocusedElement => _focused;
-    public bool NeedsRender => !_disposed && !_styleRetryBlocked && (_markupDirty || _invalidation != VisualInvalidation.None || _hasPendingPointerMove || _deferredInput.Count != 0 || _renderDeferred);
+    public bool NeedsRender => !_disposed && !_styleRetryBlocked && (_markupDirty || _invalidation != VisualInvalidation.None || _hasPendingPointerMove || _deferredInput.Count != 0 || _renderDeferred || TransitionProjectionNeedsRender() || DomInputsNeedImport() || HasPendingInteractionLosses());
     /// <summary>True while the CSS transition runtime is animating one or more properties.</summary>
     public bool HasActiveTransitions => _transitionRuntime?.HasActive == true;
 
@@ -137,14 +140,32 @@ public sealed partial class UiDocumentHost : IDisposable
     /// </summary>
     public bool TickTransitions(long nowMs)
     {
-        if (_transitionRuntime is null || !_transitionRuntime.HasActive)
+        ThrowIfDisposed();
+        var runtime = _transitionRuntime;
+        if (runtime is null) return false;
+        var beforeStatus = runtime.TryReadToken(out var before);
+        var status = runtime.TryTick(nowMs, out var active);
+        if (status != 0)
         {
-            return false;
+            RejectStyleProjection();
+            _styleRetryBlocked = true;
+            ThrowTransitionStatus(status);
         }
-
-        _transitionRuntime.Tick(nowMs);
-        InvalidateDisplayList();
-        return _transitionRuntime.HasActive;
+        var current = runtime.ReadToken();
+        // Explicit sampling may advance the transition portion of an otherwise
+        // current style certificate. Derived layout/display remain uncertified
+        // until rebuilt. A replay caller is also checked against its local R1.
+        if (beforeStatus == 0 && before == _publishedTransitionToken)
+            _publishedTransitionToken = current;
+        // Sampling acknowledges only TickError. An unrelated host staging or
+        // notification failure remains blocked until an explicit Render attempt.
+        if (current != before || before.TickError != 0)
+        {
+            _hasPendingPointerTarget = false;
+            _pendingPointerTarget = null;
+            InvalidateDisplayList(); // RequestRender respects the operation guard.
+        }
+        return active;
     }
     public float DpiScale => _dpiScale;
     /// <summary>Pipeline counters for deterministic performance regression tests.</summary>
@@ -222,13 +243,18 @@ public sealed partial class UiDocumentHost : IDisposable
     private void EnsureVisualTree()
     {
         if (_styleOperationDepth != 0) { _renderDeferred = true; return; }
+        using var interactionEntry = EnterInteractionEntry();
         ThrowIfDisposed();
         if (_markupDirty)
         {
             RebuildDocument();
         }
 
-        if (!HasCertifiedStyleSnapshot() && (_invalidation & VisualInvalidation.Style) == 0)
+        EnsureDomInputsCurrent();
+        DrainInteractionLosses();
+        ThrowIfDisposed();
+        EnsureDomInputsCurrent();
+        if (!HasCertifiedStyleSnapshot(requireDerived: false) && (_invalidation & VisualInvalidation.Style) == 0)
             RejectStyleProjection();
 
         if (_invalidation == VisualInvalidation.None && _displayList is not null)
@@ -240,35 +266,50 @@ public sealed partial class UiDocumentHost : IDisposable
 
         ResolveStyles();
 
-        if (_layoutInterop.PrepareTransitionContext(_transitionRuntime, _nativeVisualStyleMap!, _nativeLayout))
+        var derivedRuntime = _transitionRuntime!;
+        var derivedTransitionToken = _publishedTransitionToken;
+        ++_styleOperationDepth;
+        try
         {
-            InvalidateLayout();
-            _pendingPointerTarget = null;
-            _hasPendingPointerTarget = false;
-            if (_hasPointerPosition)
+            if (_layoutInterop.PrepareTransitionContext(_transitionRuntime, _nativeVisualStyleMap!, _nativeLayout))
             {
-                _pendingPointerMove = _lastPointerPosition;
-                _hasPendingPointerMove = true;
+                InvalidateLayout();
+                _pendingPointerTarget = null;
+                _hasPendingPointerTarget = false;
+                if (_hasPointerPosition)
+                {
+                    _pendingPointerMove = _lastPointerPosition;
+                    _hasPendingPointerMove = true;
+                }
             }
-        }
 
-        if ((_invalidation & VisualInvalidation.Layout) != 0)
-        {
-            // Native layout results borrow their resolved style map for layout-only
-            // nodes such as anonymous flex items. Destroy the dependent layout
-            // before replacing the style map; reversing this order leaves the
-            // layout destructor holding a dangling native style-map pointer.
-            _nativeLayout?.Dispose();
-            _nativeLayout = null;
-            _nativeLayoutStyleMap?.Dispose();
-            _nativeLayoutStyleMap = _nativeStyleRuntime.CreateResolvedStyleMap(_nativeDom!.Native);
-            _nativeLayout = _layoutInterop.CreateNativeLayout(_nativeDom, _nativeLayoutStyleMap, _viewport);
-            Interlocked.Increment(ref _layoutBuildCount);
-            _layout = _layoutInterop.Project(_nativeLayout, _nativeDom, _styles!, _viewport);
-            RebuildScrollBoxIndex();
-            AcknowledgeInvalidation(VisualInvalidation.Layout);
-            ProduceInvalidation(VisualInvalidation.DisplayList);
+            if ((_invalidation & VisualInvalidation.Layout) != 0)
+            {
+                // Native layout results borrow their resolved style map for layout-only
+                // nodes such as anonymous flex items. Destroy the dependent layout
+                // before replacing the style map; reversing this order leaves the
+                // layout destructor holding a dangling native style-map pointer.
+                _nativeLayout?.Dispose();
+                _nativeLayout = null;
+                _nativeLayoutStyleMap?.Dispose();
+                _nativeLayoutStyleMap = _nativeStyleRuntime.CreateResolvedStyleMap(_nativeDom!.Native);
+                _nativeLayout = _layoutInterop.CreateNativeLayout(_nativeDom, _nativeLayoutStyleMap, _viewport);
+                ValidateDerivedTransition(derivedRuntime, derivedTransitionToken);
+                Interlocked.Increment(ref _layoutBuildCount);
+                _layout = _layoutInterop.Project(_nativeLayout, _nativeDom, _styles!, _viewport);
+                RebuildScrollBoxIndex();
+                AcknowledgeInvalidation(VisualInvalidation.Layout);
+                ProduceInvalidation(VisualInvalidation.DisplayList);
+            }
+            ValidateDerivedTransition(derivedRuntime, derivedTransitionToken);
         }
+        catch
+        {
+            RejectStyleProjection();
+            _styleRetryBlocked = true;
+            throw;
+        }
+        finally { LeaveStyleOperation(); }
 
         // ResolveStyles has consumed and cleared only the previous state changes.
         // Blur can now enqueue :focus changes without losing them to that cleanup.
@@ -295,6 +336,9 @@ public sealed partial class UiDocumentHost : IDisposable
             return;
         }
 
+        ValidateDerivedTransition(derivedRuntime, derivedTransitionToken);
+        _derivedTransitionToken = derivedTransitionToken;
+
         // Scroll currently remains backed by layout coordinates. The retained scroll command
         // cut consumes this bit without entering either branch above.
         AcknowledgeInvalidation(VisualInvalidation.Scroll);
@@ -304,85 +348,11 @@ public sealed partial class UiDocumentHost : IDisposable
     {
         ++_styleOperationDepth;
         try { RebuildDocumentCore(); }
+        catch { _styleRetryBlocked = true; throw; }
         finally { LeaveStyleOperation(); }
     }
 
-    private void RebuildDocumentCore()
-    {
-        var markupSerial = _markupInputSerial;
-        CancelScrollbarDrag();
-        var focusedId = _focused?.Id;
-        var hoveredId = _hovered?.Id;
-        var activeId = _active?.Id;
-        var markup = _component.RenderMarkup();
-        var nativeDom = DomInterop.Parse(markup);
-        var previousNativeDom = _nativeDom;
-        if (_document is not null) _document.InputsChanged -= OnManagedInputsChanged;
-        _nativeDom = nativeDom;
-        _document = nativeDom.Document;
-        _knownManagedInputVersion = _document.InputVersion;
-        _inputReconciliationRequired = false;
-        _document.InputsChanged += OnManagedInputsChanged;
-        _styles = null;
-        _nativeLayout?.Dispose();
-        _nativeLayout = null;
-        _nativeLayoutStyleMap?.Dispose();
-        _nativeLayoutStyleMap = null;
-        _nativeVisualStyleMap?.Dispose();
-        _nativeVisualStyleMap = null;
-        _layout = null;
-        _displayList = null;
-        _displayListContainsPatchedChunks = false;
-
-        // The previous tree's ElementNode instances are discarded on every rebuild — this engine
-        // has no cross-render node identity yet. Clearing here drops the now-stale ComputedStyle
-        // entries for nodes that no longer exist. The styles are snapshotted by stable identity
-        // first so state-triggered markup changes can still start CSS transitions.
-        _previousStyleSnapshot = BuildStyleSnapshot();
-        _computedStyles = _computedStyles.Clear();
-        _stateDirtyElements.Clear();
-        _stateInputsToSync.Clear();
-        _nativeInitialStatesSynchronized = false;
-        _hoverChain.Clear();
-        _scrollOffsets.Clear();
-        _scrollOffsetsByStyleNode.Clear();
-        _scrollBoxesByStyleNode.Clear();
-
-        var authorCss = string.Join('\n', _document.GetElementsByTagName("style").Select(static element => element.TextContent));
-        // The UA defaults sheet is native-owned: the style runtime applies it at the
-        // engine-defaults layer on creation, so the host passes no defaults text here.
-        _nativeStyleRuntime.Load(nativeDom.Native, string.Empty, authorCss);
-        // The builder borrows its runtime. Rebind before releasing old DOM handles.
-        var previousTransitions = _transitionRuntime;
-        _transitionRuntime = new TransitionRuntimeInterop();
-        _renderingInterop.SetTransitionRuntime(_transitionRuntime.Handle);
-        previousTransitions?.Dispose();
-        previousNativeDom?.Dispose();
-
-        foreach (var input in _document.GetElementsByTagName("input"))
-        {
-            if (input.GetAttribute("value") is { } controlledValue)
-            {
-                SetKnownRuntimeValue(input, controlledValue);
-                if (input.Id is { Length: > 0 } controlledId)
-                {
-                    _uncontrolledInputValues[controlledId] = controlledValue;
-                }
-            }
-            else if (input.Id is { Length: > 0 } id && _uncontrolledInputValues.TryGetValue(id, out var saved))
-            {
-                SetKnownRuntimeValue(input, saved);
-            }
-        }
-
-        _focused = RestoreElement(focusedId, ElementState.Focus);
-        _hovered = RestoreElement(hoveredId, ElementState.Hover);
-        RestoreHoverChain(_hovered);
-        _active = RestoreElement(activeId, ElementState.Active);
-        _nativeSynchronizedDocumentVersion = _document.Version;
-        _markupDirty = _markupInputSerial != markupSerial;
-        ProduceInvalidation(VisualInvalidation.Style);
-    }
+    private void RebuildDocumentCore() => PublishComponentDocument();
 
     private ElementNode? RestoreElement(string? id, ElementState state)
     {
@@ -524,6 +494,7 @@ public sealed partial class UiDocumentHost : IDisposable
         }
 
         _disposed = true;
+        DisposeInteractionOwner();
         _component.Invalidated -= OnComponentInvalidated;
         if (_document is not null) _document.InputsChanged -= OnManagedInputsChanged;
         if (_imageResolver is not null) _imageResolver.Changed -= OnImageResourceChanged;

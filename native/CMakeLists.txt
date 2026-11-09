@@ -5,6 +5,8 @@ include(CTest)
 include(CMakePackageConfigHelpers)
 include(GNUInstallDirs)
 
+option(AETHERUI_ENABLE_HIT_ACCELERATION "Experimental certified ordinary-content hit accelerator" OFF)
+
 option(AETHERUI_ENABLE_CONTEXT_OWNERS "Experimental persistent effective context owners" OFF)
 option(AETHERUI_ENABLE_STATE_INCREMENTAL "Experimental native state transaction categories (requires independent gates)" OFF)
 
@@ -20,6 +22,11 @@ add_library(aether_core SHARED
     src/diagnostics/work_counters.cpp
     src/abi/aether_abi.cpp
     src/dom/node.cpp
+    src/dom/dom_snapshot.cpp
+    src/dom/dom_edit.cpp
+    src/dom/dom_owner.cpp
+    src/dom/dom_interaction.cpp
+    src/dom/dom_style_source.cpp
     src/dom/element_node.cpp
     src/dom/document_node.cpp
     src/dom/html_parser.cpp
@@ -94,6 +101,9 @@ add_library(aether_core SHARED
 )
 
 add_library(AetherUI::Core ALIAS aether_core)
+if(AETHERUI_ENABLE_HIT_ACCELERATION)
+    target_compile_definitions(aether_core PRIVATE AETHERUI_ENABLE_HIT_ACCELERATION)
+endif()
 if(AETHERUI_ENABLE_STATE_INCREMENTAL)
     target_compile_definitions(aether_core PRIVATE AETHERUI_ENABLE_STATE_INCREMENTAL)
 endif()
@@ -1280,6 +1290,11 @@ if(AETHERUI_BUILD_TESTS)
         target_link_libraries(aether_${measure_test}_test PRIVATE AetherUI::Core)
         add_test(NAME aether.${measure_test} COMMAND aether_${measure_test}_test)
     endforeach()
+    # The core feature definition is private. Keep the frame fixture's hot
+    # allocation probes in sync with the library exercised by this target.
+    if(AETHERUI_ENABLE_HIT_ACCELERATION)
+        target_compile_definitions(aether_contextual_transition_frame_test PRIVATE AETHERUI_ENABLE_HIT_ACCELERATION)
+    endif()
     add_executable(aether_contextual_paint_geometry_test tests/test_contextual_paint_geometry.cpp
         src/rendering/background_image_geometry.cpp src/rendering/border_painter.cpp
         src/css/border_radii.cpp src/style_runtime/css_variable_tokens.cpp)
@@ -1570,11 +1585,12 @@ endif()
 if(AETHERUI_BUILD_TESTS)
     # Compile the actual DOM mutation boundaries locally for deterministic OOM
     # injection, without adding a public ABI or touching resolver factories.
-    add_executable(aether_dom_mutation_journal_test tests/test_dom_mutation_journal.cpp
-        src/dom/node.cpp src/dom/element_node.cpp src/dom/document_node.cpp src/dom/html_parser.cpp)
+    add_executable(aether_dom_mutation_journal_test tests/test_dom_mutation_journal.cpp)
     target_include_directories(aether_dom_mutation_journal_test PRIVATE include src)
     target_compile_definitions(aether_dom_mutation_journal_test PRIVATE AETHER_EXPORTS)
-    target_link_libraries(aether_dom_mutation_journal_test PRIVATE AetherUI::Core)
+    if(NOT CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        target_link_libraries(aether_dom_mutation_journal_test PRIVATE AetherUI::Core)
+    endif()
     add_test(NAME aether.dom-mutation-journal COMMAND aether_dom_mutation_journal_test)
 endif()
 
@@ -1659,7 +1675,7 @@ if(AETHERUI_BUILD_TESTS AND AETHERUI_DOTNET_EXECUTABLE AND AETHERUI_ENABLE_CONTE
     AND AETHERUI_ENABLE_STATE_INCREMENTAL AND AETHERUI_ENABLE_WORK_COUNTERS)
     add_test(NAME aether.effective-context-managed
         COMMAND bash "${CMAKE_CURRENT_SOURCE_DIR}/../bindings/dotnet/tests/run-context-owner-tests.sh"
-        "${AETHERUI_DOTNET_EXECUTABLE}" "$<TARGET_FILE:aether_core>")
+        "${AETHERUI_DOTNET_EXECUTABLE}" "$<TARGET_FILE:aether_core>" "${CMAKE_CURRENT_BINARY_DIR}/managed-context-owners")
     set_tests_properties(aether.effective-context-managed PROPERTIES RUN_SERIAL TRUE)
 endif()
 
@@ -1696,4 +1712,175 @@ if(AETHERUI_BUILD_TESTS)
     target_include_directories(aether_generated_context_staging_test PRIVATE include src)
     target_link_libraries(aether_generated_context_staging_test PRIVATE AetherUI::Core)
     add_test(NAME aether.generated-context-staging COMMAND aether_generated_context_staging_test)
+endif()
+
+if(AETHERUI_BUILD_TESTS)
+    add_executable(aether_dom_storage_test tests/test_dom_storage.cpp)
+    target_include_directories(aether_dom_storage_test PRIVATE src)
+    target_link_libraries(aether_dom_storage_test PRIVATE AetherUI::Core)
+    add_test(NAME aether.dom-storage COMMAND aether_dom_storage_test)
+endif()
+
+if(AETHERUI_BUILD_TESTS)
+    add_executable(aether_transition_sync_test tests/test_transition_sync.cpp)
+    target_include_directories(aether_transition_sync_test PRIVATE src)
+    target_link_libraries(aether_transition_sync_test PRIVATE AetherUI::Core)
+    add_test(NAME aether.transition-sync COMMAND aether_transition_sync_test)
+endif()
+
+if(AETHERUI_BUILD_TESTS)
+    add_executable(aether_dom_snapshot_test tests/test_dom_snapshot.cpp)
+    target_include_directories(aether_dom_snapshot_test PRIVATE src)
+    target_link_libraries(aether_dom_snapshot_test PRIVATE AetherUI::Core)
+    add_test(NAME aether.dom-snapshot COMMAND aether_dom_snapshot_test)
+endif()
+
+if(AETHERUI_BUILD_TESTS)
+    add_executable(aether_dom_edit_test tests/test_dom_edit.cpp)
+    target_include_directories(aether_dom_edit_test PRIVATE src)
+    target_link_libraries(aether_dom_edit_test PRIVATE AetherUI::Core)
+    add_test(NAME aether.dom-edit COMMAND aether_dom_edit_test)
+endif()
+
+if(AETHERUI_BUILD_TESTS AND TARGET aether_publication_test_core)
+    target_compile_definitions(aether_publication_test_core PRIVATE AETHER_DOM_STYLE_TESTING)
+    add_executable(aether_dom_style_binding_test tests/test_dom_style_binding.cpp $<TARGET_OBJECTS:aether_publication_test_core>)
+    target_include_directories(aether_dom_style_binding_test PRIVATE include src)
+    target_compile_definitions(aether_dom_style_binding_test PRIVATE AETHER_DOM_STYLE_TESTING)
+    target_link_libraries(aether_dom_style_binding_test PRIVATE Threads::Threads)
+    add_test(NAME aether.dom-style-binding COMMAND aether_dom_style_binding_test)
+endif()
+
+if(AETHERUI_BUILD_TESTS AND TARGET aether_publication_test_core)
+    # White-box OOM checks must use a single core and its current binding registry.
+    target_sources(aether_dom_mutation_journal_test PRIVATE $<TARGET_OBJECTS:aether_publication_test_core>)
+    target_link_libraries(aether_dom_mutation_journal_test PRIVATE Threads::Threads)
+    add_executable(aether_dom_owner_test tests/test_dom_owner.cpp $<TARGET_OBJECTS:aether_publication_test_core>)
+    target_include_directories(aether_dom_owner_test PRIVATE include src)
+    target_link_libraries(aether_dom_owner_test PRIVATE Threads::Threads)
+    add_test(NAME aether.dom-owner COMMAND aether_dom_owner_test)
+endif()
+
+if(AETHERUI_BUILD_TESTS AND TARGET aether_publication_test_core)
+    add_executable(aether_dom_interaction_test tests/test_dom_interaction.cpp $<TARGET_OBJECTS:aether_publication_test_core>)
+    target_include_directories(aether_dom_interaction_test PRIVATE include src)
+    target_link_libraries(aether_dom_interaction_test PRIVATE Threads::Threads)
+    add_test(NAME aether.dom-interaction COMMAND aether_dom_interaction_test)
+endif()
+
+# Test-only allocator oracle. No observer API or allocation hook in aether_core.
+if(AETHERUI_BUILD_TESTS)
+    add_executable(aether_dom_commit_allocations_test tests/test_dom_commit_allocations.cpp)
+    set(dom_allocation_supported FALSE)
+    if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_CXX_COMPILER_ID STREQUAL "GNU"
+       AND TARGET aether_publication_test_core AND CMAKE_SIZEOF_VOID_P EQUAL 8
+       AND NOT CMAKE_INTERPROCEDURAL_OPTIMIZATION)
+        execute_process(COMMAND ${CMAKE_CXX_COMPILER} -print-file-name=libstdc++.a
+            OUTPUT_VARIABLE dom_static_cpp OUTPUT_STRIP_TRAILING_WHITESPACE)
+        find_program(dom_readelf readelf)
+        find_program(dom_nm nm)
+        set(dom_allocation_flags "${CMAKE_CXX_FLAGS} ${CMAKE_CXX_FLAGS_DEBUG} ${CMAKE_CXX_FLAGS_RELEASE} ${CMAKE_EXE_LINKER_FLAGS}")
+        if(EXISTS "${dom_static_cpp}" AND dom_readelf AND dom_nm AND NOT dom_allocation_flags MATCHES "sanitize|flto")
+            set(dom_allocation_supported TRUE)
+        endif()
+    endif()
+    if(dom_allocation_supported)
+        target_sources(aether_dom_commit_allocations_test PRIVATE $<TARGET_OBJECTS:aether_publication_test_core>)
+        target_include_directories(aether_dom_commit_allocations_test PRIVATE include src)
+        target_link_libraries(aether_dom_commit_allocations_test PRIVATE Threads::Threads)
+        target_compile_options(aether_dom_commit_allocations_test PRIVATE -fno-lto -fno-builtin)
+        target_link_options(aether_dom_commit_allocations_test PRIVATE -fno-lto -static-libstdc++ -static-libgcc
+            -Wl,--wrap=malloc -Wl,--wrap=calloc -Wl,--wrap=realloc
+            -Wl,--wrap=aligned_alloc -Wl,--wrap=posix_memalign)
+        get_target_property(dom_allocation_sources aether_core SOURCES)
+        string(JOIN "\n" dom_allocation_source_manifest ${dom_allocation_sources})
+        set(dom_allocation_manifest "${CMAKE_CURRENT_BINARY_DIR}/dom-commit-allocation-manifest-$<CONFIG>.txt")
+        file(GENERATE OUTPUT "${dom_allocation_manifest}" CONTENT
+            "Product sources (all aether_core SOURCES):\n${dom_allocation_source_manifest}\nProduct objects:\n$<JOIN:$<TARGET_OBJECTS:aether_publication_test_core>,\n>\nC++ runtime: ${dom_static_cpp}\n")
+        add_custom_command(TARGET aether_dom_commit_allocations_test POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -DEXECUTABLE=$<TARGET_FILE:aether_dom_commit_allocations_test>
+                -DMANIFEST=${dom_allocation_manifest} -DREADELF=${dom_readelf} -DNM=${dom_nm}
+                -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/verify_dom_commit_allocation_linkage.cmake VERBATIM)
+    else()
+        target_compile_definitions(aether_dom_commit_allocations_test PRIVATE AETHER_DOM_ALLOCATIONS_UNAVAILABLE)
+    endif()
+    add_test(NAME aether.dom-commit-allocations COMMAND aether_dom_commit_allocations_test)
+    set_tests_properties(aether.dom-commit-allocations PROPERTIES SKIP_RETURN_CODE 77)
+endif()
+
+# Real-allocator transition fault matrix; separate from the zero-allocation oracle.
+if(AETHERUI_BUILD_TESTS)
+    add_executable(aether_transition_allocations_test tests/test_transition_allocations.cpp)
+    if(dom_allocation_supported)
+        target_sources(aether_transition_allocations_test PRIVATE $<TARGET_OBJECTS:aether_publication_test_core>)
+        target_include_directories(aether_transition_allocations_test PRIVATE include src)
+        target_link_libraries(aether_transition_allocations_test PRIVATE Threads::Threads)
+        target_compile_options(aether_transition_allocations_test PRIVATE -fno-lto -fno-builtin)
+        target_link_options(aether_transition_allocations_test PRIVATE -fno-lto -static-libstdc++ -static-libgcc
+            -Wl,--wrap=malloc -Wl,--wrap=calloc -Wl,--wrap=realloc
+            -Wl,--wrap=aligned_alloc -Wl,--wrap=posix_memalign)
+        set(transition_allocation_manifest "${CMAKE_CURRENT_BINARY_DIR}/transition-allocation-manifest-$<CONFIG>.txt")
+        file(GENERATE OUTPUT "${transition_allocation_manifest}" CONTENT
+            "Product sources (all aether_core SOURCES):\n${dom_allocation_source_manifest}\nProduct objects:\n$<JOIN:$<TARGET_OBJECTS:aether_publication_test_core>,\n>\nC++ runtime: ${dom_static_cpp}\n")
+        add_custom_command(TARGET aether_transition_allocations_test POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -DEXECUTABLE=$<TARGET_FILE:aether_transition_allocations_test>
+                -DMANIFEST=${transition_allocation_manifest} -DREADELF=${dom_readelf} -DNM=${dom_nm}
+                -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/verify_dom_commit_allocation_linkage.cmake VERBATIM)
+    else()
+        target_compile_definitions(aether_transition_allocations_test PRIVATE AETHER_DOM_ALLOCATIONS_UNAVAILABLE)
+    endif()
+    add_test(NAME aether.transition-allocations COMMAND aether_transition_allocations_test)
+    set_tests_properties(aether.transition-allocations PROPERTIES SKIP_RETURN_CODE 77)
+endif()
+
+# Real-allocator DOM edit/snapshot fault matrix; independent of commit measurements.
+if(AETHERUI_BUILD_TESTS)
+    add_executable(aether_dom_edit_allocations_test tests/test_dom_edit.cpp)
+    if(dom_allocation_supported)
+        target_compile_definitions(aether_dom_edit_allocations_test PRIVATE AETHER_DOM_FAULT_LINK_UNIT)
+        target_sources(aether_dom_edit_allocations_test PRIVATE $<TARGET_OBJECTS:aether_publication_test_core>)
+        target_include_directories(aether_dom_edit_allocations_test PRIVATE include src)
+        target_link_libraries(aether_dom_edit_allocations_test PRIVATE Threads::Threads)
+        target_compile_options(aether_dom_edit_allocations_test PRIVATE -fno-lto -fno-builtin)
+        target_link_options(aether_dom_edit_allocations_test PRIVATE -fno-lto -static-libstdc++ -static-libgcc
+            -Wl,--wrap=malloc -Wl,--wrap=calloc -Wl,--wrap=realloc
+            -Wl,--wrap=aligned_alloc -Wl,--wrap=posix_memalign)
+        set(dom_edit_allocation_manifest "${CMAKE_CURRENT_BINARY_DIR}/dom-edit-allocation-manifest-$<CONFIG>.txt")
+        file(GENERATE OUTPUT "${dom_edit_allocation_manifest}" CONTENT
+            "Product sources (all aether_core SOURCES):\n${dom_allocation_source_manifest}\nProduct objects:\n$<JOIN:$<TARGET_OBJECTS:aether_publication_test_core>,\n>\nC++ runtime: ${dom_static_cpp}\n")
+        add_custom_command(TARGET aether_dom_edit_allocations_test POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -DEXECUTABLE=$<TARGET_FILE:aether_dom_edit_allocations_test>
+                -DMANIFEST=${dom_edit_allocation_manifest} -DREADELF=${dom_readelf} -DNM=${dom_nm}
+                -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/verify_dom_commit_allocation_linkage.cmake VERBATIM)
+    else()
+        target_compile_definitions(aether_dom_edit_allocations_test PRIVATE AETHER_DOM_ALLOCATIONS_UNAVAILABLE)
+    endif()
+    add_test(NAME aether.dom-edit-allocations COMMAND aether_dom_edit_allocations_test)
+    set_tests_properties(aether.dom-edit-allocations PROPERTIES SKIP_RETURN_CODE 77)
+endif()
+
+if(AETHERUI_BUILD_TESTS AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    add_executable(aether_hit_acceleration_test
+        tests/test_hit_acceleration.cpp $<TARGET_OBJECTS:aether_publication_test_core>)
+    target_include_directories(aether_hit_acceleration_test PRIVATE include src)
+    target_compile_definitions(aether_hit_acceleration_test PRIVATE $<TARGET_PROPERTY:aether_core,COMPILE_DEFINITIONS>)
+    target_compile_options(aether_hit_acceleration_test PRIVATE -ffp-contract=off)
+    target_link_libraries(aether_hit_acceleration_test PRIVATE Threads::Threads)
+    add_test(NAME aether.hit-acceleration COMMAND aether_hit_acceleration_test)
+endif()
+
+# Uniform test-only struct representation in the full core link unit and every
+# consumer. TARGET_OBJECTS alone does not propagate compile definitions. Never
+# enable this in the normal shared library or a consumer linked to that library.
+if(TARGET aether_publication_test_core)
+    target_compile_definitions(aether_publication_test_core PRIVATE AETHER_DOM_LIFETIME_TESTING)
+    add_test(NAME aether.dom-lifetime-overflow COMMAND aether_dom_owner_test --lifetime-overflow)
+    add_test(NAME aether.dom-lifetime-underflow COMMAND aether_dom_owner_test --lifetime-underflow)
+    get_property(dom_lifetime_targets DIRECTORY PROPERTY BUILDSYSTEM_TARGETS)
+    foreach(dom_lifetime_target IN LISTS dom_lifetime_targets)
+        get_target_property(dom_lifetime_sources ${dom_lifetime_target} SOURCES)
+        if("$<TARGET_OBJECTS:aether_publication_test_core>" IN_LIST dom_lifetime_sources)
+            target_compile_definitions(${dom_lifetime_target} PRIVATE AETHER_DOM_LIFETIME_TESTING)
+        endif()
+    endforeach()
 endif()

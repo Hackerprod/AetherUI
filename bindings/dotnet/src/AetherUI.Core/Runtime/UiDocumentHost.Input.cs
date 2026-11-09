@@ -14,7 +14,7 @@ namespace AetherUI.Runtime;
 /// </summary>
 public sealed partial class UiDocumentHost
 {
-    private readonly Dictionary<string, string> _uncontrolledInputValues = new(StringComparer.Ordinal);
+    private Dictionary<string, string> _uncontrolledInputValues = new(StringComparer.Ordinal);
 
     private bool _runtimeValuesDirty;
 
@@ -22,12 +22,15 @@ public sealed partial class UiDocumentHost
     {
         ThrowIfDisposed();
         if (DeferInput(() => TextInput(character))) return;
+        using var interactionEntry = EnterInteractionEntry();
         EnsureVisualTree();
-        if (_focused is not { TagName: "input" } input || input.IsDisabled || char.IsControl(character))
+        if (_focused is not { TagName: "input" } input || _focusClaim?.IsCurrent != true || input.IsDisabled || char.IsControl(character))
         {
             return;
         }
 
+        var claim = _focusClaim;
+        var continuity = InteractionContinuity.Capture(_document, input);
         var current = input.RuntimeValue ?? input.GetAttribute("value") ?? string.Empty;
         var maxLength = ParsePositiveInt(input.GetAttribute("maxlength"));
         if (maxLength is not null && current.Length >= maxLength.Value)
@@ -36,25 +39,29 @@ public sealed partial class UiDocumentHost
         }
 
         SetInputValue(input, current + character);
+        if (_disposed || !ReferenceEquals(claim, _focusClaim) || !claim!.IsCurrent || !continuity.Matches(this, input)) return;
         var uiEvent = Dispatch("input", input, default, character: character);
-        if (uiEvent.IsDefaultPrevented)
+        if (uiEvent.IsDefaultPrevented && !_disposed && ReferenceEquals(_focusClaim, claim) &&
+            claim!.IsCurrent && continuity.Matches(this, input))
         {
             SetInputValue(input, current);
         }
 
-        InvalidateLayout();
+        if (!_disposed) InvalidateLayout();
     }
 
     public void KeyPressed(UiKey key)
     {
         ThrowIfDisposed();
         if (DeferInput(() => KeyPressed(key))) return;
+        using var interactionEntry = EnterInteractionEntry();
         EnsureVisualTree();
         var target = _focused;
-        if (target is not null)
+        var claim = _focusClaim;
+        if (target is not null && claim?.IsCurrent == true)
         {
             var keyEvent = Dispatch("keydown", target, default, key);
-            if (keyEvent.IsDefaultPrevented) return;
+            if (keyEvent.IsDefaultPrevented || _disposed) return;
             // A handler may hide, disable or replace the focused node before
             // the key's default editing/activation action runs.
             EnsureVisualTree();
@@ -66,7 +73,8 @@ public sealed partial class UiDocumentHost
             return;
         }
 
-        if (target is null || !ReferenceEquals(target, _focused) || !IsEligibleForFocus(target))
+        if (_disposed || target is null || !ReferenceEquals(target, _focused) || !ReferenceEquals(claim, _focusClaim) ||
+            claim?.IsCurrent != true || !IsEligibleForFocus(target))
             return;
 
         if (target.TagName != "input" || target.IsDisabled)
@@ -74,8 +82,9 @@ public sealed partial class UiDocumentHost
             if (key is UiKey.Enter or UiKey.Space && target.TagName == "button")
             {
                 var click = Dispatch("click", target, default, key);
+                if (_disposed) return;
                 EnsureVisualTree();
-                if (!click.IsDefaultPrevented && ReferenceEquals(target, _focused) && IsEligibleForFocus(target) &&
+                if (!click.IsDefaultPrevented && ReferenceEquals(claim, _focusClaim) && claim.IsCurrent && ReferenceEquals(target, _focused) && IsEligibleForFocus(target) &&
                     !string.Equals(target.GetAttribute("type"), "button", StringComparison.OrdinalIgnoreCase))
                 {
                     SubmitClosestForm(target);
@@ -95,8 +104,9 @@ public sealed partial class UiDocumentHost
             }
 
             SetInputValue(input, current[..^1]);
+            if (_disposed || !ReferenceEquals(claim, _focusClaim) || !claim.IsCurrent) return;
             Dispatch("input", input, default, key);
-            InvalidateLayout();
+            if (!_disposed) InvalidateLayout();
         }
         else if (key == UiKey.Enter)
         {
@@ -106,10 +116,11 @@ public sealed partial class UiDocumentHost
 
     private void SetInputValue(ElementNode input, string value)
     {
-        NoteInputMutation();
+        var synchronized = input.BindingCore is NativeDomBinding;
+        if (!synchronized) NoteInputMutation();
         SetKnownRuntimeValue(input, value);
         _runtimeValuesDirty = true;
-        if (input.Id is { Length: > 0 } id)
+        if (!synchronized && input.Id is { Length: > 0 } id)
         {
             _uncontrolledInputValues[id] = value;
         }

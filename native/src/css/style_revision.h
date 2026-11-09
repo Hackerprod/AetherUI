@@ -30,11 +30,17 @@ class FrozenRetiredNode {
     aether_node_s* const node_;
     const std::shared_ptr<node_identity_s> node_lifetime_;
     const std::shared_ptr<aether_node_s> generated_leaf_;
+    const std::shared_ptr<EditableNodeStorage> editable_lease_;
+    const std::shared_ptr<EditableNodeStorage> document_lease_;
+    const std::shared_ptr<DomNodeOwnerPin> live_owner_pin_;
+    const std::vector<std::shared_ptr<EditableNodeStorage>> owner_leases_;
+    const std::vector<std::shared_ptr<DomNodeOwnerPin>> owner_relays_;
     const uint32_t impact_;
 public:
     explicit FrozenRetiredNode(const FrozenNodeRef& record):FrozenRetiredNode(record->payload_owner(),0){}
     FrozenRetiredNode(const FrozenNodePayloadRef& payload,uint32_t impact):node_(payload->node()),
-        node_lifetime_(payload->node_lifetime()),generated_leaf_(payload->generated_leaf()),impact_(impact){}
+        node_lifetime_(payload->node_lifetime()),generated_leaf_(payload->generated_leaf()),editable_lease_(payload->editable_lease()),
+        document_lease_(payload->document_lease()),live_owner_pin_(payload->live_owner_pin()),owner_leases_(payload->owner_leases()),owner_relays_(payload->owner_relays()),impact_(impact){}
     aether_node_s* node()const noexcept{return node_;}
     const auto& node_lifetime()const noexcept{return node_lifetime_;}
     const auto& generated_leaf()const noexcept{return generated_leaf_;}
@@ -46,6 +52,7 @@ struct StyleRevisionInput {
     aether_style_environment_t environment{};
     FrozenDocumentRef document;
     std::shared_ptr<node_identity_s> document_lifetime;
+    std::shared_ptr<EditableNodeStorage> document_lease;
     BackingRef backing;
     std::vector<RevisionEntryInput> entries;
     std::vector<RetiredEntryInput> retired;
@@ -70,6 +77,7 @@ struct FullPayloadRevisionInput {
     aether_style_environment_t environment{};
     FrozenDocumentRef document;
     std::shared_ptr<node_identity_s> document_lifetime;
+    std::shared_ptr<EditableNodeStorage> document_lease;
     std::vector<PayloadRevisionEntry> entries;
     std::vector<PayloadRevisionEntry> retired; // Full cross-document import only; never dereference retired nodes.
 };
@@ -170,6 +178,7 @@ class style_revision_s final {
     const aether_style_environment_t environment_;
     const aether::style::FrozenDocumentRef document_;
     const std::shared_ptr<node_identity_s> document_lifetime_;
+    const std::shared_ptr<EditableNodeStorage> document_lease_;
     // Present only for imported bound-record snapshots. New runtime revisions do
     // not materialize legacy backing; contextual maps bind the payload directory.
     const aether::style::BackingRef backing_;

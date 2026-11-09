@@ -7,9 +7,11 @@ template<class A,class B> bool same_owner(const std::shared_ptr<A>& a,const std:
     return a.get()==b.get()&&!a.owner_before(b)&&!b.owner_before(a);
 }
 bool live_entry(const PayloadDirectoryEntry* entry,const std::shared_ptr<const node_identity_s>& token)noexcept {
-    return entry&&entry->has_committed_state&&token&&token->alive&&token->attached&&
+    // Authentic immutable membership supplies storage AND current-owner relays
+    // before reading mutable liveness. Journal tokens alone own no DOM storage.
+    return entry&&entry->has_committed_state&&token&&
         same_owner(entry->payload->node_lifetime(),token)&&token->owner==entry->payload->node()&&
-        entry->payload->node_identity()==reinterpret_cast<uintptr_t>(token.get());
+        entry->payload->node_identity()==reinterpret_cast<uintptr_t>(token.get())&&token->alive&&token->attached;
 }
 }
 aether_state_fallback_t reconcile_state_inputs(const StyleRevisionRef& base,
@@ -29,9 +31,10 @@ aether_state_fallback_t reconcile_state_inputs(const StyleRevisionRef& base,
         expected=record.mutation_epoch;
         if(record.kind!=aether::dom::MutationKind::state)return AETHER_STATE_FALLBACK_NON_STATE_MUTATION;
         const auto& token=record.subject;
-        // A retained token can be inspected after node destruction. Never touch
-        // its raw owner until liveness, base membership and ownership agree.
-        if(!token||!token->alive||!token->attached)return AETHER_STATE_FALLBACK_IDENTITY;
+        // owner is immutable identity metadata, used solely as an opaque key.
+        // Do not inspect mutable alive/attached until the authentic base payload
+        // has proved membership and pinned this node's current ownership domain.
+        if(!token)return AETHER_STATE_FALLBACK_IDENTITY;
         const auto* entry=base->directory().find(reinterpret_cast<uintptr_t>(token->owner));
         if(!live_entry(entry,token))return AETHER_STATE_FALLBACK_IDENTITY;
         auto found=std::find_if(result.begin(),result.end(),[&](const auto& item){return item.token==token;});

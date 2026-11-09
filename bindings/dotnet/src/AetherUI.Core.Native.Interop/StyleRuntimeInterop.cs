@@ -88,12 +88,13 @@ public sealed unsafe partial class StyleRuntimeInterop : IDisposable
 
     private IntPtr _runtime;
     private NativeDomDocument? _ownedDocument;
+    private NativeDomDocument? _loadedDocument;
     private IntPtr _document;
     private long _defaults;
     private long _author;
     private bool _disposed;
     private ImmutableDictionary<IntPtr, NativeComputedStyle> _styles = ImmutableDictionary<IntPtr, NativeComputedStyle>.Empty;
-    private readonly Dictionary<IntPtr, int> _elementIndex = [];
+    private Dictionary<IntPtr, int> _elementIndex = [];
     private List<IntPtr> _elements = [];
 
     public StyleRuntimeInterop(float width, float height, float dpiScale)
@@ -119,6 +120,7 @@ public sealed unsafe partial class StyleRuntimeInterop : IDisposable
     public void Load(string markup, string defaultsCss, string authorCss)
     {
         ThrowIfDisposed();
+        RejectLoadWithDomBinding();
         _ownedDocument?.Dispose();
         _ownedDocument = NativeDomDocument.Parse(markup);
         Load(_ownedDocument, defaultsCss, authorCss);
@@ -130,8 +132,11 @@ public sealed unsafe partial class StyleRuntimeInterop : IDisposable
     public void Load(NativeDomDocument document, string defaultsCss, string authorCss)
     {
         ThrowIfDisposed();
+        RejectLoadWithDomBinding();
         ArgumentNullException.ThrowIfNull(document);
-        _document = document.Handle;
+        using var borrow = document.Borrow();
+        _loadedDocument = document;
+        _document = borrow.Handle;
         NativeMethods.StyleRuntimeClearCache(_runtime);
         _styles = _styles.Clear();
         if (_defaults != 0 && NativeMethods.StyleRuntimeRemoveStyleSheet(_runtime, _defaults) == 0)
@@ -152,6 +157,7 @@ public sealed unsafe partial class StyleRuntimeInterop : IDisposable
         IReadOnlyList<int> states, float width, float height, float dpiScale)
     {
         ThrowIfDisposed();
+        using var documentBorrow = BorrowLoadedDocument();
         if (states.Count != _elements.Count)
             throw new InvalidOperationException("Managed and native DOM element counts differ.");
         for (var i = 0; i < states.Count; i++)
@@ -175,6 +181,7 @@ public sealed unsafe partial class StyleRuntimeInterop : IDisposable
         IReadOnlyList<int> changedStates)
     {
         ThrowIfDisposed();
+        using var documentBorrow = BorrowLoadedDocument();
         if (changedElements.Count != changedStates.Count)
             throw new ArgumentException("Changed element and state counts differ.", nameof(changedStates));
 
@@ -204,7 +211,8 @@ public sealed unsafe partial class StyleRuntimeInterop : IDisposable
     {
         ThrowIfDisposed();
         ArgumentNullException.ThrowIfNull(document);
-        Throw(NativeMethods.StyleRuntimeCreateResolvedStyleMap(_runtime, document.Handle, out var styleMap));
+        using var borrow = document.Borrow();
+        Throw(NativeMethods.StyleRuntimeCreateResolvedStyleMap(_runtime, borrow.Handle, out var styleMap));
         return new NativeStyleMap(styleMap);
     }
 
@@ -308,16 +316,22 @@ public sealed unsafe partial class StyleRuntimeInterop : IDisposable
     }
 
     private void ThrowIfDisposed() => ObjectDisposedException.ThrowIf(_disposed, this);
+    private NativeDomBorrow BorrowLoadedDocument() => (_loadedDocument ??
+        throw new InvalidOperationException("The style runtime has no loaded document.")).Borrow();
 
     public void Dispose()
     {
         if (_disposed) return;
+        if (_domStyleBinding != IntPtr.Zero) VerifyDomBindingThread();
         _disposed = true;
         if (_managedPublicationRevision != IntPtr.Zero) NativeMethods.StyleRevisionDestroy(_managedPublicationRevision);
         _managedPublicationRevision = IntPtr.Zero;
+        if (_domStyleBinding != IntPtr.Zero) NativeMethods.DomStyleBindingDestroy(_domStyleBinding);
+        _domStyleBinding = IntPtr.Zero;
         if (_runtime != IntPtr.Zero) NativeMethods.StyleRuntimeDestroy(_runtime);
         _ownedDocument?.Dispose();
         _ownedDocument = null;
+        _loadedDocument = null;
         _runtime = _document = IntPtr.Zero;
         GC.SuppressFinalize(this);
     }

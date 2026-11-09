@@ -255,6 +255,8 @@ namespace {
         uint64_t doc = 0, node = 0;
         aether_node_t pointer = nullptr;
         std::shared_ptr<node_identity_s> lifetime, document_lifetime;
+        std::shared_ptr<EditableNodeStorage> document_lease, node_lease;
+        std::shared_ptr<DomNodeOwnerPin> live_owner;
         Channel transform, opacity;
     };
     double progress(const Channel& c, int64_t t) {
@@ -400,8 +402,14 @@ extern "C" {
                     return x.doc == e.after->document_identity && x.node == e.after->node_identity;
                 });
                 if (it == batch->state->entries.end()) {
+                    // Legacy callers may supply identity-only borrowed handles.
+                    // Do not dereference their raw event pointer to manufacture ownership.
+                    auto live_owner=token->live_owner_pin.lock();
+                    if(!live_owner)if(auto storage=aether_identity_lease(token))
+                        live_owner=aether_live_owner_pin(storage->node.get());
                     batch->state->entries.push_back({ e.after->document_identity, e.after->node_identity, e.node,
-                        e.after->node_lifetime, e.after->document_lifetime, {}, {} });
+                        e.after->node_lifetime, e.after->document_lifetime,
+                        aether_identity_lease(e.after->document_lifetime), aether_identity_lease(e.after->node_lifetime), std::move(live_owner), {}, {} });
                     it = std::prev(batch->state->entries.end());
                 }
                 const auto&before = e.before->style;
@@ -532,6 +540,8 @@ extern "C" {
     aether_status_t aether_contextual_transition_finalize_layout(aether_layout_result_t layout,
         aether_contextual_transition_batch_t batch) {
         if (!layout) return AETHER_ERROR_NULL_ARG;
+        // Even a failed/rolled-back presentation attempt invalidates prior hits.
+        layout->invalidate_hit_acceleration();
         aether::layout::LayoutOperationPin geometry_pin(layout);
         aether::layout::StyleOperationPin style_pin(layout->assets, {}, false);
         if (!style_pin.structure_valid()) return AETHER_ERROR_INVALID_STATE;

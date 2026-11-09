@@ -1,15 +1,8 @@
 #include "dom_types.h"
 #include "html_attribute_name.h"
 #include "../abi/aether_abi.h"
+#include <aether/aether_dom_sync.h>
 #include "../primitives/html_space_tokens.h"
-
-static aether_node_s* make_element(const std::string& tag, aether_doc_s* doc) {
-    auto* el = new aether_node_s();
-    el->type = AETHER_NODE_ELEMENT;
-    el->tag_name = tag;
-    el->style_node_id = doc->next_style_node_id++;
-    return el;
-}
 
 AETHER_API char* aether_element_get_tag_name(aether_node_t element) {
     if (!element || element->type != AETHER_NODE_ELEMENT) return nullptr;
@@ -18,8 +11,10 @@ AETHER_API char* aether_element_get_tag_name(aether_node_t element) {
 
 AETHER_API char* aether_element_get_attribute(aether_node_t element, const char* name) {
     if (!element || element->type != AETHER_NODE_ELEMENT || !name) return nullptr;
-    auto it = element->attributes.find(aether::canonical_html_attribute_name(name));
-    return (it != element->attributes.end()) ? aether::strdup(it->second.c_str()) : nullptr;
+    try {
+        auto it = element->attributes.find(aether::canonical_html_attribute_name(name));
+        return (it != element->attributes.end()) ? aether::strdup(it->second.c_str()) : nullptr;
+    } catch(...) { return nullptr; }
 }
 
 AETHER_API int32_t aether_element_get_attribute_count(aether_node_t element) {
@@ -50,33 +45,33 @@ AETHER_API aether_status_t aether_element_set_attribute(
         return AETHER_ERROR_NULL_ARG;
     }
 
-    const std::string attribute_name = aether::canonical_html_attribute_name(name);
-    // Conservatively invalidate before map/string writes: insertion can succeed
-    // before a later allocation throws. Never leave that partial input untracked.
-    aether_node_touch_typed(element, aether::dom::MutationKind::attribute);
-    if (attribute_name == "id") {
-        auto* root = element;
-        while (root->parent) root = root->parent;
-        if (root->type == AETHER_NODE_DOCUMENT) {
-            auto* document = static_cast<aether_doc_s*>(root);
-            auto existing = element->attributes.find("id");
-            if (existing != element->attributes.end()) {
-                auto indexed = document->id_index.find(existing->second);
-                if (indexed != document->id_index.end() && indexed->second == element) {
-                    document->id_index.erase(indexed);
-                }
-            }
-            document->id_index[std::string(value)] = element;
-        }
+    if (auto owner=element->document_owner.lock(); owner&&!owner->binding.expired()) {
+        aether_dom_token_v1_t token{},output{};auto status=aether_dom_read_token_v1(element,&token);if(status!=AETHER_OK)return status;
+        aether_dom_edit_spec_v1_t spec{};spec.kind=AETHER_DOM_SET_LEGACY_ATTRIBUTE;spec.target=element;spec.name={name,std::strlen(name)};spec.value={value,std::strlen(value)};
+        aether_dom_edit_t edit=nullptr;status=aether_dom_prepare_edit_v1(&token,&spec,&edit);if(status==AETHER_OK)status=aether_dom_edit_commit_v1(edit,&output);aether_dom_edit_destroy_v1(edit);return status;
     }
-
-    element->attributes[attribute_name] = value;
-    return AETHER_OK;
+    if (!aether_dom_can_touch(element)) return AETHER_ERROR_INVALID_STATE;
+    try {
+        const auto attribute_name=aether::canonical_html_attribute_name(name);
+        auto attributes=element->attributes; attributes[attribute_name]=value;
+        std::string base;
+        if (attribute_name=="value") base=value;
+        // No live id-cache mutation is required: lookup rebuilds locally.
+        element->attributes.swap(attributes);
+        if (attribute_name=="value") {
+            element->authored_value.swap(base); element->authored_value_present=true;
+            element->runtime_value_present=false;
+        }
+        aether_node_touch_typed(element,aether::dom::MutationKind::attribute);
+        return AETHER_OK;
+    } catch(const std::bad_alloc&) { return AETHER_ERROR_OUT_OF_MEMORY; }
+      catch(...) { return AETHER_ERROR_INVALID_STATE; }
 }
 
 AETHER_API aether_bool_t aether_element_has_attribute(aether_node_t element, const char* name) {
     if (!element || element->type != AETHER_NODE_ELEMENT || !name) return AETHER_FALSE;
-    return element->attributes.count(aether::canonical_html_attribute_name(name)) ? AETHER_TRUE : AETHER_FALSE;
+    try { return element->attributes.count(aether::canonical_html_attribute_name(name)) ? AETHER_TRUE : AETHER_FALSE; }
+    catch(...) { return AETHER_FALSE; }
 }
 
 AETHER_API aether_bool_t aether_element_has_class(aether_node_t element, const char* class_name) {
@@ -109,7 +104,19 @@ AETHER_API int32_t aether_element_get_state(aether_node_t element) {
 
 AETHER_API void aether_element_set_state(aether_node_t element, int32_t state) {
     if (element && element->state != state) {
+        if(aether_dom_access(element)!=AETHER_OK)return;
+        if (!aether_dom_can_touch(element)) {
+            if (auto owner=element->document_owner.lock()) owner->sticky_status=AETHER_ERROR_INVALID_STATE;
+            return;
+        }
         const int32_t old_state = element->state;
+        for (unsigned i=0; i<32; ++i) if ((static_cast<uint32_t>(old_state)^static_cast<uint32_t>(state)) & (uint32_t{1}<<i)) {
+            if (element->identity->state_bit_write_serial[i]==UINT64_MAX) {
+                if (auto owner=element->document_owner.lock()) owner->sticky_status=AETHER_ERROR_INVALID_STATE;
+                return;
+            }
+        }
+        for (unsigned i=0; i<32; ++i) if ((static_cast<uint32_t>(old_state)^static_cast<uint32_t>(state)) & (uint32_t{1}<<i)) ++element->identity->state_bit_write_serial[i];
         element->state = state;
         aether_node_touch_typed(element, aether::dom::MutationKind::state, false, old_state, state);
     }

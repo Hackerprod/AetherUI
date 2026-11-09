@@ -21,4 +21,8 @@
     <IncludeSymbols>true</IncludeSymbols>
     <SymbolPackageFormat>snupkg</SymbolPackageFormat>
   </PropertyGroup>
+  <!-- Dedicated allocation-oracle build only; never enabled by default. -->
+  <PropertyGroup Condition="'$(AetherDomCommitAllocationTesting)' == 'true' and ('$(MSBuildProjectName)' == 'AetherUI.Core' or '$(MSBuildProjectName)' == 'AetherUI.StylePublicationTests')">
+    <DefineConstants>$(DefineConstants);AETHER_DOM_COMMIT_ALLOCATION_TESTING</DefineConstants>
+  </PropertyGroup>
 </Project>

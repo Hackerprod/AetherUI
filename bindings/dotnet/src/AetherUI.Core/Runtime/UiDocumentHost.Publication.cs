@@ -33,7 +33,7 @@ public sealed partial class UiDocumentHost
 
     private void NoteInputMutation()
     {
-        ++_hostInputSerial;
+        _hostInputSerial = checked(_hostInputSerial + 1);
         _styleRetryBlocked = false;
         _managedProjectionOutOfDate = true;
         _hasPendingPointerTarget = false;
@@ -79,6 +79,9 @@ public sealed partial class UiDocumentHost
     private void ProduceInvalidation(VisualInvalidation flags)
     {
         for (var i = 0; i < _invalidationProduced.Length; ++i)
+            if (((int)flags & (1 << i)) != 0 && _invalidationProduced[i] == long.MaxValue)
+                throw new OverflowException("Host invalidation serial exhausted.");
+        for (var i = 0; i < _invalidationProduced.Length; ++i)
             if (((int)flags & (1 << i)) != 0) ++_invalidationProduced[i];
         _invalidation |= flags;
     }
@@ -120,10 +123,45 @@ public sealed partial class UiDocumentHost
         finally { _drainingInput = false; }
     }
 
-    private bool HasCertifiedStyleSnapshot() => !_disposed && !_managedProjectionOutOfDate &&
-        !_markupDirty && _document is not null && _document.Version == _publishedDocumentVersion &&
+    // Pure host-entry check. DOMsync may add its corresponding pure owner-token
+    // check beside this one; neither path imports or emits RenderRequested.
+    private bool TransitionProjectionNeedsRender() => _transitionRuntime is { } runtime &&
+        (runtime.TryReadToken(out var token) != 0 || !token.AllowsPublication ||
+         token != _publishedTransitionToken || token != _derivedTransitionToken);
+
+    private bool HasCertifiedStyleSnapshot(bool requireDerived = true) => !_disposed && !_managedProjectionOutOfDate &&
+        !_markupDirty && !DomInputsNeedImport() && _document is not null && _document.Version == _publishedDocumentVersion &&
         _document.InputVersion == _publishedDocumentInputVersion &&
-        _nativeStyleRuntime.IsCurrent(_publishedStyleToken);
+        _nativeStyleRuntime.IsCurrent(_publishedStyleToken) &&
+        _transitionRuntime is { } runtime && runtime.IsCurrent(_publishedTransitionToken) &&
+        (!requireDerived || _derivedTransitionToken == _publishedTransitionToken);
+
+    private static void ThrowTransitionStatus(int status)
+    {
+        if (status == -3) throw new OutOfMemoryException("Transition sampling failed; no new frame or hit is certified.");
+        if (status != 0) throw new InvalidOperationException($"Transition projection is unavailable (native status {status}).");
+    }
+
+    private void RequireHealthyTransitions(TransitionRuntimeInterop runtime)
+    {
+        var status = runtime.TryReadToken(out var token);
+        if (status == 0) status = token.TickError;
+        if (status == 0) return;
+        RejectStyleProjection();
+        _styleRetryBlocked = true;
+        ThrowTransitionStatus(status);
+    }
+
+    private void ValidateDerivedTransition(TransitionRuntimeInterop runtime, NativeTransitionToken token)
+    {
+        if (!_disposed && ReferenceEquals(runtime, _transitionRuntime) && runtime.IsCurrent(token) &&
+            HasCertifiedStyleSnapshot(requireDerived: false)) return;
+        RejectStyleProjection();
+        _styleRetryBlocked = true;
+        ThrowIfDisposed();
+        RequireHealthyTransitions(runtime);
+        throw new InvalidOperationException("Inputs or transitions changed while preparing derived output; no new frame or hit is certified.");
+    }
 
     private void RejectStyleProjection()
     {

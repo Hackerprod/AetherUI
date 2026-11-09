@@ -22,8 +22,18 @@ FrozenNodePayload::FrozenNodePayload(const NodePayloadInput& in) :
     node_identity_(in.node_identity),
     node_lifetime_(in.node_lifetime),
     document_lifetime_(in.document_lifetime),
-    generated_leaf_(in.generated_leaf) {}
+    generated_leaf_(in.generated_leaf), editable_lease_(aether_editable_lease(in.node)),
+    document_lease_(aether_identity_lease(in.document_lifetime)),
+    live_owner_pin_(aether_live_owner_pin(in.node)) {
+        auto retain_owner = [&](aether_node_s* owner) {
+            if(auto lease=aether_editable_lease(owner)) owner_leases_.push_back(std::move(lease));
+            if(auto relay=aether_live_owner_pin(owner)) owner_relays_.push_back(std::move(relay));
+        };
+        for(auto* owner=in.node->parent;owner;owner=owner->parent) retain_owner(owner);
+        if(in.node->style_origin && in.node->style_origin!=in.node->parent) retain_owner(in.node->style_origin);
+    }
 aether_status_t freeze_node_payload(const NodePayloadInput& in, FrozenNodePayloadRef& out) noexcept {
+    const auto document_pin=aether_identity_lease(in.document_lifetime);
     if (!in.node || !in.style || (in.origin != RecordOrigin::legacy && in.origin != RecordOrigin::runtime)) return AETHER_ERROR_INVALID_STATE;
     if (in.node_lifetime) {
         if (!in.node_lifetime->alive || in.node_lifetime->owner != in.node ||
@@ -42,6 +52,7 @@ aether_status_t freeze_node_payload(const NodePayloadInput& in, FrozenNodePayloa
         !in.node_lifetime || !in.document_lifetime)) return AETHER_ERROR_INVALID_STATE;
     try { FrozenNodePayloadRef result(new const FrozenNodePayload(in)); out = std::move(result); return AETHER_OK; }
     catch (const std::bad_alloc&) { return AETHER_ERROR_OUT_OF_MEMORY; }
+    catch (...) { return AETHER_ERROR_INVALID_STATE; }
 }
 aether_status_t freeze_node_record(const NodeRecordInput& in, FrozenNodeRef& out) noexcept {
     if (in.origin == RecordOrigin::runtime && (!in.measures ||

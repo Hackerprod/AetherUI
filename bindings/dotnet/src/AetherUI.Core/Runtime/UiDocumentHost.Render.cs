@@ -20,10 +20,11 @@ public sealed partial class UiDocumentHost
     {
         ThrowIfDisposed();
         if (_styleOperationDepth != 0 || _renderDepth != 0) { _renderDeferred = true; return; }
+        using var interactionEntry = EnterInteractionEntry();
         _styleRetryBlocked = false; // An explicit call permits one new bounded attempt.
         ++_renderDepth;
         try { RenderCore(); }
-        finally { --_renderDepth; }
+        finally { --_renderDepth; DrainDomNotification(); }
     }
 
     private void RenderCore()
@@ -189,13 +190,28 @@ public sealed partial class UiDocumentHost
 
         if (_nativeVisualStyleMap is null)
             _nativeVisualStyleMap = _nativeStyleRuntime.CreateResolvedStyleMap(_nativeDom!.Native);
+        var runtime = _transitionRuntime!;
+        var transitionToken = _publishedTransitionToken;
         var displayListStart = Stopwatch.GetTimestamp();
-        _displayList = AttachResolvedImages(_renderingInterop.Build(_nativeLayout, _nativeVisualStyleMap,
-            _focused is null ? IntPtr.Zero : _nativeDom!.GetNativeHandle(_focused)));
-        _displayListContainsPatchedChunks = false;
-        Interlocked.Add(ref _displayListBuildTimestampTicks, Stopwatch.GetTimestamp() - displayListStart);
-        Interlocked.Increment(ref _displayListBuildCount);
-        AcknowledgeInvalidation(VisualInvalidation.DisplayList);
+        ++_styleOperationDepth;
+        try
+        {
+            var candidate = AttachResolvedImages(_renderingInterop.Build(_nativeLayout, _nativeVisualStyleMap,
+                _focused is null ? IntPtr.Zero : _nativeDom!.GetNativeHandle(_focused)));
+            ValidateDerivedTransition(runtime, transitionToken);
+            _displayList = candidate;
+            _displayListContainsPatchedChunks = false;
+            Interlocked.Add(ref _displayListBuildTimestampTicks, Stopwatch.GetTimestamp() - displayListStart);
+            Interlocked.Increment(ref _displayListBuildCount);
+            AcknowledgeInvalidation(VisualInvalidation.DisplayList);
+        }
+        catch
+        {
+            RejectStyleProjection();
+            _styleRetryBlocked = true;
+            throw;
+        }
+        finally { LeaveStyleOperation(); }
         return false;
     }
 

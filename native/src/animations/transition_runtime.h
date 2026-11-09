@@ -37,8 +37,8 @@ AETHER_API void aether_transition_runtime_destroy(aether_transition_runtime_t ru
    delay uses double seconds * 1000 and truncation. Unrepresentable conversions
    return AETHER_ERROR_INVALID_STATE without changing any runtime entry, even
    another property's cancellation. A host ignoring this error sees the old
-   state, not a replacement or cancellation. This temporal rejection guarantee
-   does not change the existing allocation-failure behavior. NaN duration is
+   state, not a replacement or cancellation. Allocation failures also leave both
+   active and finished entries unchanged. NaN duration is
    ineligible, like non-positive duration; unused invalid times do not reject.
 
    All int64 host timestamps are accepted. The conceptual now_ms + delay may
@@ -51,7 +51,10 @@ AETHER_API aether_status_t aether_transition_runtime_observe(
     const aether_computed_style_t* after,
     int64_t now_ms);
 
-/* Advances every active transition to now_ms. Transitions whose progress
+/* Advances every active transition to now_ms. Allocation failure leaves state
+   unchanged, returns prior logical activity and records sticky TickError; use
+   aether_transition_sync.h try_tick/read_token for unambiguous status.
+   Transitions whose progress
    reaches 1 are moved into a "finished" set that still serves their exact
    end value to the overrides until an observation supersedes or cancels them,
    or the runtime is destroyed. Returns AETHER_TRUE while any transition remains
@@ -86,11 +89,15 @@ AETHER_API void aether_display_list_builder_set_transition_runtime(
 #ifdef __cplusplus
 #include <unordered_set>
 #include "../css/context_owners.h"
+// Private deterministic allocation-failure seam, thread-local; -1 disables.
+extern "C" AETHER_API void aether_transition_test_fail_after(int64_t allocations) noexcept;
+extern "C" AETHER_API void aether_transition_test_set_counters(aether_transition_runtime_t runtime,
+    uint64_t mutation, uint64_t status) noexcept;
 // Private value snapshot: active TRANSFORM only, including its delay phase.
 std::unordered_set<aether_node_t> aether_active_transform_owners(aether_transition_runtime_t runtime);
 #endif
 
 #ifdef __cplusplus
-// Null means uncertified after a failed mutation; caller must use complete oracle.
+// Immutable active TRANSFORM membership, shared with the prepared state.
 aether::style::ContextOwnersRef aether_active_transform_snapshot(aether_transition_runtime_t runtime) noexcept;
 #endif

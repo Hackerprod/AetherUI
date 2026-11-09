@@ -49,7 +49,7 @@ style_revision_s::style_revision_s(const StyleRevisionInput& in):
     static_context_owners_(import_context_causes(in)),context_topology_(make_context_lineage()),
     contextual_(in.contextual),generation_(in.generation),document_identity_(in.document_identity),input_epoch_(in.input_epoch),
     structure_epoch_(in.structure_epoch),style_tree_epoch_(in.style_tree_epoch),environment_(in.environment),document_(in.document),
-    document_lifetime_(in.document_lifetime),backing_(in.backing),
+    document_lifetime_(in.document_lifetime),document_lease_(aether_identity_lease(in.document_lifetime)),backing_(in.backing),
     entries_(ImmutableArray<FrozenRevisionEntry>::generate(in.entries.size(),[&](size_t i){return FrozenRevisionEntry(in.entries[i]);})),
     changes_(ImmutableArray<FrozenRevisionEntry>::generate(in.entries.size()+in.retired.size(),[&](size_t i){
         if(i<in.entries.size())return FrozenRevisionEntry(in.entries[i]);const auto& old=in.retired[i-in.entries.size()];
@@ -91,7 +91,7 @@ style_revision_s::style_revision_s(const CertifiedRevisionDelta& in,PayloadDirec
     }()),
     contextual_(in.header_.contextual),generation_(in.header_.generation),document_identity_(in.header_.document_identity),
     input_epoch_(in.header_.input_epoch),structure_epoch_(in.header_.structure_epoch),style_tree_epoch_(in.header_.style_tree_epoch),
-    environment_(in.header_.environment),document_(in.header_.document),document_lifetime_(in.header_.document_lifetime),
+    environment_(in.header_.environment),document_(in.header_.document),document_lifetime_(in.header_.document_lifetime),document_lease_(aether_identity_lease(in.header_.document_lifetime)),
     backing_(),entries_(),changes_(),retired_nodes_(in.retired_),directory_(std::move(directory)),manifest_(std::move(manifest)),impacts_(std::move(impacts)){}
 namespace aether::style {
 CertifiedRevisionDelta::CertifiedRevisionDelta(StyleRevisionRef base,FullPayloadRevisionInput header,bool stable,std::vector<Change> changes,
@@ -143,7 +143,7 @@ aether_status_t CertifiedRevisionDelta::build_full_data(const StyleRevisionRef& 
         auto retired_nodes=ImmutableArray<FrozenRetiredNode>::generate(retired.size(),[&](size_t i){return FrozenRetiredNode(retired[i],all);});
         FullPayloadRevisionInput header;header.contextual=in.contextual;header.generation=in.generation;header.document_identity=in.document_identity;
         header.input_epoch=in.input_epoch;header.structure_epoch=in.structure_epoch;header.style_tree_epoch=in.style_tree_epoch;
-        header.environment=in.environment;header.document=in.document;header.document_lifetime=in.document_lifetime;
+        header.environment=in.environment;header.document=in.document;header.document_lifetime=in.document_lifetime;header.document_lease=aether_identity_lease(in.document_lifetime);
         out={std::move(header),stable,std::move(changes),std::move(states),std::move(impacts),std::move(retired_nodes)};
         return AETHER_OK;
     }catch(const std::bad_alloc&){return AETHER_ERROR_OUT_OF_MEMORY;}
