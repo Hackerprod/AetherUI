@@ -1,6 +1,8 @@
 bin/
 obj/
 tools/
+# The .NET tools directory contains checked-in application source.
+!bindings/dotnet/tools/
 .vs/
 .idea/
 *.user
