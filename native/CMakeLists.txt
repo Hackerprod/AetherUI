@@ -1285,6 +1285,11 @@ if(AETHERUI_BUILD_TESTS)
         target_link_libraries(aether_${measure_test}_test PRIVATE AetherUI::Core)
         add_test(NAME aether.${measure_test} COMMAND aether_${measure_test}_test)
     endforeach()
+    # The core feature definition is private. Keep the frame fixture's hot
+    # allocation probes in sync with the library exercised by this target.
+    if(AETHERUI_ENABLE_HIT_ACCELERATION)
+        target_compile_definitions(aether_contextual_transition_frame_test PRIVATE AETHERUI_ENABLE_HIT_ACCELERATION)
+    endif()
     add_executable(aether_contextual_paint_geometry_test tests/test_contextual_paint_geometry.cpp
         src/rendering/background_image_geometry.cpp src/rendering/border_painter.cpp
         src/css/border_radii.cpp src/style_runtime/css_variable_tokens.cpp)

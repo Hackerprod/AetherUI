@@ -3,8 +3,9 @@
 Base: `c1c5548bb43ccb049cf315f4cfc05546a9cc8be5`. The exact E1 proposal
 `8710113e6dacca7f811ea1170fb5e6c3dc90b9f2` received independent design PASS
 (SHA256 `1285c355dbea78102a1a8ce041525c7751cc045b776f6f366c787d5e091893d1`).
-Implementation is an isolated review candidate, not independently approved.
-`AETHERUI_ENABLE_HIT_ACCELERATION` defaults OFF. No host opt-in or activation.
+The isolated E1 implementation at `cf66218ba1caa04fa88a23e9ab1971093e1f99cd`
+received independent scoped PASS. This does not approve complete phase E or host
+activation. `AETHERUI_ENABLE_HIT_ACCELERATION` defaults OFF.
 
 ## What changed
 
@@ -126,7 +127,7 @@ the DLL normally and with --e-contract-baseline. Never overwrite a loaded librar
 Chromium sources cited in the approved proposal were read at pinned revision
 `2d4034e6c4e0a2881aa4539c4ba4604e9b45ecc9`; no Chromium process was executed.
 
-## Local checkpoint results (independent implementation review still pending)
+## Local checks at the initial implementation checkpoint
 
 - Native core Release builds: E1 ON and default OFF pass.
 - Registered CTest E1 ON differential: 27058 assertions, zero failures.
@@ -146,4 +147,38 @@ Chromium sources cited in the approved proposal were read at pinned revision
   managed 100-test suite, its four known historical Linux failures, Windows and
   macOS execution were not rerun or reclassified here.
 
-All results above are implementer checks, not independent implementation PASS.
+These are the implementer logs from the initial checkpoint. The later independent
+scoped PASS applies to cf66218; it does not turn these logs into independent runs.
+
+
+## Standard CMake frame-probe follow-up
+
+Independent review identified a CI coverage gap: the frame test linked the ON
+core but did not inherit its private HIT_ACCELERATION definition. Its earlier hot
+probe PASS came from an explicitly defined manual build, not the standard target.
+The CMake target now receives that definition only when the core flag is ON.
+
+The test prints which branch actually executed. ON requires the exact cached hit
+and a different point on the warm index to succeed under fail-new=0 without a
+failed allocation attempt. OFF prints the full-oracle branch and omits those hot
+probes. Both modes continue to require actual cold raw/styled allocation failures,
+null ABI results and valid same-point recovery after the injected failure ends.
+No runtime code or default feature flag changed.
+
+Reproduce the standard target in separate ON/OFF configurations:
+
+```sh
+cmake --build <build-dir> --target aether_contextual_transition_frame_test -j2
+ctest --test-dir <build-dir> -V -R '^aether.contextual_transition_frame$'
+```
+
+The verbose output must contain HIT_ACCELERATION=ON with hot-probe PASS in the ON
+build, or HIT_ACCELERATION=OFF with the oracle branch in the OFF build. This
+follow-up requires its own focused independent recheck before integration.
+
+Local follow-up execution passed the standard target build and registered CTest
+in both modes. ON output included hot exact-cache/different-point allocation
+probe PASS and cold failure/recovery PASS. OFF output explicitly selected the
+full oracle and passed cold failure/recovery. Generated flags.make contained
+HIT_ACCELERATION only for ON. These are standard-target results, unlike the
+manual hot probe reported at the initial checkpoint.

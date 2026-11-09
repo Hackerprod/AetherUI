@@ -133,6 +133,9 @@ int main() {
     const auto indexed_hit = aether_layout_result_hit_test(layout, 85, 10);
     fail_allocation_after = -1;
     REQUIRE(indexed_hit == child && failed_allocation_attempts == failed_before_hot);
+    std::puts("HIT_ACCELERATION=ON: hot exact-cache and different-point index allocation probes PASS");
+#else
+    std::puts("HIT_ACCELERATION=OFF: full oracle branch; hot allocation probes disabled");
 #endif
 
     // Force a cold ordinary query: a certified hot hit intentionally performs
@@ -153,6 +156,7 @@ int main() {
     REQUIRE(styled_failure == nullptr && failed_allocation_attempts > failed_before_styled);
     REQUIRE(aether_layout_result_hit_test_with_styles_and_scroll_offsets(
         layout, after_map, 90, 10, nullptr, nullptr) == child); // Same point recovers.
+    std::puts("Cold raw/styled ABI allocation failures and same-point recovery PASS");
 
     aether_display_list_builder_t builder{};
     REQUIRE(aether_display_list_builder_create(nullptr, nullptr, &builder) == AETHER_OK);
