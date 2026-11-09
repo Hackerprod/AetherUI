@@ -30,6 +30,15 @@ typedef struct aether_context_work_counters_v1_s {
     uint64_t allocations, index_nodes_visited, static_entries_visited;
     uint64_t fallback_reason;
 } aether_context_work_counters_v1_t;
+/* E1 ordinary-content queries only; input chrome remains the full oracle.
+ * Build work includes failed staging and is separate from warm query work. */
+typedef struct aether_hit_work_counters_v1_s {
+    uint64_t cache_hits, cache_misses, build_attempts, builds;
+    uint64_t build_boxes, build_range_nodes, query_range_nodes;
+    uint64_t exact_boxes, conservative_bounds, fallbacks, fallback_reason;
+    uint64_t allocation_requests, requested_bytes;
+} aether_hit_work_counters_v1_t;
+AETHER_API aether_status_t aether_hit_work_counters_get_v1(aether_hit_work_counters_v1_t* out_counters);
 AETHER_API aether_status_t aether_context_work_counters_get_v1(aether_context_work_counters_v1_t* out_counters);
 AETHER_API aether_bool_t aether_work_counters_set_enabled(aether_bool_t enabled);
 AETHER_API void aether_work_counters_reset(void);

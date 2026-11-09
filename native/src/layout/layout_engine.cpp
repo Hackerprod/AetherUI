@@ -5,6 +5,7 @@ using aether::diagnostics::WorkCounter;
 #include "layout_internal.h"
 #include <aether/aether_contextual_transitions.h>
 #include "input_hit_test.h"
+#include "hit_acceleration.h"
 #include "../animations/transition_runtime.h"
 #include <utility>
 
@@ -1764,6 +1765,21 @@ static aether_node_t hit_with_pin(aether_layout_result_t result, aether_style_ma
     if (!pin.structure_valid() || !pin.accepts_override()) return nullptr;
     const auto policy = styles ? BoxStylePolicy::effective_map : BoxStylePolicy::snapshot;
     input_callback_context_s context(pin.lookup(), offsets, user_data);
+#if defined(AETHERUI_ENABLE_HIT_ACCELERATION)
+    if (offsets) aether::layout::count_hit_fallback(aether::layout::HitFallback::callback);
+    else if (auto accelerator = aether::layout::prepare_hit_acceleration(*result, pin.lookup(), policy, x, y)) {
+        aether::diagnostics::count_work(aether::diagnostics::WorkCounter::hit_queries);
+        const auto cached = accelerator->cached(x, y);
+        aether::diagnostics::count_work(cached ? aether::diagnostics::WorkCounter::hit_cache_hits :
+            aether::diagnostics::WorkCounter::hit_cache_misses);
+        auto* hit = cached ? *cached : accelerator->query(x, y, pin.lookup());
+        if (!pin.structure_valid() || !context.valid() || !live_input_owner(pin.lookup(), hit) ||
+            !accelerator->matches(*result, pin.lookup(), policy)) return nullptr;
+        accelerator->remember(x, y, hit, pin.lookup());
+        result->hit_acceleration = std::move(accelerator);
+        return hit;
+    }
+#endif
     auto* hit = geometry.geometry()->hit_test(x, y, pin.lookup(), policy,
         offsets ? checked_input_offsets : nullptr, offsets ? &context : user_data);
     return pin.structure_valid() && context.valid() && live_input_owner(pin.lookup(), hit) ? hit : nullptr;

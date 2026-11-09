@@ -5,6 +5,7 @@ namespace {
 thread_local bool enabled = false;
 thread_local aether_work_counters_v1_t counters{};
 thread_local aether_context_work_counters_v1_t context{};
+thread_local aether_hit_work_counters_v1_t hit{};
 #endif
 }
 extern "C" {
@@ -19,8 +20,17 @@ AETHER_API aether_bool_t aether_work_counters_set_enabled(aether_bool_t value) {
 }
 AETHER_API void aether_work_counters_reset(void) {
 #if defined(AETHERUI_ENABLE_WORK_COUNTERS)
-    counters = {}; context = {};
+    counters = {}; context = {}; hit = {};
 #endif
+}
+AETHER_API aether_status_t aether_hit_work_counters_get_v1(aether_hit_work_counters_v1_t* out) {
+    if (!out) return AETHER_ERROR_NULL_ARG;
+#if defined(AETHERUI_ENABLE_WORK_COUNTERS)
+    *out = hit;
+#else
+    *out = {};
+#endif
+    return AETHER_OK;
 }
 AETHER_API aether_status_t aether_context_work_counters_get_v1(aether_context_work_counters_v1_t* out) {
     if (!out) return AETHER_ERROR_NULL_ARG;
@@ -71,6 +81,19 @@ void aether::diagnostics::count_work(WorkCounter counter, uint64_t amount) noexc
     case WorkCounter::context_index_visits: target = &context.index_nodes_visited; break;
     case WorkCounter::context_static_visits: target = &context.static_entries_visited; break;
     case WorkCounter::context_fallback_reason: context.fallback_reason = amount; return;
+    case WorkCounter::hit_cache_hits: target = &hit.cache_hits; break;
+    case WorkCounter::hit_cache_misses: target = &hit.cache_misses; break;
+    case WorkCounter::hit_build_attempts: target = &hit.build_attempts; break;
+    case WorkCounter::hit_builds: target = &hit.builds; break;
+    case WorkCounter::hit_build_boxes: target = &hit.build_boxes; break;
+    case WorkCounter::hit_build_ranges: target = &hit.build_range_nodes; break;
+    case WorkCounter::hit_query_ranges: target = &hit.query_range_nodes; break;
+    case WorkCounter::hit_exact_boxes: target = &hit.exact_boxes; break;
+    case WorkCounter::hit_conservative_bounds: target = &hit.conservative_bounds; break;
+    case WorkCounter::hit_fallbacks: target = &hit.fallbacks; break;
+    case WorkCounter::hit_allocations: target = &hit.allocation_requests; break;
+    case WorkCounter::hit_bytes: target = &hit.requested_bytes; break;
+    case WorkCounter::hit_fallback_reason: hit.fallback_reason = amount; return;
     }
     if (!target) return;
     constexpr auto maximum = std::numeric_limits<uint64_t>::max();

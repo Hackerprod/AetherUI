@@ -7,6 +7,7 @@
 #include <cstddef>
 #include <algorithm>
 #include <memory>
+#include <limits>
 #include <string>
 #include <vector>
 #include <unordered_map>
@@ -40,6 +41,8 @@ enum layout_scroll_completion_flag : uint8_t {
     LAYOUT_SCROLL_Y = 4,
     LAYOUT_SCROLL_TABLE_CELL = 8,
 };
+
+namespace aether::layout { class HitAcceleration; }
 
 struct aether_layout_result_s;
 struct aether_style_map_s;
@@ -266,6 +269,17 @@ struct inline_item_s {
 
 struct aether_layout_result_s {
     size_t references = 1;
+    // E1 cache/index owns maps and tokens, never its containing layout.
+    mutable std::shared_ptr<aether::layout::HitAcceleration> hit_acceleration;
+    uint64_t hit_presentation_serial = 0;
+    bool hit_acceleration_disabled = false;
+    void invalidate_hit_acceleration() noexcept {
+        hit_acceleration.reset();
+        if (hit_presentation_serial == std::numeric_limits<uint64_t>::max())
+            hit_acceleration_disabled = true;
+        else ++hit_presentation_serial;
+    }
+
     aether_layout_box_s* root = nullptr;
     // Immutable effective context for this result, installed before all passes.
     bool effective_context_enabled = false;
@@ -323,6 +337,7 @@ struct aether_layout_result_s {
     // remove the exact instance, including text fragments that have no primary
     // box entry, before its storage can be reused.
     void unregister_box(aether_layout_box_s* box) noexcept {
+        invalidate_hit_acceleration();
         paint_order.erase(std::remove(paint_order.begin(), paint_order.end(), box), paint_order.end());
         if (box->element) {
             const auto it = primary_boxes.find(box->element);

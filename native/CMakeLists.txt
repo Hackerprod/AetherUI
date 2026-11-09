@@ -5,6 +5,8 @@ include(CTest)
 include(CMakePackageConfigHelpers)
 include(GNUInstallDirs)
 
+option(AETHERUI_ENABLE_HIT_ACCELERATION "Experimental certified ordinary-content hit accelerator" OFF)
+
 option(AETHERUI_ENABLE_CONTEXT_OWNERS "Experimental persistent effective context owners" OFF)
 option(AETHERUI_ENABLE_STATE_INCREMENTAL "Experimental native state transaction categories (requires independent gates)" OFF)
 
@@ -94,6 +96,9 @@ add_library(aether_core SHARED
 )
 
 add_library(AetherUI::Core ALIAS aether_core)
+if(AETHERUI_ENABLE_HIT_ACCELERATION)
+    target_compile_definitions(aether_core PRIVATE AETHERUI_ENABLE_HIT_ACCELERATION)
+endif()
 if(AETHERUI_ENABLE_STATE_INCREMENTAL)
     target_compile_definitions(aether_core PRIVATE AETHERUI_ENABLE_STATE_INCREMENTAL)
 endif()

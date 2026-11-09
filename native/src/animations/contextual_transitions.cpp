@@ -532,6 +532,8 @@ extern "C" {
     aether_status_t aether_contextual_transition_finalize_layout(aether_layout_result_t layout,
         aether_contextual_transition_batch_t batch) {
         if (!layout) return AETHER_ERROR_NULL_ARG;
+        // Even a failed/rolled-back presentation attempt invalidates prior hits.
+        layout->invalidate_hit_acceleration();
         aether::layout::LayoutOperationPin geometry_pin(layout);
         aether::layout::StyleOperationPin style_pin(layout->assets, {}, false);
         if (!style_pin.structure_valid()) return AETHER_ERROR_INVALID_STATE;
