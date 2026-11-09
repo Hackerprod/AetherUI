@@ -123,6 +123,8 @@ static void retained_history_and_bounded_journal(bool local=false) {
         CHECK(f.doc->mutation_journal.size()==0&&f.doc->mutation_journal.floor_epoch()==f.doc->identity->mutation_epoch);
     }
     CHECK(full_fallbacks==0); // Exact certified publication recognizes the bounded journal.
+    std::vector<std::weak_ptr<const style_revision_s>> weak_revisions;weak_revisions.reserve(history.size());
+    std::weak_ptr<const aether::style::FrozenNodePayload> first_local_payload;
     for(size_t i=0;i<history.size();++i) {
         CHECK(aether_style_revision_generation(history[i])==first_generation+i);
         aether_computed_style_handle_t style=nullptr;aether_node_t node=nullptr;
@@ -131,8 +133,18 @@ static void retained_history_and_bounded_journal(bool local=false) {
         CHECK(ledger&&ledger->committed_state==((i&1)?0:AETHER_STATE_HOVER));
         CHECK(style->revision->generation()==first_generation+i);
         if(local)CHECK(style->style.background_color.r==((i&1)?0.0f:1.0f));
+        weak_revisions.push_back(style->revision);
+        if(local&&i==0)first_local_payload=style->record->payload_owner();
         aether_computed_style_handle_destroy(style);aether_style_revision_destroy(history[i]);
     }
-    std::printf("10000 retained %s revisions preserve generations/ledgers; %u FULL journal fallbacks with certified ACK\n",local?"local":"no-op",full_fallbacks);
+    // Retaining ten thousand snapshots legitimately retains persistent storage.
+    // After release, only the current revision may remain; no receipt/base chain.
+    for(size_t i=0;i+1<weak_revisions.size();++i)CHECK(weak_revisions[i].expired());
+    CHECK(!weak_revisions.back().expired());
+    if(local)CHECK(first_local_payload.expired());
+    aether_style_revision_destroy(f.base);f.base=nullptr;
+    aether_style_runtime_destroy(f.runtime);f.runtime=nullptr;
+    CHECK(weak_revisions.back().expired());
+    std::printf("10000 retained %s revisions preserve generations/ledgers; %u FULL journal fallbacks with certified ACK; expected owners reclaimed\n",local?"local":"no-op",full_fallbacks);
 }
 int main(){noop_counts(100);noop_counts(500);noop_counts(1000);inherited_first_full_shadow();batches_and_fallbacks();retained_history_and_bounded_journal();retained_history_and_bounded_journal(true);}

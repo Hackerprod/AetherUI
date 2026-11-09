@@ -1,5 +1,9 @@
 # Experimental local state revision certification
 
+Historical predecessor protocol. This branch implements the separately reviewed
+C3d extension documented in state-publication-receipts.md; restrictions below
+describe the earlier checkpoint and remain its historical evidence.
+
 C3c extends the independently reviewed C3b empty-agenda category. It remains
 behind AETHERUI_ENABLE_STATE_INCREMENTAL, default OFF. This document describes
 implementation, not independent approval. Incremental journal ACK is prohibited.

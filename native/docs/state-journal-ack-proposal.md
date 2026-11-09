@@ -1,5 +1,9 @@
 # C3 journal acknowledgment proposal
 
+Historical predecessor protocol. This branch implements the separately reviewed
+C3d extension documented in state-publication-receipts.md; restrictions below
+describe the earlier checkpoint and remain its historical evidence.
+
 Status: revision 2 of this protocol received independent design PASS. C3a implements FULL-only acknowledgment in b5297b3 and received independent implementation PASS. Incremental acknowledgment is not enabled.
 Base: integration commit 45c9647. Approved design reference: DESIGN.md sections 4 and 8.
 

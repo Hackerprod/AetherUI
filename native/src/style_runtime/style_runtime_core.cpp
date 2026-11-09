@@ -1645,7 +1645,7 @@ AETHER_API aether_status_t aether_style_runtime_commit_revision(
         transaction->base_compiled_pin!=runtime->revision_compiled||transaction->candidate->compiled!=runtime->compiled||
         transaction->revision->structure_epoch()!=transaction->document_lifetime->structure_epoch||
         !transaction->valid_publication_authority())return AETHER_ERROR_INVALID_STATE;
-    // No callbacks, allocation, comparison, diagnostics or fallible work in this
+    // No callbacks, allocation, payload comparison, diagnostics or fallible work in this
     // publication boundary. Old generated storage stays owned by retained frames.
     for (auto& link : transaction->links) {
         for (auto& old : link.host->generated_storage) aether_node_mark_attached(old.get(), false);
