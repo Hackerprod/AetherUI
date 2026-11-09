@@ -37,9 +37,12 @@ class ImmutableStyleBacking {
     };
     const NodeRef root_;
     const size_t size_;
+    // Nullable legacy tokens are valid imports, but never certified coverage.
+    // Maintain the count by changed identity rather than scanning on prepare.
+    const size_t unbound_context_entries_;
     const ContextOwnersRef context_owners_;
     const ContextLineageRef context_topology_;
-    explicit ImmutableStyleBacking(NodeRef root, size_t size, ContextOwnersRef owners, ContextLineageRef topology) : root_(std::move(root)), size_(size), context_owners_(std::move(owners)), context_topology_(std::move(topology)) {}
+    explicit ImmutableStyleBacking(NodeRef root, size_t size, size_t unbound, ContextOwnersRef owners, ContextLineageRef topology) : root_(std::move(root)), size_(size), unbound_context_entries_(unbound), context_owners_(std::move(owners)), context_topology_(std::move(topology)) {}
     static bool one(uintptr_t key, unsigned bit) noexcept { return ((key >> bit) & 1) != 0; }
     static const Node* find_leaf(const Node* node, uintptr_t key) noexcept {
         while (node && !node->leaf()) node=(one(key,node->bit) ? node->one : node->zero).get();
@@ -91,7 +94,7 @@ public:
         bool empty() const noexcept { return !size_; }
     };
     const ContextLineageRef& context_topology() const noexcept { return context_topology_; }
-    const ContextOwnersRef& context_owners() const noexcept { return context_owners_; }
+    ContextOwnersRef context_owners() const noexcept { return unbound_context_entries_ ? ContextOwnersRef{} : context_owners_; }
     size_t size() const noexcept { return size_; }
     const FrozenNodeRecord* find(const aether_node_s* node) const noexcept {
         const auto* leaf=find_leaf(root_.get(),reinterpret_cast<uintptr_t>(node));

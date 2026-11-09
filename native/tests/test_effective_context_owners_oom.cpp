@@ -38,14 +38,16 @@ void operator delete[](void* p, std::size_t) noexcept { std::free(p); }
 #define main d2_baseline_main
 #include "test_effective_context_owners.cpp"
 #undef main
-static void sweep_context(bool compact) {
+static void sweep_context(bool compact,bool legacy=false) {
  unsigned rejected=0;bool completed=false;
  for(long failure=0;failure<5000;++failure) {
-  Fixture f;const auto old_layout=f.layout->effective_context_owners;const auto old_map=f.map->current;
+  Fixture f;
+  if(legacy) {aether_transform_operation operation{};auto style=transformed(operation,10);install_legacy(f,unbound_record(f.node,style));}
+  const auto old_layout=f.layout->effective_context_owners;const auto old_map=f.map->current;
   aether_style_transaction_t tx{};
   if(compact) {ok(aether_element_set_attribute(f.node,"style","transform:translateX(10px);backdrop-filter:blur(2px)"));
    ok(aether_style_runtime_prepare_revision(f.styles,f.doc,nullptr,&tx));}
-  else {auto before=aether_computed_style_default();aether_transform_operation operation{};auto after=transformed(operation,20);
+  else if(!legacy) {auto before=aether_computed_style_default();aether_transform_operation operation{};auto after=transformed(operation,20);
    ok(aether_transition_runtime_observe(f.transitions,f.node,&before,&after,0));}
   aether_style_map_t staged=nullptr;aether_bool_t changed=0;
   fault_delivered=false;fail_after=failure;
@@ -61,6 +63,6 @@ static void sweep_context(bool compact) {
   else {CHECK(f.engine->prepared_context_owners->owners.size()==1);f.build();}
   if(completed)break;
  }
- CHECK(completed && rejected);std::printf("PASS D2 %s OOM rejected=%u\n",compact?"compact staging":"context preparation",rejected);
+ CHECK(completed && rejected);std::printf("PASS D2 %s OOM rejected=%u\n",compact?"compact staging":legacy?"legacy full context":"context preparation",rejected);
 }
-int main(){sweep_context(true);sweep_context(false);std::printf("PASS D2 OOM %u checks\n",checks);}
+int main(){sweep_context(true);sweep_context(false);sweep_context(false,true);std::printf("PASS D2 OOM %u checks\n",checks);}

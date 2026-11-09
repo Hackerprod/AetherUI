@@ -96,9 +96,13 @@ aether_status_t freeze_backing(const BackingBuildInput& in, BackingRef& out) noe
         });
         auto root=ImmutableStyleBacking::build_sorted(entries);
         std::vector<ContextOwnerIndex::Entry> owners;
-        for(const auto& item:entries) { auto entry=static_owner(item.second); if(entry.causes) append_context_entry(owners,std::move(entry)); }
+        size_t unbound=0;
+        for(const auto& item:entries) {
+            if(!item.second->node_lifetime()) ++unbound;
+            auto entry=static_owner(item.second); if(entry.causes) append_context_entry(owners,std::move(entry));
+        }
         auto context=publish_context_owners({},ContextOwnerIndex::build(std::move(owners)));
-        BackingRef result(new const ImmutableStyleBacking(std::move(root),in.entries.size(),std::move(context),make_context_lineage()));
+        BackingRef result(new const ImmutableStyleBacking(std::move(root),in.entries.size(),unbound,std::move(context),make_context_lineage()));
         out=std::move(result); return AETHER_OK;
     } catch (const std::bad_alloc&) { return AETHER_ERROR_OUT_OF_MEMORY; }
 }
@@ -111,12 +115,15 @@ aether_status_t patch_backing(const BackingRef& base, std::span<const BackingPat
     try {
         auto root=base ? base->root_ : ImmutableStyleBacking::NodeRef{};
         size_t size=base ? base->size_ : 0;
+        size_t unbound=base ? base->unbound_context_entries_ : 0;
         auto owners=base?base->context_owners_->owners:ContextOwnerIndex{};
         auto topology=base?base->context_topology_:make_context_lineage();
         bool topology_changed=false;
         for (const auto& entry : patch) {
             const auto* old_leaf=ImmutableStyleBacking::find_leaf(root.get(),reinterpret_cast<uintptr_t>(entry.node));
             const auto previous=old_leaf && old_leaf->entry.first==entry.node?old_leaf->entry.second:FrozenNodeRef{};
+            if(previous && !previous->node_lifetime()) --unbound;
+            if(entry.record && !entry.record->node_lifetime()) ++unbound;
             if(!previous || !entry.record || previous->node_lifetime()!=entry.record->node_lifetime()) topology_changed=true;
             if(previous && (!entry.record || previous->node_lifetime()!=entry.record->node_lifetime()))
                 owners=erase_context_owner(std::move(owners),reinterpret_cast<uintptr_t>(previous->node_lifetime().get()));
@@ -134,7 +141,7 @@ aether_status_t patch_backing(const BackingRef& base, std::span<const BackingPat
             }
         }
         if (base && root==base->root_) { out=base; return AETHER_OK; }
-        BackingRef result(new const ImmutableStyleBacking(std::move(root),size,publish_context_owners(base?base->context_owners_:ContextOwnersRef{},std::move(owners)),topology_changed?make_context_lineage():topology));
+        BackingRef result(new const ImmutableStyleBacking(std::move(root),size,unbound,publish_context_owners(base?base->context_owners_:ContextOwnersRef{},std::move(owners)),topology_changed?make_context_lineage():topology));
         out=std::move(result); return AETHER_OK;
     } catch (const std::bad_alloc&) { return AETHER_ERROR_OUT_OF_MEMORY; }
 }
