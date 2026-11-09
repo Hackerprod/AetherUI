@@ -3,13 +3,14 @@ namespace AetherUI.Dom;
 
 // Test build only. Direct scalar bookkeeping, never an observer/delegate or a
 // production diagnostic API. This type and all call sites are absent normally.
-internal enum DomCommitAllocationKind { ReplaceText, InsertChild, RemoveChild, ClearChildren, Text, State, RuntimeValue, SetAttribute, RemoveAttribute, Import, Interaction }
-internal enum DomCommitAllocationPhase { NativeValidation, BookkeepingValidation, NativeCommit, ManagedMaps, BookkeepingPublish, ScalarMirror }
+internal enum DomCommitAllocationKind { ReplaceText, InsertChild, RemoveChild, ClearChildren, Text, State, RuntimeValue, SetAttribute, RemoveAttribute, Import, Interaction, ComponentInitial, ComponentReplacement, StylePublication }
+internal enum DomCommitAllocationPhase { NativeValidation, BookkeepingValidation, NativeCommit, ManagedMaps, BookkeepingPublish, ScalarMirror, ComponentValidation, ComponentBinding, ComponentActivation, ComponentRenderer, ComponentScalars, StyleTransition, StyleNativePublish, StyleScalars }
 internal struct DomCommitAllocationSnapshot
 {
     internal ulong Successful, Failed, SuccessfulBytes, FailedBytes, Nested;
-    internal ulong ReplaceText, InsertChild, RemoveChild, ClearChildren, Text, State, RuntimeValue, SetAttribute, RemoveAttribute, Import, Interaction;
+    internal ulong ReplaceText, InsertChild, RemoveChild, ClearChildren, Text, State, RuntimeValue, SetAttribute, RemoveAttribute, Import, Interaction, ComponentInitial, ComponentReplacement, StylePublication;
     internal ulong NativeValidationBytes, BookkeepingValidationBytes, NativeCommitBytes, ManagedMapsBytes, BookkeepingPublishBytes, ScalarMirrorBytes;
+    internal ulong ComponentValidationBytes, ComponentBindingBytes, ComponentActivationBytes, ComponentRendererBytes, ComponentScalarsBytes, StyleTransitionBytes, StyleNativePublishBytes, StyleScalarsBytes;
     internal bool Invalid;
     internal readonly ulong Count(DomCommitAllocationKind kind) => kind switch
     {
@@ -18,7 +19,9 @@ internal struct DomCommitAllocationSnapshot
         DomCommitAllocationKind.Text => Text, DomCommitAllocationKind.State => State,
         DomCommitAllocationKind.RuntimeValue => RuntimeValue, DomCommitAllocationKind.SetAttribute => SetAttribute,
         DomCommitAllocationKind.RemoveAttribute => RemoveAttribute, DomCommitAllocationKind.Import => Import,
-        DomCommitAllocationKind.Interaction => Interaction, _ => 0,
+        DomCommitAllocationKind.Interaction => Interaction,
+        DomCommitAllocationKind.ComponentInitial => ComponentInitial, DomCommitAllocationKind.ComponentReplacement => ComponentReplacement,
+        DomCommitAllocationKind.StylePublication => StylePublication, _ => 0,
     };
 }
 internal static class DomCommitAllocationLedger
@@ -68,6 +71,9 @@ internal static class DomCommitAllocationLedger
             case DomCommitAllocationKind.RemoveAttribute: Add(ref _counts.RemoveAttribute); break;
             case DomCommitAllocationKind.Import: Add(ref _counts.Import); break;
             case DomCommitAllocationKind.Interaction: Add(ref _counts.Interaction); break;
+            case DomCommitAllocationKind.ComponentInitial: Add(ref _counts.ComponentInitial); break;
+            case DomCommitAllocationKind.ComponentReplacement: Add(ref _counts.ComponentReplacement); break;
+            case DomCommitAllocationKind.StylePublication: Add(ref _counts.StylePublication); break;
             default: _counts.Invalid = true; break;
         }
     }
@@ -88,6 +94,14 @@ internal static class DomCommitAllocationLedger
             case DomCommitAllocationPhase.ManagedMaps: Add(ref _counts.ManagedMapsBytes, bytes); break;
             case DomCommitAllocationPhase.BookkeepingPublish: Add(ref _counts.BookkeepingPublishBytes, bytes); break;
             case DomCommitAllocationPhase.ScalarMirror: Add(ref _counts.ScalarMirrorBytes, bytes); break;
+            case DomCommitAllocationPhase.ComponentValidation: Add(ref _counts.ComponentValidationBytes, bytes); break;
+            case DomCommitAllocationPhase.ComponentBinding: Add(ref _counts.ComponentBindingBytes, bytes); break;
+            case DomCommitAllocationPhase.ComponentActivation: Add(ref _counts.ComponentActivationBytes, bytes); break;
+            case DomCommitAllocationPhase.ComponentRenderer: Add(ref _counts.ComponentRendererBytes, bytes); break;
+            case DomCommitAllocationPhase.ComponentScalars: Add(ref _counts.ComponentScalarsBytes, bytes); break;
+            case DomCommitAllocationPhase.StyleTransition: Add(ref _counts.StyleTransitionBytes, bytes); break;
+            case DomCommitAllocationPhase.StyleNativePublish: Add(ref _counts.StyleNativePublishBytes, bytes); break;
+            case DomCommitAllocationPhase.StyleScalars: Add(ref _counts.StyleScalarsBytes, bytes); break;
         }
     }
     internal static void End(bool successful)

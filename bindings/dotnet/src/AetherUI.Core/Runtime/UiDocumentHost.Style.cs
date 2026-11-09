@@ -244,9 +244,23 @@ public sealed partial class UiDocumentHost
             if (transitionCandidate.Validate() != 0) return Reject();
 
             // Certified owner-thread publication. All fallible .NET allocations happened above.
-            if (transitionCandidate.TryCommit(out var transitionPublishedToken) != 0) return Reject();
-            var previousMap = _nativeVisualStyleMap;
+            NativeTransitionToken transitionPublishedToken;
+            NativeStyleMap? previousMap;
+#if AETHER_DOM_COMMIT_ALLOCATION_TESTING
+            DomCommitAllocationLedger.Begin(DomCommitAllocationKind.StylePublication);
+            var allocationPublicationSucceeded = false;
+            try
+            {
+#endif
+            if (transitionCandidate.TryCommit(out transitionPublishedToken) != 0) return Reject();
+#if AETHER_DOM_COMMIT_ALLOCATION_TESTING
+            DomCommitAllocationLedger.MarkPhase(DomCommitAllocationPhase.StyleTransition);
+#endif
+            previousMap = _nativeVisualStyleMap;
             _nativeVisualStyleMap = native.Publish();
+#if AETHER_DOM_COMMIT_ALLOCATION_TESTING
+            DomCommitAllocationLedger.MarkPhase(DomCommitAllocationPhase.StyleNativePublish);
+#endif
             _computedStyles = computed;
             _styles = styles;
             foreach (var (box, style) in boxes) box.Style = style;
@@ -282,6 +296,12 @@ public sealed partial class UiDocumentHost
             }
             if (ReferenceEquals(_retainedStyleBatches, retainedAtStart)) _retainedStyleBatches = null;
             published = true;
+#if AETHER_DOM_COMMIT_ALLOCATION_TESTING
+            DomCommitAllocationLedger.MarkPhase(DomCommitAllocationPhase.StyleScalars);
+            allocationPublicationSucceeded = true;
+            }
+            finally { DomCommitAllocationLedger.End(allocationPublicationSucceeded); }
+#endif
             previousMap?.Dispose();
             Interlocked.Add(ref _styleUpdatedElementCount, native.ChangedStyleCount);
             if (native.MapPatched) Interlocked.Increment(ref _visualStyleMapUpdateCount);

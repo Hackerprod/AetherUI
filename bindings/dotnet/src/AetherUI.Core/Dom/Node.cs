@@ -14,6 +14,9 @@ public abstract class Node
     protected Node(NodeType nodeType)
     {
         NodeType = nodeType;
+        #if AETHER_DOM_FAULT_TESTING
+        AetherUI.Core.Native.ManagedDomFault.Before("dom.node.child-view");
+        #endif
         _childrenView = new ChildView(this);
     }
 
@@ -52,7 +55,19 @@ public abstract class Node
         {
             EnsureCurrent();
             var text = value ?? string.Empty;
-            var replacement = text.Length == 0 ? Array.Empty<Node>() : new Node[] { new TextNode(text) };
+            Node[] replacement;
+            if (text.Length == 0) replacement = Array.Empty<Node>();
+            else
+            {
+#if AETHER_DOM_FAULT_TESTING
+                AetherUI.Core.Native.ManagedDomFault.Before("dom.node.replace-array");
+#endif
+                replacement = new Node[1];
+#if AETHER_DOM_FAULT_TESTING
+                AetherUI.Core.Native.ManagedDomFault.Before("dom.node.replace-text-node");
+#endif
+                replacement[0] = new TextNode(text);
+            }
             var change = PrepareVersions(OwnerDocumentCore, text.Length == 0 ? 1 : 2, true);
             var binding = BindingCore;
             using (var prepared = binding?.PrepareEdit(new(DomEditKind.ReplaceText, this, Child: replacement.FirstOrDefault(), Text: text)))
@@ -83,6 +98,9 @@ public abstract class Node
     internal static string ReadTextCore(Node node)
     {
         if (node is TextNode text) return text.TextCore;
+        #if AETHER_DOM_FAULT_TESTING
+        AetherUI.Core.Native.ManagedDomFault.Before("dom.node.text-builder");
+        #endif
         var result = new StringBuilder();
         foreach (var child in node._children)
         {
@@ -92,6 +110,9 @@ public abstract class Node
             else if (node.BindingCore is null) result.Append(child.TextContent);
             else throw new InvalidOperationException("Custom nodes cannot be synchronized.");
         }
+        #if AETHER_DOM_FAULT_TESTING
+        AetherUI.Core.Native.ManagedDomFault.Before("dom.node.text-string");
+        #endif
         return result.ToString();
     }
 
@@ -116,6 +137,9 @@ public abstract class Node
         if (append) index = destinationCount;
         ArgumentOutOfRangeException.ThrowIfNegative(index);
         if (index > destinationCount) throw new ArgumentOutOfRangeException(nameof(index));
+        #if AETHER_DOM_FAULT_TESTING
+        AetherUI.Core.Native.ManagedDomFault.Before("dom.node.insert-destination");
+        #endif
         var destination = new Node[destinationCount + 1];
         var output = 0;
         foreach (var existing in _children)
@@ -213,11 +237,17 @@ public abstract class Node
     public IEnumerable<Node> Descendants()
     {
         EnsureCurrent();
+        #if AETHER_DOM_FAULT_TESTING
+        AetherUI.Core.Native.ManagedDomFault.Before("dom.node.descendants-snapshot");
+        #endif
         return DescendantsCore().ToArray();
     }
     public IEnumerable<ElementNode> DescendantElements()
     {
         EnsureCurrent();
+        #if AETHER_DOM_FAULT_TESTING
+        AetherUI.Core.Native.ManagedDomFault.Before("dom.node.element-descendants-aggregate");
+        #endif
         return DescendantsCore().OfType<ElementNode>().ToArray();
     }
     internal IEnumerable<Node> DescendantsCore()
@@ -230,6 +260,9 @@ public abstract class Node
     }
     private static Node[] Without(Node[] source, Node child)
     {
+        #if AETHER_DOM_FAULT_TESTING
+        AetherUI.Core.Native.ManagedDomFault.Before("dom.node.remove-array");
+        #endif
         var result = new Node[source.Length - 1];
         var index = 0;
         foreach (var node in source) if (!ReferenceEquals(node, child)) result[index++] = node;

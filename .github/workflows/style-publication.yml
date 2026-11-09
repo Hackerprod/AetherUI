@@ -32,16 +32,16 @@ jobs:
       - name: Build allocator oracle with opt-in diagnostic counters
         run: |
           cmake -S native -B artifacts/build/dom-allocations -DCMAKE_BUILD_TYPE=Release -DAETHERUI_BUILD_TESTS=ON -DAETHERUI_ENABLE_WORK_COUNTERS=ON -DAETHERUI_ENABLE_STATE_INCREMENTAL=OFF -DCMAKE_INSTALL_PREFIX="$PWD/artifacts/native/linux-x64"
-          cmake --build artifacts/build/dom-allocations --target aether_core aether_dom_commit_allocations_test --parallel 2
+          cmake --build artifacts/build/dom-allocations --target aether_core aether_dom_commit_allocations_test aether_dom_edit_allocations_test aether_transition_allocations_test --parallel 2
           cmake --install artifacts/build/dom-allocations
       - name: Require measured native allocation gate, never a skipped zero
         run: |
-          ctest --test-dir artifacts/build/dom-allocations -R '^aether.dom-commit-allocations$' --no-tests=error --output-on-failure --output-junit dom-allocation-results.xml
+          ctest --test-dir artifacts/build/dom-allocations -R '^aether\.(dom-commit-allocations|dom-edit-allocations|transition-allocations)$' --no-tests=error --output-on-failure --output-junit dom-allocation-results.xml
           python3 - <<'PY'
           import xml.etree.ElementTree as ET
           root = ET.parse('artifacts/build/dom-allocations/dom-allocation-results.xml').getroot()
           cases = root.findall('.//testcase')
-          assert len(cases) == 1 and not root.findall('.//skipped') and not root.findall('.//failure'), 'Allocation gate unavailable or failed'
+          assert len(cases) == 3 and not root.findall('.//skipped') and not root.findall('.//failure') and not root.findall('.//error'), 'Allocation gate unavailable, missing or failed'
           PY
       - name: Measure real managed DOM publication intervals
         run: bindings/dotnet/tests/run-dom-commit-allocation-tests.sh "$(command -v dotnet)" "$PWD/artifacts/native/linux-x64/lib/libaether_core.so"
@@ -51,4 +51,6 @@ jobs:
           name: dom-commit-allocation-linkage
           path: |
             artifacts/build/dom-allocations/dom-commit-allocation-manifest-*.txt*
+            artifacts/build/dom-allocations/dom-edit-allocation-manifest-*.txt*
+            artifacts/build/dom-allocations/transition-allocation-manifest-*.txt*
             artifacts/build/dom-allocations/dom-allocation-results.xml

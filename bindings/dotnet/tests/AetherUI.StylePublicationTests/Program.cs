@@ -8,6 +8,13 @@ using AetherUI.Primitives;
 using AetherUI.Rendering;
 using AetherUI.Runtime;
 
+#if AETHER_DOM_FAULT_TESTING
+if (args.Contains("--dom-faults")) { DomFaultSiteTests.Run(); return; }
+#else
+if (typeof(NativeDomDocument).Assembly.GetType("AetherUI.Core.Native.ManagedDomFault") is not null)
+    throw new InvalidOperationException("Normal build contains managed DOM fault instrumentation.");
+#endif
+
 #if AETHER_DOM_COMMIT_ALLOCATION_TESTING
 if (args.Contains("--commit-allocations"))
 {

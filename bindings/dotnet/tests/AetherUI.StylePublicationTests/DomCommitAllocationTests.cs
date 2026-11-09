@@ -9,8 +9,8 @@ using AetherUI.Rendering;
 using AetherUI.Runtime;
 
 // Allocation measurement of the real public mutation publication intervals.
-// Staging, teardown, user notification, component and transition publication are
-// not mislabeled as zero-allocation commit. Native allocation is a separate test.
+// Staging, teardown, user notification and native style commit/replay are
+// separate from the certified publication intervals. Native allocation is a separate test.
 internal static class DomCommitAllocationTests
 {
     private static object? _escape;
@@ -21,7 +21,8 @@ internal static class DomCommitAllocationTests
         // Initialize the measuring API, not the product's commit paths.
         _ = GC.GetAllocatedBytesForCurrentThread();
         Fixture? first = null;
-        Measure("cold initial import publication", () => first = new Fixture(), DomCommitAllocationKind.Import);
+        Measure("cold initial import/component/style publication", () => first = new Fixture(), DomCommitAllocationKind.Import, 1,
+            (DomCommitAllocationKind.ComponentInitial, 1), (DomCommitAllocationKind.StylePublication, 1));
         using (var fixture = first!)
         {
             var node = fixture.Input;
@@ -62,12 +63,13 @@ internal static class DomCommitAllocationTests
         Controls();
         StructuralAndSourceCases();
         FailureBoundaries();
+        HostPublicationCases();
         foreach (var cards in new[] { 100, 500, 1000 }) HoverAfterWarmup(cards);
-        Check(Covered.Count == 11, "a publication interval was never exercised");
-        Console.WriteLine("PASS managed DOM allocation intervals (9 public mutation paths + import + interaction), GC bytes on calling thread; native/other threads/component/transition publication UNMEASURED here");
+        Check(Covered.Count == 14, "a publication interval was never exercised");
+        Console.WriteLine("PASS managed allocation intervals (9 public mutation paths + import + interaction + initial/replacement components + certified style/transition publication), GC bytes on calling thread; native allocation/replay/other threads UNMEASURED here");
     }
 
-    private static void Measure(string name, Action action, DomCommitAllocationKind kind, ulong expected = 1)
+    private static void Measure(string name, Action action, DomCommitAllocationKind kind, ulong expected = 1, params (DomCommitAllocationKind Kind, ulong Count)[] additional)
     {
         DomCommitAllocationLedger.Reset(); DomCommitAllocationLedger.SetEnabled(true);
         var before = GC.GetAllocatedBytesForCurrentThread();
@@ -75,12 +77,19 @@ internal static class DomCommitAllocationTests
         finally { DomCommitAllocationLedger.SetEnabled(false); }
         var total = GC.GetAllocatedBytesForCurrentThread() - before;
         var counts = DomCommitAllocationLedger.Read();
-        Check(!counts.Invalid && counts.Successful == expected && counts.Failed == 0 && counts.Count(kind) == expected,
-            $"{name}: missing/extra/failed interval successful={counts.Successful}, failed={counts.Failed}, kind={counts.Count(kind)}");
+        var scopes = expected;
+        foreach (var extra in additional) scopes += extra.Count;
+        Check(!counts.Invalid && counts.Successful == scopes && counts.Failed == 0 && counts.Count(kind) == expected,
+            $"{name}: missing/extra/failed interval successful={counts.Successful} expected={scopes}, failed={counts.Failed}, kind={counts.Count(kind)}, initial={counts.ComponentInitial}, replacement={counts.ComponentReplacement}, style={counts.StylePublication}");
+        foreach (var extra in additional)
+            Check(counts.Count(extra.Kind) == extra.Count, $"{name}: {extra.Kind} count={counts.Count(extra.Kind)} expected={extra.Count}");
         if (counts.SuccessfulBytes != 0)
             Console.WriteLine($"DOM allocation attribution {name}: nativeValidate={counts.NativeValidationBytes}, bookkeepingValidate={counts.BookkeepingValidationBytes}, nativeCommit={counts.NativeCommitBytes}, managedMaps={counts.ManagedMapsBytes}, bookkeepingPublish={counts.BookkeepingPublishBytes}, scalarMirror={counts.ScalarMirrorBytes}, total={counts.SuccessfulBytes}");
+        if (counts.SuccessfulBytes != 0)
+            Console.WriteLine($"Host allocation attribution {name}: componentValidation={counts.ComponentValidationBytes}, binding={counts.ComponentBindingBytes}, activate={counts.ComponentActivationBytes}, renderer={counts.ComponentRendererBytes}, componentScalars={counts.ComponentScalarsBytes}, transition={counts.StyleTransitionBytes}, nativePublish={counts.StyleNativePublishBytes}, styleScalars={counts.StyleScalarsBytes}");
         Check(counts.SuccessfulBytes == 0, $"{name}: commit allocated {counts.SuccessfulBytes} managed bytes (cold allocations also fail)");
         if (expected > 0) Covered.Add(kind);
+        foreach (var extra in additional) if (extra.Count > 0) Covered.Add(extra.Kind);
         Console.WriteLine($"DOM managed {name}: intervals={counts.Successful}, commitBytes={counts.SuccessfulBytes}, wholeOperationBytes={total} (staging/teardown/notification included only in whole operation)");
     }
 
@@ -184,6 +193,32 @@ internal static class DomCommitAllocationTests
         Check(node.State == ElementState.Hover, "notification failure reverted committed input");
     }
 
+    private static void HostPublicationCases()
+    {
+        using var fixture = new Fixture();
+        Measure("cold component replacement", fixture.Rebuild, DomCommitAllocationKind.ComponentReplacement, 1,
+            (DomCommitAllocationKind.Import, 1), (DomCommitAllocationKind.StylePublication, 1));
+        Measure("retained style map and old revision release", () =>
+        {
+            fixture.Host.Document!.GetElementById("a")!.SetAttribute("style", "opacity:.5;transition:opacity 1s");
+            fixture.Host.Render();
+        }, DomCommitAllocationKind.SetAttribute, 1, (DomCommitAllocationKind.StylePublication, 1));
+        var previous = fixture.Host.Document;
+        var listenerError = new InvalidOperationException("post-component-publication notification");
+        fixture.Host.ComponentPublicationProbe = phase => { if (phase == "published") { AllocatePositive(); throw listenerError; } };
+        try
+        {
+            Measure("component post-publication exception", () =>
+            {
+                var failed = false;
+                try { fixture.Rebuild(); }
+                catch (InvalidOperationException error) when (ReferenceEquals(error, listenerError)) { failed = true; }
+                Check(failed && !ReferenceEquals(previous, fixture.Host.Document), "post-publication exception rolled back component");
+            }, DomCommitAllocationKind.ComponentReplacement, 1, (DomCommitAllocationKind.Import, 1));
+        }
+        finally { fixture.Host.ComponentPublicationProbe = null; }
+    }
+
     private static void HoverAfterWarmup(int cards)
     {
         using var fixture = new Fixture(cards); var node = fixture.Input;
@@ -191,26 +226,30 @@ internal static class DomCommitAllocationTests
         Measure($"warm hover {cards} cards", () =>
         {
             for (var i = 0; i < 4; i++) { node.State = ElementState.Hover; fixture.Host.Render(); node.State = ElementState.None; fixture.Host.Render(); }
-        }, DomCommitAllocationKind.State, 8);
+        }, DomCommitAllocationKind.State, 8, (DomCommitAllocationKind.StylePublication, 8));
         Check(!fixture.Host.ManagedProjectionOutOfDate, "hover left stale projection");
     }
 
     private sealed class Fixture : IDisposable
     {
         private readonly Renderer _renderer = new();
+        private readonly Cards _component;
         internal readonly UiDocumentHost Host;
         internal readonly DomInterop Dom;
         internal readonly ElementNode Input, Container;
         internal Fixture(int cards = 2)
         {
-            Host = new(new Cards(cards), new ApproximateTextMeasurer(), _renderer, new UiHostOptions { Width = 400, Height = 300 });
+            _component = new Cards(cards);
+            Host = new(_component, new ApproximateTextMeasurer(), _renderer, new UiHostOptions { Width = 400, Height = 300 });
             Host.Render(); Dom = Field<DomInterop>(Host, "_nativeDom");
             Input = Host.Document!.GetElementById("a")!; Container = Host.Document.GetElementById("box")!;
         }
+        internal void Rebuild() { _component.Rebuild(); Host.Render(); }
         public void Dispose() { Host.Dispose(); _renderer.Dispose(); }
     }
     private sealed class Cards(int count) : UiComponent
     {
+        internal void Rebuild() => StateHasChanged();
         protected override void BuildRenderTree(MarkupWriter writer)
         {
             writer.WriteLiteral("<style id='s'>body{margin:0}article{height:20px}</style><body><input id='a'><div id='box'><span>text</span></div>");

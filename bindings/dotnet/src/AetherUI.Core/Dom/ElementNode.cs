@@ -6,7 +6,12 @@ public enum ElementState { None = 0, Hover = 1 << 0, Active = 1 << 1, Focus = 1 
 
 public sealed class ElementNode : Node
 {
-    private Dictionary<string, string> _attributes = new(StringComparer.Ordinal);
+    private Dictionary<string, string> _attributes =
+#if AETHER_DOM_FAULT_TESTING
+        AetherUI.Core.Native.ManagedDomFault.Dictionary<string, string>(StringComparer.Ordinal, "dom.element.initial-map");
+#else
+        new(StringComparer.Ordinal);
+#endif
     private readonly AttributeView _attributeView;
     private readonly string _tagName;
     private ElementState _state;
@@ -15,6 +20,9 @@ public sealed class ElementNode : Node
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(tagName);
         _tagName = DomNames.Canonicalize(tagName);
+        #if AETHER_DOM_FAULT_TESTING
+        AetherUI.Core.Native.ManagedDomFault.Before("dom.element.attribute-view");
+        #endif
         _attributeView = new AttributeView(this);
     }
     public string TagName { get { EnsureCurrent(); return _tagName; } }
@@ -107,7 +115,14 @@ public sealed class ElementNode : Node
     }
     private void SetAttributeCore(string name, string value)
     {
-        var attributes = new Dictionary<string, string>(_attributes, StringComparer.Ordinal) { [name] = value };
+        #if AETHER_DOM_FAULT_TESTING
+        AetherUI.Core.Native.ManagedDomFault.Before("dom.element.set-copy");
+        #endif
+        var attributes = new Dictionary<string, string>(_attributes, StringComparer.Ordinal);
+#if AETHER_DOM_FAULT_TESTING
+        AetherUI.Core.Native.ManagedDomFault.BeforeDictionaryInsert(attributes, name, "dom.element.set-map-insert-aggregate");
+#endif
+        attributes[name] = value;
         var change = PrepareVersions(OwnerDocumentCore, 1, true);
         var binding = BindingCore;
         using (var prepared = binding?.PrepareEdit(new(DomEditKind.SetAttribute, this, Name: name, Text: value)))
@@ -134,6 +149,9 @@ public sealed class ElementNode : Node
         EnsureCurrent();
         name = DomNames.Canonicalize(name);
         if (!_attributes.ContainsKey(name)) return false;
+        #if AETHER_DOM_FAULT_TESTING
+        AetherUI.Core.Native.ManagedDomFault.Before("dom.element.remove-copy");
+        #endif
         var attributes = new Dictionary<string, string>(_attributes, StringComparer.Ordinal);
         attributes.Remove(name);
         var change = PrepareVersions(OwnerDocumentCore, 1, true);
@@ -179,8 +197,14 @@ public sealed class ElementNode : Node
     public IEnumerable<ElementNode> AncestorsAndSelf()
     {
         EnsureCurrent();
+        #if AETHER_DOM_FAULT_TESTING
+        AetherUI.Core.Native.ManagedDomFault.Before("dom.element.ancestors-list");
+        #endif
         var result = new List<ElementNode>();
         for (Node? node = this; node is ElementNode element; node = node.ParentCore) result.Add(element);
+        #if AETHER_DOM_FAULT_TESTING
+        AetherUI.Core.Native.ManagedDomFault.Before("dom.element.ancestors-array");
+        #endif
         return result.ToArray();
     }
     public ElementNode? Closest(string tagName)

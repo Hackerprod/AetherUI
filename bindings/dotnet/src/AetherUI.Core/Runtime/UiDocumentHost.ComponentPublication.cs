@@ -126,9 +126,24 @@ public sealed partial class UiDocumentHost
                 (previousDom is not null && NativeDomSync.ReadToken(previousDom.Native.Handle) != previousDomToken) ||
                 (previousTransitions is not null && (previousTransitions.TryReadToken(out var currentTransition) != 0 || currentTransition != previousTransitionToken)))
                 throw new InvalidOperationException("Component publication was superseded during preparation.");
+#if AETHER_DOM_COMMIT_ALLOCATION_TESTING
+            DomCommitAllocationLedger.Begin(previousDom is null ? DomCommitAllocationKind.ComponentInitial : DomCommitAllocationKind.ComponentReplacement);
+            var allocationPublicationSucceeded = false;
+            try
+            {
+#endif
             nextInteractions.Owner.ValidatePrepared();
+#if AETHER_DOM_COMMIT_ALLOCATION_TESTING
+            DomCommitAllocationLedger.MarkPhase(DomCommitAllocationPhase.ComponentValidation);
+#endif
             binding.Commit();
+#if AETHER_DOM_COMMIT_ALLOCATION_TESTING
+            DomCommitAllocationLedger.MarkPhase(DomCommitAllocationPhase.ComponentBinding);
+#endif
             PublishInteractionSession(nextInteractions, _nativeStyleRuntime.DomStyleBindingHandle);
+#if AETHER_DOM_COMMIT_ALLOCATION_TESTING
+            DomCommitAllocationLedger.MarkPhase(DomCommitAllocationPhase.ComponentActivation);
+#endif
 
             // Native DOM/source binding is now committed. All remaining publication work
             // uses preallocated data. No freshness getter, delegate or retirement is here.
@@ -140,6 +155,9 @@ public sealed partial class UiDocumentHost
             _document = document;
             _transitionRuntime = nextTransitions;
             _renderingInterop.SetTransitionRuntime(transitionHandle);
+#if AETHER_DOM_COMMIT_ALLOCATION_TESTING
+            DomCommitAllocationLedger.MarkPhase(DomCommitAllocationPhase.ComponentRenderer);
+#endif
             _previousStyleSnapshot = previousStyles;
             _computedStyles = computed;
             _stateDirtyElements = dirty;
@@ -181,6 +199,12 @@ public sealed partial class UiDocumentHost
             _invalidationProduced[0] = nextStyleSerial;
             _invalidation |= VisualInvalidation.Style;
             published = true;
+#if AETHER_DOM_COMMIT_ALLOCATION_TESTING
+            DomCommitAllocationLedger.MarkPhase(DomCommitAllocationPhase.ComponentScalars);
+            allocationPublicationSucceeded = true;
+            }
+            finally { DomCommitAllocationLedger.End(allocationPublicationSucceeded); }
+#endif
 
             // Retire only after publication, still inside the host guard. If notification
             // or cleanup fails, B stays published and more recent user effects stay intact.
