@@ -73,6 +73,7 @@ public sealed unsafe class NativeDomDocument : IDisposable
         var utf8 = System.Text.Encoding.UTF8.GetBytes(markup + '\0');
         fixed (byte* source = utf8)
         {
+            NativeDomWorkCounters.RecordParse();
             Throw(NativeMethods.DocParseHtml(borrow.Handle, source));
         }
     }

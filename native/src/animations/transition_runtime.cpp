@@ -1,4 +1,5 @@
 #include "transition_runtime.h"
+#include "../diagnostics/work_counters.h"
 #include <aether/aether_transition_sync.h>
 #include "../dom/dom_types.h"
 #include <atomic>
@@ -247,8 +248,15 @@ bool stale(const transition_state& state) noexcept {
 std::shared_ptr<transition_state> clone(const transition_state& state) {
     allocation_checkpoint();
     auto copy = std::make_shared<transition_state>();
-    if (!state.active.empty()) { allocation_checkpoint(); copy->active = state.active; }
-    if (!state.finished.empty()) { allocation_checkpoint(); copy->finished = state.finished; }
+    aether::diagnostics::count_work(aether::diagnostics::WorkCounter::transition_candidates_cloned);
+    if (!state.active.empty()) {
+        allocation_checkpoint(); copy->active = state.active;
+        aether::diagnostics::count_work(aether::diagnostics::WorkCounter::transition_entries_copied, state.active.size());
+    }
+    if (!state.finished.empty()) {
+        allocation_checkpoint(); copy->finished = state.finished;
+        aether::diagnostics::count_work(aether::diagnostics::WorkCounter::transition_entries_copied, state.finished.size());
+    }
     return copy;
 }
 bool matrix_exact(const aether_transform_matrix& a, const aether_transform_matrix& b) noexcept {

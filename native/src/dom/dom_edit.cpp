@@ -1,4 +1,7 @@
 #include "dom_types.h"
+#include "../diagnostics/work_counters.h"
+using aether::diagnostics::count_work;
+using aether::diagnostics::WorkCounter;
 #include "html_attribute_name.h"
 #include "dom_strings.h"
 #include <aether/aether_dom_sync.h>
@@ -6,6 +9,12 @@
 #include "../style_runtime/aether_dom_style_binding.h"
 
 namespace {
+struct DomPreparationWorkScope {
+    bool prepared = false;
+    DomPreparationWorkScope() noexcept { count_work(WorkCounter::dom_edit_prepare_attempts); }
+    ~DomPreparationWorkScope() { if (!prepared) count_work(WorkCounter::dom_edits_aborted); }
+    void complete() noexcept { prepared = true; count_work(WorkCounter::dom_edits_prepared); }
+};
 bool token_equal(const aether_dom_token_v1_t& a,const aether_dom_token_v1_t& b) noexcept {
     return a.owner_identity==b.owner_identity&&a.observation_serial==b.observation_serial&&a.input_epoch==b.input_epoch&&a.structure_epoch==b.structure_epoch&&a.sticky_status==b.sticky_status;
 }
@@ -184,6 +193,7 @@ void preflight_counters(const aether_dom_edit_s& e){
 AETHER_API aether_status_t aether_dom_prepare_edit_v1(const aether_dom_token_v1_t* expected,const aether_dom_edit_spec_v1_t* spec,aether_dom_edit_t* out){
     if(out)*out=nullptr;if(!expected||!spec||!out||!spec->target)return AETHER_ERROR_NULL_ARG;
     if(synthetic(spec->target))return AETHER_ERROR_INVALID_STATE;
+    DomPreparationWorkScope work;
     try{
         auto e=std::make_unique<aether_dom_edit_s>();e->target=spec->target;domain(*e,spec->target);pin(*e,spec->target);if(!token_equal(*expected,e->domains[0].token))return AETHER_ERROR_INVALID_STATE;
         auto* target=spec->target;const auto kind=spec->kind;
@@ -192,7 +202,7 @@ AETHER_API aether_status_t aether_dom_prepare_edit_v1(const aether_dom_token_v1_
             if(target->type!=AETHER_NODE_ELEMENT)return AETHER_ERROR_INVALID_STATE;auto name=aether::ascii_lowercase(read(spec->name));if(name.empty())return AETHER_ERROR_INVALID_STATE;
             auto attrs=target->attributes;bool existed=attrs.contains(name);
             if(name=="value")existed=target->authored_value_present;
-            if(kind==AETHER_DOM_REMOVE_ATTRIBUTE&&!existed){*out=e.release();return AETHER_OK;}
+            if(kind==AETHER_DOM_REMOVE_ATTRIBUTE&&!existed){work.complete();*out=e.release();return AETHER_OK;}
             if(name=="value"){
                 e->authored=kind!=AETHER_DOM_REMOVE_ATTRIBUTE?read(spec->value):std::string{};e->write_authored=true;e->authored_present=kind!=AETHER_DOM_REMOVE_ATTRIBUTE;
                 if(kind==AETHER_DOM_SET_LEGACY_ATTRIBUTE){e->runtime=std::string{};e->write_runtime=true;e->runtime_present=false;}
@@ -242,7 +252,7 @@ AETHER_API aether_status_t aether_dom_prepare_edit_v1(const aether_dom_token_v1_
             const auto status=aether_dom_interaction_prepare_stage(d.owner,e->disconnect,e->target,e->attributes?&*e->attributes:nullptr,stage);
             if(status!=AETHER_OK)return status;if(stage)e->interaction_stages.push_back(std::move(stage));
         }
-        const auto slots=prepare_slots(*e);if(slots!=AETHER_OK)return slots;*out=e.release();return AETHER_OK;
+        const auto slots=prepare_slots(*e);if(slots!=AETHER_OK)return slots;work.complete();*out=e.release();return AETHER_OK;
     }catch(const std::bad_alloc&){return AETHER_ERROR_OUT_OF_MEMORY;}catch(...){return AETHER_ERROR_INVALID_STATE;}
 }
 AETHER_API aether_status_t aether_dom_edit_created_node_v1(aether_dom_edit_t e,size_t index,aether_node_t* out){if(out)*out=nullptr;if(!e||!out)return AETHER_ERROR_NULL_ARG;if(index>=e->results.size())return AETHER_ERROR_INVALID_STATE;*out=e->results[index]->node.get();return AETHER_OK;}
@@ -267,6 +277,6 @@ AETHER_API aether_status_t aether_dom_edit_commit_v1(aether_dom_edit_t e,aether_
     for(const auto& [node,id]:e->adopted_ids)node->style_node_id=id;
     for(auto& d:e->domains)if(d.registry){auto* doc=static_cast<aether_doc_s*>(d.root->node.get());doc->editable_nodes.swap(*d.registry);doc->next_style_node_id=d.next_id;}
     if(e->style_batch)aether_dom_style_commit_batch(e->style_batch);
-    e->committed=true;return aether_dom_read_token_v1(target,out);
+    e->committed=true;count_work(WorkCounter::dom_edits_committed);return aether_dom_read_token_v1(target,out);
 }
-AETHER_API void aether_dom_edit_destroy_v1(aether_dom_edit_t e){if(e&&!e->committed)for(auto& n:e->created)aether_dom_retire_node(n->node.get());delete e;}
+AETHER_API void aether_dom_edit_destroy_v1(aether_dom_edit_t e){if(e&&!e->committed)count_work(WorkCounter::dom_edits_aborted);if(e&&!e->committed)for(auto& n:e->created)aether_dom_retire_node(n->node.get());delete e;}

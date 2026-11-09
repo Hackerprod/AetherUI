@@ -81,6 +81,8 @@ internal sealed class DomInterop : IDisposable
                 (int)NodeType.Comment => new CommentNode(data.Text),
                 _ => throw new InvalidOperationException("Unexpected native DOM node type."),
             };
+            NativeDomWorkCounters.RecordNodesImported(1);
+            NativeDomWorkCounters.RecordTraversal((ulong)data.Attributes.Count, (ulong)data.Children.Length);
             if (ReferenceEquals(nodes[i], Document)) root = i;
             _nodesByHandle.Add(data.Handle, nodes[i]);
             _handlesByNode.Add(nodes[i], data.Handle);

@@ -161,7 +161,10 @@ public sealed unsafe partial class StyleRuntimeInterop
                 _snapshot = NativeDomSnapshot.Acquire(document);
                 BuildDomIndex(_snapshot, FindSnapshotRoot(_snapshot), _elements, _index);
                 if (_previousBinding != IntPtr.Zero)
+                {
+                    NativeDomWorkCounters.RecordRebind();
                     NativeDomSync.Throw(NativeMethods.DomStyleBindingPrepareRebind(_previousBinding, _document, out _transaction));
+                }
                 Validate();
             }
             catch { Dispose(); throw; }

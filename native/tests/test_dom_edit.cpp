@@ -5,6 +5,12 @@
 #include <cstdlib>
 #include <new>
 static long failure=-1;void* operator new(std::size_t n){if(failure==0)throw std::bad_alloc();if(failure>0)--failure;if(auto p=std::malloc(n?n:1))return p;throw std::bad_alloc();}void* operator new[](std::size_t n){return ::operator new(n);}void operator delete(void* p)noexcept{std::free(p);}void operator delete[](void* p)noexcept{std::free(p);}void operator delete(void* p,std::size_t)noexcept{std::free(p);}void operator delete[](void* p,std::size_t)noexcept{std::free(p);}
+// Keep nothrow allocations in the same fault-allocator family. Otherwise ASan
+// intercepts nothrow new while our sized delete calls free, a harness mismatch.
+void* operator new(std::size_t n,const std::nothrow_t&)noexcept{try{return ::operator new(n);}catch(...){return nullptr;}}
+void* operator new[](std::size_t n,const std::nothrow_t&)noexcept{try{return ::operator new[](n);}catch(...){return nullptr;}}
+void operator delete(void* p,const std::nothrow_t&)noexcept{std::free(p);}
+void operator delete[](void* p,const std::nothrow_t&)noexcept{std::free(p);}
 #define CHECK(x) do{if(!(x)){std::fprintf(stderr,"%d: %s\n",__LINE__,#x);std::abort();}}while(0)
 static aether_dom_string_v1_t str(const char* s){return {s,std::strlen(s)};}
 static aether_dom_token_v1_t token(aether_node_t n){aether_dom_token_v1_t t{};CHECK(aether_dom_read_token_v1(n,&t)==AETHER_OK);return t;}

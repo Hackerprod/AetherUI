@@ -1,4 +1,7 @@
 #include "dom_types.h"
+#include "../diagnostics/work_counters.h"
+using aether::diagnostics::count_work;
+using aether::diagnostics::WorkCounter;
 #include <aether/aether_dom_sync.h>
 #include <unordered_set>
 struct aether_dom_node_lease_s { std::shared_ptr<DomNodeOwnerPin> live_owner; std::shared_ptr<EditableNodeStorage> document; std::shared_ptr<EditableNodeStorage> storage; std::shared_ptr<node_identity_s> identity; };
@@ -32,6 +35,7 @@ AETHER_API aether_status_t aether_dom_node_lease_get_v1(aether_dom_node_lease_t 
     if(out)*out=nullptr;if(!lease||!out)return AETHER_ERROR_NULL_ARG;*out=lease->storage->node.get();return AETHER_OK;
 }
 AETHER_API aether_status_t aether_dom_read_token_v1(aether_node_t node,aether_dom_token_v1_t* out){
+    count_work(WorkCounter::dom_token_reads);
     if(out)*out={};if(!node||!out)return AETHER_ERROR_NULL_ARG;
     if(node->unpublished)return AETHER_ERROR_INVALID_STATE;
     auto owner=node->document_owner.lock();if(!owner||owner->owner_thread!=std::this_thread::get_id())return AETHER_ERROR_INVALID_STATE;
@@ -44,6 +48,7 @@ AETHER_API aether_status_t aether_dom_read_token_v1(aether_node_t node,aether_do
 AETHER_API aether_status_t aether_dom_acquire_snapshot_v1(aether_doc_t doc,const aether_dom_node_lease_t* known,size_t known_count,aether_dom_snapshot_t* out){
     if(out)*out=nullptr;if(!doc||!out||(known_count&&!known))return AETHER_ERROR_NULL_ARG;
     aether_dom_token_v1_t token{};auto status=aether_dom_read_token_v1(doc,&token);if(status!=AETHER_OK)return status;
+    count_work(WorkCounter::dom_snapshot_builds);
     try{
         auto snapshot=std::make_unique<aether_dom_snapshot_s>();snapshot->token=token;
         std::vector<std::shared_ptr<EditableNodeStorage>> leases;leases.reserve(doc->editable_nodes.size()+known_count+1);
@@ -53,7 +58,7 @@ AETHER_API aether_status_t aether_dom_acquire_snapshot_v1(aether_doc_t doc,const
         std::unordered_map<const aether_node_s*,size_t> positions;
         snapshot->nodes.reserve(leases.size());
         for(auto& storage:leases){auto* node=storage->node.get();if(positions.contains(node))continue;positions.emplace(node,snapshot->nodes.size());DomSnapshotNode item;item.live_owner=aether_live_owner_pin(node);item.storage=std::move(storage);item.identity=node->identity;snapshot->nodes.push_back(std::move(item));}
-        for(auto& item:snapshot->nodes){auto* node=item.storage->node.get();auto& v=item.values;
+        for(auto& item:snapshot->nodes){count_work(WorkCounter::dom_snapshot_nodes_visited);auto* node=item.storage->node.get();auto& v=item.values;
             v.node=node;v.identity=aether_node_identity(node);v.disconnect_serial=node->identity->disconnect_serial;
             if(auto owner=node->document_owner.lock())if(auto pin=owner->document.lock())v.owner_identity=aether_node_identity(pin->node.get());
             v.type=node->type;v.state=node->state;v.alive=node->identity->alive;v.attached=node->identity->attached;v.style_node_id=node->style_node_id;
@@ -61,8 +66,8 @@ AETHER_API aether_status_t aether_dom_acquire_snapshot_v1(aether_doc_t doc,const
             item.tag=node->tag_name;item.text=node->text;item.authored_value=node->authored_value;item.runtime_value=node->runtime_value;
             v.authored_value_present=node->authored_value_present;v.runtime_value_present=node->runtime_value_present;
             std::copy(node->identity->state_bit_write_serial.begin(),node->identity->state_bit_write_serial.end(),v.state_bit_write_serial);
-            for(const auto& [name,value]:node->attributes){if(name=="value"){if(node->authored_value_present)item.attributes.emplace_back(name,node->authored_value);}else item.attributes.emplace_back(name,value);}
-            for(auto* child:node->children){auto found=positions.find(child);if(found!=positions.end())item.children.push_back(found->second);}
+            for(const auto& [name,value]:node->attributes){count_work(WorkCounter::dom_snapshot_attributes_visited);if(name=="value"){if(node->authored_value_present)item.attributes.emplace_back(name,node->authored_value);}else item.attributes.emplace_back(name,value);}
+            for(auto* child:node->children){count_work(WorkCounter::dom_snapshot_children_visited);auto found=positions.find(child);if(found!=positions.end())item.children.push_back(found->second);}
             v.attribute_count=item.attributes.size();v.child_count=item.children.size();
         }
         aether_dom_token_v1_t current{};status=aether_dom_read_token_v1(doc,&current);if(status!=AETHER_OK||!same(token,current))return AETHER_ERROR_INVALID_STATE;
