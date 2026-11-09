@@ -1542,3 +1542,14 @@ if(AETHERUI_BUILD_TESTS AND NOT MSVC)
         target_compile_options(${target} PRIVATE -ffp-contract=off)
     endforeach()
 endif()
+
+if(AETHERUI_BUILD_TESTS)
+    # Compile the actual DOM mutation boundaries locally for deterministic OOM
+    # injection, without adding a public ABI or touching resolver factories.
+    add_executable(aether_dom_mutation_journal_test tests/test_dom_mutation_journal.cpp
+        src/dom/node.cpp src/dom/element_node.cpp src/dom/document_node.cpp src/dom/html_parser.cpp)
+    target_include_directories(aether_dom_mutation_journal_test PRIVATE include src)
+    target_compile_definitions(aether_dom_mutation_journal_test PRIVATE AETHER_EXPORTS)
+    target_link_libraries(aether_dom_mutation_journal_test PRIVATE AetherUI::Core)
+    add_test(NAME aether.dom-mutation-journal COMMAND aether_dom_mutation_journal_test)
+endif()

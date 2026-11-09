@@ -56,9 +56,9 @@ AETHER_API aether_status_t aether_node_append_child(aether_node_t parent, aether
         if (ancestor == child) return AETHER_ERROR_INVALID_STATE;
     }
     parent->children.reserve(parent->children.size() + 1);
-    aether_node_touch(parent, true);
+    aether_node_touch_typed(parent, aether::dom::MutationKind::structure, true, 0, 0, child);
     if (child->parent) {
-        aether_node_touch(child->parent, true);
+        aether_node_touch_typed(child->parent, aether::dom::MutationKind::structure, true, 0, 0, child);
         auto& siblings = child->parent->children;
         siblings.erase(std::remove(siblings.begin(), siblings.end(), child), siblings.end());
     }
@@ -75,7 +75,7 @@ AETHER_API aether_status_t aether_node_remove_child(aether_node_t parent, aether
     auto& vec = parent->children;
     auto it = std::find(vec.begin(), vec.end(), child);
     if (it == vec.end() || child->parent != parent) return AETHER_ERROR_INVALID_STATE;
-    aether_node_touch(parent, true);
+    aether_node_touch_typed(parent, aether::dom::MutationKind::structure, true, 0, 0, child);
     vec.erase(it);
     aether_node_mark_attached(child, false);
     child->parent = nullptr;

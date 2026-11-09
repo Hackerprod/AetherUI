@@ -2,6 +2,7 @@
 #include <aether/aether.h>
 #include "pseudo_element.h"
 #include "node_identity.h"
+#include "mutation_journal.h"
 #include <memory>
 #include <string>
 #include <vector>
@@ -38,6 +39,7 @@ struct aether_node_s {
 };
 
 struct aether_doc_s : aether_node_s {
+    aether::dom::MutationJournal mutation_journal;
     int64_t version = 0;
     std::unordered_map<std::string, aether_node_s*> id_index;
     int64_t next_style_node_id = 1;
@@ -52,11 +54,31 @@ inline aether_node_s* aether_dom_root(aether_node_s* node) noexcept {
     while (node && node->parent) node = node->parent;
     return node;
 }
-inline void aether_node_touch(aether_node_s* node, bool structure = false) noexcept {
+// Keep the original epoch boundary/counts. The optional subject distinguishes a
+// moved/removed child from the parent whose root receives structural invalidation.
+inline void aether_node_touch_typed(aether_node_s* node, aether::dom::MutationKind kind,
+                                   bool structure = false, int32_t old_state = 0,
+                                   int32_t new_state = 0, aether_node_s* subject = nullptr) noexcept {
     auto* root = aether_dom_root(node);
     if (!root) return;
     ++root->identity->mutation_epoch;
     if (structure) ++root->identity->structure_epoch;
+    if (root->type == AETHER_NODE_DOCUMENT) {
+        static_cast<aether_doc_s*>(root)->mutation_journal.append(
+            (subject ? subject : node)->identity, kind, root->identity->mutation_epoch,
+            root->identity->structure_epoch, old_state, new_state);
+    }
+    // Detached/non-document roots retain their existing epochs but have no
+    // journal coverage. Reattachment is always a structural/full invalidation.
+}
+inline void aether_node_touch(aether_node_s* node, bool structure = false) noexcept {
+    // Legacy/internal writes without a declared kind must never look state-only.
+    aether_node_touch_typed(node, aether::dom::MutationKind::unknown, structure);
+}
+inline const aether::dom::MutationJournal* aether_node_mutation_journal(aether_node_s* node) noexcept {
+    auto* root = aether_dom_root(node);
+    return root && root->type == AETHER_NODE_DOCUMENT
+        ? &static_cast<aether_doc_s*>(root)->mutation_journal : nullptr;
 }
 inline void aether_node_mark_attached(aether_node_s* node, bool attached) noexcept {
     if (!node) return;

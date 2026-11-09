@@ -513,7 +513,10 @@ AETHER_API aether_status_t aether_doc_parse_html(aether_doc_t doc, const char* h
     // path for the native style bridge during component rebuilds, so retaining the
     // previous children here would leak an entire DOM snapshot and make selectors
     // operate over stale nodes.
-    aether_node_touch(doc, true);
+    // A single coarse structural record covers the whole replacement, including
+    // its text/attribute writes and any partially completed parse on allocation
+    // failure. Those writes are never candidates for state-only reconciliation.
+    aether_node_touch_typed(doc, aether::dom::MutationKind::structure, true);
     for (auto* child : doc->children) aether_destroy_dom_subtree(child);
     doc->children.clear();
     doc->id_index.clear();
