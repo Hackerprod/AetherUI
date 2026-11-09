@@ -1417,6 +1417,22 @@ if(AETHERUI_BUILD_TESTS AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
 endif()
 
 if(AETHERUI_BUILD_TESTS)
+    add_executable(aether_inline_hanging_oom_test tests/test_inline_hanging_oom.cpp)
+    target_link_libraries(aether_inline_hanging_oom_test PRIVATE AetherUI::Core ${CMAKE_DL_LIBS})
+    add_test(NAME aether.inline-hanging-oom COMMAND aether_inline_hanging_oom_test)
+
+    add_executable(aether_inline_hanging_paint_test tests/test_inline_hanging_paint.cpp)
+    target_link_libraries(aether_inline_hanging_paint_test PRIVATE AetherUI::Core ${CMAKE_DL_LIBS})
+    add_test(NAME aether.inline-hanging-paint COMMAND aether_inline_hanging_paint_test)
+
+    add_executable(aether_inline_hanging_contract_test tests/test_inline_hanging_contract.cpp)
+    target_link_libraries(aether_inline_hanging_contract_test PRIVATE AetherUI::Core ${CMAKE_DL_LIBS})
+    add_test(NAME aether.inline-hanging-contract COMMAND aether_inline_hanging_contract_test)
+
+    add_executable(aether_inline_hanging_test tests/test_inline_hanging.cpp)
+    target_link_libraries(aether_inline_hanging_test PRIVATE AetherUI::Core ${CMAKE_DL_LIBS})
+    add_test(NAME aether.inline-hanging COMMAND aether_inline_hanging_test)
+
     add_executable(aether_flex_intrinsic_width_test tests/test_flex_intrinsic_width.cpp)
     target_link_libraries(aether_flex_intrinsic_width_test PRIVATE AetherUI::Core ${CMAKE_DL_LIBS})
     add_test(NAME aether.flex-intrinsic-width COMMAND aether_flex_intrinsic_width_test)
