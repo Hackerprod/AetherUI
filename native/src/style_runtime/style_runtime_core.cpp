@@ -96,7 +96,7 @@ struct aether_style_runtime_s {
     std::unordered_map<aether_node_s*, FrozenNodeRef> states;
     std::unordered_map<aether_node_s*, std::unique_ptr<PreparedNodeResult>> prepared;
     std::shared_ptr<document_measure_context_s> document_measures;
-    std::shared_ptr<const struct style_revision_s> revision;
+    std::shared_ptr<const style_revision_s> revision;
     uint64_t generation = 0;
     uint64_t sheet_epoch = 0;
     bool preparing = false;
