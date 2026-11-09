@@ -26,7 +26,7 @@ The five current LayoutOperationPin call sites are:
   line 537. Acquire/check before the present pre-pin invalidation; on retain
   failure there must be no presentation write or serial change.
 
-`layout_engine.cpp::aether_layout_layout` constructs at line 1587 and has private
+`layout_engine.cpp::aether_layout_layout` constructs at line 1582 and has private
 failure deletes at 1632, 1679, 1684, 1691 and 1693. `layout_box.cpp::aether_layout_clone_snapshot`
 constructs via unique_ptr at line 96. These are unexposed construction owners, not
 additional shared retain sites. The proposed implementation replaces their direct
@@ -158,7 +158,7 @@ application-callback API. All live mutation and queries remain owner-thread.
    read tokens while alive but destructor does not. MutableLayoutOverlay and
    FrozenSyntheticStore release their local index/ordered owners. SyntheticEntry
    releases FrozenMeasures, FrozenStyle and shared_ptr<aether_node_s> synthetic
-   node. `layout_flex.cpp::build_anonymous_flex_item` creates the anonymous shared
+   node. `layout_flex.cpp::create_anonymous_flex_item` creates the anonymous shared
    node (around line 53); its parent/children/anonymous_flex_owner are borrowed.
    `dom_types.h::~aether_node_s` marks its own identity dead/unattached, releases
    value members and generated_storage, not raw children/parent. This is a real
@@ -207,6 +207,30 @@ application-callback API. All live mutation and queries remain owner-thread.
     lookup during destruction. Offset creation validates this representation,
     rather than accepting an arbitrary custom "read-only source" object.
 
+### Member destruction order, not just the ownership graph
+
+The result destructor BODY deletes boxes while assets and other members are still
+alive. The first release_box resets hit_acceleration; repeated resets see empty.
+If there are no boxes, the remaining accelerator is destroyed later as a member.
+After the body, members are destroyed in reverse declaration order: local registry/
+value containers, anonymous/paint/primary maps, build_overlay, assets, effective
+context owners, then the early-declared hit_acceleration and counter/scalars.
+No member destructor reads another already-destroyed result member. In particular,
+a surviving accelerator only releases its own maps/tokens; it does not inspect
+boxes or assets after their lifetime ended.
+
+LayoutAssets releases its members in reverse too. At the DOMsync reference revision,
+dom_pin is declared last and therefore releases BEFORE document identity, defaults,
+synthetic and base. This is not permission to traverse borrowed synthetic children
+while destroying synthetic storage: their destructor never traverses those links.
+Base/payloads that can read live DOM retain their own root/relay; if none remain,
+remaining identity controls are just tokens and no destructor dereferences them.
+FrozenNodePayload's trailing owner-relay/lease members release before generated_leaf
+and identity/style values; generated storage destruction uses no raw style_origin/
+parent access. Therefore the closure does not rely on incidental member ordering
+to protect such a dereference. Any future destructor adding one invalidates this
+inventory and requires an owning pin/order change before it is accepted.
+
 Nothing in items 1-9 licenses background query/mutation. Final destruction can run
 on the releasing thread only because each live query/writer has a protected owned
 layout/map/assets chain and exclusive final storage cannot still have such a user.
@@ -250,6 +274,16 @@ must be no live interaction hook capable of observing or writing another live
 registry. Root retirement may then touch only its exclusively owned dying domain.
 Token-only readers, weak.lock promotion followed by unpinned access, or raw
 current_root writers would invalidate the proof and block E2 capability.
+
+The inspected interaction hook has a concrete ownership guard too:
+`585804d:dom/dom_interaction.cpp::DomInteractionRegistry` owns a strong `document`
+storage; each claim owns node storage plus live_owner relay and weak registry;
+`aether_dom_interaction_retire_node` (137 onward) acts only after locking those weak
+claims/registry references. A still-live registry therefore prevents the root from
+being last-released. During final registry destruction its weak references cannot
+be promoted; its document member is released only as its owners are unwound. This
+supports the closure argument, but does not substitute for the complete DOMsync
+consumer/root-pin gate. E2 does not install its own finalizer callback hook.
 
 This is precisely the pending independent DOMsync global lifetime gate, not a proof
 that 585804d already passes it. E2 must consume a named accepted DOMsync revision

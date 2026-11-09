@@ -1,6 +1,9 @@
 # E2 proposal: certified host hit and scroll input
 
-Status: COMPLETE PROPOSAL v1, pending independent design review. No product code,
+Status: COMPLETE PROPOSAL v2, pending independent design re-review. Revision 1
+(8663b26) received FAIL/revision required for ownership acquisition and closure,
+durable discrete-action admission, and the shared settling budget. No PASS is
+asserted for this revision. No product code,
 activation or E2 implementation is authorized by this document. Preserve E1 freeze
 `51b4fb53f78d01782a7de92f6ca4d4f8668dbebb` (E1 implementation + CI follow-up).
 DOMsync `585804d5eac67232f8ea7eac829ba792e4e9e20e` is a separately inspected
@@ -110,8 +113,9 @@ A published host HitSnapshotLease must own real native references to geometry,
 immutable selected/base maps, offset snapshot and authenticated DOM identity owner.
 It must not be implemented as a .NET object reference to a disposable IntPtr.
 Native index ownership remains one-way (layout -> index, never index -> layout).
-Pending/cache records hold a bounded shared lease and authentic target descriptor;
-no per-point deep copy or new DOM-wide snapshot, no historical owner chain.
+Pending/cache records hold actual owned leases and authentic target descriptors;
+no per-point deep copy or new DOM-wide snapshot, no historical owner chain. Sealed
+prefixes of admitted discrete actions have separate owners as bounded in §6.1.
 
 ### 3.1 Selected lease protocol, subject to design PASS
 
@@ -131,32 +135,38 @@ versions through shared ownership. DOMsync's coordinator confirms there is NO
 existing guaranteed owner-thread disposal queue for layout and no finalizer
 permission implied by DOMsync.
 
-Proposed new protocol: make layout's intrusive reference count atomic, with
-retain allowed only while an existing owned layout reference is protected; a raw
-address does not authorize acquisition. Composite leases also use atomic reference
-ownership. Managed lease SafeHandle calls release only; query entry protects that
-handle for the whole call. Normal publication and host disposal release
-predictably on the owner thread. The last GC release may reclaim storage only
-after all legitimate owners/readers are gone, and must perform no logical retire,
-callbacks, writes to live owners or unprotected shared registries. This DOES NOT
-make layout queries, finalize or DOM mutation concurrent/thread-safe.
+The complete source inventory and selected acquisition/release protocol are in
+`hover-e2-ownership-audit.md` (normative part of this proposal). They cover all
+three direct layout reference-count accesses, five LayoutOperationPin callers,
+private result construction/failure cleanup and the complete transitive owner
+closure, including the custom-property scope's thread-local deletion chain.
 
-Required pre-implementation audit: layout/result/box destructors and release_box,
-accelerator/map/offset destruction, measure/assets payload destruction, editable
-and generated DOM pins, and every retained-owner destructor. Existing local box
-registry writes are allowed only inside the exclusively owned dying layout.
-Any transitively shared non-thread-safe cleanup blocks this protocol: obtain a
-new reviewed design instead of inventing a Post/queue whose drain is not guaranteed.
-DOMsync's finalizable root/relay global gate must pass first. This is an explicit
-new ownership decision for the reviewer, not an E1 safety claim.
+Selected protocol: checked atomic retain/release from an ALREADY protected owner;
+no overflow, underflow or resurrection. A fallible noexcept LayoutOperationPin
+records acquisition success and every caller checks it before use. Managed original
+NativeLayoutResult AND NativeStyleMap wrappers become real SafeHandle owners;
+stack-only borrows protect them before composite creation reads/retains anything.
+The composite SafeHandle alone cannot protect its own creation from old IntPtr
+wrappers. On any creation failure the output is null and only acquired owners are
+released. All map/layout consumers use protected borrows, not raw Handle access.
+Queries/mutations remain owner-thread operations, not concurrent APIs.
 
-Pure native queries have no callbacks. Generic callback queries keep their existing
-local LayoutOperationPin/StyleOperationPin and callback guards. No cached native
-index/result may strongly hold the composite lease that owns its layout. It can
-retain offset/map/identity owners directly without a back-reference to layout.
-Memory is bounded by one current index/result per layout, one host published
-lease, one pending lease, and short-lived in-flight scopes. Replacing A with B
-releases displaced owners even if building B fails; no linked historical snapshots.
+The inventory corrects revision 1's over-broad "memory-only" wording. Layout box
+registry/index/serial writes at last release are local to the dying layout.
+Synthetic-node destructors write their own identity flags. DOMsync's last-root
+physical destructor may retire its exclusively dying domain when no legitimate
+root/relay reader or writer survives. E2 release does not call explicit doc_destroy
+or independently revoke a live domain. Shared DOM users independently retain root/
+relay ownership, so a layout count of zero alone is NOT the proof for DOM cleanup.
+The inspected DOMsync 585804d remains a reference; a frozen accepted global lifetime
+base is still a prerequisite. No invented owner-thread Post or drain queue is used.
+
+Pure native queries have no callbacks. Generic callback queries retain their
+existing local pins/guards, now with checked acquisition. No cached native index
+or result may strongly retain its containing layout or the composite lease that
+owns that layout. Immutable offset/map/identity owners have no layout back-edge.
+The action queue's bounded prefix owners are accounted separately, not hidden in
+an index self-cycle. Replacement/build failure releases displaced owners.
 
 ## 4. Two certificates, not one epoch shortcut
 
@@ -242,39 +252,40 @@ continuity cancels the drag but keeps capture-until-release as DOMsync requires.
 
 ### 6.1 Exact barrier and prefix rules (P2)
 
-Before PointerPressed, PointerReleased, vertical/horizontal wheel, KeyPressed or
-TextInput, finish the older compatible pending hover prefix at a safe lifecycle
-point. Keyboard-generated click remains in its keyboard action; it is not queued
-or coalesced separately. PointerLeft discards the unobserved prefix as above.
-Capture entry/exit and scrollbar drag seal the coalescing segment. Every captured
-move is delivered synchronously to the existing drag path. Focus/default actions,
-bubbling, StopPropagation and click eligibility remain the DOMsync-reviewed rules.
-No new device or DOM event is added.
+`hover-e2-input-protocol.md` is the normative admission/state/budget protocol for
+this proposal. Before PointerPressed, PointerReleased, vertical/horizontal wheel,
+KeyPressed or TextInput, finish only the action's sealed older compatible prefix
+at a safe lifecycle point, then query the action's own point. Keyboard click stays
+inside its keyboard action. No synthetic move is manufactured for action coordinates.
+PointerLeft is ordered too: when eligible it discards only its unseen prefix,
+not an older action's sealed work, then sends out only for committed hover.
+Capture/drag seals the segment; every captured scrollbar point remains synchronous.
 
-Public programmatic SetScrollOffset, SetViewport and publication of changed
-geometry seal/invalidate pending certificates, but do not synthesize old boundary
-events before a non-input mutation. The last physical point is re-evaluated after
-the new geometry/source is publishable. Read-only CursorAt is not an input barrier
-and cannot change physical input sequence or the pending point.
+Admission reserves descriptor, immutable arguments, original checked sequence,
+queue slot and authentic prefix-lease ownership BEFORE EnsureVisualTree, lifecycle
+notifications or any prefix callback. The E2-only queue has 64 slots. A full queue,
+OOM or retain/sequence exhaustion rejects the new call before admission and leaves
+prior logical state intact. This explicit resource limit requires design approval;
+it does not silently discard an accepted action. Retention is bounded by one
+published lease, one global pending lease, up to 64 queued prefix leases and active
+scopes. There is no discrete descriptor allocation on ordinary hot moves.
 
-Allocate a checked input sequence once at each public entry; deferred replay uses
-the original sequence. Before action N, detach/ack only the pending prefix with
-sequence less than N. Callbacks can create Bnext (sequence greater than N), which
-must not be consumed or erased by this older drain. Nested input keeps the existing
-DOMsync reentrant press/request takeover and claim checks: a newer press can
-supersede an older press, but a new move alone cannot silently cancel a press.
-Style-publication reentrancy retains discrete inputs in existing safe-point order;
-this proposal does not turn all event callbacks into a new general event queue.
+Queued -> Started occurs before the first action-owned observable effect, including
+focus/state/capture/scroll/text/default commit even with no registered handler.
+Completed and Cancelled are terminal. Prefix callbacks have separate consumed
+progress. An unstarted accepted action survives prefix/query/lifecycle failure with
+its original sequence; a started action is not automatically replayed after a
+callback/default fault. Dispose/replacement explicitly cancels queued descriptors.
+Callback-created newer moves/actions cannot overwrite the older sealed prefix.
+Recovery services older queued actions before Bnext, with one attempt per outer
+entry and no automatic retry loop. A nested action cannot pass an older Queued
+action; existing reentrant takeover still applies after the older action Started.
 
-After draining, re-check host/session/claim continuity and lifecycle before querying
-the action's own point. Deferred queue draining snapshots its initial count, like
-Chromium's bounded prefix; callbacks do not extend it indefinitely. Never label a
-superseded or failed query as a successful miss. A prefix already delivered before
-a callback throws is acknowledged, not replayed. An action that has not started
-when lifecycle/query fails remains ordered and unstarted; processing is blocked
-until explicit recovery/new input, without automatic busy-frame retries. Once an
-action's first callback starts, existing exception behavior applies and that action
-is not automatically replayed. Tests must check exact-once delivery and Bnext.
+Programmatic SetScrollOffset, SetViewport and geometry publication invalidate/seal
+certificates but do not synthesize old boundary events before a non-input mutation.
+They request current-point reevaluation only after publication. CursorAt is a query,
+not a physical input barrier or sequence change. Bubbling, StopPropagation, focus,
+click eligibility and authoritative continuity remain the accepted DOMsync rules.
 
 ### 6.2 Explicit P3 corrections: stationary scroll and geometric retargeting
 
@@ -317,12 +328,22 @@ the final certified snapshot. Query-only CursorAt(B) does not overwrite A's curs
 Geometry/visibility and newly approved scroll resettlement set one dirty point;
 ordinary paint-only or pointer-events-only state writes do not keep scheduling it.
 
-All settling performed by Render or a barrier shares a maximum of eight passes
-for that drain and retains ResetUnstableHover. A reset acknowledges only its own
-batch, preserving newer Bnext, and does not repeatedly schedule itself at rest.
-Exhaustion/error does not certify a stale target or cache a miss. Dispose invalidates
-host authority immediately; leases keep storage alive only until in-flight scopes
-unwind. No stale event or cursor certificate escapes after disposal.
+All automatic settling in one OUTERMOST external entry shares eight passes and
+one captured DOM lifecycle-loss batch. Render, barriers, EnsureVisualTree, internal
+recovery and reentrant callbacks inherit that same budget/cutoff; no internal drain
+gets a fresh eight or enlarges the lifecycle batch from Bnext. The protocol document
+defines when each pass is consumed and how user-authored explicit recursion differs
+from an automatic loop.
+
+On exhaustion, one ResetUnstableHover acknowledges only its unstable prefix,
+preserves newer Bnext and seals the old prefix as SuppressedUnstable. An unstarted
+action remains queued for a later external entry; it does not execute after the
+budget ran out or reopen that same oscillating prefix on recovery. Fresh action
+query/authority checks are still required. Reset/cleanup failure keeps explicit
+cleanup owed, never a replay of consumed events. Suppress self-scheduled retries;
+a later external Render/new input permits one bounded recovery attempt as in the
+existing style retry policy. Disposal invalidates authority immediately; retained
+storage never legitimizes later stale events.
 
 ## 7. DOMsync integration contract (reference, not integration approval)
 
@@ -384,7 +405,8 @@ Expected product surfaces, only after independent design PASS:
 - Native layout types/operation pins and lifecycle exports; offset snapshot and hit
   acceleration helpers; ordinary/input traversal pure-source adapters; diagnostic
   work counter extension without changing existing ABI sizes.
-- NativeLayoutInterop, LayoutInterop and a composite managed lease wrapper;
+- NativeLayoutInterop, NativeStyleMap, their map/layout consumers, LayoutInterop
+  and protected SafeHandle/composite lease wrappers;
   UiHostOptions: separate experimental E2 input flag default false, requiring a
   native capability handshake. E1 native acceleration default remains OFF.
 - UiDocumentHost Scroll/Pointer/Input/Render/Publication/Style and DOMsync
@@ -483,11 +505,14 @@ Windows CPU, OS delivery, GPU/presentation or macOS execution evidence.
 
 ## 11. Review decision requested
 
-Review this exact document and evidence as a proposal only. Explicit decisions:
+Review this document, its evidence, `hover-e2-ownership-audit.md` and
+`hover-e2-input-protocol.md` together as a proposal only. Explicit decisions:
 composite atomic ownership with destructor audit; persistent authentic offsets and
 atomic host publication; split broad-phase/result certificates; scroll-space bound
 proof and fallback; P1 cursor, P2 barriers and P3 observable corrections with the
-pointer-events-only exception; bounded reentrancy/error policy and full gates.
+pointer-events-only exception; 64-slot pre-callback admission and explicit resource
+rejection; exact action states/default effects; one outer-entry hover/lifecycle
+budget and bounded recovery; full gates.
 
 No PASS is asserted here. E1 remains frozen separately at 51b4fb5. Existing E1
 implementation PASS does not approve E2, DOMsync integration or any CPU benefit.
