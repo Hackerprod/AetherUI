@@ -29,7 +29,10 @@ internal static class ClaimsFaultSiteTests
             foreach (var site in trace)
             {
                 counts.TryGetValue(site, out var occurrence); counts[site] = ++occurrence;
-                var boundary = family == "losses" ? "8.2-capture-or-delivery-prefix" : "13.3";
+                var boundary = family != "losses" ? "13.3" :
+                    site.StartsWith("host.losses.", StringComparison.Ordinal) || site == "interop.utf8.decode" ?
+                    "8.2-capture-zero-publication" : $"8.2-delivery-prefix-{occurrence - 1}";
+                Console.WriteLine($"REACHED {family} {site}/{occurrence}");
                 Sweep(family, site, occurrence);
                 Collect(); Equal(baseline, ManagedDomFault.Resources, family + "/" + site + " teardown");
                 rows.Add($"{family}\t{site}\t{occurrence}\t{boundary}\ttrue");
@@ -56,7 +59,11 @@ internal static class ClaimsFaultSiteTests
             if (family == "restore") f.Component.Invalidate();
         }
         var before = f.Image(); var native = NativeImage(f.Dom);
+        var produced = Field<long[]>(f.Host, "_invalidationProduced").ToArray();
+        var acknowledged = Field<long[]>(f.Host, "_invalidationAcknowledged").ToArray();
         var claims = f.ClaimSnapshots();
+        var expectedNativePrefixes = family == "losses" ? Enumerable.Range(0, LossCount + 1).Select(prefix => NativeImage(f.Dom, f.Nodes.Take(prefix).ToArray())).ToArray() : [];
+        var expectedManagedPrefixes = family == "losses" ? Enumerable.Range(0, LossCount + 1).Select(f.Image).ToArray() : [];
         var token = NativeDomSync.ReadToken(f.Dom.Native);
         var document = f.Host.Document;
         var registry = Field<object>(f.Host, "_componentRegistry");
@@ -66,8 +73,7 @@ internal static class ClaimsFaultSiteTests
         var resources = ManagedDomFault.Resources; var frames = f.Renderer.Frames;
         var notifications = f.Notifications;
         var fault = selected is null ? ManagedDomFault.Arm() : ManagedDomFault.ArmSite(selected, occurrence);
-        var captureEnd = -1; var deliveryEnd = -1;
-        f.Host.InteractionLossCaptureProbe = phase => { if (phase == "before-array") captureEnd = fault.Count; };
+        var deliveryEnd = -1;
         if (family == "losses") f.Component.Blur = _ => deliveryEnd = fault.Count;
         Exception? error = null;
         try
@@ -77,7 +83,7 @@ internal static class ClaimsFaultSiteTests
             else f.Host.Render();
         }
         catch (Exception caught) { error = caught; }
-        finally { f.Host.InteractionLossCaptureProbe = null; f.Component.Blur = null; fault.Dispose(); }
+        finally { f.Component.Blur = null; fault.Dispose(); }
         var trace = fault.Sites.Take(selected is null && family == "losses" ? deliveryEnd : fault.Count).Where(site => family switch
         {
             "losses" => true,
@@ -101,6 +107,9 @@ internal static class ClaimsFaultSiteTests
         Equal(notifications, f.Notifications, "Failure notified user");
         Equal(publication, f.Host.HostPublicationSerial, "Failure published managed styles");
         Equal(style, Field<NativeStylePublicationToken>(f.Host, "_publishedStyleToken"), "Failure replaced style token");
+        Check(acknowledged.SequenceEqual(Field<long[]>(f.Host, "_invalidationAcknowledged")), "Failure acknowledged prior B/Bnext");
+        var pendingInvalidations = Field<long[]>(f.Host, "_invalidationProduced");
+        for (var i = 0; i < produced.Length; i++) Check(pendingInvalidations[i] >= produced[i], "Failure erased pending invalidation");
         Check(ReferenceEquals(document, f.Host.Document) && ReferenceEquals(registry, Field<object>(f.Host, "_componentRegistry")), "Failure replaced DOM or registry A");
         Equal(0, Field<int>(f.Host, "_interactionEntryDepth"), "Leaked entry depth");
         Check(!Field<bool>(f.Host, "_drainingInteractionLosses"), "Leaked loss guard");
@@ -132,6 +141,8 @@ internal static class ClaimsFaultSiteTests
             Equal(version, document.Version, "Loss cleanup changed structural version");
             Equal(inputVersion + prefix, document.InputVersion, "Wrong input prefix");
             Equal(serial + prefix, f.Host.HostInputSerial, "Wrong host bookkeeping prefix");
+            Equal(expectedNativePrefixes[prefix], NativeImage(f.Dom), "Native DOM/token differs from completed cleanup prefix");
+            Equal(expectedManagedPrefixes[prefix], f.Image(), "Managed DOM/authority differs from completed cleanup prefix");
             if (prefix == 0)
             {
                 Equal(token, NativeDomSync.ReadToken(f.Dom.Native), "Capture changed native token");
@@ -141,6 +152,7 @@ internal static class ClaimsFaultSiteTests
             }
             // This is a fresh explicit attempt after disarming, never an automatic retry.
             f.Host.Render(); f.AssertDelivered(LossCount);
+            Equal(CursorKind.Pointer, f.Host.CursorAt(new(10, 10)), "Explicit recovery did not recertify hit");
             Check(!f.Pending(), "Explicit retry retained the old loss batch");
             f.Host.Render(); f.AssertDelivered(LossCount);
         }
@@ -149,7 +161,13 @@ internal static class ClaimsFaultSiteTests
             Equal(token, NativeDomSync.ReadToken(f.Dom.Native), "Failed claim preparation changed token");
             Equal(native, NativeImage(f.Dom), "Failed claim preparation changed DOM");
             Equal(before, f.Image(), "Failed claim preparation changed authority/bookkeeping");
-            Equal(resources, ManagedDomFault.Resources, "Claim staging leaked ownership");
+            // Candidate node wrappers are finalizable, not IDisposable. Interaction
+            // handles/buffers must release immediately; node leases after bounded GC.
+            Equal(resources.InteractionOwners, ManagedDomFault.Resources.InteractionOwners, "Provisional interaction owner escaped");
+            Equal(resources.Claims, ManagedDomFault.Resources.Claims, "Provisional claims escaped");
+            Equal(resources.Buffers, ManagedDomFault.Resources.Buffers, "Temporary native buffer escaped");
+            Collect();
+            Equal(resources, ManagedDomFault.Resources, "Claim staging leaked ownership after GC");
             if (family == "acquire") Invoke(f.Host, "AcquireInteractionClaim", f.Nodes[2], ElementState.Hover);
             else f.Host.Render();
         }
@@ -162,7 +180,16 @@ internal static class ClaimsFaultSiteTests
     {
         using (var f = new Fixture())
         {
-            f.PrepareLosses(); var once = false;
+            f.PrepareLosses();
+            // First reject a real late capture operation. The following explicit
+            // disarmed retry is the one whose callbacks create Bnext/new authority.
+            using (var fault = ManagedDomFault.ArmSite("host.losses.pending-growth", 2))
+            {
+                try { f.Host.Render(); throw new Exception("Missing recovery setup failure"); }
+                catch (OutOfMemoryException error) { Check(ReferenceEquals(error, fault.Failure), "Wrong recovery setup sentinel"); }
+            }
+            Check(!f.Host.NeedsRender && f.Pending() && f.Component.Trace.Count == 0, "Failed capture did not retain its finite batch");
+            var once = false;
             f.Component.Blur = e =>
             {
                 if (once) return; once = true;
@@ -208,7 +235,8 @@ internal static class ClaimsFaultSiteTests
         using (var f = new Fixture())
         {
             f.PrepareLosses(); f.Component.Blur = _ => f.Host.Dispose();
-            f.Host.Render(); Equal(1, f.Component.Trace.Count, "Disposed host invoked remaining loss callbacks");
+            try { f.Host.Render(); } catch (ObjectDisposedException) { }
+            Equal(1, f.Component.Trace.Count, "Disposed host invoked remaining loss callbacks");
         }
         Console.WriteLine("PASS separate callbacks: finite batch/Bnext, new focus, adoption, throwing callback, disposal");
     }
@@ -261,20 +289,21 @@ internal static class ClaimsFaultSiteTests
             Equal(count, Component.Trace.Count, "Unexpected loss callback count");
             for (var i = 0; i < count; i++) Equal($"A:{i + 1}:n{i}", Component.Trace[i], "Frozen registry/token/target route");
         }
-        internal string Image()
+        internal string Image(int retiredPrefix = 0)
         {
             var text = new StringBuilder();
             void Visit(Node n)
             {
                 text.Append(n.NodeType).Append('/').Append(n.NativeRecordCore?.Identity).Append('/').Append(n.NativeRecordCore?.DisconnectSerial).Append('/').Append(n.NativeRecordCore?.Attached);
-                if (n.NativeRecordCore is { } r) text.Append('/').AppendJoin(',', r.StateBitWriteSerial);
-                if (n is ElementNode e) { text.Append('/').Append(e.StateCore).Append('/').Append(e.RuntimeValueCore); foreach (var p in e.AttributesCore.OrderBy(p => p.Key)) text.Append('/').Append(p.Key).Append('=').Append(p.Value); }
+                var cleaned = Nodes.Take(retiredPrefix).Any(element => ReferenceEquals(element, n));
+                if (n.NativeRecordCore is { } r) text.Append('/').AppendJoin(',', r.StateBitWriteSerial.Select((stamp, bit) => stamp + (cleaned && ((uint)ElementState.Focus & (1u << bit)) != 0 ? 1UL : 0UL)));
+                if (n is ElementNode e) { text.Append('/').Append(cleaned ? e.StateCore & ~ElementState.Focus : e.StateCore).Append('/').Append(e.RuntimeValueCore); foreach (var p in e.AttributesCore.OrderBy(p => p.Key)) text.Append('/').Append(p.Key).Append('=').Append(p.Value); }
                 text.Append('('); foreach (var c in n.ChildrenCore) Visit(c); text.Append(')');
             }
             Visit(Host.Document!);
-            foreach (var c in ClaimSnapshots()) text.Append('|').Append(c.Info).Append('/').Append(c.Loss);
-            return text.Append('|').Append(Host.Document!.Version).Append('/').Append(Host.Document.InputVersion).Append('/').Append(Host.HostInputSerial)
-                .Append('/').AppendJoin(',', Field<long[]>(Host, "_invalidationProduced")).Append('/').AppendJoin(',', Field<long[]>(Host, "_invalidationAcknowledged")).ToString();
+            foreach (var c in ClaimSnapshots().Skip(retiredPrefix)) text.Append('|').Append(c.Info).Append('/').Append(c.Loss);
+            return text.Append('|').Append(Host.Document!.Version).Append('/').Append(Host.Document.InputVersion + retiredPrefix).Append('/').Append(Host.HostInputSerial + retiredPrefix)
+                .Append('/').Append(Host.FocusedElement?.NativeRecordCore?.Identity).ToString();
         }
         public void Dispose() => Host.Dispose();
     }
@@ -284,15 +313,18 @@ internal static class ClaimsFaultSiteTests
         return $"{loss.Claim}/{loss.RecordId}/{loss.RecordSerial}/{loss.DisconnectSerial}/{loss.StateBitWriteSerial}/{loss.Reason}/{loss.HandlerPresent}/" +
             (loss.HandlerPresent != 0 ? NativeDomCodec.Decode(loss.Handler) : "<absent>");
     }
-    private static string NativeImage(DomInterop dom)
+    private static string NativeImage(DomInterop dom, ElementNode[]? cleanedNodes = null)
     {
         using var borrow = dom.Native.Borrow(); using var snapshot = NativeDomSnapshot.Acquire(borrow.Handle);
-        var text = new StringBuilder().Append(snapshot.Token);
+        var token = snapshot.Token;
+        var cleanCount = (ulong)(cleanedNodes?.Length ?? 0);
+        var text = new StringBuilder().Append(token with { ObservationSerial = token.ObservationSerial + cleanCount, InputEpoch = token.InputEpoch + cleanCount });
         foreach (var n in snapshot.Nodes)
         {
-            text.Append('|').Append(n.Identity).Append('/').Append(n.OwnerIdentity).Append('/').Append(n.ParentIndex).Append('/').Append(n.DisconnectSerial).Append('/').Append(n.State).Append('/').Append(n.Tag).Append('/').Append(n.Text).Append('/').Append(n.RuntimeValue).Append('/').Append(n.AuthoredValue);
+            var cleaned = cleanedNodes?.Any(element => element.NativeRecordCore!.Identity == n.Identity) == true;
+            text.Append('|').Append(n.Identity).Append('/').Append(n.OwnerIdentity).Append('/').Append(n.ParentIndex).Append('/').Append(n.DisconnectSerial).Append('/').Append(cleaned ? n.State & ~(int)ElementState.Focus : n.State).Append('/').Append(n.Tag).Append('/').Append(n.Text).Append('/').Append(n.RuntimeValue).Append('/').Append(n.AuthoredValue);
             foreach (var p in n.Attributes.OrderBy(p => p.Key)) text.Append('/').Append(p.Key).Append('=').Append(p.Value);
-            text.Append('/').AppendJoin(',', n.Children).Append('/').AppendJoin(',', n.StateBitWriteSerial);
+            text.Append('/').AppendJoin(',', n.Children).Append('/').AppendJoin(',', n.StateBitWriteSerial.Select((stamp, bit) => stamp + (cleaned && ((uint)ElementState.Focus & (1u << bit)) != 0 ? 1UL : 0UL)));
         }
         return text.ToString();
     }

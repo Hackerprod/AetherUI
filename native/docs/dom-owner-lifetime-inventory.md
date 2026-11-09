@@ -1,6 +1,6 @@
 # DOMsync ownership and live-reader inventory
 
-Current source basis: **e2c06e7458557946c76860e8ee140ec9fb615698**, read from `frozen-e2c06e7/`. This consolidates the old 54dd45d work notes, whose archival copy is `OWNER-LIFETIME-INVENTORY-history-54dd45d.md`. Old statements about missing loaded-document ownership or retaining a complete retired style payload are superseded here. This inventory is an audit input, not an independent safety PASS.
+Original audited source basis: **e2c06e7458557946c76860e8ee140ec9fb615698**, read from `frozen-e2c06e7/`. Subsequent staged-create, prelink and instance-ledger updates are consolidated below; they do not change the original audit attribution. This consolidates the old 54dd45d work notes, whose archival copy is `OWNER-LIFETIME-INVENTORY-history-54dd45d.md`. Old statements about missing loaded-document ownership or retaining a complete retired style payload are superseded here. This inventory is an audit input, not an independent safety PASS.
 
 ## Semantics and admitted boundaries
 
@@ -36,7 +36,7 @@ Current source basis: **e2c06e7458557946c76860e8ee140ec9fb615698**, read from `f
 10. **Legacy transitions.** `animations/transition_runtime.cpp::transition_claim` owns node storage, identity, historical root and live-owner relay. Active, finished and prepared candidate states retain those claims. Validity/staleness/has-active/Tick/override reads are protected by the runtime/candidate state. Input observation/retirement raw pointers are borrowed for the native call. Candidates retain runtime instance/lifetime, compare mutation/status revisions, and publish payload without replacing the public handle. The refactor does not replace legacy behavior with contextual transitions.
 11. **Contextual transitions.** `animations/contextual_transitions.cpp::Entry` retains node/document storage and live relay in immutable State and retained batches. It obtains ownership from authentic identity storage/relay, not by dereferencing a possibly sentinel `event.node`. Existing identity-only legacy inputs remain borrowed and gain no new owned-DOM promise. Has-active/sample/owner-extraction reads are protected by retained entry owners.
 12. **Geometry/layout/render.** Production `layout_engine.cpp` captures the actual geometry document and a full `EditableDomPin` (including text/comments and live relays), even for null/unbound/empty style maps. Both initial and frozen `LayoutAssets` retain it. Its pure `structure_valid` reads are thus protected independently from map provenance. `operation_pin.h::CallbackEpochGuard` holds root/token across callbacks; style/layout operation pins retain maps/assets/geometry. Raw layout boxes require the layout owner. Engine measure-document tokens live only inside this protected operation and are cleared on unwind. Display-list callback guards use the same retained geometry/style ownership.
-13. **Bound CSS source stages.** `aether_dom_style_binding.*` binding/stages retain document storage and the runtime cell while compiling/capturing candidates. DOM-edit domains retain the corresponding source/destination binding stages; all slot mutations and validation precede no-fail publication. Direct legacy mutators participate. This is not a parse/rebind recovery mechanism.
+13. **Bound CSS source stages.** `style_runtime_core.cpp::DomStyleBinding` retains the runtime control cell but has only a weak owner-control edge; a binding handle alone is not a root-storage lease. `DomStyleSlotStage` separately owns the root storage/control and compiled/base/cache/registry data while preparing source changes. DOM-edit domains retain the corresponding source/destination binding stages. Borrowed raw document calls require their existing owner; runtime calls reject expired/dead owner controls. All slot mutations and validation precede no-fail publication. Direct legacy mutators participate. This is not a parse/rebind recovery mechanism.
 14. **Interaction native metadata.** `dom_interaction.cpp::DomInteractionRegistry` strongly owns document/control/binding and claims. Owner control stores only a weak registry; each claim holds a weak registry, node storage and live-owner relay; node identity stores only weak claims. No root-registry-claim strong cycle is introduced. Prepared stages retain registry/claim and reserved route/loss data. Claim/owner handle release only drops refs. Logical retire/dispose and exact loss acknowledgment are owner-thread. Destroy/reparse retirement freezes the first loss without allocation. Reading a retained loss after logical document destruction is supported under its retained registry, until host/binding replacement revokes it.
 
 ## Managed borrowing and publication
@@ -66,3 +66,50 @@ Executed by implementer (independent reruns separate):
 ## Still open
 
 Independent proof that every reachable live read belongs to one of the above ownership paths, complete allocation/failure coverage, complete measured zero-allocation commits, broader concurrency coverage, platform execution and any findings from the independent e2 audit. Physical lifetime pins do not certify semantic freshness, attachment, authority or callback eligibility. No completed subset establishes D1 complete.
+
+
+## Post-e2 staged-create and measured lifetime updates
+
+`ba7396c` adds `style_runtime_core.cpp::aether_dom_style_create_s` and the additive
+prepare/validate/commit/destroy API. Prepare acquires a local real document pin and
+runtime control before collecting source; the returned slot stage owns the root and
+runtime control. Its output binding shell is allocated in prepare and holds no
+published registration until commit. DOM token, source/base registry, recipient and
+registration are revalidated before `commit_slot`; output ownership is released only
+after that no-fail publication. Destroy only releases staging and cannot logically
+deregister the published binding. Initial abort and postcommit destruction are
+therefore different from `aether_dom_style_binding_destroy_v1`.
+
+`StyleRuntimeInterop.DomBinding.cs::NativeDomBindingStageHandle` is constructed
+before native acquisition; its immutable initial/rebind kind selects the matching
+staging destructor. The readonly ref-struct borrow protects its SafeHandle during
+validate/commit. `PreparedDomBinding` holds current/previous document owners and a
+snapshot until disposal and clears those references afterward. Publication swaps the
+loaded owner, binding and element/style indexes together. Host provisional owner
+validation/activation and renderer assignment remain in the joint commit interval.
+
+`950dda7`/`5703965` explicitly prepare the small import groups before any candidate
+capture. Native library resolution may execute application resolver code; it is not
+claimed callback-free. CAS initialization has no fallible type initializer and holds
+no monitor across linking. Reentry/busy fails retryably; only the initializing winner
+resets failure, and ready is published after every required import links. Owner,
+disposed and binding bases are revalidated after linking. Import preparation does not
+replace, weaken or omit the existing SafeHandle/document borrows.
+
+`753f598` adds a compile-time-only instance ledger to eight native families: node
+(including generated/document), editable storage, legacy external cell, owner control,
+current-root relay, identity, interaction registry and claim. Atomics permit counting
+valid final releases on another thread, but do not authorize concurrent live reads.
+Counts are sampled only after teardown/join; saturation/underflow remains invalid.
+Every typed/snapshot fault fixture compares the count vector after all oracle pins
+have been dropped. The owner runner checks adoption/retirement/generated cases and
+last node-lease release on a joined thread. `cf891ff`/`2b8d5f7` extend the same vector
+check to transition fault fixtures and the complete joint-commit runner. These count
+physical instances, not control blocks, payloads, arbitrary memory or every handle.
+The normal shared library contains no ledger member/symbol and is byte-identical to
+normal `c3f97849b0fd75a11baae029d037d562131d2cf99628028fdcd28490357c7b25`.
+
+Independent source review accepted these instrumentation cuts with that limited
+scope. Local six-target 753 checks pass; complete ON/OFF refresh and independent
+execution are separately tracked. A direct LSan retry on 4df3530 again exits 1 with
+fatal ptrace unsupported. No accounting subset is relabeled as a successful LSan run.
