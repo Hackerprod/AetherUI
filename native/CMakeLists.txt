@@ -1037,7 +1037,7 @@ if(AETHERUI_BUILD_TESTS)
     add_test(NAME aether.render-plan COMMAND aether_render_plan_test)
 
     add_executable(aether_layout_ownership_test tests/test_layout_ownership.cpp src/layout/layout_box.cpp src/css/computed_style.cpp
-        src/css/frozen_style.cpp src/css/frozen_c_string.cpp src/css/style_map_version.cpp)
+        src/css/frozen_style.cpp src/css/frozen_c_string.cpp src/css/style_map_version.cpp src/css/immutable_style_backing.cpp)
     target_include_directories(aether_layout_ownership_test PRIVATE src/layout include)
     target_link_libraries(aether_layout_ownership_test PRIVATE AetherUI::Core)
     add_test(NAME aether.layout-ownership COMMAND aether_layout_ownership_test)

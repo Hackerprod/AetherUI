@@ -2,6 +2,11 @@
 #include "style_revision.h"
 #include "../dom/dom_types.h"
 namespace aether::style {
+namespace {
+template<class T> bool same_owner(const std::shared_ptr<T>& a,const std::shared_ptr<T>& b)noexcept {
+    return a==b&&!a.owner_before(b)&&!b.owner_before(a);
+}
+}
 MapVersion::MapVersion(const MapVersionInput& in) :
     backing_(in.backing),
     mode_(in.mode),
@@ -30,7 +35,7 @@ aether_status_t make_map_version(const MapVersionInput& in, MapVersionRef& out) 
     } else return AETHER_ERROR_INVALID_STATE;
     if (in.document_lifetime) {
         if (!in.document_lifetime->owner ||
-            (in.document_lifetime->alive && static_cast<const aether_node_s*>(in.document_lifetime->owner)->identity != in.document_lifetime) || in.document_identity != reinterpret_cast<uintptr_t>(in.document_lifetime.get())) return AETHER_ERROR_INVALID_STATE;
+            (in.document_lifetime->alive && !same_owner(static_cast<const aether_node_s*>(in.document_lifetime->owner)->identity,in.document_lifetime)) || in.document_identity != reinterpret_cast<uintptr_t>(in.document_lifetime.get())) return AETHER_ERROR_INVALID_STATE;
     } else if (in.document_identity) return AETHER_ERROR_INVALID_STATE;
     try { MapVersionRef result(new const MapVersion(in)); out=std::move(result); return AETHER_OK; }
     catch (const std::bad_alloc&) { return AETHER_ERROR_OUT_OF_MEMORY; }

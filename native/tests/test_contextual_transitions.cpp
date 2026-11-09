@@ -228,7 +228,7 @@ static void sampler_binding_contract() {
     REQUIRE(make_map_version(version_input,selected_version)==AETHER_OK);
     REQUIRE(selected_version->mode()==MapMode::legacy_partial);
     REQUIRE(selected_version->document_identity()!=record->document_identity());
-    const auto inputs=sample_inputs(*selected_version,record);
+    const auto inputs=sample_inputs(*selected_version,BoundNodeView::from_legacy(record));
     REQUIRE(inputs.document_identity==selected_version->document_identity());
     REQUIRE(inputs.node_identity==record->node_identity());
     aether_computed_style_handle_t owned=nullptr;
@@ -244,7 +244,7 @@ static void sampler_binding_contract() {
         REQUIRE(export_style_handle(*selected_version,nonmember,&unchanged)==AETHER_ERROR_INVALID_STATE);
         REQUIRE(unchanged==owned);
         bool rejected=false;
-        try { (void)sample_inputs(*selected_version,nonmember); }
+        try { (void)sample_inputs(*selected_version,BoundNodeView::from_legacy(nonmember)); }
         catch(const std::invalid_argument&) { rejected=true; }
         REQUIRE(rejected);
     };
@@ -264,7 +264,7 @@ static void sampler_binding_contract() {
     MapVersionRef legacy_version;
     REQUIRE(make_map_version(version_input,legacy_version)==AETHER_OK);
     REQUIRE(record->document_identity()!=0);
-    const auto legacy_inputs=sample_inputs(*legacy_version,record);
+    const auto legacy_inputs=sample_inputs(*legacy_version,BoundNodeView::from_legacy(record));
     REQUIRE(legacy_inputs.document_identity==0);
     REQUIRE(legacy_inputs.node_identity==record->node_identity());
     REQUIRE(export_style_handle(*legacy_version,record,&owned)==AETHER_OK);

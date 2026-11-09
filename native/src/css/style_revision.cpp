@@ -44,7 +44,11 @@ bool measures_equal(const FrozenMeasurePayload& a,const FrozenMeasurePayload& b)
     if(ap.size()!=bp.size()||az.size()!=bz.size()||a.property_dependencies().size()!=b.property_dependencies().size())return false;
     for(size_t i=0;i<ap.size();++i)if(std::memcmp(&ap[i],&bp[i],sizeof(MeasureBackgroundPosition)))return false;
     for(size_t i=0;i<az.size();++i)if(std::memcmp(&az[i],&bz[i],sizeof(MeasureBackgroundSize)))return false;
-    for(const auto& dep:a.property_dependencies())if(b.dependency(std::string_view(dep.name().c_str(),dep.name().size()))!=dep.flags())return false;
+    const auto ad=a.property_dependencies(),bd=b.property_dependencies();
+    // Preserve even noncanonical imported sequence metadata. A different order
+    // conservatively replaces; no assumption of unique imported names is needed.
+    for(size_t i=0;i<ad.size();++i)if(ad[i].flags()!=bd[i].flags()||
+        !ad[i].name().equals(std::string_view(bd[i].name().c_str(),bd[i].name().size())))return false;
     return true;
 }
 bool payload_equivalent(const FrozenNodePayload& a,const FrozenNodePayload& b)noexcept{
@@ -86,7 +90,7 @@ aether_status_t certify_full_payload_revision(const StyleRevisionRef& base,const
     if(!in.document||!in.document_lifetime||!in.generation||!in.document_lifetime->alive||!in.document_lifetime->owner||
         in.document_identity!=reinterpret_cast<uintptr_t>(in.document_lifetime.get())||in.document->values().identity!=in.document_identity||
         in.document->values().generation!=in.generation||in.entries.size()>INT32_MAX)return AETHER_ERROR_INVALID_STATE;
-    if(static_cast<const aether_node_s*>(in.document_lifetime->owner)->identity!=in.document_lifetime)return AETHER_ERROR_INVALID_STATE;
+    if(!same_owner(static_cast<const aether_node_s*>(in.document_lifetime->owner)->identity,in.document_lifetime))return AETHER_ERROR_INVALID_STATE;
     if(base&&(!base->authentic_owner(base)||!same_owner(base->document_lifetime(),in.document_lifetime)||base->document_identity()!=in.document_identity||in.generation<=base->generation()))return AETHER_ERROR_INVALID_STATE;
     if(in.input_epoch!=in.document_lifetime->mutation_epoch||in.structure_epoch!=in.document_lifetime->structure_epoch||
         in.style_tree_epoch!=in.document_lifetime->style_tree_epoch+1|| (base&&!in.retired.empty()))return AETHER_ERROR_INVALID_STATE;
@@ -96,7 +100,7 @@ aether_status_t certify_full_payload_revision(const StyleRevisionRef& base,const
         for(size_t i=0;i<in.entries.size();++i){
             const auto& entry=in.entries[i];const auto& p=entry.payload;
             if(!entry.node||!p||p->node()!=entry.node||p->origin()!=RecordOrigin::runtime||!seen.insert(entry.node).second||
-                !p->node_lifetime()||!p->node_lifetime()->alive||p->node_lifetime()->owner!=entry.node||entry.node->identity!=p->node_lifetime()||
+                !p->node_lifetime()||!p->node_lifetime()->alive||p->node_lifetime()->owner!=entry.node||!same_owner(entry.node->identity,p->node_lifetime())||
                 !same_owner(p->document_lifetime(),in.document_lifetime)||p->document_identity()!=in.document_identity||!p->measures()||
                 !p->custom_properties()||!p->color_references())return AETHER_ERROR_INVALID_STATE;
             if(stable&&base->manifest().find(i)->node!=entry.node)stable=false;
@@ -162,7 +166,7 @@ aether_status_t freeze_style_revision(const StyleRevisionInput& in, StyleRevisio
         in.retired.size() > static_cast<size_t>(INT32_MAX) - in.entries.size())
         return AETHER_ERROR_INVALID_STATE;
     // Liveness is checked before touching the DOM observer's raw owner.
-    if (static_cast<const aether_node_s*>(in.document_lifetime->owner)->identity != in.document_lifetime)
+    if (!same_owner(static_cast<const aether_node_s*>(in.document_lifetime->owner)->identity,in.document_lifetime))
         return AETHER_ERROR_INVALID_STATE;
     try {
         std::unordered_set<const aether_node_s*> seen;
@@ -175,7 +179,7 @@ aether_status_t freeze_style_revision(const StyleRevisionInput& in, StyleRevisio
                 !same_owner(r->document_lifetime(), in.document_lifetime) || r->document_identity() != in.document_identity ||
                 !r->measures() || !same_owner(r->measures()->document_owner(), in.document))
                 return AETHER_ERROR_INVALID_STATE;
-            if (entry.node->identity != r->node_lifetime()) return AETHER_ERROR_INVALID_STATE;
+            if (!same_owner(entry.node->identity,r->node_lifetime())) return AETHER_ERROR_INVALID_STATE;
         }
         for (const auto& retired : in.retired) {
             const auto& r = retired.previous_record;

@@ -1,6 +1,11 @@
 #include "frozen_node_record.h"
 #include "../dom/dom_types.h"
 namespace aether::style {
+namespace {
+template<class T> bool same_owner(const std::shared_ptr<T>& a,const std::shared_ptr<T>& b)noexcept {
+    return a==b&&!a.owner_before(b)&&!b.owner_before(a);
+}
+}
 FrozenNodePayload::FrozenNodePayload(const NodePayloadInput& in) :
     origin_(in.origin),
     node_(in.node),
@@ -21,16 +26,16 @@ aether_status_t freeze_node_payload(const NodePayloadInput& in, FrozenNodePayloa
     if (!in.node || !in.style || (in.origin != RecordOrigin::legacy && in.origin != RecordOrigin::runtime)) return AETHER_ERROR_INVALID_STATE;
     if (in.node_lifetime) {
         if (!in.node_lifetime->alive || in.node_lifetime->owner != in.node ||
-            in.node_lifetime != in.node->identity ||
+            !same_owner(in.node_lifetime,in.node->identity) ||
             in.node_identity != reinterpret_cast<uintptr_t>(in.node_lifetime.get())) return AETHER_ERROR_INVALID_STATE;
     } else if (in.node_identity) return AETHER_ERROR_INVALID_STATE;
     if (in.document_lifetime) {
         if (!in.document_lifetime->alive || !in.document_lifetime->owner ||
-            static_cast<const aether_node_s*>(in.document_lifetime->owner)->identity != in.document_lifetime ||
+            !same_owner(static_cast<const aether_node_s*>(in.document_lifetime->owner)->identity,in.document_lifetime) ||
             in.document_identity != reinterpret_cast<uintptr_t>(in.document_lifetime.get())) return AETHER_ERROR_INVALID_STATE;
     } else if (in.document_identity) return AETHER_ERROR_INVALID_STATE;
     if (in.generated_leaf && (in.generated_leaf.get() != in.node || !in.node->is_generated ||
-        !in.node_lifetime || in.generated_leaf->identity != in.node_lifetime)) return AETHER_ERROR_INVALID_STATE;
+        !in.node_lifetime || !same_owner(in.generated_leaf->identity,in.node_lifetime))) return AETHER_ERROR_INVALID_STATE;
     if (in.node->is_generated && !in.generated_leaf) return AETHER_ERROR_INVALID_STATE;
     if (in.origin == RecordOrigin::runtime && (!in.measures || !in.custom_properties || !in.color_references ||
         !in.node_lifetime || !in.document_lifetime)) return AETHER_ERROR_INVALID_STATE;

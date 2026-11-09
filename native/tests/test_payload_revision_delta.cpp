@@ -57,6 +57,21 @@ static MapVersionRef map(const StyleRevisionRef& revision) {
 }
 int main() {
     Fixture f(512);
+    // Equal raw token addresses with unrelated control blocks are not owners.
+    // Rejection is checked while the real DOM and tokens are still alive.
+    {
+        const auto& p=f.payloads[0];NodePayloadInput in;
+        in.origin=p->origin();in.node=p->node();in.style=p->style();in.measures=p->measures();
+        in.custom_properties=p->custom_properties();in.color_references=p->color_references();
+        in.node_lifetime=p->node_lifetime();in.node_identity=p->node_identity();
+        in.document_lifetime=p->document_lifetime();in.document_identity=p->document_identity();
+        auto output=p;
+        in.node_lifetime=std::shared_ptr<node_identity_s>(p->node_lifetime().get(),[](node_identity_s*){});
+        need(freeze_node_payload(in,output)==AETHER_ERROR_INVALID_STATE&&output==p,"forged node token owner rejected");
+        in.node_lifetime=p->node_lifetime();
+        in.document_lifetime=std::shared_ptr<node_identity_s>(p->document_lifetime().get(),[](node_identity_s*){});
+        need(freeze_node_payload(in,output)==AETHER_ERROR_INVALID_STATE&&output==p,"forged document token owner rejected");
+    }
     auto input1=f.input(1);auto first=freeze({},input1);
     need(!first->backing()&&first->entries().size()==512,"payload-only full revision");
     f.doc.identity->style_tree_epoch=first->style_tree_epoch();
