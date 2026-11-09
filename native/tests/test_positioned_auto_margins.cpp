@@ -204,7 +204,7 @@ void snapshot_14(fixture& f,bool automatic,float fx,float fy,const char* name,bo
     f.all("fixed",{fx,fy,4,4});f.all("leaf",{fx,fy,1,1});
     equal(f.box("relative")->own_relative_dx,7,"relative own X");equal(f.box("relative")->own_relative_dy,-3,"relative own Y");
     check(f.result->effective_context_enabled==prepared,"prepared result metadata");
-    if(prepared)check((f.result->effective_fixed_container_nodes.count(f.node("ctx"))!=0)==local,"local context snapshot");
+    if(prepared)check((f.result->effective_fixed_container(f.node("ctx"))!=0)==local,"local context snapshot");
     done(name);
 }
 void group_14() {

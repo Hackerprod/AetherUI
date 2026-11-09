@@ -11,7 +11,7 @@ ContextOwnerEntry static_owner(const FrozenNodeRef& record) {
     ContextOwnerEntry entry{record->node(),record->node_lifetime(),0};
     if(!entry.identity || entry.identity->owner!=entry.node || !entry.identity->alive || !entry.identity->attached) return entry;
     if(entry.node->type!=AETHER_NODE_ELEMENT || entry.node->anonymous_flex_owner) return entry;
-    const auto& style=*record->style();
+    const auto& style=*record->style()->payload_owner();
     entry.causes=(!style.transforms().empty()?StaticTransform:0)|(!style.backdrop_filters().empty()?StaticBackdrop:0);
     return entry;
 }

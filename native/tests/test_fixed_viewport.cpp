@@ -491,9 +491,9 @@ static void remaining_guards() {
   fixture hidden("html{transform:translate(0)}#other{display:none;transform:"
                  "translate(0)}");
   hidden.layout();
-  check(hidden.result->effective_fixed_container_nodes.count(
+  check(hidden.result->effective_fixed_container(
             hidden.node("html")) &&
-            hidden.result->effective_fixed_container_nodes.count(
+            hidden.result->effective_fixed_container(
                 hidden.node("other")),
         "H complete map domain");
   check(!hidden.prepare(hidden.transitions), "H full-map snapshot stable");
