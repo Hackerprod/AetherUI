@@ -1190,6 +1190,7 @@ struct aether_style_transaction_s {
     std::shared_ptr<const CompiledStyleInputs> base_compiled_pin;
     uint64_t base_generation = 0, base_sheet_epoch = 0, input_epoch = 0, base_style_tree_epoch = 0;
     std::shared_ptr<node_identity_s> document_lifetime;
+    std::shared_ptr<EditableNodeStorage> document_lease;
     std::unique_ptr<aether_style_runtime_s> candidate;
     std::vector<std::unique_ptr<aether_style_update_s>> updates;
     std::unique_ptr<aether_style_update_t[]> legacy_array;
@@ -1233,6 +1234,7 @@ static aether_status_t prepare_revision_impl(
         transaction->owner = runtime; transaction->base_pin = runtime->revision; transaction->base_registry_pin=runtime->registry; transaction->base_compiled_pin=runtime->revision_compiled; transaction->base_generation = runtime->generation;
         transaction->base_sheet_epoch = runtime->sheet_epoch;
         auto* document = aether_dom_root(root);
+        transaction->document_lease=aether_editable_lease(document);
         transaction->document_lifetime = document->identity;
         transaction->input_epoch = document->identity->mutation_epoch;
         transaction->base_style_tree_epoch = document->identity->style_tree_epoch;
@@ -1379,7 +1381,7 @@ public:
         auto transaction=std::make_unique<aether_style_transaction_s>();
         transaction->owner=runtime;transaction->base_pin=base;transaction->base_registry_pin=runtime->registry;transaction->base_compiled_pin=runtime->revision_compiled;
         transaction->base_generation=runtime->generation;transaction->base_sheet_epoch=runtime->sheet_epoch;
-        transaction->document_lifetime=document->identity;transaction->input_epoch=document->identity->mutation_epoch;
+        transaction->document_lease=aether_editable_lease(document);transaction->document_lifetime=document->identity;transaction->input_epoch=document->identity->mutation_epoch;
         transaction->base_style_tree_epoch=document->identity->style_tree_epoch;
         transaction->candidate=std::make_unique<aether_style_runtime_s>();
         auto& staged=*transaction->candidate;staged.options=runtime->options;staged.environment=runtime->environment;

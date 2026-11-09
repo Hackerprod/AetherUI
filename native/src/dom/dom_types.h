@@ -116,6 +116,19 @@ inline void aether_dom_retire_node(aether_node_s* node) noexcept {
     for (auto* child : node->children) if (child->snapshot_owned || !aether_editable_lease(child)) aether_dom_retire_node(child);
 }
 
+struct EditableDomPin {
+    std::vector<std::shared_ptr<EditableNodeStorage>> editable;
+    std::vector<std::shared_ptr<aether_node_s>> generated;
+};
+inline void aether_pin_dom_subtree(aether_node_s* node, EditableDomPin& pin) {
+    if(auto lease=aether_editable_lease(node)) pin.editable.push_back(std::move(lease));
+    for(const auto& storage:node->generated_storage) pin.generated.push_back(storage);
+    for(auto* child:node->children) aether_pin_dom_subtree(child,pin);
+}
+inline std::shared_ptr<const EditableDomPin> aether_pin_dom_snapshot(aether_node_s* node) {
+    auto pin=std::make_shared<EditableDomPin>(); if(node)aether_pin_dom_subtree(node,*pin); return pin;
+}
+
 inline uint64_t aether_node_identity(const aether_node_s* node) noexcept {
     return node ? static_cast<uint64_t>(reinterpret_cast<uintptr_t>(node->identity.get())) : 0;
 }

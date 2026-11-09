@@ -35,6 +35,19 @@ internal static class TransitionStyleMarshaler
     internal static PreparedObservation Prepare(IntPtr node, AetherUI.Css.ComputedStyle before, AetherUI.Css.ComputedStyle after)
         => new(node, before, after);
 
+    /// <summary>Prepare a single native transaction before any style publication.
+    /// No Apply loop is permitted after managed diagnostic replay.</summary>
+    internal static TransitionRuntimeInterop.PreparedPublication PrepareBatch(
+        TransitionRuntimeInterop runtime, IReadOnlyList<PreparedObservation> observations,
+        ReadOnlySpan<IntPtr> retiredNodes, long nowMs)
+    {
+        if (observations.Count == 0)
+            return runtime.PreparePublication(ReadOnlySpan<NativeTransitionObservation>.Empty, retiredNodes, nowMs);
+        var entries = new NativeTransitionObservation[observations.Count];
+        for (var i = 0; i < entries.Length; ++i) entries[i] = observations[i].Observation;
+        return runtime.PreparePublication(entries, retiredNodes, nowMs);
+    }
+
     internal sealed class PreparedObservation : IDisposable
     {
         private readonly IntPtr _node;
@@ -58,6 +71,14 @@ internal static class TransitionStyleMarshaler
                 Marshal.StructureToPtr(afterRaw, _after, false);
             }
             catch { Dispose(); throw; }
+        }
+        internal NativeTransitionObservation Observation
+        {
+            get
+            {
+                ObjectDisposedException.ThrowIf(_before == IntPtr.Zero || _after == IntPtr.Zero, this);
+                return new(_node, _before, _after);
+            }
         }
         internal void Apply(TransitionRuntimeInterop runtime, long nowMs) => runtime.Observe(_node, _before, _after, nowMs);
         public void Dispose()

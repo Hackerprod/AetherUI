@@ -85,10 +85,11 @@ public:
     // null/empty or unbound legacy map still lays out real DOM nodes.
     const std::shared_ptr<node_identity_s> document_lifetime;
     const uint64_t document_structure_epoch;
+    const std::shared_ptr<const EditableDomPin> dom_pin;
     LayoutAssets(MapVersionRef version, FrozenSyntheticStoreRef overlay, FrozenStyleRef defaults,
-        std::shared_ptr<node_identity_s> document, uint64_t structure_epoch)
+        std::shared_ptr<node_identity_s> document, uint64_t structure_epoch, std::shared_ptr<const EditableDomPin> pin = {})
         : base(std::move(version)), synthetic(std::move(overlay)), default_style(std::move(defaults)),
-          document_lifetime(std::move(document)), document_structure_epoch(structure_epoch) {}
+          document_lifetime(std::move(document)), document_structure_epoch(structure_epoch), dom_pin(std::move(pin)) {}
     LayoutAssets(MapVersionRef version, FrozenSyntheticStoreRef overlay, FrozenStyleRef defaults)
         : LayoutAssets(version, std::move(overlay), std::move(defaults),
             version ? version->document_lifetime() : nullptr, version ? version->structure_epoch() : 0) {}

@@ -1,4 +1,10 @@
 #include "transition_runtime.h"
+#include <aether/aether_transition_sync.h>
+#include "../dom/dom_types.h"
+#include <atomic>
+#include <thread>
+#include <limits>
+#include <cstring>
 #include "../rendering/transform_matrix.h"
 
 #include <algorithm>
@@ -8,7 +14,18 @@
 
 namespace {
 
+struct transition_claim {
+    std::shared_ptr<EditableNodeStorage> lease;
+    std::shared_ptr<node_identity_s> identity;
+    uint64_t disconnect_serial = 0;
+    bool valid() const noexcept {
+        return identity && identity->alive && identity->attached &&
+            identity->disconnect_serial == disconnect_serial;
+    }
+};
+
 struct active_transition_s {
+    transition_claim claim;
     aether_node_t node = nullptr;
     int32_t property = 0;
     int32_t timing = AETHER_TRANSITION_TIMING_LINEAR;
@@ -27,6 +44,7 @@ struct active_transition_s {
    an observation supersedes it or disables its property, or until destruction.
    An eligible observation with an unchanged value preserves the entry. */
 struct finished_transition_s {
+    transition_claim claim;
     aether_node_t node = nullptr;
     int32_t property = 0;
     float opacity = 0.f;
@@ -170,30 +188,101 @@ float sample_transition(active_transition_s& transition, int64_t now_ms) {
 
 } // namespace
 
-/* The runtime handle type is deliberately defined at global scope: it is the
-   C ABI's opaque object, and the header only forward-declares it. The helper
-   entry structs it stores live in the anonymous namespace above. */
-struct aether_transition_runtime_s {
+struct transition_state {
     std::vector<active_transition_s> active;
     std::vector<finished_transition_s> finished;
 };
-
-extern "C" {
-
-AETHER_API aether_status_t aether_transition_runtime_create(aether_transition_runtime_t* out_runtime) {
-    if (!out_runtime) return AETHER_ERROR_NULL_ARG;
-    auto* runtime = new (std::nothrow) aether_transition_runtime_s();
-    if (!runtime) return AETHER_ERROR_OUT_OF_MEMORY;
-    *out_runtime = runtime;
-    return AETHER_OK;
+struct transition_lifetime {
+    aether_transition_runtime_t owner = nullptr;
+    const std::thread::id thread = std::this_thread::get_id();
+    uint64_t instance = 0;
+};
+struct aether_transition_runtime_s {
+    std::shared_ptr<transition_lifetime> lifetime;
+    std::shared_ptr<transition_state> state;
+    uint64_t mutation_serial = 0;
+    uint64_t status_revision = 0;
+    aether_status_t tick_error = AETHER_OK;
+    bool exhausted = false;
+};
+struct aether_transition_candidate_s {
+    std::shared_ptr<transition_lifetime> lifetime;
+    std::shared_ptr<transition_state> state;
+    aether_transition_token_t base{};
+    bool changed = false;
+    bool committed = false;
+};
+namespace {
+std::atomic<uint64_t> next_instance{1};
+thread_local int64_t allocation_countdown = -1;
+void allocation_checkpoint() {
+    if (allocation_countdown == 0) throw std::bad_alloc();
+    if (allocation_countdown > 0) --allocation_countdown;
+}
+bool on_thread(aether_transition_runtime_t runtime) noexcept {
+    return runtime && runtime->lifetime->thread == std::this_thread::get_id();
+}
+aether_transition_token_t token_of(aether_transition_runtime_t r) noexcept {
+    return {r->lifetime->instance, r->mutation_serial, r->status_revision, r->tick_error};
+}
+bool active_state(const transition_state& state) noexcept {
+    for (const auto& e : state.active) if (e.claim.valid()) return true;
+    return false;
+}
+bool prune(transition_state& state) noexcept {
+    const auto a = state.active.size(), f = state.finished.size();
+    state.active.erase(std::remove_if(state.active.begin(), state.active.end(),
+        [](const active_transition_s& e) { return !e.claim.valid(); }), state.active.end());
+    state.finished.erase(std::remove_if(state.finished.begin(), state.finished.end(),
+        [](const finished_transition_s& e) { return !e.claim.valid(); }), state.finished.end());
+    return a != state.active.size() || f != state.finished.size();
+}
+bool stale(const transition_state& state) noexcept {
+    for (const auto& e : state.active) if (!e.claim.valid()) return true;
+    for (const auto& e : state.finished) if (!e.claim.valid()) return true;
+    return false;
+}
+std::shared_ptr<transition_state> clone(const transition_state& state) {
+    allocation_checkpoint();
+    auto copy = std::make_shared<transition_state>();
+    if (!state.active.empty()) { allocation_checkpoint(); copy->active = state.active; }
+    if (!state.finished.empty()) { allocation_checkpoint(); copy->finished = state.finished; }
+    return copy;
+}
+bool matrix_exact(const aether_transform_matrix& a, const aether_transform_matrix& b) noexcept {
+    return std::memcmp(&a, &b, sizeof(a)) == 0;
+}
+bool float_exact(float a, float b) noexcept { return std::memcmp(&a, &b, sizeof(a)) == 0; }
+bool equal_state(const transition_state& a, const transition_state& b) noexcept {
+    if (a.active.size() != b.active.size() || a.finished.size() != b.finished.size()) return false;
+    for (size_t i = 0; i < a.active.size(); ++i) {
+        const auto& x = a.active[i]; const auto& y = b.active[i];
+        if (x.node != y.node || x.claim.identity != y.claim.identity ||
+            x.claim.disconnect_serial != y.claim.disconnect_serial || x.property != y.property ||
+            x.timing != y.timing || x.observed_ms != y.observed_ms || x.delay_ms != y.delay_ms ||
+            x.duration_ms != y.duration_ms || !float_exact(x.opacity_from, y.opacity_from) ||
+            !float_exact(x.opacity_to, y.opacity_to) || !float_exact(x.current_opacity, y.current_opacity) ||
+            !matrix_exact(x.matrix_from, y.matrix_from) || !matrix_exact(x.matrix_to, y.matrix_to) ||
+            !matrix_exact(x.current_matrix, y.current_matrix)) return false;
+    }
+    for (size_t i = 0; i < a.finished.size(); ++i) {
+        const auto& x = a.finished[i]; const auto& y = b.finished[i];
+        if (x.node != y.node || x.claim.identity != y.claim.identity ||
+            x.claim.disconnect_serial != y.claim.disconnect_serial || x.property != y.property ||
+            !float_exact(x.opacity, y.opacity) || !matrix_exact(x.matrix, y.matrix)) return false;
+    }
+    return true;
+}
+void record_tick_error(aether_transition_runtime_t r, aether_status_t error) noexcept {
+    r->tick_error = error;
+    if (r->status_revision == UINT64_MAX) {
+        r->exhausted = true;
+        r->tick_error = AETHER_ERROR_INVALID_STATE;
+    } else ++r->status_revision;
 }
 
-AETHER_API void aether_transition_runtime_destroy(aether_transition_runtime_t runtime) {
-    delete runtime;
-}
-
-AETHER_API aether_status_t aether_transition_runtime_observe(
-    aether_transition_runtime_t runtime,
+aether_status_t observe_state(
+    transition_state* runtime,
     aether_node_t node,
     const aether_computed_style_t* before,
     const aether_computed_style_t* after,
@@ -249,12 +338,15 @@ AETHER_API aether_status_t aether_transition_runtime_observe(
         }
     };
     const auto install = [&](active_transition_s transition) {
+        transition.claim = {aether_editable_lease(node), node->identity, node->identity->disconnect_serial};
         transition.observed_ms = now_ms;
         transition.delay_ms = delay_ms;
         if (sample_transition(transition, now_ms) >= 1.f) {
-            runtime->finished.push_back({node, transition.property,
+            allocation_checkpoint();
+            runtime->finished.push_back({transition.claim, node, transition.property,
                 transition.current_opacity, transition.current_matrix});
         } else {
+            allocation_checkpoint();
             runtime->active.push_back(transition);
         }
     };
@@ -304,7 +396,7 @@ AETHER_API aether_status_t aether_transition_runtime_observe(
     return AETHER_OK;
 }
 
-AETHER_API aether_bool_t aether_transition_runtime_tick(aether_transition_runtime_t runtime, int64_t now_ms) {
+aether_bool_t tick_state(transition_state* runtime, int64_t now_ms) {
     if (!runtime) return AETHER_FALSE;
     auto& active = runtime->active;
     for (auto it = active.begin(); it != active.end();) {
@@ -312,10 +404,12 @@ AETHER_API aether_bool_t aether_transition_runtime_tick(aether_transition_runtim
         const float p = sample_transition(transition, now_ms);
         if (p >= 1.f) {
             finished_transition_s done{};
+            done.claim = transition.claim;
             done.node = transition.node;
             done.property = transition.property;
             done.opacity = transition.current_opacity;
             done.matrix = transition.current_matrix;
+            allocation_checkpoint();
             runtime->finished.push_back(done);
             it = active.erase(it);
         } else {
@@ -325,22 +419,190 @@ AETHER_API aether_bool_t aether_transition_runtime_tick(aether_transition_runtim
     return active.empty() ? AETHER_FALSE : AETHER_TRUE;
 }
 
+
+} // namespace
+
+extern "C" {
+
+AETHER_API aether_status_t aether_transition_runtime_create(aether_transition_runtime_t* out) {
+    if (!out) return AETHER_ERROR_NULL_ARG;
+    *out = nullptr;
+    try {
+        allocation_checkpoint();
+        auto runtime = std::make_unique<aether_transition_runtime_s>();
+        allocation_checkpoint();
+        runtime->lifetime = std::make_shared<transition_lifetime>();
+        allocation_checkpoint();
+        runtime->state = std::make_shared<transition_state>();
+        auto id = next_instance.load();
+        do {
+            if (id == UINT64_MAX) return AETHER_ERROR_INVALID_STATE;
+        } while (!next_instance.compare_exchange_weak(id, id + 1));
+        runtime->lifetime->instance = id;
+        runtime->lifetime->owner = runtime.get();
+        *out = runtime.release();
+        return AETHER_OK;
+    } catch (const std::bad_alloc&) { return AETHER_ERROR_OUT_OF_MEMORY; }
+      catch (...) { return AETHER_ERROR_INVALID_STATE; }
+}
+AETHER_API void aether_transition_runtime_destroy(aether_transition_runtime_t r) {
+    if (!on_thread(r)) return;
+    r->lifetime->owner = nullptr;
+    delete r;
+}
+AETHER_API aether_status_t aether_transition_runtime_read_token(
+    aether_transition_runtime_t r, aether_transition_token_t* out) {
+    if (out) *out = {};
+    if (!r || !out) return AETHER_ERROR_NULL_ARG;
+    if (!on_thread(r)) return AETHER_ERROR_INVALID_STATE;
+    *out = token_of(r);
+    return r->exhausted ? AETHER_ERROR_INVALID_STATE : AETHER_OK;
+}
+AETHER_API aether_status_t aether_transition_runtime_prepare(
+    aether_transition_runtime_t r, const aether_transition_observation_t* observations,
+    size_t count, const aether_node_t* retired, size_t retire_count, int64_t now,
+    aether_transition_candidate_t* out) {
+    if (out) *out = nullptr;
+    if (!r || !out || (count && !observations) || (retire_count && !retired))
+        return AETHER_ERROR_NULL_ARG;
+    if (!on_thread(r) || r->exhausted) return AETHER_ERROR_INVALID_STATE;
+    try {
+        allocation_checkpoint();
+        auto candidate = std::make_unique<aether_transition_candidate_s>();
+        candidate->lifetime = r->lifetime;
+        candidate->base = token_of(r);
+        candidate->changed = count || retire_count || stale(*r->state);
+        if (candidate->changed) {
+            if (r->mutation_serial == UINT64_MAX) return AETHER_ERROR_INVALID_STATE;
+            candidate->state = clone(*r->state);
+            prune(*candidate->state);
+            for (size_t i = 0; i < retire_count; ++i) {
+                if (!retired[i]) return AETHER_ERROR_NULL_ARG;
+                auto identity = retired[i]->identity;
+                auto& a = candidate->state->active;
+                auto& f = candidate->state->finished;
+                a.erase(std::remove_if(a.begin(), a.end(), [&](const active_transition_s& e) {
+                    return e.claim.identity == identity; }), a.end());
+                f.erase(std::remove_if(f.begin(), f.end(), [&](const finished_transition_s& e) {
+                    return e.claim.identity == identity; }), f.end());
+            }
+            for (size_t i = 0; i < count; ++i) {
+                const auto& observation = observations[i];
+                if (!observation.node || !observation.before || !observation.after)
+                    return AETHER_ERROR_NULL_ARG;
+                if (aether_dom_access(observation.node) != AETHER_OK ||
+                    !observation.node->identity->attached)
+                    return AETHER_ERROR_INVALID_STATE;
+                auto status = observe_state(candidate->state.get(), observation.node,
+                    observation.before, observation.after, now);
+                if (status != AETHER_OK) return status;
+            }
+            candidate->changed = !equal_state(*candidate->state, *r->state);
+        } else candidate->state = r->state;
+        *out = candidate.release();
+        return AETHER_OK;
+    } catch (const std::bad_alloc&) { return AETHER_ERROR_OUT_OF_MEMORY; }
+      catch (...) { return AETHER_ERROR_INVALID_STATE; }
+}
+/* Internal validation permits direct Observe while a TickError is pending;
+ * style publication validation deliberately does not. Neither path clears it. */
+static aether_status_t validate_candidate(aether_transition_candidate_t c, bool require_healthy) {
+    if (!c) return AETHER_ERROR_NULL_ARG;
+    if (c->lifetime->thread != std::this_thread::get_id()) return AETHER_ERROR_INVALID_STATE;
+    auto r = c->lifetime->owner;
+    if (!r) return AETHER_ERROR_DISPOSED;
+    if (c->committed || r->exhausted || c->base.instance_id != r->lifetime->instance ||
+        c->base.mutation_serial != r->mutation_serial ||
+        c->base.status_revision != r->status_revision ||
+        c->base.tick_error != r->tick_error ||
+        (require_healthy && r->tick_error != AETHER_OK)) return AETHER_ERROR_INVALID_STATE;
+    if (c->changed && r->mutation_serial == UINT64_MAX) return AETHER_ERROR_INVALID_STATE;
+    // A DOM disconnect between prepare and commit invalidates the candidate.
+    if (stale(*c->state)) return AETHER_ERROR_INVALID_STATE;
+    return AETHER_OK;
+}
+AETHER_API aether_status_t aether_transition_candidate_validate(aether_transition_candidate_t c) {
+    return validate_candidate(c, true);
+}
+static aether_status_t commit_candidate(aether_transition_candidate_t c,
+    aether_transition_token_t* out, bool require_healthy) {
+    if (out) *out = {};
+    auto status = validate_candidate(c, require_healthy);
+    if (status != AETHER_OK) return status;
+    auto r = c->lifetime->owner;
+    if (c->changed) { r->state.swap(c->state); ++r->mutation_serial; }
+    c->committed = true;
+    if (out) *out = token_of(r);
+    return AETHER_OK;
+}
+AETHER_API aether_status_t aether_transition_candidate_commit(
+    aether_transition_candidate_t c, aether_transition_token_t* out) {
+    return commit_candidate(c, out, true);
+}
+AETHER_API void aether_transition_candidate_destroy(aether_transition_candidate_t c) { delete c; }
+AETHER_API aether_status_t aether_transition_runtime_observe(aether_transition_runtime_t r,
+    aether_node_t node, const aether_computed_style_t* before,
+    const aether_computed_style_t* after, int64_t now) {
+    const aether_transition_observation_t observation{node, before, after};
+    aether_transition_candidate_t c = nullptr;
+    auto status = aether_transition_runtime_prepare(r, &observation, 1, nullptr, 0, now, &c);
+    if (status == AETHER_OK) status = commit_candidate(c, nullptr, false);
+    aether_transition_candidate_destroy(c);
+    return status;
+}
+AETHER_API aether_status_t aether_transition_runtime_try_tick(aether_transition_runtime_t r,
+    int64_t now, aether_bool_t* out) {
+    if (out) *out = AETHER_FALSE;
+    if (!r || !out) return AETHER_ERROR_NULL_ARG;
+    if (!on_thread(r)) return AETHER_ERROR_INVALID_STATE;
+    if (r->exhausted) return AETHER_ERROR_INVALID_STATE;
+    const auto base = token_of(r);
+    try {
+        const bool changed = !r->state->active.empty() || stale(*r->state);
+        if ((changed && r->mutation_serial == UINT64_MAX) ||
+            (r->tick_error != AETHER_OK && r->status_revision == UINT64_MAX)) {
+            record_tick_error(r, AETHER_ERROR_INVALID_STATE);
+            return AETHER_ERROR_INVALID_STATE;
+        }
+        auto state = changed ? clone(*r->state) : r->state;
+        if (changed) { prune(*state); tick_state(state.get(), now); }
+        if (r->mutation_serial != base.mutation_serial || r->status_revision != base.status_revision)
+            return AETHER_ERROR_INVALID_STATE;
+        if (changed) { r->state.swap(state); ++r->mutation_serial; }
+        if (base.tick_error != AETHER_OK) { r->tick_error = AETHER_OK; ++r->status_revision; }
+        *out = active_state(*r->state) ? AETHER_TRUE : AETHER_FALSE;
+        return AETHER_OK;
+    } catch (const std::bad_alloc&) {
+        record_tick_error(r, AETHER_ERROR_OUT_OF_MEMORY); return AETHER_ERROR_OUT_OF_MEMORY;
+    } catch (...) {
+        record_tick_error(r, AETHER_ERROR_INVALID_STATE); return AETHER_ERROR_INVALID_STATE;
+    }
+}
+AETHER_API aether_bool_t aether_transition_runtime_tick(aether_transition_runtime_t r, int64_t now) {
+    if (!on_thread(r)) return AETHER_FALSE;
+    const bool previous = active_state(*r->state);
+    aether_bool_t active = AETHER_FALSE;
+    return aether_transition_runtime_try_tick(r, now, &active) == AETHER_OK ? active :
+        (previous ? AETHER_TRUE : AETHER_FALSE);
+}
+
+
 AETHER_API aether_bool_t aether_transition_runtime_has_active(aether_transition_runtime_t runtime) {
-    return runtime && !runtime->active.empty() ? AETHER_TRUE : AETHER_FALSE;
+    return on_thread(runtime) && active_state(*runtime->state) ? AETHER_TRUE : AETHER_FALSE;
 }
 
 AETHER_API aether_bool_t aether_transition_runtime_opacity_override(
     aether_transition_runtime_t runtime, aether_node_t node, float* out_opacity) {
-    if (!runtime || !node || !out_opacity) return AETHER_FALSE;
-    for (const auto& transition : runtime->active) {
-        if (transition.node == node &&
+    if (!on_thread(runtime) || !node || !out_opacity) return AETHER_FALSE;
+    for (const auto& transition : runtime->state->active) {
+        if (transition.claim.valid() && transition.node == node &&
             transition.property == AETHER_TRANSITION_PROPERTY_OPACITY) {
             *out_opacity = transition.current_opacity;
             return AETHER_TRUE;
         }
     }
-    for (const auto& transition : runtime->finished) {
-        if (transition.node == node &&
+    for (const auto& transition : runtime->state->finished) {
+        if (transition.claim.valid() && transition.node == node &&
             transition.property == AETHER_TRANSITION_PROPERTY_OPACITY) {
             *out_opacity = transition.opacity;
             return AETHER_TRUE;
@@ -351,16 +613,16 @@ AETHER_API aether_bool_t aether_transition_runtime_opacity_override(
 
 AETHER_API aether_bool_t aether_transition_runtime_transform_override(
     aether_transition_runtime_t runtime, aether_node_t node, aether_transform_matrix* out_matrix) {
-    if (!runtime || !node || !out_matrix) return AETHER_FALSE;
-    for (const auto& transition : runtime->active) {
-        if (transition.node == node &&
+    if (!on_thread(runtime) || !node || !out_matrix) return AETHER_FALSE;
+    for (const auto& transition : runtime->state->active) {
+        if (transition.claim.valid() && transition.node == node &&
             transition.property == AETHER_TRANSITION_PROPERTY_TRANSFORM) {
             *out_matrix = transition.current_matrix;
             return AETHER_TRUE;
         }
     }
-    for (const auto& transition : runtime->finished) {
-        if (transition.node == node &&
+    for (const auto& transition : runtime->state->finished) {
+        if (transition.claim.valid() && transition.node == node &&
             transition.property == AETHER_TRANSITION_PROPERTY_TRANSFORM) {
             *out_matrix = transition.matrix;
             return AETHER_TRUE;
@@ -373,7 +635,14 @@ AETHER_API aether_bool_t aether_transition_runtime_transform_override(
 
 std::unordered_set<aether_node_t> aether_active_transform_owners(aether_transition_runtime_t runtime) {
     std::unordered_set<aether_node_t> owners;
-    if (runtime) for (const auto& entry : runtime->active)
-        if (entry.property == AETHER_TRANSITION_PROPERTY_TRANSFORM) owners.insert(entry.node);
+    if (on_thread(runtime)) for (const auto& entry : runtime->state->active)
+        if (entry.claim.valid() && entry.property == AETHER_TRANSITION_PROPERTY_TRANSFORM) owners.insert(entry.node);
     return owners;
+}
+
+void aether_transition_test_fail_after(int64_t allocations) noexcept { allocation_countdown = allocations; }
+
+void aether_transition_test_set_counters(aether_transition_runtime_t r,
+    uint64_t mutation, uint64_t status) noexcept {
+    if (on_thread(r)) { r->mutation_serial = mutation; r->status_revision = status; }
 }

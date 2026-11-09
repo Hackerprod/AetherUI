@@ -31,12 +31,13 @@ public:
 // Capture immediately before external code; validate before touching DOM again.
 class CallbackEpochGuard {
     std::shared_ptr<node_identity_s> document_;
+    std::shared_ptr<EditableNodeStorage> document_lease_;
     uint64_t structure_ = 0, mutation_ = 0, style_ = 0;
 public:
     explicit CallbackEpochGuard(const MapVersionRef& version) noexcept
         : CallbackEpochGuard(version ? version->document_lifetime() : nullptr) {}
     explicit CallbackEpochGuard(std::shared_ptr<node_identity_s> document) noexcept
-        : document_(std::move(document)),
+        : document_(std::move(document)), document_lease_(aether_identity_lease(document_)),
           structure_(document_ ? document_->structure_epoch : 0),
           mutation_(document_ ? document_->mutation_epoch : 0),
           style_(document_ ? document_->style_tree_epoch : 0) {}

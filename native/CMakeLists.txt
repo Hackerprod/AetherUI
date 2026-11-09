@@ -19,6 +19,7 @@ add_library(aether_core SHARED
     src/diagnostics/work_counters.cpp
     src/abi/aether_abi.cpp
     src/dom/node.cpp
+    src/dom/dom_snapshot.cpp
     src/dom/element_node.cpp
     src/dom/document_node.cpp
     src/dom/html_parser.cpp
@@ -1643,4 +1644,18 @@ if(AETHERUI_BUILD_TESTS)
     target_include_directories(aether_dom_storage_test PRIVATE src)
     target_link_libraries(aether_dom_storage_test PRIVATE AetherUI::Core)
     add_test(NAME aether.dom-storage COMMAND aether_dom_storage_test)
+endif()
+
+if(AETHERUI_BUILD_TESTS)
+    add_executable(aether_transition_sync_test tests/test_transition_sync.cpp)
+    target_include_directories(aether_transition_sync_test PRIVATE src)
+    target_link_libraries(aether_transition_sync_test PRIVATE AetherUI::Core)
+    add_test(NAME aether.transition-sync COMMAND aether_transition_sync_test)
+endif()
+
+if(AETHERUI_BUILD_TESTS)
+    add_executable(aether_dom_snapshot_test tests/test_dom_snapshot.cpp)
+    target_include_directories(aether_dom_snapshot_test PRIVATE src)
+    target_link_libraries(aether_dom_snapshot_test PRIVATE AetherUI::Core)
+    add_test(NAME aether.dom-snapshot COMMAND aether_dom_snapshot_test)
 endif()

@@ -12,16 +12,18 @@ namespace AetherUI.Runtime;
 public sealed class MarkupWriter
 {
     private readonly StringBuilder _builder;
-    private readonly UiComponent _owner;
+    private readonly Dictionary<string, UiEventHandler> _events = new(StringComparer.Ordinal);
+    private long _nextEventId;
+    private bool _sealed;
 
-    internal MarkupWriter(UiComponent owner, int capacity = 2048)
+    internal MarkupWriter(int capacity = 2048)
     {
-        _owner = owner;
         _builder = new StringBuilder(capacity);
     }
 
     public void WriteLiteral(string? value)
     {
+        VerifyWritable();
         if (!string.IsNullOrEmpty(value))
         {
             _builder.Append(value);
@@ -30,6 +32,7 @@ public sealed class MarkupWriter
 
     public void Write(object? value)
     {
+        VerifyWritable();
         if (value is null)
         {
             return;
@@ -49,6 +52,7 @@ public sealed class MarkupWriter
 
     public void WriteAttribute(string name, object? value)
     {
+        VerifyWritable();
         ValidateAttributeName(name);
         if (value is null || value is false)
         {
@@ -71,6 +75,7 @@ public sealed class MarkupWriter
 
     public void WriteEventAttribute(string name, UiEventHandler handler)
     {
+        VerifyWritable();
         ValidateAttributeName(name);
         if (!name.StartsWith("on", StringComparison.OrdinalIgnoreCase) || name.Length <= 2)
         {
@@ -78,12 +83,16 @@ public sealed class MarkupWriter
         }
 
         ArgumentNullException.ThrowIfNull(handler);
-        var token = _owner.RegisterEvent(handler);
+        var next = checked(_nextEventId + 1);
+        var token = $"aether:{_nextEventId:x}";
+        _events.Add(token, handler);
+        _nextEventId = next;
         _builder.Append(' ').Append(name).Append("=\"").Append(token).Append('"');
     }
 
     public void WriteEventAttribute(string name, Action handler)
     {
+        VerifyWritable();
         ArgumentNullException.ThrowIfNull(handler);
         WriteEventAttribute(name, _ => handler());
     }
@@ -96,6 +105,19 @@ public sealed class MarkupWriter
         {
             throw new ArgumentException("El nombre del atributo contiene caracteres no permitidos.", nameof(name));
         }
+    }
+
+    internal void Seal() => _sealed = true;
+
+    internal UiComponent.EventRegistry CreateEventRegistry(long generation)
+    {
+        if (!_sealed) throw new InvalidOperationException("The render writer is not sealed.");
+        return new UiComponent.EventRegistry(_events, generation);
+    }
+
+    private void VerifyWritable()
+    {
+        if (_sealed) throw new InvalidOperationException("The render writer is sealed.");
     }
 
     public override string ToString() => _builder.ToString();

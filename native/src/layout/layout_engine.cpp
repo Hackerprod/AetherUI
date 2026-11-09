@@ -1501,13 +1501,14 @@ AETHER_API aether_status_t aether_layout_layout(
     result->abandoned = true;
     struct measure_scope_s { aether_layout_engine_s* e; ~measure_scope_s() { e->measure_styles = nullptr; e->measure_document.reset(); } } measure_scope{engine};
     try {
+    const auto dom_pin=aether_pin_dom_snapshot(doc);
     aether::style::FrozenStyleRef defaults;
     const auto default_flat = aether_computed_style_default();
     const auto default_status = aether::style::freeze_style(default_flat, defaults);
     if (default_status == AETHER_ERROR_OUT_OF_MEMORY) throw std::bad_alloc();
     if (default_status != AETHER_OK) throw std::runtime_error("Invalid default style");
     result->build_overlay = std::make_unique<aether::layout::MutableLayoutOverlay>();
-    result->assets = std::make_shared<const aether::layout::LayoutAssets>(version, nullptr, defaults, document_identity, document_structure_epoch);
+    result->assets = std::make_shared<const aether::layout::LayoutAssets>(version, nullptr, defaults, document_identity, document_structure_epoch, dom_pin);
     const StyleLookup build_lookup(version, result->build_overlay.get(), defaults);
     const auto* styles = &build_lookup;
     engine->measure_styles = styles;
@@ -1518,7 +1519,7 @@ AETHER_API aether_status_t aether_layout_layout(
             throw std::runtime_error("Layout viewport differs from style document");
     }
     const auto freeze_assets = [&]() {
-        auto assets = std::make_shared<const aether::layout::LayoutAssets>(version, result->build_overlay->freeze(), defaults, document_identity, document_structure_epoch);
+        auto assets = std::make_shared<const aether::layout::LayoutAssets>(version, result->build_overlay->freeze(), defaults, document_identity, document_structure_epoch, dom_pin);
         result->assets = std::move(assets);
         result->build_overlay.reset();
     };
