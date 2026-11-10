@@ -62,7 +62,23 @@ public:
             edge -= it->width;
             if (hanging < it->width) break;
         }
-        out.alignment_width = physical_ - out.hanging_width;
+        // Compute A from its retained prefix, never P-H: a very large tail
+        // can round P and H to the same float and erase a small real word.
+        // P and the fit decisions deliberately retain their physical domain.
+        size_t suffix_begin = fragments_.size();
+        while (suffix_begin > 0) {
+            const auto& fragment = fragments_[suffix_begin - 1];
+            if (!fragment.text || !fragment.whitespace ||
+                fragment.white_space != AETHER_WHITE_SPACE_PRE_WRAP) break;
+            --suffix_begin;
+        }
+        out.alignment_width = physical_;
+        if (suffix_begin < fragments_.size()) {
+            float prefix = 0.f;
+            for (size_t i = 0; i < suffix_begin; ++i) prefix += fragments_[i].width;
+            out.alignment_width = end == inline_line_end::soft ? prefix :
+                std::max(prefix, std::min(physical_, available_));
+        }
         return out;
     }
     void reset() {

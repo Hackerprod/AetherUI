@@ -1,6 +1,6 @@
-#include "layout_scroll_bounds.h"
 /* ── Layout Engine — core box layout, flow, inline, and intrinsic sizing ─ */
 #include "layout_internal.h"
+#include "layout_scroll_bounds.h"
 #include "inline_line_resolver.h"
 #include <aether/aether_contextual_transitions.h>
 #include "input_hit_test.h"
@@ -1049,7 +1049,7 @@ static float layout_hanging_inline_items(
             aether_text_justify_extra_per_gap(available_width, summary.alignment_width, gaps) : 0.f;
         const double line_left = x;
         double justify_advance = 0.;
-        for (size_t i = summary.justify_begin; i < summary.justify_end; ++i) {
+        for (size_t i = summary.justify_begin; summary.hanging_width > 0.f && extra != 0.f && i < summary.justify_end; ++i) {
             if (!line[i].metrics.whitespace) continue;
             const float expanded = line[i].metrics.width + extra * static_cast<float>(line[i].text.size());
             justify_advance += double(expanded) - line[i].metrics.width;

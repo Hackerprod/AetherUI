@@ -39,7 +39,6 @@ void unite(OverflowBounds& result, const OverflowBounds& contribution) {
     result.bottom = std::max(result.bottom, contribution.bottom);
 }
 
-
 void check_coordinate(double coordinate) {
     if (!std::isfinite(coordinate) || std::abs(coordinate) > std::numeric_limits<float>::max())
         throw std::invalid_argument("nonrepresentable transformed overflow");

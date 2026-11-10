@@ -1421,6 +1421,11 @@ if(AETHERUI_BUILD_TESTS)
     target_link_libraries(aether_inline_hanging_oom_test PRIVATE AetherUI::Core ${CMAKE_DL_LIBS})
     add_test(NAME aether.inline-hanging-oom COMMAND aether_inline_hanging_oom_test)
 
+    add_executable(aether_inline_hanging_scroll_test tests/test_inline_hanging_scroll.cpp src/layout/layout_scroll.cpp)
+    target_include_directories(aether_inline_hanging_scroll_test PRIVATE src)
+    target_link_libraries(aether_inline_hanging_scroll_test PRIVATE AetherUI::Core ${CMAKE_DL_LIBS})
+    add_test(NAME aether.inline-hanging-scroll COMMAND aether_inline_hanging_scroll_test)
+
     add_executable(aether_inline_hanging_paint_test tests/test_inline_hanging_paint.cpp)
     target_link_libraries(aether_inline_hanging_paint_test PRIVATE AetherUI::Core ${CMAKE_DL_LIBS})
     add_test(NAME aether.inline-hanging-paint COMMAND aether_inline_hanging_paint_test)
