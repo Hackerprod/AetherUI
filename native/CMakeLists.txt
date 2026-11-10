@@ -369,6 +369,10 @@ if(AETHERUI_BUILD_TESTS)
     target_link_libraries(aether_flex_fractional_test PRIVATE AetherUI::Core)
     add_test(NAME aether.flex-fractional COMMAND aether_flex_fractional_test)
 
+    add_executable(aether_flex_decoration_test tests/test_flex_decoration.cpp)
+    target_link_libraries(aether_flex_decoration_test PRIVATE AetherUI::Core)
+    add_test(NAME aether.flex-decoration COMMAND aether_flex_decoration_test)
+
     add_executable(aether_intrinsic_sizing_test tests/test_intrinsic_sizing.cpp src/layout/intrinsic_sizing.cpp)
     target_include_directories(aether_intrinsic_sizing_test PRIVATE src/layout)
     target_link_libraries(aether_intrinsic_sizing_test PRIVATE AetherUI::Core)

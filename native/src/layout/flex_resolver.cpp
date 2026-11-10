@@ -13,9 +13,13 @@ float non_negative(float value) {
 }
 
 double clamp_main_size(double value, const aether_flex_item_input_s& item) {
-    const double minimum = std::isfinite(item.min_main_size)
+    const double requested_minimum = std::isfinite(item.min_main_size)
         ? non_negative(item.min_main_size)
         : aether_flex_resolve_automatic_minimum(item.automatic_minimum);
+    // Flexbox §§9.2, 9.7 floor the content box at zero when calculating the
+    // hypothetical size and clamping targets, but never when finding the base.
+    const double minimum = std::max(requested_minimum,
+                                   static_cast<double>(non_negative(item.main_decoration_size)));
     const double maximum = std::isfinite(item.max_main_size)
         ? std::max(minimum, static_cast<double>(item.max_main_size))
         : std::numeric_limits<float>::infinity();
@@ -50,7 +54,7 @@ void resolve_line(const std::vector<aether_flex_item_input_s>& items,
                   const aether_flex_line_s& line, float available_main_size, float gap) {
     if (!std::isfinite(available_main_size)) return;
 
-    const bool using_grow = line.hypothetical_outer_main_size < available_main_size - epsilon;
+    const bool using_grow = line.hypothetical_outer_main_size < available_main_size;
     for (const size_t index : line.item_indices) {
         auto& result = results[index];
         result.target_main_size = result.flex_base_size;
@@ -59,10 +63,12 @@ void resolve_line(const std::vector<aether_flex_item_input_s>& items,
         // Flexbox §9.7's initial freeze applies the hypothetical size, not the
         // flex base. A zero base with a positive automatic minimum freezes
         // under shrink because the base is below the hypothetical size, not
-        // because its scaled shrink weight is zero.
+        // because its scaled shrink weight is zero. The decoration floor also
+        // freezes every negative inner base before shrink weights are summed.
+        // Use strict comparisons: even a tiny negative inner base must freeze.
         const bool violates_hypothetical = using_grow
-            ? result.flex_base_size > result.hypothetical_main_size + epsilon
-            : result.flex_base_size < result.hypothetical_main_size - epsilon;
+            ? result.flex_base_size > result.hypothetical_main_size
+            : result.flex_base_size < result.hypothetical_main_size;
         result.frozen = factor <= 0.f || violates_hypothetical;
         if (result.frozen) result.target_main_size = result.hypothetical_main_size;
     }
@@ -84,13 +90,13 @@ void resolve_line(const std::vector<aether_flex_item_input_s>& items,
                 ++unfrozen_count;
                 const double factor = using_grow ? item.flex_grow : item.flex_shrink;
                 factor_sum += factor;
-                weight_sum += using_grow ? factor : factor * result.flex_base_size;
+                weight_sum += using_grow ? factor : factor * result.inner_flex_base_size;
             }
         }
         if (unfrozen_count == 0) return;
 
-        // The partial budget uses unscaled factors in BOTH modes. A zero-base
-        // shrink item still contributes its factor, even though its weight is zero.
+        // The partial budget uses unscaled factors in BOTH modes. An active
+        // zero-inner-base item still contributes its factor despite zero weight.
         if (factor_sum < 1.0) {
             const double scaled_initial_free_space = initial_free_space * factor_sum;
             if (std::fabs(scaled_initial_free_space) < std::fabs(remaining_free_space)) {
@@ -105,7 +111,7 @@ void resolve_line(const std::vector<aether_flex_item_input_s>& items,
             if (result.frozen) continue;
             const auto& item = items[index];
             const double weight = using_grow ? static_cast<double>(item.flex_grow)
-                : static_cast<double>(item.flex_shrink) * result.flex_base_size;
+                : static_cast<double>(item.flex_shrink) * result.inner_flex_base_size;
             // Zero weights leave the original base intact, then still clamp.
             // Factors/weights are not pixel distances: no geometric epsilon.
             const double share = weight_sum > 0.0 ? weight / weight_sum : 0.0;
@@ -120,7 +126,10 @@ void resolve_line(const std::vector<aether_flex_item_input_s>& items,
             total_violation += violations[position];
         }
 
-        if (std::fabs(total_violation) <= epsilon) {
+        // A tiny real clamp still changes which factors participate in the
+        // next partial budget. Treat only exact zero as no violation; an
+        // epsilon here can turn a subpixel floor into a visible size error.
+        if (total_violation == 0.0) {
             for (const size_t index : line.item_indices) results[index].frozen = true;
             return;
         }
@@ -130,8 +139,8 @@ void resolve_line(const std::vector<aether_flex_item_input_s>& items,
             auto& result = results[line.item_indices[position]];
             if (result.frozen) continue;
             const double violation = violations[position];
-            if ((total_violation > 0.f && violation > epsilon) ||
-                (total_violation < 0.f && violation < -epsilon)) {
+            if ((total_violation > 0.0 && violation > 0.0) ||
+                (total_violation < 0.0 && violation < 0.0)) {
                 result.frozen = true;
                 froze_any = true;
             }
@@ -187,6 +196,9 @@ aether_flex_resolve_result_s aether_resolve_flexible_lengths(
     for (size_t index = 0; index < items.size(); ++index) {
         auto& result = output.items[index];
         result.flex_base_size = aether_flex_resolve_base_size(items[index].basis);
+        // A border-box basis smaller than its decoration has a negative inner
+        // base (§9.2). Retain it; flooring the base here changes grow allocation.
+        result.inner_flex_base_size = result.flex_base_size - non_negative(items[index].main_decoration_size);
         result.hypothetical_main_size = static_cast<float>(clamp_main_size(result.flex_base_size, items[index]));
         result.target_main_size = result.flex_base_size;
     }

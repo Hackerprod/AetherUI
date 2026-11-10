@@ -148,6 +148,87 @@ static void test_fractional_contract() {
     require(fractional_failures == 0, "fractional flex contract regressions must all pass");
 }
 
+static aether_flex_item_input_s decorated(float base, float decoration, float grow = 0.f,
+                                          float shrink = 1.f, float minimum = 0.f,
+                                          float maximum = NAN) {
+    auto value = item(base, grow, shrink, minimum, maximum);
+    value.main_decoration_size = decoration;
+    return value;
+}
+
+static void test_decoration_contract() {
+    check_case("shrink uses inner border-box base", {decorated(200, 100), item(200)},
+               300, {166.666667f, 133.333333f});
+    check_case("shrink uses both unequal decorations", {decorated(200, 100), decorated(200, 50)},
+               300, {160, 140});
+    check_case("content-box converted base excludes decoration weight", {decorated(300, 100), item(200)},
+               300, {200, 100});
+    check_case("partial shrink uses raw factor and inner weight", {decorated(200, 100, 0, .25f), item(200, 0, .25f)},
+               300, {183.333333f, 166.666667f});
+    check_case("partial content-box shrink", {decorated(300, 100, 0, .25f), item(200, 0, .25f)},
+               300, {250, 150});
+
+    // CSS Flexbox §9.2 retains the raw border-box base, even below decoration.
+    // Raising it to the floor prematurely gives the wrong grow shares.
+    auto negative_inner = std::vector<aether_flex_item_input_s>{decorated(0, 100, 1), item(200, 1)};
+    const float available[] = {300, 350, 400, 500, 300};
+    const float first[] = {100, 100, 100, 150, 100};
+    const float second[] = {200, 250, 300, 350, 200};
+    for (size_t i = 0; i < 5; ++i) {
+        check_case("negative inner base grow and repeated resolution", negative_inner, available[i], {first[i], second[i]});
+        const auto result = resolve(negative_inner, available[i]);
+        require(result.items[0].flex_base_size == 0.f && result.items[0].inner_flex_base_size == -100.f &&
+                result.items[0].hypothetical_main_size == 100.f,
+                "negative inner base must survive separately from the hypothetical floor");
+    }
+    check_case("negative inner base freezes before partial shrink", {decorated(0, 100, 0, .25f), item(200, 0, .25f)},
+               200, {100, 175});
+    check_case("zero inner base remains active in fractional sum", {decorated(100, 100, 0, .25f), item(200, 0, .25f)},
+               200, {100, 150});
+    check_case("all inner weights zero preserve decoration overflow", {decorated(100, 100), decorated(100, 100)},
+               100, {100, 100});
+    const float below = std::nextafter(100.f, 0.f);
+    const float above = std::nextafter(100.f, 200.f);
+    check_case("tiny negative inner base still freezes before budget", {decorated(below, 100, 0, .25f), item(200, 0, .25f)},
+               200, {100, 175});
+    check_case("tiny positive inner base remains active", {decorated(above, 100, 0, .25f), item(200, 0, .25f)},
+               200, {100, 150});
+    auto tiny_growth = std::vector<aether_flex_item_input_s>{decorated(0, 100, 1), item(200, 1)};
+    const float barely_growing = std::nextafter(300.f, 400.f);
+    const auto tiny_result = resolve(tiny_growth, barely_growing);
+    require(tiny_result.items[1].target_main_size == barely_growing - 100.f,
+            "positive room smaller than the geometric epsilon must still select grow");
+
+    check_case("decoration violation freezes and redistributes shrink", {decorated(200, 100, 0, 10), item(200)},
+               150, {100, 50});
+    // After C freezes, B lands exactly on its floor at available=600 and
+    // remains active. One representable step below that creates a real tiny
+    // min violation: B must freeze too, rather than re-enter a .125 budget
+    // that would enlarge it by 25px. All factors here are binary-exact.
+    const auto near_floor = std::vector<aether_flex_item_input_s>{
+        decorated(200, 100, 0, .75f), decorated(300, 100, 0, .125f), decorated(1500, 900, 0, 10)};
+    check_case("exact floor is not a violation", near_floor, 600, {100, 125, 900});
+    check_case("tiny decoration violation freezes before next partial budget", near_floor,
+               std::nextafter(600.f, 0.f), {100, 100, 900});
+    check_case("maximum cannot undercut decoration", {decorated(200, 100, 1, 1, 0, 50), item(200, 1)},
+               500, {100, 400});
+    check_case("explicit minimum dominates maximum and decoration", {decorated(200, 100, 1, 1, 250, 50), item(200, 1)},
+               500, {250, 250});
+    auto scrolling = decorated(0, 100, 1, 1, NAN);
+    scrolling.automatic_minimum = {true, 500, NAN, NAN, NAN};
+    check_case("zero automatic minimum still floors decoration", {scrolling, item(200, 1)},
+               300, {100, 200});
+    auto margins = std::vector<aether_flex_item_input_s>{decorated(200, 100), item(200)};
+    margins[0].outer_main_size = 20;
+    margins[1].outer_main_size = -10;
+    check_case("signed margins and gap excluded from shrink weights", margins, 300, {160, 120}, false, 10);
+    check_case("wrap uses decoration-floor hypothetical sizes", {decorated(0, 100, 1), item(200, 1), item(200, 1)},
+               300, {100, 200, 300}, true, 0, {{0, 1}, {2}});
+    check_case("wrap isolates floor and line growth", {decorated(0, 100, 1), item(200, 1)},
+               299, {299, 299}, true, 0, {{0}, {1}});
+    require(fractional_failures == 0, "decoration flex contract regressions must all pass");
+}
+
 int main() {
     require(same(aether_flex_resolve_base_size({ AETHER_FLEX_BASIS_AUTO, 75.f, 20.f, NAN, false }), 75.f),
         "auto flex-basis must use the definite main-size property");
@@ -258,5 +339,6 @@ int main() {
             "positive main-axis margins must retain their existing outer-size behavior");
     }
     test_fractional_contract();
+    test_decoration_contract();
     return 0;
 }

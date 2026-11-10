@@ -342,6 +342,12 @@ static resolved_flex_children_s resolve_flex_children(
             horizontal ? child_style.max_width : child_style.max_height, measures, horizontal ? "max-width" : "max-height");
         const auto child_padding = resolve_padding_edges(engine, child_style.padding, content.width, child_style);
         const auto child_border = resolve_border_edges(engine, child_style, content.width);
+        // Keep the raw border-box flex base, decoration and margins distinct.
+        // In either axis percentage padding uses the containing inline size,
+        // exactly as it does in the final layout_element box construction.
+        item.main_decoration_size = horizontal
+            ? aether_thicknessf_horizontal(child_padding) + aether_thicknessf_horizontal(child_border)
+            : aether_thicknessf_vertical(child_padding) + aether_thicknessf_vertical(child_border);
         // The automatic minimum on a row's main axis is a min-content inline-size.
         // On a column's main axis it is a block-size at the item's resolved cross-size.
         // The base layout has already established that cross-size (including nested flex

@@ -8,9 +8,11 @@
 
 /* Pure Flexbox main-axis resolution. The layout tree supplies intrinsic and
    specified sizes; this module owns the §9.7 arithmetic and never accesses
-   DOM, layout boxes, or styles directly. All main sizes use the caller's
-   chosen sizing box consistently (the layout engine supplies border-box
-   sizes). NaN represents an unavailable/indefinite input where noted. */
+   DOM, layout boxes, or styles directly. Bases, constraints and targets use
+   border-box sizes; decoration and signed margins are separate inputs. The
+   inner base used for shrink weights excludes decoration and may be negative
+   before the initial freeze. NaN represents an unavailable/indefinite input
+   where noted. This is a private contract, not part of the public C ABI. */
 
 struct aether_flex_basis_resolution_input_s {
     int32_t kind = AETHER_FLEX_BASIS_AUTO;
@@ -50,6 +52,7 @@ struct aether_flex_item_input_s {
     float outer_main_size = 0.f; // Signed non-auto main-axis margins.
     float flex_grow = 0.f;
     float flex_shrink = 1.f;
+    float main_decoration_size = 0.f; // Non-flexible main-axis padding + border.
 };
 
 struct aether_flex_item_result_s {
@@ -57,6 +60,7 @@ struct aether_flex_item_result_s {
     float hypothetical_main_size = 0.f;
     float target_main_size = 0.f;
     bool frozen = false;
+    float inner_flex_base_size = 0.f; // Raw border-box base minus decoration.
 };
 
 struct aether_flex_line_s {
