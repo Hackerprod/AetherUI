@@ -1759,3 +1759,21 @@ if(AETHERUI_BUILD_TESTS)
         add_test(NAME aether.flex-wrap-intrinsic-${kind} COMMAND aether_flex_wrap_intrinsic_${kind}_test)
     endforeach()
 endif()
+
+if(AETHERUI_BUILD_TESTS)
+    add_executable(aether_flex_definite_basis_test tests/test_flex_definite_basis.cpp)
+    target_link_libraries(aether_flex_definite_basis_test PRIVATE AetherUI::Core)
+    add_test(NAME aether.flex-definite-basis COMMAND aether_flex_definite_basis_test)
+
+    foreach(kind lifetime measurement)
+        add_executable(aether_flex_definite_basis_${kind}_test
+            tests/test_flex_definite_basis_${kind}.cpp
+            $<TARGET_OBJECTS:aether_flex_text_test_core>)
+        target_include_directories(aether_flex_definite_basis_${kind}_test PRIVATE include src)
+        target_compile_definitions(aether_flex_definite_basis_${kind}_test PRIVATE AETHER_EXPORTS)
+        add_test(NAME aether.flex-definite-basis-${kind} COMMAND aether_flex_definite_basis_${kind}_test)
+    endforeach()
+    # Keep the full depth/callback matrix bounded while allowing instrumented
+    # runs on slower hosts (ASan/UBSan with LSan takes about 150 s on a 4-core VPS).
+    set_tests_properties(aether.flex-definite-basis-measurement PROPERTIES TIMEOUT 600)
+endif()

@@ -306,12 +306,25 @@ static resolved_flex_children_s resolve_flex_children(
             // Reuse this existing layout pass for the raw content base. Columns
             // also need it for their independent automatic-minimum suggestion,
             // even when the used basis is a definite length or specified height.
-            // Rows with a definite basis keep their previous measurement path.
+            // Non-table rows with a definite basis need no provisional tree:
+            // their only other input from that tree would be signed margins.
             const intrinsic_measurement_s measurement{child,
                 horizontal ? intrinsic_axis_e::width : intrinsic_axis_e::height};
             const bool stretch_base_cross = single_line_container && cross_size_is_definite &&
                 flex_item_stretches_on_cross_axis(parent_style, child_style, horizontal);
             const auto margin = resolve_margin_edges(engine, child_style.margin, content.width, child_style);
+            const bool table_item = child_style.display == AETHER_DISPLAY_TABLE ||
+                child_style.display == AETHER_DISPLAY_TABLE_ROW ||
+                child_style.display == AETHER_DISPLAY_TABLE_CELL;
+            if (horizontal && !uses_content_basis && !table_item) {
+                item.basis.content_main_size = 0.f;
+                item.outer_main_size = aether_thicknessf_horizontal(margin);
+                // Keep indices aligned with children/inputs. Only retained
+                // measurement paths may dereference a base box below.
+                base_boxes.push_back(nullptr);
+                inputs.push_back(item);
+                continue;
+            }
             const float forced_border_cross = std::max(0.f,
                 (horizontal ? content.height : content.width) -
                 (horizontal ? aether_thicknessf_vertical(margin) : aether_thicknessf_horizontal(margin)));
@@ -369,22 +382,30 @@ static resolved_flex_children_s resolve_flex_children(
         // for the latter. Re-measuring through a parallel intrinsic-height walk loses the
         // horizontal constraints of nested rows and can let a column shrink an item below
         // its painted descendant extent.
-        const float content_size_suggestion = horizontal
-            ? measure_intrinsic_width(engine, styles, children[index], child_style,
-                                      child_padding, child_border, content.width, result,
-                                      aether_intrinsic_size_mode_e::min_content)
-            : flex_box_main_size(base_box, false);
         const int32_t main_axis_overflow = horizontal ? child_style.overflow_x : child_style.overflow_y;
+        const bool zero_automatic_minimum = flex_automatic_minimum_is_zero_for_overflow(main_axis_overflow);
+        // An explicit minimum or scrollable overflow never consumes the content
+        // suggestion. Keep the unused value finite for the resolver's validation.
+        float content_size_suggestion = 0.f;
+        if (!std::isfinite(item.min_main_size) && !zero_automatic_minimum) {
+            content_size_suggestion = horizontal
+                ? measure_intrinsic_width(engine, styles, children[index], child_style,
+                                          child_padding, child_border, content.width, result,
+                                          aether_intrinsic_size_mode_e::min_content)
+                : flex_box_main_size(base_box, false);
+        }
         item.automatic_minimum = {
-            flex_automatic_minimum_is_zero_for_overflow(main_axis_overflow),
+            zero_automatic_minimum,
             content_size_suggestion, item.basis.specified_main_size, NAN, item.max_main_size
         };
         // Unlike every other flex input, explicit margins are signed.  A
         // negative margin reduces the item's outer main size and must take
         // part in line formation and free-space resolution (Flexbox §9.7).
         // Auto margins are still zero here and consumed in their later phase.
-        item.outer_main_size =
-            flex_box_outer_main_size(base_box, horizontal) - flex_box_main_size(base_box, horizontal);
+        if (base_box) {
+            item.outer_main_size =
+                flex_box_outer_main_size(base_box, horizontal) - flex_box_main_size(base_box, horizontal);
+        }
         item.flex_grow = child_style.flex_grow;
         item.flex_shrink = child_style.flex_shrink;
     }
