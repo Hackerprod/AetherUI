@@ -20,6 +20,9 @@ inline layout_scroll_bounds_s aether_scroll_own_bounds(const aether_layout_box_s
     if (proxy.valid && box->kind == LAYOUT_BOX_TEXT) {
         const double dx = double(box->content_box.x) - double(proxy.reference_content_x);
         const double top = double(box->content_box.y);
+        // Check before addition: a huge y can round away a negative height.
+        if (box->content_box.height < 0.f)
+            throw std::invalid_argument("inverted scroll proxy height");
         const layout_scroll_bounds_s bounds{
             proxy.left + dx, top, proxy.right + dx, top + double(box->content_box.height), false};
         aether_check_scroll_coordinate(bounds.left);

@@ -315,7 +315,7 @@ static void clone_faults_and_numeric_rollback() {
     std::printf("hanging clone OOM: %d failures injected\n",delivered);
     struct SavedVisual {aether_layout_box_s* box;bool valid,has; aether_transform_matrix matrix;float opacity;int64_t time;aether_scroll_metrics_t scroll;};
     const auto content=text->content_box;
-    for(int invalid=0;invalid<9;++invalid) {
+    for(int invalid=0;invalid<11;++invalid) {
         scenario="invalid proxy transaction "+std::to_string(invalid);
         text->scroll_proxy=proxy;text->content_box=content;
         if(invalid==0)text->scroll_proxy.right=std::numeric_limits<double>::infinity();
@@ -327,6 +327,7 @@ static void clone_faults_and_numeric_rollback() {
         if(invalid==6)text->content_box.height=std::numeric_limits<float>::quiet_NaN();
         if(invalid==7)text->content_box.height=-1;
         if(invalid==8){text->content_box.y=std::numeric_limits<float>::max();text->content_box.height=std::numeric_limits<float>::max();}
+        if(invalid==9 || invalid==10){text->content_box.y=invalid==9?1.e38f:-1.e38f;text->content_box.height=-1;}
         std::vector<SavedVisual> states;
         for(auto* box:f.result->paint_order)states.push_back({box,box->visual_sample_valid,box->visual_has_transform,box->visual_transform,box->visual_opacity,box->visual_timestamp,box->scroll});
         check(aether_contextual_transition_finalize_layout(f.result,nullptr)==AETHER_ERROR_INVALID_STATE,"invalid proxy rejects finalize");
