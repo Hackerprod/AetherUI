@@ -218,6 +218,12 @@ static bool bi_opacity_value(const std::string& source, float& result) {
     return true;
 }
 
+// Explicit inheritance copies the computed scalar, not accumulated paint alpha.
+static void bi_inherit_opacity(aether_computed_style_t* style,
+                               aether::style::ComputedStyleReadView parent) {
+    style->opacity = parent.scalars().opacity;
+}
+
 static bool bi_try_opacity(const char* src, std::string& out) {
     if (!src) return false;
     // Runtime substitution can alias out, including an interior source pointer.
@@ -1317,7 +1323,7 @@ void builtin_properties_register(style_property_registry_s* reg) {
 
     // opacity
     reg->register_property_checked("opacity", false, STYLE_IMPACT_COMPOSITE | STYLE_IMPACT_HITTEST,
-        "1", bi_try_opacity, bi_apply_opacity);
+        "1", bi_try_opacity, bi_apply_opacity, {}, bi_inherit_opacity, bi_origin_css_wide);
 
     // -webkit-background-clip
     {

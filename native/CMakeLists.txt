@@ -462,6 +462,10 @@ if(AETHERUI_BUILD_TESTS)
     endif()
     add_test(NAME aether.flex-number-registry COMMAND aether_flex_number_registry_test)
 
+    add_executable(aether_opacity_inheritance_test tests/test_opacity_inheritance.cpp)
+    target_link_libraries(aether_opacity_inheritance_test PRIVATE AetherUI::Core)
+    add_test(NAME aether.opacity-inheritance COMMAND aether_opacity_inheritance_test)
+
     add_executable(aether_opacity_pipeline_test tests/test_opacity_pipeline.cpp)
     target_link_libraries(aether_opacity_pipeline_test PRIVATE AetherUI::Core ${CMAKE_DL_LIBS})
     add_test(NAME aether.opacity-pipeline COMMAND aether_opacity_pipeline_test)

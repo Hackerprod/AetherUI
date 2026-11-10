@@ -1,5 +1,6 @@
 #include "../src/style_runtime/style_property_registry_internal.h"
 #include <cmath>
+#include <cstddef>
 #include <cstdio>
 #include <cstring>
 #include <limits>
@@ -77,10 +78,40 @@ int run_opacity_registry_tests() {
     check(p->id == before->id + 1 && after->id == p->id + 1, "unchanged registration order and ID");
     check(p->name == "opacity" && p->initial_value == "1" && !p->inherited &&
           p->impact == (STYLE_IMPACT_COMPOSITE | STYLE_IMPACT_HITTEST), "unchanged metadata");
-    check(p->parse && p->apply_checked && !p->apply && !p->css_wide && !p->inherit_explicit &&
+    check(p->parse && p->apply_checked && !p->apply && p->css_wide && p->inherit_explicit &&
           !p->inherit_context && !p->parse_failure && !p->apply_with_context &&
-          !p->apply_with_context_checked, "only checked scalar apply; no inheritance hooks");
-    if (!p->parse || !p->apply_checked) return 1;
+          !p->apply_with_context_checked, "checked scalar apply with explicit inheritance and CSS-wide hooks");
+    if (!p->parse || !p->apply_checked || !p->css_wide || !p->inherit_explicit) return 1;
+    for (const char* keyword : {"inherit", "INHERIT", "/**/\\69 NHeRiT/**/"})
+        check(p->css_wide(keyword) == property_css_wide_e::inherit, "whole decoded inherit keyword");
+    check(p->css_wide("initial") == property_css_wide_e::initial &&
+          p->css_wide("revert") == property_css_wide_e::initial &&
+          p->css_wide("unset") == property_css_wide_e::unset, "existing CSS-wide compatibility");
+    for (const char* keyword : {"revert-layer", "in/**/herit", "inherit initial", "inherit /*", ".5"})
+        check(p->css_wide(keyword) == property_css_wide_e::none, "reject non-keyword token sequences");
+    for (float value : {0.f, .3f, 1.f, 1e-7f, 1e-40f}) {
+        aether::style::StyleScalars scalar{}; scalar.opacity = value;
+        using namespace aether::style;
+        auto payload = std::make_shared<const FrozenStylePayload>(
+            ImmutableArray<FrozenBackgroundLayer>{}, ImmutableArray<aether_backdrop_filter>{},
+            FrozenGradient{}, ImmutableArray<aether_transform_operation>{},
+            ImmutableArray<aether_shadow>{}, ImmutableArray<aether_shadow>{});
+        FrozenStyle parent(scalar, std::move(payload));
+        aether_computed_style_t style{}; style.opacity = .123f; style.flex_grow = 17;
+        unsigned char saved[sizeof(style)]; std::memcpy(saved, &style, sizeof(style));
+#if defined(AETHER_OPACITY_LOCALE_WRAPPERS)
+        const int acq = acquisitions, conv = conversions;
+        monitor = true; fail_locale = true;
+#endif
+        p->inherit_explicit(&style, parent.view());
+        check(equal(style.opacity, value), "inherit exact computed float");
+#if defined(AETHER_OPACITY_LOCALE_WRAPPERS)
+        monitor = false; fail_locale = false;
+        check(acquisitions == acq && conversions == conv, "inherit never reparses or acquires locale");
+#endif
+        std::memcpy(&style.opacity, saved + offsetof(aether_computed_style_t, opacity), sizeof(style.opacity));
+        check(std::memcmp(saved, &style, sizeof(style)) == 0, "inherit changes only opacity bytes");
+    }
     struct Case { const char* text; float expected; };
     const Case valid[] = {
         {".5", .5f}, {"+0.5", .5f}, {"00.50", .5f}, {"5e-1", .5f}, {"5E+1%", .5f},

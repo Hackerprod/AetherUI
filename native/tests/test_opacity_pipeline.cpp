@@ -149,6 +149,8 @@ static void locale_cases() {
                 run(sheet,c.first,c.second,"","",compile,apply);
                 run(sheet,"var(--x)",c.second,std::string("--x:")+c.first+";","",compile,apply);
             }
+            run(sheet,"inherit",.3f,"","opacity:.3;",compile,apply);
+            run(sheet,"var(--missing,inherit)",.3f,"","opacity:.3;",compile,apply);
             run(sheet,"0,5",.25f,"","",compile,apply);
             run(sheet,"var(--x)",1,"--x:0,5;","",compile,apply);
         }
@@ -194,11 +196,25 @@ int main() {
         run(sheet, "var(--missing)", 1);
         run(sheet, "var(--missing,var(--also-missing,50%))", .5f);
         for (const char* word : {"initial", "unset", "inherit", "revert"}) {
-            // Opacity has no native explicit-inheritance hook: even parent .3 gives 1.
-            run(sheet, word, 1);
-            run(sheet, std::string("var(--missing,") + word + ")", 1);
+            const float expected = std::string(word) == "inherit" ? .3f : 1.f;
+            run(sheet, word, expected);
+            run(sheet, std::string("var(--missing,") + word + ")", expected);
         }
         run(sheet, "var(--x)", .5f, "--x:inherit;", "opacity:.3;--x:50%;");
+        for (const char* keyword : {"INHERIT", "/**/inherit/**/", R"(\69 nherit)"}) {
+            run(sheet, keyword, .3f);
+            run(sheet, std::string("var(--missing,") + keyword + ")", .3f);
+            run(sheet, std::string("var(--missing,var(--nested,") + keyword + "))", .3f);
+            run(sheet, "var(--x)", .3f, std::string("--x:var(--missing,") + keyword + ");");
+        }
+        for (const auto& c : valid) {
+            run(sheet, "inherit", c.expected, "", std::string("opacity:") + c.text + ";");
+            run(sheet, "var(--missing,inherit)", c.expected, "", std::string("opacity:") + c.text + ";");
+        }
+        for (const char* invalid_keyword : {"revert-layer", "inherit initial", "in/**/herit"}) {
+            run(sheet, invalid_keyword, .25f);
+            run(sheet, std::string("var(--missing,") + invalid_keyword + ")", 1);
+        }
     }
     lifecycle();
     locale_cases();

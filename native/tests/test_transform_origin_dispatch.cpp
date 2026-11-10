@@ -119,9 +119,10 @@ int main() {
     for(const auto& definition : registry.definitions) {
         const bool expected = contextual.count(definition.name) != 0;
         const bool computed_list = computed_lists.count(definition.name) != 0;
-        check(static_cast<bool>(definition.css_wide)==(expected||computed_list),"exact CSS-wide hook coverage");
+        const bool opacity = definition.name == "opacity";
+        check(static_cast<bool>(definition.css_wide)==(expected||computed_list||opacity),"exact CSS-wide hook coverage");
         check(static_cast<bool>(definition.inherit_context)==expected,"exact contextual inheritance coverage");
-        check(static_cast<bool>(definition.inherit_explicit)==(definition.name=="transform-origin"||computed_list),"exact explicit inheritance hook coverage");
+        check(static_cast<bool>(definition.inherit_explicit)==(definition.name=="transform-origin"||computed_list||opacity),"exact explicit inheritance hook coverage");
     }
     std::printf("transform-origin dispatch: %d checks, %d failures\n",checks,failures);
     const int corner_failures = run_corner_radius_registry_tests();
