@@ -958,6 +958,19 @@ if(AETHERUI_BUILD_TESTS)
     target_include_directories(aether_selector_dom_boundary_test PRIVATE include src/style_runtime)
     add_test(NAME aether.selector-dom-boundary COMMAND aether_selector_dom_boundary_test)
 
+    add_executable(aether_selector_edge_children_test tests/test_selector_edge_children.cpp
+        src/style_runtime/selector_parser.cpp src/style_runtime/selector_matcher.cpp)
+    target_include_directories(aether_selector_edge_children_test PRIVATE include src/style_runtime)
+    target_link_libraries(aether_selector_edge_children_test PRIVATE AetherUI::Core)
+    add_test(NAME aether.selector-edge-children COMMAND aether_selector_edge_children_test)
+
+    # Timing is opt-in; correctness and deterministic work counts stay in the harness.
+    add_executable(aether_selector_edge_children_benchmark EXCLUDE_FROM_ALL
+        tests/benchmark_selector_edge_children.cpp
+        src/style_runtime/selector_parser.cpp src/style_runtime/selector_matcher.cpp)
+    target_include_directories(aether_selector_edge_children_benchmark PRIVATE include src/style_runtime)
+    target_link_libraries(aether_selector_edge_children_benchmark PRIVATE AetherUI::Core)
+
     # Generated content must never change the logical DOM used by selectors.
     add_executable(aether_generated_selector_metamorphic_test tests/test_generated_selector_metamorphic.cpp)
     target_link_libraries(aether_generated_selector_metamorphic_test PRIVATE AetherUI::Core)

@@ -69,12 +69,16 @@ static int dom_element_sibling_index(aether_node_s* node) {
     return -1;
 }
 
-static int dom_element_child_count(aether_node_s* node) {
-    if (!node) return 0;
-    int count = 0;
-    for (auto* child : node->children)
-        if (is_selector_dom_element(child)) ++count;
-    return count;
+static bool is_first_dom_element_child(aether_node_s* node) {
+    if (!is_selector_dom_element(node)) return false;
+    if (!node->parent) return true; // Preserve existing disconnected-element behavior.
+    auto* parent = dom_parent(node);
+    if (!parent) return false;
+    for (auto* child : parent->children) {
+        if (!is_selector_dom_element(child)) continue;
+        return child == node;
+    }
+    return false;
 }
 
 static bool is_last_dom_element_child(aether_node_s* node) {
@@ -173,12 +177,12 @@ static bool matches_pseudo(const pseudo_selector_s& pseudo, aether_node_s* node)
     case PSEUDO_EMPTY:
         return is_empty_for_selector(node);
     case PSEUDO_FIRST_CHILD:
-        return dom_element_sibling_index(node) == 0;
+        return is_first_dom_element_child(node);
     case PSEUDO_LAST_CHILD:
         return is_last_dom_element_child(node);
     case PSEUDO_ONLY_CHILD:
-        return dom_parent(node) && dom_element_sibling_index(node) == 0 &&
-               dom_element_child_count(dom_parent(node)) == 1;
+        return dom_parent(node) && is_first_dom_element_child(node) &&
+               is_last_dom_element_child(node);
     case PSEUDO_NTH_CHILD: {
         const int index = dom_element_sibling_index(node);
         return index >= 0 && pseudo.nth.matches(index + 1);
