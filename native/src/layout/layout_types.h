@@ -229,6 +229,9 @@ struct inline_item_s {
     std::string           text;
     bool is_atomic = false;
     bool is_line_break = false;
+    // Collection-time marker: flattened inline decoration disables the entire
+    // hanging sequence, including empty decorated elements.
+    bool hanging_barrier = false;
     // Only the final flow collector creates these zero-consumption markers.
     size_t block_anchor_index = static_cast<size_t>(-1);
 

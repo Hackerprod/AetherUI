@@ -1,5 +1,6 @@
 /* ── Layout Engine — core box layout, flow, inline, and intrinsic sizing ─ */
 #include "layout_internal.h"
+#include "inline_line_resolver.h"
 #include <aether/aether_contextual_transitions.h>
 #include "input_hit_test.h"
 #include "../animations/transition_runtime.h"
@@ -876,6 +877,203 @@ float layout_flow_children(
     return std::max(0.f, cursor_y - content.y + (has_pending_margin ? pending_margin : 0.f));
 }
 
+// The phase-one path is deliberately sequence-wide. Unsupported content or a
+// flattened inline decoration keeps the complete legacy sequence, rather than
+// mixing incompatible line decisions halfway through a paragraph.
+static bool uses_hanging_line_resolver(const std::vector<inline_item_s>& items) {
+    bool pre_wrap = false;
+    bool nowrap_content = false, nowrap_pending_space = false;
+    for (const auto& item : items) {
+        if (item.hanging_barrier || item.block_anchor_index != static_cast<size_t>(-1)) return false;
+        pre_wrap |= item.style.white_space == AETHER_WHITE_SPACE_PRE_WRAP;
+        for (unsigned char c : item.text) {
+            if (c >= 128 || c == '\t' || c == '\v' || c == '\f') return false;
+        }
+        // CSS trailing collapse precedes hanging. This phase does not replace
+        // that legacy algorithm: mixed collapsible whitespace is admitted only
+        // when it is provably internal to an unbreakable nowrap unit. Decide
+        // before any measurement, never fall back after processing a prefix.
+        if (item.is_atomic || item.is_line_break || item.style.white_space != AETHER_WHITE_SPACE_NOWRAP) {
+            if (nowrap_pending_space) return false;
+            nowrap_content = false;
+        }
+        for (const auto& token : aether_tokenize_inline_text(item.text, item.style.white_space)) {
+            if (token.kind == aether_inline_text_token_kind_e::forced_break) {
+                if (nowrap_pending_space) return false;
+                nowrap_content = false;
+            } else if (token.kind == aether_inline_text_token_kind_e::collapsible_space) {
+                if (item.style.white_space != AETHER_WHITE_SPACE_NOWRAP || !nowrap_content) return false;
+                nowrap_pending_space = true;
+            } else if (item.style.white_space == AETHER_WHITE_SPACE_NOWRAP) {
+                nowrap_content = true;
+                nowrap_pending_space = false;
+            }
+        }
+    }
+    return pre_wrap && !nowrap_pending_space;
+}
+
+struct measured_inline_fragment {
+    size_t item_index = 0;
+    std::string text;
+    inline_line_metrics metrics;
+    aether_layout_box_s* atomic_box = nullptr;
+    std::vector<aether_layout_box_s*> atomic_paint_order;
+};
+
+// Shared streaming adapter for height measurement and final geometry. It only
+// buffers the current line and the next indivisible unit. Token strings stay
+// individual, and immutable item indexes survive every vector reallocation.
+// Every first measurement occurs in source order; closing a line never measures.
+template<class MeasureAtomic, class EmitLine>
+static float resolve_hanging_inline_lines(
+    const aether_layout_engine_s* engine, const std::vector<inline_item_s>& items,
+    float available_width, float minimum_line_height,
+    MeasureAtomic measure_atomic, EmitLine emit_line)
+{
+    inline_line_resolver resolver(available_width, minimum_line_height);
+    std::vector<measured_inline_fragment> line, unit;
+    float total_height = 0.f, unit_width = 0.f;
+    bool previous_collapsible = false;
+    bool opportunity = false, preserved_opportunity = false;
+    bool unit_can_wrap = false;
+    auto close = [&](inline_line_end end) {
+        if (!resolver.empty() || end == inline_line_end::forced) {
+            const auto summary = resolver.close(end);
+            emit_line(line, summary, total_height, end);
+            total_height += summary.height;
+            if (!std::isfinite(total_height)) throw std::overflow_error("Non-finite inline height");
+        }
+        resolver.reset(); line.clear();
+        opportunity = preserved_opportunity = false;
+    };
+    auto accept = [&](measured_inline_fragment fragment) {
+        resolver.append(fragment.metrics);
+        line.push_back(std::move(fragment));
+    };
+    auto flush_unit = [&]() {
+        if (unit.empty()) return;
+        if (resolver.needs_break(unit_width, opportunity && (preserved_opportunity || unit_can_wrap)))
+            close(inline_line_end::soft);
+        for (auto& fragment : unit) accept(std::move(fragment));
+        unit.clear(); unit_width = 0.f;
+        opportunity = preserved_opportunity = false;
+    };
+    for (size_t item_index = 0; item_index < items.size(); ++item_index) {
+        const auto& item = items[item_index];
+        if (item.is_line_break) {
+            flush_unit(); close(inline_line_end::forced); previous_collapsible = false;
+            continue;
+        }
+        if (item.is_atomic) {
+            flush_unit();
+            // The operation is performed once at its source position. Emission
+            // translates the already-built atom if its complete width must wrap.
+            auto fragment = measure_atomic(item_index, total_height);
+            if (resolver.needs_break(fragment.metrics.width, true)) close(inline_line_end::soft);
+            accept(std::move(fragment));
+            opportunity = true; preserved_opportunity = false;
+            previous_collapsible = false;
+            continue;
+        }
+        for (const auto& token : aether_tokenize_inline_text(item.text, item.style.white_space)) {
+            if (token.kind == aether_inline_text_token_kind_e::forced_break) {
+                flush_unit(); close(inline_line_end::forced); previous_collapsible = false;
+                continue;
+            }
+            const bool collapsible = token.kind == aether_inline_text_token_kind_e::collapsible_space;
+            const bool whitespace = token.kind != aether_inline_text_token_kind_e::word;
+            const bool wrap = aether_white_space_allows_soft_wrap(item.style.white_space);
+            if (whitespace && wrap) flush_unit();
+            if (collapsible && (previous_collapsible || (resolver.empty() && unit.empty()))) continue;
+            const auto metrics = engine_measure_text(engine, token.text.c_str(), &item.style, 0.f, item.element);
+            measured_inline_fragment fragment{item_index, token.text,
+                {metrics.width, metrics.height, metrics.baseline, true, whitespace, item.style.white_space}, nullptr, {}};
+            if (whitespace && wrap) {
+                // A preserved trailing group never wraps due to its own width.
+                accept(std::move(fragment));
+                opportunity = true;
+                preserved_opportunity |= item.style.white_space == AETHER_WHITE_SPACE_PRE_WRAP;
+            } else {
+                if (unit.empty()) unit_can_wrap = wrap;
+                unit_width += metrics.width;
+                if (!std::isfinite(unit_width)) throw std::overflow_error("Non-finite inline unit");
+                unit.push_back(std::move(fragment));
+            }
+            previous_collapsible = collapsible;
+        }
+    }
+    flush_unit(); close(inline_line_end::paragraph_end);
+    return total_height;
+}
+
+static float layout_hanging_inline_items(
+    const aether_layout_engine_s* engine, const StyleLookup* styles,
+    aether_layout_box_s* parent_box, const std::vector<inline_item_s>& items,
+    float start_x, float start_y, float available_width, float available_height,
+    percentage_height_s containing_height, const BoxStyleSnapshot& parent_style,
+    aether_layout_result_s* result)
+{
+    const float minimum = std::max(layout_used_line_height(engine, parent_box->element, parent_style), 1.f);
+    auto atomic = [&](size_t index, float y) {
+        const auto& item = items[index];
+        const size_t paint_start = result->paint_order.size();
+        auto* box = layout_element(engine, styles, item.element,
+            {start_x, start_y + y, available_width, available_height}, containing_height,
+            start_y + y, false, 0, false, 0, forced_height_kind_e::none, true, result);
+        measured_inline_fragment fragment{index, {},
+            {box->margin_box.width, box->margin_box.height, 0.f, false, false, item.style.white_space}, box, {}};
+        // Text prefixes are emitted when their baseline/alignment is known.
+        // Keep the public paint-order index in DOM order despite measuring an
+        // atom before closing its prefix. The already-built tree is not replayed.
+        fragment.atomic_paint_order.assign(result->paint_order.begin() + paint_start, result->paint_order.end());
+        result->paint_order.resize(paint_start);
+        return fragment;
+    };
+    auto emit = [&](const std::vector<measured_inline_fragment>& line, const inline_line_summary& summary,
+                    float y, inline_line_end end) {
+        float x = start_x;
+        const int align = parent_style.text_align;
+        if (align == AETHER_TEXT_ALIGN_CENTER)
+            x += std::max(0.f, (available_width - summary.alignment_width) / 2.f);
+        else if (align == AETHER_TEXT_ALIGN_RIGHT || align == AETHER_TEXT_ALIGN_END)
+            x += std::max(0.f, available_width - summary.alignment_width);
+        int gaps = 0;
+        for (size_t i = summary.justify_begin; i < summary.justify_end; ++i)
+            if (line[i].metrics.whitespace) gaps += static_cast<int>(line[i].text.size());
+        const float extra = end == inline_line_end::soft && align == AETHER_TEXT_ALIGN_JUSTIFY ?
+            aether_text_justify_extra_per_gap(available_width, summary.alignment_width, gaps) : 0.f;
+        for (size_t i = 0; i < line.size(); ++i) {
+            const auto& fragment = line[i];
+            const auto& item = items[fragment.item_index];
+            auto* box = fragment.atomic_box;
+            float width = fragment.metrics.width;
+            if (i >= summary.justify_begin && i < summary.justify_end && fragment.metrics.whitespace)
+                width += extra * static_cast<float>(fragment.text.size());
+            if (box) {
+                const auto normal = normal_flow_margin_box(box);
+                offset_box(box, x - normal.x, start_y + y - normal.y);
+                result->paint_order.insert(result->paint_order.end(),
+                    fragment.atomic_paint_order.begin(), fragment.atomic_paint_order.end());
+            } else {
+                box = result->create_box();
+                box->kind = LAYOUT_BOX_TEXT;
+                box->element = item.element;
+                box->style = item.style;
+                box->presentation_owner = item.element ? item.element->anonymous_flex_owner : nullptr;
+                box->text = fragment.text;
+                box->content_box = {x, start_y + y + std::max(0.f, summary.ascent - fragment.metrics.baseline),
+                    width, fragment.metrics.height};
+                box->padding_box = box->border_box = box->margin_box = box->content_box;
+                if (result->records_boxes) result->paint_order.push_back(box);
+            }
+            parent_box->add_child(box);
+            x += width;
+        }
+    };
+    return resolve_hanging_inline_lines(engine, items, available_width, minimum, atomic, emit);
+}
+
 /* ── LayoutInlineItems ─────────────────────────────────────────────── */
 
 float layout_inline_items(
@@ -888,6 +1086,9 @@ float layout_inline_items(
     const BoxStyleSnapshot& parent_style,
     aether_layout_result_s* result)
 {
+    if (uses_hanging_line_resolver(items))
+        return layout_hanging_inline_items(engine, styles, parent_box, items,
+            start_x, start_y, available_width, available_height, containing_height, parent_style, result);
     float cursor_x = start_x;
     float cursor_y = start_y;
     const float minimum_line_height = std::max(layout_used_line_height(engine, parent_box->element, parent_style), 1.f);
@@ -1021,6 +1222,15 @@ static void collect_inline_element(
     const BoxStyleSnapshot& style,
     std::vector<inline_item_s>& output, inline_capitalization_context_s& context)
 {
+    // Keep this fact before recursive flattening erases the inline boundaries.
+    // Values other than a provable zero conservatively select the legacy path.
+    const auto nonzero = [](aether_css_length value) { return value.value != 0.f; };
+    if (nonzero(style.padding.left) || nonzero(style.padding.right) ||
+        nonzero(style.border_width.left) || nonzero(style.border_width.right)) {
+        auto marker = inline_item_s::text_item(element, style, "");
+        marker.hanging_barrier = true;
+        output.push_back(std::move(marker));
+    }
     for (auto* node : element->children) {
         if (node->type == AETHER_NODE_TEXT) {
             collect_text_items(element, style, node->text, output, context);
@@ -1089,6 +1299,17 @@ static inline_node_role_e append_inline_node(
     if (node->type != AETHER_NODE_ELEMENT) return inline_node_role_e::ignored;
 
     const auto child_style = get_style(styles, node);
+    if (node->pseudo_element == aether_pseudo_element_t::none &&
+        child_style.position == AETHER_POSITION_ABSOLUTE && !output.empty() &&
+        (child_style.display == AETHER_DISPLAY_BLOCK || child_style.display == AETHER_DISPLAY_FLEX ||
+         child_style.display == AETHER_DISPLAY_TABLE)) {
+        // The final flow collector emits a block-static anchor here. Its
+        // measurement counterpart needs the same sequence-wide admission fact,
+        // without installing a geometric anchor or consuming any line space.
+        auto marker = inline_item_s::text_item(node, child_style, "");
+        marker.hanging_barrier = true;
+        output.push_back(std::move(marker));
+    }
     if (child_style.display == AETHER_DISPLAY_NONE || is_out_of_flow(child_style)) {
         return inline_node_role_e::ignored;
     }
@@ -1276,6 +1497,21 @@ static float measure_inline_items_height(
     aether_layout_result_s* result, aether_node_s* owner)
 {
     const float line_minimum = std::max(1.f, layout_used_line_height(engine, owner, parent_style));
+    if (uses_hanging_line_resolver(items)) {
+        auto atomic = [&](size_t index, float) {
+            const auto& item = items[index];
+            const auto style = get_style(styles, item.element);
+            const auto padding = resolve_padding_edges(engine, style.padding, available_width, style);
+            const auto border = resolve_border_edges(engine, style, available_width);
+            const float width = measure_child_natural_width(engine, styles, item.element,
+                available_width, result, aether_intrinsic_size_mode_e::max_content);
+            const float height = measure_intrinsic_height(engine, styles, result, item.element,
+                style, padding, border, available_width);
+            return measured_inline_fragment{index, {}, {width, height, 0.f, false, false, style.white_space}, nullptr, {}};
+        };
+        auto emit = [](const auto&, const inline_line_summary&, float, inline_line_end) {};
+        return resolve_hanging_inline_lines(engine, items, available_width, line_minimum, atomic, emit);
+    }
     float line_height = line_minimum;
     float line_ascent = 0.f, line_descent = 0.f;
     float cursor_x = 0.f;
