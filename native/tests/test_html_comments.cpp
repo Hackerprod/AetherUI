@@ -144,7 +144,7 @@ void fixed_cases() {
         {"<!--a-- --!>", "a-- "}, {"<!--a---x-->", "a---x"},
         {"<!--<b id=phantom>&amp;&#65;&unknown;</b>-->", "<b id=phantom>&amp;&#65;&unknown;</b>"},
         {"<!--</section><p id=phantom>fake</p>--!>", "</section><p id=phantom>fake</p>"},
-        {"<!--A\r\nB\rC\nD--!>", "A\r\nB\rC\nD"},
+        {"<!--A\r\nB\rC\nD--!>", "A\nB\nC\nD"},
         {"<!--&#45;&#45;&#33;&#62;-->", "&#45;&#45;&#33;&#62;"},
         {"<!--<!---->", "<!--"}, {"<!--<!--x-->", "<!--x"},
         {"<!--x<!--y-->", "x<!--y"}, {"<!--x<!-->later-->", "x<!", "later-->"}
@@ -157,7 +157,7 @@ void fixed_cases() {
         {"a----", "a--"}, {"a---!", "a-"}, {"a--!-", "a--!"},
         {"a--!--", "a--!"}, {"a--!--!", "a--!"}, {"a--!!", "a--!!"},
         {"a--!x", "a--!x"}, {"a--!-x", "a--!-x"}, {"a->", "a->"},
-        {"a--\r", "a--\r"}, {"a--!\r\n", "a--!\r\n"}
+        {"a--\r", "a--\n"}, {"a--!\r\n", "a--!\n"}
     };
     for (size_t i = 0; i < std::size(endings); ++i)
         eof("EOF-literal/" + std::to_string(i), endings[i].first, endings[i].second);
@@ -185,8 +185,8 @@ void state_byte_matrix() {
             const bool early = c == '>' && (state == 0 || state == 1 || state == 4 || state == 5);
             const std::string early_data = state < 2 ? "" : "a";
             closed("state-byte-close/" + label, "<!--" + input + "-->",
-                   early ? early_data : input, early ? "-->" : "");
-            std::string value = input;
+                   early ? early_data : prefixes[state] + (c == '\r' ? '\n' : c), early ? "-->" : "");
+            std::string value = prefixes[state] + (c == '\r' ? '\n' : c);
             if (early) value = early_data;
             else if (c == '-') {
                 const std::string dash[] = {"", "", "a", "a", "a-", "a--!"};
@@ -208,7 +208,7 @@ void boundaries_and_guards() {
     for (const std::string tag : {"script", "style", "textarea", "title"}) {
         const bool raw = tag == "script" || tag == "style";
         const std::string source = "<!--><!---><!--x--!>A&amp;\r\nB<!--unfinished--!";
-        const std::string value = raw ? source : "<!--><!---><!--x--!>A&\nB<!--unfinished--!";
+        const std::string value = raw ? "<!--><!---><!--x--!>A&amp;\nB<!--unfinished--!" : "<!--><!---><!--x--!>A&\nB<!--unfinished--!";
         run("text-mode/" + tag, "<body id=body><" + tag + " id=mode>" + source + "</" + tag +
             "><p id=after>tail</p></body>",
             {body({element(tag, {{"id", "mode"}}, {text(value)}), after()})});

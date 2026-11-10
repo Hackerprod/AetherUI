@@ -536,14 +536,13 @@ void lexical() {
     for (char ws : std::string(" \t\r\n\f\v")) {
         for (const std::string prefix : {"&#", "&#x", "&#X"}) {
             const auto input = prefix + ws + "65;";
-            // Only source CR in Data-state changes; attribute expectations and
-            // character-reference-created CR elsewhere in this matrix do not.
+            // Source CR changes in both text and attributes; reference-created CR does not.
             const auto data = prefix + (ws == '\r' ? '\n' : ws) + "65;";
-            matrix("whitespace/" + std::to_string(int(ws)), input, input, &data);
+            matrix("whitespace/" + std::to_string(int(ws)), input, data);
         }
         const auto data = "A" + std::string(1, ws == '\r' ? '\n' : ws) + "tail;";
         matrix("termination-space/" + std::to_string(int(ws)), "&#65" + std::string(1, ws) + "tail;",
-               "A" + std::string(1, ws) + "tail;", &data);
+               data);
     }
 }
 void scale() {

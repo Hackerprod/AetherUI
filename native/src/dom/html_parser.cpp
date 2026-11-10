@@ -30,7 +30,6 @@ static bool is_void_element(const std::string& tag) {
 
 static bool is_raw_text_end_boundary(char c) {
     // HTML whitespace, not locale-sensitive isspace (which also accepts VT).
-    // Unlike a browser tokenizer, this byte parser has not normalized CR to LF.
     return c == '>' || c == '/' || aether::is_html_space(static_cast<unsigned char>(c));
 }
 
@@ -126,19 +125,6 @@ class HtmlParser {
         if (pos <= start) return;
 
         std::string raw(src + start, pos - start);
-        // Normalize source newlines within this Data-state interval only.
-        // Markup separates intervals; references such as &#13; must retain
-        // their decoded CR, so this must precede html_decode.
-        size_t written = 0;
-        for (size_t read = 0; read < raw.size(); ++read) {
-            if (raw[read] == '\r') {
-                if (read + 1 < raw.size() && raw[read + 1] == '\n') ++read;
-                raw[written++] = '\n';
-            } else {
-                raw[written++] = raw[read];
-            }
-        }
-        raw.resize(written);
         std::string decoded = aether::html_decode(raw.c_str());
         if (!decoded.empty()) {
             parent->children.push_back(create_text(decoded, doc));
@@ -189,7 +175,7 @@ class HtmlParser {
         // only a possible closing suffix: nothing, '-', nothing, '-', '--',
         // or '--!'. A fallback commits it by advancing into Comment (or the
         // next pending suffix). At both a close and EOF it remains excluded.
-        // Keep literal bytes, including CR/CRLF and references; the public
+        // Keep preprocessed source bytes and literal references; the public
         // C-string boundary makes an embedded NUL EOF before this parser runs.
         constexpr size_t pending[] = {0, 1, 0, 1, 2, 3};
         const size_t text_end = pos - pending[static_cast<size_t>(state)];
@@ -368,19 +354,10 @@ class HtmlParser {
         }
         if (text_end == len) pos = len;
 
-        std::string normalized;
-        normalized.reserve(text_end - text_start);
-        for (size_t i = text_start; i < text_end; ++i) {
-            if (src[i] == '\r') {
-                normalized.push_back('\n');
-                if (i + 1 < text_end && src[i + 1] == '\n') ++i;
-            } else {
-                normalized.push_back(src[i]);
-            }
-        }
+        std::string raw(src + text_start, text_end - text_start);
         // Keep the existing HTML4 named-reference decoder. A decoded CR is not
         // source preprocessing, and decoded markup must never be tokenized.
-        std::string decoded = aether::html_decode(normalized.c_str());
+        std::string decoded = aether::html_decode(raw.c_str());
         if (name == "textarea" && !decoded.empty() && decoded.front() == '\n')
             decoded.erase(0, 1);
         if (!decoded.empty()) {
@@ -522,6 +499,29 @@ public:
 AETHER_API aether_status_t aether_doc_parse_html(aether_doc_t doc, const char* html) {
     if (!doc || !html) return AETHER_ERROR_NULL_ARG;
 
+    // WHATWG input preprocessing applies to the whole source, before tokenization
+    // and reference decoding. Keep the original pointer on the no-CR fast path.
+    // The owned buffer, when needed, outlives every parser view; DOM strings copy.
+    size_t length = std::strlen(html);
+    std::string normalized;
+    const char* first_cr = static_cast<const char*>(std::memchr(html, '\r', length));
+    if (first_cr) {
+        // Allocate before replacing the previous DOM. This particular failure
+        // leaves it intact; later parser allocations still have no rollback guarantee.
+        normalized.reserve(length);
+        normalized.append(html, static_cast<size_t>(first_cr - html));
+        for (size_t read = static_cast<size_t>(first_cr - html); read < length; ++read) {
+            if (html[read] == '\r') {
+                normalized.push_back('\n');
+                if (read + 1 < length && html[read + 1] == '\n') ++read;
+            } else {
+                normalized.push_back(html[read]);
+            }
+        }
+        html = normalized.c_str();
+        length = normalized.size();
+    }
+
     // Parsing is replacement, not append.  Reusing a document handle is the normal
     // path for the native style bridge during component rebuilds, so retaining the
     // previous children here would leak an entire DOM snapshot and make selectors
@@ -532,7 +532,6 @@ AETHER_API aether_status_t aether_doc_parse_html(aether_doc_t doc, const char* h
     doc->id_index.clear();
     doc->next_style_node_id = 1;
 
-    size_t length = std::strlen(html);
     HtmlParser parser(html, length);
     parser.parse_document(doc);
     doc->version++;

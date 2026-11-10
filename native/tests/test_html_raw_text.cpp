@@ -110,9 +110,9 @@ void run(const std::string& name, const std::string& html, const std::vector<Nod
     run_on(doc, name, html, children);
 }
 void fixture(const std::string& name, const std::string& opening, const std::string& canonical,
-             const std::string& payload, const std::string& closing) {
+             const std::string& payload, const std::string& closing, const std::string* expected = nullptr) {
     run(name, "<body><" + opening + " id=raw>" + payload + closing +
-              "<p id=after>tail</p></body>", {raw(canonical, payload), after()});
+              "<p id=after>tail</p></body>", {raw(canonical, expected ? *expected : payload), after()});
 }
 std::string casing(std::string tag, unsigned mask) {
     for (size_t i = 0; i < tag.size(); ++i)
@@ -197,8 +197,10 @@ void eof_cases() {
 void preservation() {
     const std::string payload = " \t\r\nA<b id=phantom>Hi</b><!--COMMENT-->&amp;&#60;&#x3C;&unknown;\"'"
                                 "CAF\xC3\x89 \xE6\x9D\xB1\xE4\xBA\xAC\r\n ";
+    const std::string expected = " \t\nA<b id=phantom>Hi</b><!--COMMENT-->&amp;&#60;&#x3C;&unknown;\"'"
+                                 "CAF\xC3\x89 \xE6\x9D\xB1\xE4\xBA\xAC\n ";
     for (const std::string tag : {"style", "script"}) {
-        fixture("preservation/" + tag, casing(tag, 255), tag, payload, "</" + tag + ">");
+        fixture("preservation/" + tag, casing(tag, 255), tag, payload, "</" + tag + ">", &expected);
         fixture("empty/" + tag, casing(tag, 255), tag, "", "</" + tag + ">");
         // HTML end tags inside CSS/JS strings still terminate the raw text.
         fixture("quoted-content/" + tag, tag, tag, tag == "style" ? "a{content:\"" : "const x='", "</" + casing(tag, 255) + ">");

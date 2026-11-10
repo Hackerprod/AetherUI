@@ -1,4 +1,4 @@
-// Source normalization is Data-state only, before character-reference decoding.
+// Source normalization is global, before character-reference decoding.
 #define AETHER_INLINE_UNITS_FIXTURE_ONLY
 #include "test_inline_units.cpp"
 
@@ -50,12 +50,12 @@ static void dom_cases() {
  scenario="scope controls";
  need(aether_doc_parse_html(doc,"<body><div id=target data-x='A\r\nB'><!--A\r\nB--><script id=s>A\r\nB&amp;</script><style id=c>A\rB</style><title id=t>A\r\nB&#13;</title><textarea id=a>\r\nA\rB&#13;</textarea></div></body>")==AETHER_OK,"parse controls");
  auto target=aether_doc_get_element_by_id(doc,"target");
- bytes(aether_node_get_child(target,0),"A\r\nB");
- bytes(aether_doc_get_element_by_id(doc,"s"),"A\r\nB&amp;");
- bytes(aether_doc_get_element_by_id(doc,"c"),"A\rB");
+ bytes(aether_node_get_child(target,0),"A\nB");
+ bytes(aether_doc_get_element_by_id(doc,"s"),"A\nB&amp;");
+ bytes(aether_doc_get_element_by_id(doc,"c"),"A\nB");
  bytes(aether_doc_get_element_by_id(doc,"t"),"A\nB\r");
  bytes(aether_doc_get_element_by_id(doc,"a"),"A\nB\r");
- char* attr=aether_element_get_attribute(target,"data-x");check(attr&&std::strcmp(attr,"A\r\nB")==0,"attribute source unchanged");aether_string_free(attr);
+ char* attr=aether_element_get_attribute(target,"data-x");check(attr&&std::strcmp(attr,"A\nB")==0,"attribute source normalized");aether_string_free(attr);
  need(aether_element_set_attribute(target,"data-x","C\r\nD&#13;")==AETHER_OK,"set attribute");
  attr=aether_element_get_attribute(target,"data-x");check(attr&&std::strcmp(attr,"C\r\nD&#13;")==0,"setter neither normalizes nor decodes");aether_string_free(attr);
  std::string source,expected;

@@ -280,7 +280,7 @@ void lifecycle() {
     run("mixed-sequence", "<body><textarea id=a>\nA&amp;</TEXTAREA><title id=b>\nB<b id=phantom></TiTlE><textarea id=c></textarea><title id=d>D</title><p id=after>tail</p></body>",
         {raw("textarea", "A&", "a"), raw("title", "\nB<b id=phantom>", "b"), raw("textarea", "", "c"), raw("title", "D", "d"), after()});
     run("raw-and-ordinary-controls", "<body><style id=s>A&amp;\r\n</style><script id=j>B&amp;</script><div id=d><b id=inside>X&amp;</b></div><p id=after>tail</p></body>",
-        {raw("style", "A&amp;\r\n", "s"), raw("script", "B&amp;", "j"), element("div", {{"id", "d"}}, {element("b", {{"id", "inside"}}, {text("X&")})}), after()});
+        {raw("style", "A&amp;\n", "s"), raw("script", "B&amp;", "j"), element("div", {{"id", "d"}}, {element("b", {{"id", "inside"}}, {text("X&")})}), after()});
     Document doc;
     for (int i = 0; i < 32; ++i) {
         const bool odd = i % 2;

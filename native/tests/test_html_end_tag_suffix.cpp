@@ -146,7 +146,7 @@ void matched_suffixes() {
         const bool raw = tag == "style" || tag == "script";
         const bool rcdata = tag == "textarea" || tag == "title";
         const std::string input = raw || rcdata ? "A<b id=phantom>&amp;\r\nB" : "A&amp;B";
-        const std::string expected = raw ? input : rcdata ? "A<b id=phantom>&\nB" : "A&B";
+        const std::string expected = raw ? "A<b id=phantom>&amp;\nB" : rcdata ? "A<b id=phantom>&\nB" : "A&B";
         for (size_t i = 0; i < suffixes.size(); ++i) {
             for (const unsigned mask : {0u, 255u, 85u})
                 run("matched/" + tag + "/" + std::to_string(i) + "/" + std::to_string(mask),

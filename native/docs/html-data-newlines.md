@@ -1,34 +1,45 @@
-# Data-state source newlines
+# HTML source newlines
 
-`HtmlParser::parse_text` normalizes source bytes within each ordinary text
-interval before `html_decode`: contiguous CRLF becomes LF and every other CR
-becomes LF. The rewrite is in place in the existing raw string, without another
-allocation, parser state, or a pending CR carried between intervals or parses.
+`aether_doc_parse_html` preprocesses the complete C-string source before the
+HTML tokenizer: contiguous CRLF becomes LF and every remaining CR becomes LF.
+This applies to Data, RCDATA, RAWTEXT (script/style), comments, attributes and
+markup delimiters. The Data and RCDATA paths no longer normalize separately.
+
+Without CR, the parser uses the original pointer and length, with no new
+normalization allocation or copy. The CR search still scans the source. With
+CR, an owned contiguous string reserves the original length, copies the prefix
+and rewrites the remainder in one forward pass. The parser receives its actual
+normalized length. The buffer lives until parsing finishes; DOM strings own
+their contents and do not retain source views. Time is O(n), with O(n) additional
+buffer space only on the CR path. This is not a streaming parser.
 
 Markup and comments separate source bytes. Thus `aa\r\nbb` becomes `aa\nbb`,
 while `<span>aa\r</span><span>\nbb</span>` contains two normalized LF characters.
-The latter correctly has three lines in pre, pre-line and pre-wrap, not two.
-At a 20px line height the expected height is 60px. Normal and nowrap still
-collapse those newlines as whitespace.
+The latter has three lines in pre, pre-line and pre-wrap, not two. At a 20px
+line height the expected height is 60px. Normal and nowrap still collapse them.
 
-Character references are decoded afterwards. `&#13;` and `&#xD;` retain CR;
-`A\r&#10;B` becomes `A\n\nB`, and `A&#13;\nB` remains `A\r\nB`. Entity-created
-markup remains text. CSS treatment of entity-created CR is a separate existing
-contract and is not changed here.
+Character references are decoded afterwards only in states that already
+support decoding. `&#13;` and `&#xD;` retain CR in Data, RCDATA and attributes;
+`A\r&#10;B` becomes `A\n\nB`, and `A&#13;\nB` remains `A\r\nB`. References in
+comments and RAWTEXT remain literal. Decoded markup is never retokenized.
+Textarea removes exactly its first decoded LF: an initial source CR/CRLF or
+`&#10;` is omitted, while an initial `&#13;` is retained. Explicit DOM mutations
+and CSS handling of entity-created CR are unchanged. The C-string boundary
+still makes embedded NUL EOF; UTF-8 and other non-CR bytes are not rewritten.
+This does not implement general HTML tokenizer conformance.
 
-This is deliberately not global HTML input preprocessing. RCDATA keeps its
-existing normalization and textarea leading-LF behavior. RAWTEXT, comments,
-attribute values and explicit DOM mutations retain their existing semantics.
-The public input is a C string, so embedded NUL remains outside this change.
-
-The new DOM tests check exact bytes, EOF, invalid tag openers, entity ordering,
-UTF-8, source barriers, large input, and repeated document replacement. Geometry
+The byte tests cover all these states, quoted and unquoted attributes, source
+barriers, entity ordering, EOF, end-tag suffixes, UTF-8/high bytes, large input,
+reparse, and DOM reads after changing and releasing the input. Existing geometry
 and paint checks cover five white-space modes and both measurement callbacks.
-Allocation probes fail the raw-string and decoder allocations and require an
-uninjected retry with exact DOM bytes. They are not a full OOM sweep: the legacy
-parser replaces the previous tree before parsing and can propagate `bad_alloc`;
-this change does not add rollback or an ABI OOM guarantee. Layout OOM transaction
-tests remain separate.
+
+Allocation probes inject failure at three boundaries: the new source buffer,
+raw text and reference decoding. The new source allocation is before document
+touch/destruction, and its failure leaves the old DOM intact. Later allocations
+retain the legacy nontransactional behavior and can propagate `bad_alloc`.
+Each probe requires an uninjected retry with exact DOM bytes and removal of old
+IDs. These are not a complete OOM sweep and do not establish an ABI OOM or global
+rollback guarantee. Layout OOM transaction tests remain separate.
 
 References:
 - https://html.spec.whatwg.org/multipage/parsing.html#preprocessing-the-input-stream
