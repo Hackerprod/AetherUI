@@ -50,36 +50,32 @@ static std::vector<aether_table_column_contribution_s> measure_table_columns(
     std::vector<aether_table_column_contribution_s> columns(column_count);
     for (const auto& row : rows) {
         for (size_t column = 0; column < row.cells.size(); ++column) {
-            const float minimum = measure_child_natural_width(
+            const auto widths = measure_child_natural_widths(
                 engine, styles, row.cells[column], maximum, result,
-                aether_intrinsic_size_mode_e::min_content, child_width_context_e::intrinsic_contribution);
-            const float preferred = measure_child_natural_width(
-                engine, styles, row.cells[column], maximum, result,
-                aether_intrinsic_size_mode_e::max_content, child_width_context_e::intrinsic_contribution);
-            columns[column].min_content = std::max(columns[column].min_content, minimum);
-            columns[column].max_content = std::max(columns[column].max_content, preferred);
+                {true, true}, child_width_context_e::intrinsic_contribution);
+            columns[column].min_content = std::max(columns[column].min_content, widths.min_content);
+            columns[column].max_content = std::max(columns[column].max_content, widths.max_content);
         }
     }
     return columns;
 }
 
-float measure_intrinsic_table_width(
+intrinsic_widths_s measure_intrinsic_table_widths(
     const aether_layout_engine_s* engine,
     const StyleLookup* styles,
     aether_node_s* table,
     float maximum,
-    aether_layout_result_s* result,
-    aether_intrinsic_size_mode_e mode)
+    aether_layout_result_s* result)
 {
     std::vector<table_row_s> rows;
     collect_table_rows(styles, table, rows);
     const auto columns = measure_table_columns(engine, styles, rows, maximum, result);
-    float contribution = 0.f;
+    intrinsic_widths_s widths;
     for (const auto& column : columns) {
-        contribution += mode == aether_intrinsic_size_mode_e::min_content
-            ? column.min_content : column.max_content;
+        widths.min_content += column.min_content;
+        widths.max_content += column.max_content;
     }
-    return contribution;
+    return widths;
 }
 
 float layout_table_children(

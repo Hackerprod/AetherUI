@@ -39,7 +39,10 @@ float aether_intrinsic_flex_main_contribution(
     bool column_direction,
     bool wraps,
     float gap,
-    aether_intrinsic_size_mode_e mode);
+    aether_intrinsic_size_mode_e mode,
+    // For a wrapping maximum, supply the separately measured natural minimum,
+    // before root decoration. This is never inferred from selected C/H widths.
+    float natural_minimum = 0.f);
 
 // Decide before measuring the hypothetical size or automatic minimum. Inputs
 // are border-box sizes without margins. An indefinite base is ignored.

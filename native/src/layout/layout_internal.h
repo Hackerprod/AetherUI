@@ -160,6 +160,23 @@ void layout_positioned_children(
 void layout_finalize_fixed_containers(const aether_layout_engine_s* engine,
     const StyleLookup* styles, aether_layout_result_s* result);
 
+// A call-local pair, never retained in a result or style snapshot. Only requested
+// members are valid. Request both when a wrapping maximum needs the independent
+// natural minimum; descendants and text tokens are then measured in one walk.
+struct intrinsic_width_request_s {
+    bool minimum;
+    bool maximum;
+};
+struct intrinsic_widths_s {
+    float min_content = 0.f;
+    float max_content = 0.f;
+};
+intrinsic_widths_s measure_intrinsic_widths(
+    const aether_layout_engine_s* engine, const StyleLookup* styles,
+    aether_node_s* element, const BoxStyleSnapshot& style,
+    aether_thicknessf padding, aether_thicknessf border, float maximum,
+    aether_layout_result_s* result, intrinsic_width_request_s request);
+
 float measure_intrinsic_width(
     const aether_layout_engine_s* engine,
     const StyleLookup* styles,
@@ -193,13 +210,17 @@ float measure_child_natural_width(
     aether_intrinsic_size_mode_e mode,
     child_width_context_e context);
 
-float measure_intrinsic_table_width(
+intrinsic_widths_s measure_child_natural_widths(
+    const aether_layout_engine_s* engine, const StyleLookup* styles,
+    aether_node_s* child, float maximum, aether_layout_result_s* result,
+    intrinsic_width_request_s request, child_width_context_e context);
+
+intrinsic_widths_s measure_intrinsic_table_widths(
     const aether_layout_engine_s* engine,
     const StyleLookup* styles,
     aether_node_s* table,
     float maximum,
-    aether_layout_result_s* result,
-    aether_intrinsic_size_mode_e mode);
+    aether_layout_result_s* result);
 
 BoxStyleSnapshot get_style(const StyleLookup* styles, aether_node_s* el);
 

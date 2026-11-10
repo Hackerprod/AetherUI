@@ -286,7 +286,7 @@ int main() {
     pair("content signed outer","#a,#b{flex:0 0 content;min-width:0}#a{margin-left:-150px}",150,100,200,-150,-50);
     pair("table individual contribution","#a,#b{flex:0 0 auto;min-width:0}#a{display:table;width:100px;margin-left:-150px}",150,100,200,-150,-50);
     pair("column unchanged","#a,#b{flex:0 0 50px;min-width:0}#inner{flex-direction:column}",200,100,200,0,0,0,50);
-    pair("wrap unchanged","#a,#b{flex:0 0 50px;min-width:0}#inner{flex-wrap:wrap}",300,50,50,0,50);
+    pair("wrap natural minimum floor","#a,#b{flex:0 0 50px;min-width:0}#inner{flex-wrap:wrap}",200,50,50,0,50);
 
     text_case("min40 max60","flex-grow:0;flex-shrink:1",40,60);
     text_case("min60 max100","flex-grow:1;flex-shrink:0",60,100);

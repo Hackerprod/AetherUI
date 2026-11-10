@@ -49,13 +49,15 @@ float aether_intrinsic_flex_main_contribution(
     bool column_direction,
     bool wraps,
     float gap,
-    aether_intrinsic_size_mode_e mode) {
-    // A nowrap row retains signed outer contributions until after every gap.
+    aether_intrinsic_size_mode_e mode, float natural_minimum) {
+    // A row sum retains signed outer contributions until after every gap.
     // Accumulate in double so intermediate float overflow cannot erase a later
     // negative margin; reject a non-finite input before any clamp can hide it.
-    if (!column_direction && !wraps) {
+    if (!column_direction && (!wraps || mode == aether_intrinsic_size_mode_e::max_content)) {
         if (!std::isfinite(gap))
             throw std::overflow_error("Non-finite intrinsic flex gap");
+        if (wraps && !std::isfinite(natural_minimum))
+            throw std::overflow_error("Non-finite intrinsic flex minimum");
         double total = 0.0;
         for (const float width : child_contributions) {
             if (!std::isfinite(width))
@@ -66,19 +68,17 @@ float aether_intrinsic_flex_main_contribution(
             total += static_cast<double>(std::max(0.f, gap)) * (child_contributions.size() - 1);
         if (!std::isfinite(total) || total > std::numeric_limits<float>::max())
             throw std::overflow_error("Intrinsic flex sum overflow");
-        return static_cast<float>(std::max(0.0, total));
+        return static_cast<float>(std::max({0.0, total, wraps ? double(natural_minimum) : 0.0}));
+    }
+    if (!column_direction) {
+        for (float width : child_contributions)
+            if (!std::isfinite(width))
+                throw std::overflow_error("Non-finite intrinsic flex minimum contribution");
     }
     if (child_contributions.empty()) return 0.f;
-    const auto largest = *std::max_element(child_contributions.begin(), child_contributions.end());
-    // Horizontal column sizing and a wrapping row's minimum use the widest
-    // contribution. Row max-content keeps all items and gaps on one line;
-    // a nowrap row also retains that sum for its minimum.
-    if (column_direction || (wraps && mode == aether_intrinsic_size_mode_e::min_content))
-        return std::max(0.f, largest);
-
-    float result = 0.f;
-    for (const float width : child_contributions) result += std::max(0.f, width);
-    return result + std::max(0.f, gap) * static_cast<float>(child_contributions.size() - 1);
+    // Horizontal column sizing and a wrapping row's natural minimum retain
+    // the widest individual contribution; no gap belongs to this minimum.
+    return std::max(0.f, *std::max_element(child_contributions.begin(), child_contributions.end()));
 }
 
 bool aether_intrinsic_flex_needs_hypothetical(

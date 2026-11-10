@@ -76,7 +76,9 @@ int main() {
         require(sum({},60) == 0, "empty has no gap");
         require(sum({-30,50},-10) == 20, "negative gap zero");
         require(sum({-30,50},0,true) == 50, "column unchanged");
-        require(sum({-30,50},0,false,true) == 50, "wrap unchanged");
+        require(sum({-30,50},0,false,true) ==
+            (mode == aether_intrinsic_size_mode_e::min_content ? 50 : 20),
+            "wrap minimum remains widest; maximum uses a signed sum with explicit separate floor");
         const float max = std::numeric_limits<float>::max();
         require(sum({max,max,-max}) == max, "double avoids intermediate float overflow");
         require(sum({-max,-max}) == 0, "finite negative double sum floors at publication");

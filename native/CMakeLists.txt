@@ -1681,3 +1681,23 @@ if(AETHERUI_BUILD_TESTS)
     target_compile_definitions(aether_flex_inflexible_intrinsic_lifetime_test PRIVATE AETHER_EXPORTS)
     add_test(NAME aether.flex-inflexible-intrinsic-lifetime COMMAND aether_flex_inflexible_intrinsic_lifetime_test)
 endif()
+
+if(AETHERUI_BUILD_TESTS)
+    add_executable(aether_flex_wrap_intrinsic_test tests/test_flex_wrap_intrinsic.cpp)
+    target_link_libraries(aether_flex_wrap_intrinsic_test PRIVATE AetherUI::Core)
+    add_test(NAME aether.flex-wrap-intrinsic COMMAND aether_flex_wrap_intrinsic_test)
+
+    add_executable(aether_flex_wrap_intrinsic_pure_test
+        tests/test_flex_wrap_intrinsic_pure.cpp src/layout/intrinsic_sizing.cpp)
+    target_include_directories(aether_flex_wrap_intrinsic_pure_test PRIVATE src/layout)
+    add_test(NAME aether.flex-wrap-intrinsic-pure COMMAND aether_flex_wrap_intrinsic_pure_test)
+
+    foreach(kind lifetime measurement)
+        add_executable(aether_flex_wrap_intrinsic_${kind}_test
+            tests/test_flex_wrap_intrinsic_${kind}.cpp
+            $<TARGET_OBJECTS:aether_flex_text_test_core>)
+        target_include_directories(aether_flex_wrap_intrinsic_${kind}_test PRIVATE include src)
+        target_compile_definitions(aether_flex_wrap_intrinsic_${kind}_test PRIVATE AETHER_EXPORTS)
+        add_test(NAME aether.flex-wrap-intrinsic-${kind} COMMAND aether_flex_wrap_intrinsic_${kind}_test)
+    endforeach()
+endif()
