@@ -58,7 +58,8 @@ static int sweep(const char* name,const std::string& content,const std::string& 
 }
 int main(){
  int total=0;
- for(const char* mode:{"normal","pre-line","nowrap","pre"})
+ for(const char* mode:{"normal","pre-line","nowrap","pre","pre-wrap"})
  total+=sweep(mode,"<span>abc</span><span>def</span><span> </span><span>xy</span><br><span>a\r</span><span>\nb</span>",column(false)+"#host{white-space:"+std::string(mode)+"}");
+ total+=sweep("pre-wrap intrinsic flex","<span>abc</span><span>def</span><span> </span><span> </span>xy  ","#outer{display:flex;width:20px}#host{width:auto;white-space:pre-wrap;flex:0 1 auto}");
  std::printf("inline-units-oom: %d checks, %d failures, %d injected\n",checks,failures,total);return failures?1:0;
 }

@@ -797,9 +797,13 @@ static void retain_unit_admission(std::vector<inline_item_s>& output,
 // inline ancestors. There is no prefix admission or fallback after measuring.
 // ASCII excludes bidi/shaping/Unicode line-breaking from this initial contract.
 static bool uses_source_unit_resolver(const std::vector<inline_item_s>& items,
-                                     const BoxStyleSnapshot& parent_style) {
+                                     const BoxStyleSnapshot& parent_style,
+                                     bool intrinsic_width = false) {
     const auto mode = parent_style.white_space;
-    if (mode != AETHER_WHITE_SPACE_NORMAL && mode != AETHER_WHITE_SPACE_PRE_LINE &&
+    // PRE_WRAP is admitted only for intrinsic widths. Its hanging/geometry
+    // resolver (including existing split-CRLF height behavior) stays unchanged.
+    if (!(intrinsic_width && mode == AETHER_WHITE_SPACE_PRE_WRAP) &&
+        mode != AETHER_WHITE_SPACE_NORMAL && mode != AETHER_WHITE_SPACE_PRE_LINE &&
         mode != AETHER_WHITE_SPACE_NOWRAP && mode != AETHER_WHITE_SPACE_PRE) return false;
     for (const auto& item : items) {
         if (item.unit_barrier || item.hanging_barrier || item.is_atomic ||
@@ -1009,7 +1013,8 @@ static std::vector<inline_source_unit> collect_source_units(
     std::vector<inline_source_unit> units;
     bool previous_cr = false, line_content = false, pending_space = false;
     size_t pending_owner = 0;
-    const bool preserve_spaces = mode == AETHER_WHITE_SPACE_PRE;
+    const bool preserve_spaces = mode == AETHER_WHITE_SPACE_PRE ||
+        mode == AETHER_WHITE_SPACE_PRE_WRAP;
     const bool preserve_breaks = preserve_spaces || mode == AETHER_WHITE_SPACE_PRE_LINE;
     auto append = [&](inline_source_kind kind, size_t owner, char c) {
         if (units.empty() || units.back().kind != kind)
@@ -1621,7 +1626,7 @@ static float measure_inline_items_intrinsic_width(
     aether_layout_result_s* result,
     aether_intrinsic_size_mode_e mode)
 {
-    if (uses_source_unit_resolver(items, parent_style)) {
+    if (uses_source_unit_resolver(items, parent_style, true)) {
         const auto sizes = measure_source_intrinsic_sizes(engine, items, parent_style.white_space);
         return mode == aether_intrinsic_size_mode_e::min_content ? sizes.min_content : sizes.max_content;
     }
