@@ -334,7 +334,7 @@ static float measure_inline_items_intrinsic_width(
     const aether_layout_engine_s* engine,
     const StyleLookup* styles,
     const std::vector<inline_item_s>& items,
-    float maximum,
+    const BoxStyleSnapshot& parent_style, float maximum,
     aether_layout_result_s* result,
     aether_intrinsic_size_mode_e mode);
 
@@ -760,6 +760,59 @@ static float layout_atomic_control(
         aether_thicknessf_vertical(border));
 }
 
+// Retaining admission evidence must not create a legacy paragraph or consume
+// a pending collapsed block margin.
+static bool has_legacy_inline_content(const std::vector<inline_item_s>& items) {
+    return std::any_of(items.begin(), items.end(),
+        [](const inline_item_s& item) { return !item.legacy_ignored; });
+}
+
+static bool transparent_unit_inline(const BoxStyleSnapshot& style) {
+    const auto zero = [](aether_css_length v) {
+        return v.unit != AETHER_CSS_UNIT_AUTO && v.value == 0.f &&
+            v.linear_percent == 0.f && v.linear_em == 0.f && v.linear_rem == 0.f &&
+            v.linear_vw == 0.f && v.linear_vh == 0.f;
+    };
+    const auto edges_zero = [&](aether_css_edges e) {
+        return zero(e.left) && zero(e.top) && zero(e.right) && zero(e.bottom);
+    };
+    return (style.display == AETHER_DISPLAY_INLINE || style.display == AETHER_DISPLAY_LINE_BREAK) &&
+        style.position == AETHER_POSITION_STATIC &&
+        edges_zero(style.margin) && edges_zero(style.padding) && edges_zero(style.border_width) &&
+        style.background_color.a == 0.f && style.opacity == 1.f &&
+        style.view().background_layers().empty() && style.view().transforms().empty() &&
+        style.view().box_shadows().empty() && style.view().text_shadows().empty() &&
+        style.view().backdrop_filters().empty() && !style.has_text_gradient;
+}
+
+static void retain_unit_admission(std::vector<inline_item_s>& output,
+    aether_node_s* owner, const BoxStyleSnapshot& style, bool barrier) {
+    auto marker = inline_item_s::text_item(owner, style, "");
+    marker.legacy_ignored = true;
+    marker.unit_barrier = barrier;
+    output.push_back(std::move(marker));
+}
+
+// One side-effect-free admission decision on the entire IFC, including empty
+// inline ancestors. There is no prefix admission or fallback after measuring.
+// ASCII excludes bidi/shaping/Unicode line-breaking from this initial contract.
+static bool uses_source_unit_resolver(const std::vector<inline_item_s>& items,
+                                     const BoxStyleSnapshot& parent_style) {
+    const auto mode = parent_style.white_space;
+    if (mode != AETHER_WHITE_SPACE_NORMAL && mode != AETHER_WHITE_SPACE_PRE_LINE &&
+        mode != AETHER_WHITE_SPACE_NOWRAP && mode != AETHER_WHITE_SPACE_PRE) return false;
+    for (const auto& item : items) {
+        if (item.unit_barrier || item.hanging_barrier || item.is_atomic ||
+            item.block_anchor_index != static_cast<size_t>(-1) || item.style.white_space != mode)
+            return false;
+        for (const unsigned char c : item.text)
+            if (!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+                  (c >= '0' && c <= '9') || c == ' ' || c == '\r' || c == '\n'))
+                return false;
+    }
+    return true;
+}
+
 // Anonymous flex wrappers have one inherited style and own a single CSS text
 // sequence. Join raw DOM text before transformation/tokenization so node and
 // comment boundaries cannot change shaping, whitespace or break opportunities.
@@ -803,7 +856,7 @@ float layout_flow_children(
     aether_node_s* cursor_owner = nullptr;
 
     auto flush_inline = [&]() {
-        if (inline_items.empty()) return;
+        if (!has_legacy_inline_content(inline_items)) { inline_items.clear(); return; }
         if (has_pending_margin) {
             cursor_y += pending_margin;
             has_pending_margin = false;
@@ -834,7 +887,8 @@ float layout_flow_children(
                     cursor_y - content.y + (has_pending_margin ? pending_margin : 0.f)});
                 // A marker never creates a run or flushes a pending block margin.
                 // Existing real runs retain their existing whitespace/flush behavior.
-                if (!inline_items.empty()) inline_items.push_back(inline_item_s::block_anchor(index));
+                if (has_legacy_inline_content(inline_items)) inline_items.push_back(inline_item_s::block_anchor(index));
+                retain_unit_admission(inline_items, node, style, true);
                 continue;
             }
         }
@@ -888,6 +942,7 @@ static bool uses_hanging_line_resolver(const std::vector<inline_item_s>& items) 
     bool pre_wrap = false;
     bool nowrap_content = false, nowrap_pending_space = false;
     for (const auto& item : items) {
+        if (item.legacy_ignored) continue;
         if (item.hanging_barrier || item.block_anchor_index != static_cast<size_t>(-1)) return false;
         pre_wrap |= item.style.white_space == AETHER_WHITE_SPACE_PRE_WRAP;
         for (unsigned char c : item.text) {
@@ -924,6 +979,175 @@ struct measured_inline_fragment {
     aether_layout_box_s* atomic_box = nullptr;
     std::vector<aether_layout_box_s*> atomic_paint_order;
 };
+
+// Source-unit preparation is operation-local and never measures or joins text
+// belonging to different owners. An inline/comment/empty-span boundary is not a
+// line-break opportunity. Admission is performed once before calling this code.
+struct inline_source_fragment {
+    size_t item_index;
+    std::string text;
+};
+enum class inline_source_kind { word, space, forced };
+struct inline_source_unit {
+    inline_source_kind kind;
+    std::vector<inline_source_fragment> fragments;
+};
+
+static std::vector<inline_source_unit> collect_source_units(
+    const std::vector<inline_item_s>& items, int32_t mode)
+{
+    std::vector<inline_source_unit> units;
+    bool previous_cr = false, line_content = false, pending_space = false;
+    size_t pending_owner = 0;
+    const bool preserve_spaces = mode == AETHER_WHITE_SPACE_PRE;
+    const bool preserve_breaks = preserve_spaces || mode == AETHER_WHITE_SPACE_PRE_LINE;
+    auto append = [&](inline_source_kind kind, size_t owner, char c) {
+        if (units.empty() || units.back().kind != kind)
+            units.push_back({kind, {}});
+        auto& fragments = units.back().fragments;
+        if (fragments.empty() || fragments.back().item_index != owner)
+            fragments.push_back({owner, {}});
+        fragments.back().text += c;
+    };
+    auto forced = [&]() {
+        units.push_back({inline_source_kind::forced, {}});
+        pending_space = false;
+        line_content = false;
+    };
+    for (size_t index = 0; index < items.size(); ++index) {
+        const auto& item = items[index];
+        if (item.is_line_break) {
+            forced();
+            previous_cr = false;
+            continue;
+        }
+        for (const char c : item.text) {
+            if (c == '\n' && previous_cr) { previous_cr = false; continue; }
+            previous_cr = c == '\r';
+            if ((c == '\r' || c == '\n') && preserve_breaks) {
+                forced();
+                continue;
+            }
+            const bool space = c == ' ' || c == '\r' || c == '\n';
+            if (space && !preserve_spaces) {
+                if (line_content && !pending_space) {
+                    pending_space = true;
+                    pending_owner = index;
+                }
+                continue;
+            }
+            if (pending_space) {
+                append(inline_source_kind::space, pending_owner, ' ');
+                pending_space = false;
+            }
+            append(space ? inline_source_kind::space : inline_source_kind::word, index, c);
+            line_content = true;
+        }
+    }
+    return units;
+}
+
+static float checked_inline_sum(float left, float right) {
+    const float sum = left + right;
+    if (!std::isfinite(sum)) throw std::overflow_error("Non-finite inline unit advance");
+    return sum;
+}
+
+struct measured_source_unit {
+    std::vector<measured_inline_fragment> fragments;
+    float width = 0.f;
+};
+static measured_source_unit measure_source_unit(const aether_layout_engine_s* engine,
+    const std::vector<inline_item_s>& items, const inline_source_unit& source)
+{
+    measured_source_unit result;
+    for (const auto& fragment : source.fragments) {
+        const auto& item = items[fragment.item_index];
+        const auto metrics = engine_measure_text(engine, fragment.text.c_str(), &item.style, 0.f, item.element);
+        result.width = checked_inline_sum(result.width, metrics.width);
+        result.fragments.push_back({fragment.item_index, fragment.text,
+            {metrics.width, metrics.height, metrics.baseline, true,
+             source.kind == inline_source_kind::space, item.style.white_space}, nullptr, {}});
+    }
+    return result;
+}
+
+// Width, height and geometry share the same source units and callback slices.
+// A collapsible separator waits for the next whole word, so wrapping drops it
+// rather than painting trailing whitespace or allowing a break inside a word.
+template<class EmitLine>
+static float resolve_source_inline_lines(
+    const aether_layout_engine_s* engine, const std::vector<inline_item_s>& items,
+    int32_t mode, float available_width, float minimum_line_height, EmitLine emit_line)
+{
+    const auto units = collect_source_units(items, mode);
+    const bool wrap = aether_white_space_allows_soft_wrap(mode);
+    inline_line_resolver resolver(available_width, minimum_line_height);
+    std::vector<measured_inline_fragment> line;
+    measured_source_unit pending;
+    float total_height = 0.f;
+    auto close = [&](inline_line_end end) {
+        if (!resolver.empty() || end == inline_line_end::forced) {
+            const auto summary = resolver.close(end);
+            emit_line(line, summary, total_height, end);
+            total_height = checked_inline_sum(total_height, summary.height);
+        }
+        resolver.reset();
+        line.clear();
+    };
+    auto accept = [&](measured_source_unit& unit) {
+        for (auto& fragment : unit.fragments) {
+            resolver.append(fragment.metrics);
+            line.push_back(std::move(fragment));
+        }
+        unit.fragments.clear();
+        unit.width = 0.f;
+    };
+    for (const auto& source : units) {
+        if (source.kind == inline_source_kind::forced) {
+            close(inline_line_end::forced);
+            continue;
+        }
+        auto unit = measure_source_unit(engine, items, source);
+        if (wrap && source.kind == inline_source_kind::space) {
+            pending = std::move(unit);
+            continue;
+        }
+        if (wrap && !pending.fragments.empty() &&
+            resolver.needs_break(checked_inline_sum(pending.width, unit.width), true)) {
+            close(inline_line_end::soft);
+            pending.fragments.clear();
+            pending.width = 0.f;
+        }
+        accept(pending);
+        accept(unit);
+    }
+    close(inline_line_end::paragraph_end);
+    return total_height;
+}
+
+static aether_inline_intrinsic_sizes_s measure_source_intrinsic_sizes(
+    const aether_layout_engine_s* engine, const std::vector<inline_item_s>& items, int32_t mode)
+{
+    const auto units = collect_source_units(items, mode);
+    aether_inline_intrinsic_sizes_s result{};
+    float line_width = 0.f;
+    const bool wrap = aether_white_space_allows_soft_wrap(mode);
+    for (const auto& source : units) {
+        if (source.kind == inline_source_kind::forced) {
+            result.max_content = std::max(result.max_content, line_width);
+            line_width = 0.f;
+            continue;
+        }
+        const auto unit = measure_source_unit(engine, items, source);
+        line_width = checked_inline_sum(line_width, unit.width);
+        if (wrap && source.kind == inline_source_kind::word)
+            result.min_content = std::max(result.min_content, unit.width);
+    }
+    result.max_content = std::max(result.max_content, line_width);
+    if (!wrap) result.min_content = result.max_content;
+    return result;
+}
 
 // Shared streaming adapter for height measurement and final geometry. It only
 // buffers the current line and the next indivisible unit. Token strings stay
@@ -965,6 +1189,7 @@ static float resolve_hanging_inline_lines(
     };
     for (size_t item_index = 0; item_index < items.size(); ++item_index) {
         const auto& item = items[item_index];
+        if (item.legacy_ignored) continue;
         if (item.is_line_break) {
             flush_unit(); close(inline_line_end::forced); previous_collapsible = false;
             continue;
@@ -1011,12 +1236,12 @@ static float resolve_hanging_inline_lines(
     return total_height;
 }
 
-static float layout_hanging_inline_items(
+static float layout_resolved_inline_items(
     const aether_layout_engine_s* engine, const StyleLookup* styles,
     aether_layout_box_s* parent_box, const std::vector<inline_item_s>& items,
     float start_x, float start_y, float available_width, float available_height,
     percentage_height_s containing_height, const BoxStyleSnapshot& parent_style,
-    aether_layout_result_s* result)
+    aether_layout_result_s* result, bool source_units = false)
 {
     const float minimum = std::max(layout_used_line_height(engine, parent_box->element, parent_style), 1.f);
     auto atomic = [&](size_t index, float y) {
@@ -1099,6 +1324,9 @@ static float layout_hanging_inline_items(
             x += width;
         }
     };
+    if (source_units)
+        return resolve_source_inline_lines(engine, items, parent_style.white_space,
+            available_width, minimum, emit);
     return resolve_hanging_inline_lines(engine, items, available_width, minimum, atomic, emit);
 }
 
@@ -1114,8 +1342,11 @@ float layout_inline_items(
     const BoxStyleSnapshot& parent_style,
     aether_layout_result_s* result)
 {
+    if (uses_source_unit_resolver(items, parent_style))
+        return layout_resolved_inline_items(engine, styles, parent_box, items,
+            start_x, start_y, available_width, available_height, containing_height, parent_style, result, true);
     if (uses_hanging_line_resolver(items))
-        return layout_hanging_inline_items(engine, styles, parent_box, items,
+        return layout_resolved_inline_items(engine, styles, parent_box, items,
             start_x, start_y, available_width, available_height, containing_height, parent_style, result);
     float cursor_x = start_x;
     float cursor_y = start_y;
@@ -1160,6 +1391,7 @@ float layout_inline_items(
 
     bool previous_collapsible_space = false;
     for (auto& item : items) {
+        if (item.legacy_ignored) continue;
         if (item.block_anchor_index != static_cast<size_t>(-1)) {
             const bool has_prefix = static_cast<int>(parent_box->children.size()) > line_start_index;
             // Use only already measured prefix metrics. Later atoms, text or wraps
@@ -1250,6 +1482,7 @@ static void collect_inline_element(
     const BoxStyleSnapshot& style,
     std::vector<inline_item_s>& output, inline_capitalization_context_s& context)
 {
+    retain_unit_admission(output, element, style, !transparent_unit_inline(style));
     // Keep this fact before recursive flattening erases the inline boundaries.
     // Values other than a provable zero conservatively select the legacy path.
     const auto nonzero = [](aether_css_length value) { return value.value != 0.f; };
@@ -1266,6 +1499,8 @@ static void collect_inline_element(
             auto child_style = get_style(styles, node);
             if (child_style.display == AETHER_DISPLAY_NONE) continue;
             const bool isolated = is_out_of_flow(child_style);
+            if (isolated || child_style.display == AETHER_DISPLAY_LINE_BREAK)
+                retain_unit_admission(output, node, child_style, !transparent_unit_inline(child_style));
             const bool block = child_style.display == AETHER_DISPLAY_BLOCK ||
                 child_style.display == AETHER_DISPLAY_FLEX || child_style.display == AETHER_DISPLAY_TABLE;
             inline_capitalization_context_s independent;
@@ -1317,8 +1552,9 @@ static inline_node_role_e append_inline_node(
 {
     if (node->type == AETHER_NODE_TEXT) {
         if (!aether_inline_text_has_visible_content(node->text, parent_style.white_space)) {
-            if (!node->text.empty())
-                context.starts_word = aether::presentation_space_byte(static_cast<unsigned char>(node->text.back())) != 0;
+            const size_t begin = output.size();
+            collect_text_items(parent, parent_style, node->text, output, context);
+            for (size_t i = begin; i < output.size(); ++i) output[i].legacy_ignored = true;
             return inline_node_role_e::ignored;
         }
         collect_text_items(parent, parent_style, node->text, output, context);
@@ -1328,7 +1564,7 @@ static inline_node_role_e append_inline_node(
 
     const auto child_style = get_style(styles, node);
     if (node->pseudo_element == aether_pseudo_element_t::none &&
-        child_style.position == AETHER_POSITION_ABSOLUTE && !output.empty() &&
+        child_style.position == AETHER_POSITION_ABSOLUTE && has_legacy_inline_content(output) &&
         (child_style.display == AETHER_DISPLAY_BLOCK || child_style.display == AETHER_DISPLAY_FLEX ||
          child_style.display == AETHER_DISPLAY_TABLE)) {
         // The final flow collector emits a block-static anchor here. Its
@@ -1338,7 +1574,9 @@ static inline_node_role_e append_inline_node(
         marker.hanging_barrier = true;
         output.push_back(std::move(marker));
     }
-    if (child_style.display == AETHER_DISPLAY_NONE || is_out_of_flow(child_style)) {
+    if (child_style.display == AETHER_DISPLAY_NONE) return inline_node_role_e::ignored;
+    if (is_out_of_flow(child_style)) {
+        retain_unit_admission(output, node, child_style, true);
         return inline_node_role_e::ignored;
     }
     if (child_style.display == AETHER_DISPLAY_BLOCK || child_style.display == AETHER_DISPLAY_FLEX ||
@@ -1347,6 +1585,7 @@ static inline_node_role_e append_inline_node(
         return inline_node_role_e::block_content;
     }
     if (child_style.display == AETHER_DISPLAY_LINE_BREAK) {
+        retain_unit_admission(output, node, child_style, !transparent_unit_inline(child_style));
         output.push_back(inline_item_s::line_break(node, child_style));
         context.starts_word = true;
     } else if (is_opaque_single_line_control(node) || child_style.display == AETHER_DISPLAY_INLINE_BLOCK) {
@@ -1362,12 +1601,17 @@ static float measure_inline_items_intrinsic_width(
     const aether_layout_engine_s* engine,
     const StyleLookup* styles,
     const std::vector<inline_item_s>& items,
-    float maximum,
+    const BoxStyleSnapshot& parent_style, float maximum,
     aether_layout_result_s* result,
     aether_intrinsic_size_mode_e mode)
 {
+    if (uses_source_unit_resolver(items, parent_style)) {
+        const auto sizes = measure_source_intrinsic_sizes(engine, items, parent_style.white_space);
+        return mode == aether_intrinsic_size_mode_e::min_content ? sizes.min_content : sizes.max_content;
+    }
     std::vector<aether_inline_intrinsic_fragment_s> fragments;
     for (const auto& item : items) {
+        if (item.legacy_ignored) continue;
         if (item.is_line_break) {
             fragments.push_back({aether_inline_fragment_kind_e::forced_break, 0.f});
             continue;
@@ -1425,7 +1669,7 @@ float measure_intrinsic_width(
     auto flush_inline = [&]() {
         if (inline_items.empty()) return;
         content_width = std::max(content_width,
-            measure_inline_items_intrinsic_width(engine, styles, inline_items, maximum, result, mode));
+            measure_inline_items_intrinsic_width(engine, styles, inline_items, style, maximum, result, mode));
         inline_items.clear();
     };
 
@@ -1524,7 +1768,13 @@ static float measure_inline_items_height(
     const BoxStyleSnapshot& parent_style,
     aether_layout_result_s* result, aether_node_s* owner)
 {
+    const bool source_units = uses_source_unit_resolver(items, parent_style);
     const float line_minimum = std::max(1.f, layout_used_line_height(engine, owner, parent_style));
+    if (source_units) {
+        auto emit = [](const auto&, const inline_line_summary&, float, inline_line_end) {};
+        return resolve_source_inline_lines(engine, items, parent_style.white_space,
+            available_width, line_minimum, emit);
+    }
     if (uses_hanging_line_resolver(items)) {
         auto atomic = [&](size_t index, float) {
             const auto& item = items[index];
@@ -1568,6 +1818,7 @@ static float measure_inline_items_height(
     };
 
     for (const auto& item : items) {
+        if (item.legacy_ignored) continue;
         if (item.is_line_break) {
             finish_line(true);
             previous_collapsible_space = false;

@@ -243,6 +243,10 @@ struct inline_item_s {
     // Collection-time marker: flattened inline decoration disables the entire
     // hanging sequence, including empty decorated elements.
     bool hanging_barrier = false;
+    // Admission evidence and formerly discarded whitespace are retained for
+    // the homogeneous source-unit path, but invisible to every legacy path.
+    bool legacy_ignored = false;
+    bool unit_barrier = false;
     // Only the final flow collector creates these zero-consumption markers.
     size_t block_anchor_index = static_cast<size_t>(-1);
 

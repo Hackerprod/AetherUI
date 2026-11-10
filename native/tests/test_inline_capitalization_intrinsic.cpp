@@ -39,7 +39,7 @@ int main() {
         scenario = "intrinsic split";
         Fixture split("hel<span>lo</span>");
         CHECK(near(intrinsic(split, false, Mode::max_content), 41));
-        CHECK(near(intrinsic(split, false, Mode::min_content), 27));
+        CHECK(near(intrinsic(split, false, Mode::min_content), 41));
         CHECK(near(intrinsic(split, true, Mode::max_content, 44), 20));
         CHECK(std::find(split.meter.calls.begin(), split.meter.calls.end(), "lo") != split.meter.calls.end());
         CHECK(std::find(split.meter.calls.begin(), split.meter.calls.end(), "Lo") == split.meter.calls.end());
@@ -50,7 +50,7 @@ int main() {
         scenario = "intrinsic mixed";
         Fixture mixed("<span style='text-transform:none'>hel</span><span>lo</span>");
         CHECK(near(intrinsic(mixed, false, Mode::max_content, 200, {"hel", "lo"}), 35));
-        CHECK(near(intrinsic(mixed, false, Mode::min_content, 200, {"hel", "lo"}), 21));
+        CHECK(near(intrinsic(mixed, false, Mode::min_content, 200, {"hel", "lo"}), 35));
         scenario = "intrinsic word boundary";
         Fixture boundary("hel <span>lo</span>");
         Fixture joined_fixture("hel lo");
@@ -87,7 +87,7 @@ int main() {
         CHECK(joined(empty.runs()) == "Hello");
         CHECK(empty.paint() == "Hello");
         CHECK(near(intrinsic(empty, false, Mode::max_content), 41));
-        CHECK(near(intrinsic(empty, false, Mode::min_content), 27));
+        CHECK(near(intrinsic(empty, false, Mode::min_content), 41));
         CHECK(near(intrinsic(empty, true, Mode::max_content, 44), 20));
     } // Destroy every fixture before deciding the reported status.
     std::printf("intrinsic fixtures=%u checks=%u failures=%u\n", fixtures, checks, failures);
