@@ -52,6 +52,23 @@ int main(){
   std::string input=std::string("<")+tag+" id=t>A\r\n</"+tag+"\r\n x='>\r\n'>tail<p id=after>Z</p>";
   check(aether_doc_parse_html(d,input.c_str())==AETHER_OK,"end tag suffix");check(text(aether_doc_get_element_by_id(d,"t"))=="A\n","normalized delimiter indexes");check(aether_doc_get_element_by_id(d,"after")!=nullptr,"tail remains markup");
  }
+
+ // Source lengths straddle common SSO boundaries; vary the first CR and
+ // adjacent CRLF at both ends. Source bytes must remain immutable.
+ for(size_t length=1;length<=65;++length)for(size_t first=0;first<length;++first)for(bool pair:{false,true}){
+  std::string input(length,'a');input[first]='\r';
+  if(pair&&first+1<length)input[first+1]='\n';
+  input.back()='\r';
+  const std::string original=input;
+  std::string expected;
+  for(size_t i=0;i<input.size();++i){
+   if(input[i]=='\r'){expected+='\n';if(i+1<input.size()&&input[i+1]=='\n')++i;}
+   else expected+=input[i];
+  }
+  check(aether_doc_parse_html(d,input.c_str())==AETHER_OK,"SSO and CR boundaries");
+  check(input==original,"source is immutable");
+  check(text(reinterpret_cast<aether_node_t>(d))==expected,"byte-exact compaction");
+ }
  const char nul[]="<div id=t>A\r\n\0ignored</div>";
  check(aether_doc_parse_html(d,nul)==AETHER_OK,"embedded NUL boundary");check(text(aether_doc_get_element_by_id(d,"t"))=="A\n","NUL remains EOF");
  check(aether_doc_parse_html(d,"<p id=fresh>Z</p>")==AETHER_OK,"fresh replacement");check(!aether_doc_get_element_by_id(d,"t"),"old ID removed");

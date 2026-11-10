@@ -7,8 +7,9 @@ markup delimiters. The Data and RCDATA paths no longer normalize separately.
 
 Without CR, the parser uses the original pointer and length, with no new
 normalization allocation or copy. The CR search still scans the source. With
-CR, an owned contiguous string reserves the original length, copies the prefix
-and rewrites the remainder in one forward pass. The parser receives its actual
+CR, an owned contiguous string first copies the complete source, then compacts
+in place from its first CR with forward read/write indices (write never exceeds
+read). A final shrink establishes the normalized length and NUL terminator. The parser receives its actual
 normalized length. The buffer lives until parsing finishes; DOM strings own
 their contents and do not retain source views. Time is O(n), with O(n) additional
 buffer space only on the CR path. This is not a streaming parser.

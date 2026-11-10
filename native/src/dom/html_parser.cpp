@@ -508,16 +508,17 @@ AETHER_API aether_status_t aether_doc_parse_html(aether_doc_t doc, const char* h
     if (first_cr) {
         // Allocate before replacing the previous DOM. This particular failure
         // leaves it intact; later parser allocations still have no rollback guarantee.
-        normalized.reserve(length);
-        normalized.append(html, static_cast<size_t>(first_cr - html));
-        for (size_t read = static_cast<size_t>(first_cr - html); read < length; ++read) {
-            if (html[read] == '\r') {
-                normalized.push_back('\n');
-                if (read + 1 < length && html[read + 1] == '\n') ++read;
+        normalized.assign(html, length);
+        size_t write = static_cast<size_t>(first_cr - html);
+        for (size_t read = write; read < length; ++read) {
+            if (normalized[read] == '\r') {
+                normalized[write++] = '\n';
+                if (read + 1 < length && normalized[read + 1] == '\n') ++read;
             } else {
-                normalized.push_back(html[read]);
+                normalized[write++] = normalized[read];
             }
         }
+        normalized.resize(write);
         html = normalized.c_str();
         length = normalized.size();
     }
