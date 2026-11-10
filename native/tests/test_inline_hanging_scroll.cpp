@@ -22,6 +22,7 @@ void operator delete[](void*p,const std::nothrow_t&) noexcept {std::free(p);}
 #include <aether/aether_contextual_transitions.h>
 #include "../src/layout/layout_internal.h"
 #include "../src/layout/layout_scroll_bounds.h"
+#include "../src/layout/inline_line_resolver.h"
 #include <algorithm>
 #include <array>
 #include <limits>
@@ -142,26 +143,48 @@ static void real_fragmented_extremes() {
             return {text[0]==' '?meter.width:20.f,20,15};
         }
     };
-    for(float width:{1.e9f,1.e38f})for(bool ctx:{false,true}) {
-        scenario="real fragmented huge hanging tail "+std::to_string(width)+(ctx?" contextual":" legacy");
-        Fixture f("aa<span> </span><span> </span>bb","#host{overflow:auto}");
+    for(float width:{1.e9f,1.e38f})for(bool ctx:{false,true})for(int count:{1,2})
+    for(const char* align:{"start","center","right"})for(int ending:{0,1,2}) {
+        const bool soft=ending==0;const double edge=soft?(std::string(align)=="center"?35:std::string(align)=="right"?50:20):50;
+        scenario="real huge tail "+std::to_string(width)+" count"+std::to_string(count)+align+" ending"+std::to_string(ending)+(ctx?" contextual":" legacy");
+        std::string body="aa";for(int i=0;i<count;++i)body+="<span> </span>";body+=soft?"bb":ending==1?"<br>":"";
+        Fixture f(body,std::string("#host{overflow:auto;text-align:")+align+"}");
         ExtremeMeter meter{width};aether_layout_destroy(f.engine);f.engine=nullptr;
         need(aether_layout_create(ExtremeMeter::measure,&meter,&f.engine)==AETHER_OK,"extreme measurement engine");
         if(ctx)contextual(f);else f.layout();
-        check(meter.calls==4,"huge fragments measured once in source order");
-        near(f.rect().height,40,"huge tail creates no phantom line");
-        auto* host=f.box();need(host->children.size()==4,"huge tail kept as separate fragments");
-        for(size_t i:{size_t(1),size_t(2)}) {
+        check(meter.calls==1+count+int(soft),"huge fragments measured once in source order");
+        near(f.rect().height,soft?40:20,"huge tail creates no phantom line");
+        auto* host=f.box();need(host->children.size()==size_t(1+count+int(soft)),"huge tail kept as separate fragments");
+        for(int i=1;i<=count;++i) {
             auto* text=host->children.at(i);check(text->scroll_proxy.valid,"real huge tail has proxy");
-            check_bounds(aether_scroll_own_bounds(text),{20,0,20,20},"real huge tail preserves small prefix edge");
+            check_bounds(aether_scroll_own_bounds(text),{!soft&&i==1?20:edge,0,edge,20},"real huge tail preserves small prefix edge");
         }
         near(aether_layout_box_get_scroll_metrics(host).scrollable_overflow_x,0,"real huge tail excluded from scroll");
         if(ctx){need(aether_contextual_transition_finalize_layout(f.result,nullptr)==AETHER_OK,"huge tail repeated finalization");
-            exact(aether_scroll_own_bounds(host->children.at(2)).right,20,"huge tail repeated exact edge");}
+            exact(aether_scroll_own_bounds(host->children.at(count)).right,edge,"huge tail repeated exact edge");}
         aether_layout_result_t clone{};need(aether_layout_clone_snapshot(f.result,&clone)==AETHER_OK,"real huge tail clone");
         auto* copied=aether_layout_result_find_primary_box(clone,aether_doc_get_element_by_id(f.doc,"host"));
-        exact(aether_scroll_own_bounds(copied->children.at(2)).right,20,"real huge tail clone exact edge");
+        exact(aether_scroll_own_bounds(copied->children.at(count)).right,edge,"real huge tail clone exact edge");
         aether_layout_result_destroy(clone);
+    }
+}
+
+static void stable_alignment_summaries() {
+    auto word=[](float width){return inline_line_metrics{width,20,15,true,false,AETHER_WHITE_SPACE_PRE_WRAP};};
+    auto space=[](float width){return inline_line_metrics{width,20,15,true,true,AETHER_WHITE_SPACE_PRE_WRAP};};
+    struct Case{float available;std::vector<inline_line_metrics> fragments;float soft,hard;};
+    auto atom=word(5);atom.text=false;auto pre=space(5);pre.white_space=AETHER_WHITE_SPACE_PRE;auto nowrap=space(5);nowrap.white_space=AETHER_WHITE_SPACE_NOWRAP;
+    std::vector<Case> cases{{50,{word(20),space(30)},20,50},{50,{word(20),space(31)},20,50},
+        {0,{word(20),space(10)},20,20},{50,{space(60)},0,50},{50,{word(80),space(10)},80,80},
+        {50,{word(20),space(10),atom,space(30)},35,50},
+        {50,{word(20),space(30),pre},55,55},{50,{word(20),space(30),nowrap},55,55}};
+    for(float huge:{1.e9f,1.e38f}){cases.push_back({50,{word(20),space(huge)},20,50});cases.push_back({50,{word(20),space(huge),space(huge)},20,50});}
+    for(const auto& c:cases)for(auto ending:{inline_line_end::soft,inline_line_end::forced,inline_line_end::paragraph_end}) {
+        scenario="stable retained-prefix line summary";inline_line_resolver resolver(c.available,20);float physical=0;
+        for(auto fragment:c.fragments){resolver.append(fragment);physical+=fragment.width;}
+        auto summary=resolver.close(ending);exact(summary.alignment_width,ending==inline_line_end::soft?c.soft:c.hard,"A survives cancellation without clipping word");
+        exact(summary.physical_width,physical,"P keeps original physical accumulation");
+        near(summary.height,20,"summary height unchanged");
     }
 }
 static void anchored_extremes_and_clone() {
@@ -354,7 +377,7 @@ static void shifted_layout_and_scroll_input() {
     }
     scenario="deferred table cell placement";
     {
-        Fixture table("<table id='table'><tr><td id='cell'>aa    bb</td><td style='height:100px'>z</td></tr></table>","#table{width:100px}#cell{width:50px;white-space:pre-wrap;vertical-align:middle}");
+        Fixture table("<table id='table'><tr><td id='cell'>aa    bb</td><td style='height:100px'>z</td></tr></table>","#table{display:table;width:100px}tr{display:table-row}td{display:table-cell}#cell{width:50px;white-space:pre-wrap;vertical-align:middle}");
         auto* cell=aether_layout_result_find_primary_box(table.result,aether_doc_get_element_by_id(table.doc,"cell"));need(cell,"table cell box");
         int proxies=0;for(auto* text:cell->children)if(text->scroll_proxy.valid){++proxies;auto b=aether_scroll_own_bounds(text);
             near(float(b.top),text->content_box.y,"table proxy follows vertical alignment");
@@ -371,7 +394,7 @@ static void shifted_layout_and_scroll_input() {
 }
 
 int main() {
-    basic_cases();public_projections();physical_proxy_coverage();real_fragmented_extremes();anchored_extremes_and_clone();segment_projection_and_clips();clone_faults_and_numeric_rollback();transition_reuse();shifted_layout_and_scroll_input();
+    basic_cases();public_projections();physical_proxy_coverage();stable_alignment_summaries();real_fragmented_extremes();anchored_extremes_and_clone();segment_projection_and_clips();clone_faults_and_numeric_rollback();transition_reuse();shifted_layout_and_scroll_input();
     std::printf("sizeof(layout_box)=%zu sizeof(scroll_proxy)=%zu\n",sizeof(aether_layout_box_s),sizeof(layout_scroll_proxy_s));
     std::printf("inline-hanging-scroll: %d checks, %d failures\n",checks,failures);return failures?1:0;
 }
