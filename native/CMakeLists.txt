@@ -1320,6 +1320,29 @@ if(AETHERUI_BUILD_TESTS)
     add_library(aether_flex_text_test_core OBJECT ${immutable_layout_core_sources})
     target_include_directories(aether_flex_text_test_core PRIVATE include src)
     target_compile_definitions(aether_flex_text_test_core PRIVATE AETHER_EXPORTS)
+    # The semantic classifier is private. Reuse authentic core objects so its
+    # allocation check and exhaustive inventory do not expand the public ABI.
+    add_executable(aether_style_diff_classifier_test tests/test_style_diff_classifier.cpp
+        $<TARGET_OBJECTS:aether_flex_text_test_core>)
+    target_include_directories(aether_style_diff_classifier_test PRIVATE include src)
+    target_compile_definitions(aether_style_diff_classifier_test PRIVATE AETHER_EXPORTS)
+    if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        target_compile_definitions(aether_style_diff_classifier_test PRIVATE AETHER_DIFF_WRAP_MALLOC)
+        target_link_options(aether_style_diff_classifier_test PRIVATE "-Wl,--wrap=malloc")
+    endif()
+    add_test(NAME aether.style-diff-classifier COMMAND aether_style_diff_classifier_test)
+    add_executable(aether_style_diff_catalog_test tests/test_style_diff_catalog.cpp
+        $<TARGET_OBJECTS:aether_flex_text_test_core>)
+    target_include_directories(aether_style_diff_catalog_test PRIVATE include src)
+    target_compile_definitions(aether_style_diff_catalog_test PRIVATE AETHER_EXPORTS)
+    add_test(NAME aether.style-diff-catalog COMMAND aether_style_diff_catalog_test)
+    add_executable(aether_style_semantic_diff_test tests/test_style_semantic_diff.cpp src/css/frozen_c_string.cpp)
+    target_link_libraries(aether_style_semantic_diff_test PRIVATE AetherUI::Core)
+    add_test(NAME aether.style-semantic-diff COMMAND aether_style_semantic_diff_test)
+    add_executable(aether_style_semantic_diff_oom_test tests/test_style_semantic_diff_oom.cpp src/css/frozen_c_string.cpp)
+    target_link_libraries(aether_style_semantic_diff_oom_test PRIVATE AetherUI::Core)
+    add_test(NAME aether.style-semantic-diff-oom COMMAND aether_style_semantic_diff_oom_test)
+
     add_executable(aether_table_cell_final_private_test
         tests/test_table_cell_final_private.cpp
         $<TARGET_OBJECTS:aether_flex_text_test_core>)

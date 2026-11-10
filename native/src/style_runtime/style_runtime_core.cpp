@@ -13,6 +13,7 @@
 #include "style_property_registry_internal.h"
 #include "style_runtime_types.h"
 #include "style_source_limits.h"
+#include "style_diff.h"
 #include "css_variable_tokens.h"
 #include "custom_property_scope_internal.h"
 #include "frozen_runtime_metadata.h"
@@ -57,23 +58,10 @@ static void require_style_status(aether_status_t status) {
     if(status==AETHER_ERROR_OUT_OF_MEMORY)throw std::bad_alloc();
     if(status!=AETHER_OK)throw std::invalid_argument("invalid frozen style preparation");
 }
-static color_resolution_state_s copy_color_state(const FrozenColorMetadata& source) {
-    color_resolution_state_s result;
-    result.background_uses_current_color=source.background();
-    for(size_t i=0;i<4;++i)result.border_uses_current_color[i]=source.border(i);
-    for(size_t i=0;i<source.text_shadow_count();++i)result.text_shadow_uses_current_color.push_back(source.text_shadow_at(i));
-    for(size_t i=0;i<source.box_shadow_count();++i)result.box_shadow_uses_current_color.push_back(source.box_shadow_at(i));
-    return result;
-}
 static std::vector<bool> copy_text_color_flags(const FrozenColorMetadata& source) {
     std::vector<bool> out; out.reserve(source.text_shadow_count());
     for(size_t i=0;i<source.text_shadow_count();++i)out.push_back(source.text_shadow_at(i));
     return out;
-}
-static bool text_color_flags_equal(const FrozenColorMetadata& source,const std::vector<bool>& flags) {
-    if(source.text_shadow_count()!=flags.size())return false;
-    for(size_t i=0;i<flags.size();++i)if(source.text_shadow_at(i)!=flags[i])return false;
-    return true;
 }
 struct aether_style_update_s {
     aether_node_s* node = nullptr;
@@ -180,157 +168,6 @@ static node_style_info_s get_node_info(aether_node_s* node) {
             info.classes.emplace_back(token); // Own the bytes beyond this scan.
     }
     return info;
-}
-
-static bool color_equal(const aether_color_rgba& a, const aether_color_rgba& b) {
-    return a.r == b.r && a.g == b.g && a.b == b.b && a.a == b.a;
-}
-
-static bool length_equal(const aether_css_length& a, const aether_css_length& b) {
-    return a.value == b.value &&
-           a.unit == b.unit &&
-           a.linear_percent == b.linear_percent &&
-           a.linear_em == b.linear_em &&
-           a.linear_rem == b.linear_rem &&
-           a.linear_vw == b.linear_vw &&
-           a.linear_vh == b.linear_vh;
-}
-
-static bool edges_equal(const aether_css_edges& a, const aether_css_edges& b) {
-    return length_equal(a.left, b.left) &&
-           length_equal(a.top, b.top) &&
-           length_equal(a.right, b.right) &&
-           length_equal(a.bottom, b.bottom);
-}
-
-static bool color_edges_equal(const aether_color_edges& a, const aether_color_edges& b) {
-    return color_equal(a.left, b.left) &&
-           color_equal(a.top, b.top) &&
-           color_equal(a.right, b.right) &&
-           color_equal(a.bottom, b.bottom);
-}
-
-static bool border_style_edges_equal(const aether_border_style_edges& a, const aether_border_style_edges& b) {
-    return a.left == b.left &&
-           a.top == b.top &&
-           a.right == b.right &&
-           a.bottom == b.bottom;
-}
-
-static bool flex_basis_equal(const aether_flex_basis& a, const aether_flex_basis& b) {
-    return a.kind == b.kind && length_equal(a.length, b.length);
-}
-
-static bool corner_radius_equal(const aether_corner_radius& a, const aether_corner_radius& b) {
-    return length_equal(a.horizontal, b.horizontal) &&
-           length_equal(a.vertical, b.vertical);
-}
-
-static bool border_radii_equal(const aether_border_radii& a, const aether_border_radii& b) {
-    return corner_radius_equal(a.top_left, b.top_left) &&
-           corner_radius_equal(a.top_right, b.top_right) &&
-           corner_radius_equal(a.bottom_right, b.bottom_right) &&
-           corner_radius_equal(a.bottom_left, b.bottom_left);
-}
-
-static bool transform_origin_equal(const aether_transform_origin& a, const aether_transform_origin& b) {
-    return length_equal(a.x, b.x) && length_equal(a.y, b.y);
-}
-
-static bool gradient_stop_equal(const aether_gradient_stop& a, const aether_gradient_stop& b) {
-    return color_equal(a.color, b.color) &&
-           length_equal(a.position, b.position) &&
-           a.offset == b.offset &&
-           a.has_position == b.has_position;
-}
-
-template<class T> static bool frozen_array_equal(ReadOnlyArrayView<T> a,const T* b,int32_t n) {
-    if(n<0||a.size()!=static_cast<size_t>(n)||(n&&!b))return false;
-    for(size_t i=0;i<a.size();++i)if(std::memcmp(&a[i],&b[i],sizeof(T))!=0)return false;
-    return true;
-}
-static bool frozen_gradient_equal(GradientReadView a,const aether_linear_gradient& b,bool bytes) {
-    if(a.direction_x!=b.direction_x||a.direction_y!=b.direction_y||b.stop_count<0||a.stops.size()!=static_cast<size_t>(b.stop_count)||(b.stop_count&&!b.stops))return false;
-    for(size_t i=0;i<a.stops.size();++i)if(bytes ? std::memcmp(&a.stops[i],&b.stops[i],sizeof(aether_gradient_stop))!=0 : !gradient_stop_equal(a.stops[i],b.stops[i]))return false;
-    return true;
-}
-static bool backgrounds_equal(ReadOnlyArrayView<FrozenBackgroundLayer> a,const aether_background_layer_list& b) {
-    if(b.count<0||a.size()!=static_cast<size_t>(b.count)||(b.count&&!b.items))return false;
-    for(size_t i=0;i<a.size();++i) {
-        const auto v=a[i].view(); const auto& x=v.scalars; const auto& y=b.items[i];
-        if(x.kind!=y.kind||std::memcmp(&x.position_x,&y.position_x,sizeof(aether_css_length))||std::memcmp(&x.position_y,&y.position_y,sizeof(aether_css_length))||x.size_kind!=y.size_kind||std::memcmp(&x.size_x,&y.size_x,sizeof(aether_css_length))||std::memcmp(&x.size_y,&y.size_y,sizeof(aether_css_length))||x.repeat_x!=y.repeat_x||x.repeat_y!=y.repeat_y)return false;
-        if(x.kind==AETHER_BACKGROUND_LAYER_LINEAR_GRADIENT){if(!frozen_gradient_equal(v.gradient,y.gradient,true))return false;}
-        else if(x.kind==AETHER_BACKGROUND_LAYER_IMAGE_URL){if(!v.image_source.present()||!y.image_source||std::strcmp(v.image_source.c_str(),y.image_source))return false;}
-        else return false;
-    }
-    return true;
-}
-static bool complete_background_payload_equal(ComputedStyleReadView a,const aether_computed_style_t& b) {
-    const auto layers=a.background_layers();
-    for(size_t i=0;i<layers.size();++i){auto x=layers[i].view();const auto& y=b.background_layers.items[i];
-        if(!frozen_gradient_equal(x.gradient,y.gradient,true))return false;
-        if(x.image_source.present()!=(y.image_source!=nullptr))return false;
-        if(y.image_source&&!x.image_source.equals(y.image_source))return false;
-    }
-    return true;
-}
-static bool style_equal(ComputedStyleReadView av, const aether_computed_style_t& b) {
-    const auto& a=av.scalars();
-    return a.display == b.display &&
-           a.flex_direction == b.flex_direction &&
-           a.justify_content == b.justify_content &&
-           a.align_items == b.align_items &&
-           a.align_self == b.align_self &&
-           a.flex_grow == b.flex_grow &&
-           a.flex_shrink == b.flex_shrink &&
-           flex_basis_equal(a.flex_basis, b.flex_basis) &&
-           a.flex_wrap == b.flex_wrap &&
-           a.gap == b.gap &&
-           a.position == b.position &&
-           edges_equal(a.inset, b.inset) &&
-           length_equal(a.width, b.width) &&
-           length_equal(a.height, b.height) &&
-           length_equal(a.min_width, b.min_width) &&
-           length_equal(a.min_height, b.min_height) &&
-           length_equal(a.max_width, b.max_width) &&
-           length_equal(a.max_height, b.max_height) &&
-           edges_equal(a.margin, b.margin) &&
-           edges_equal(a.padding, b.padding) &&
-           edges_equal(a.border_width, b.border_width) &&
-           a.box_sizing == b.box_sizing &&
-           color_equal(a.color, b.color) &&
-           color_equal(a.background_color, b.background_color) &&
-           backgrounds_equal(av.background_layers(),b.background_layers) &&
-           frozen_array_equal(av.backdrop_filters(),b.backdrop_filters.items,b.backdrop_filters.count) &&
-           color_equal(a.border_color, b.border_color) &&
-           color_edges_equal(a.border_colors, b.border_colors) &&
-           border_style_edges_equal(a.border_styles, b.border_styles) &&
-           a.has_text_gradient == b.has_text_gradient &&
-           frozen_gradient_equal(av.text_gradient(), b.text_gradient, false) &&
-           frozen_array_equal(av.transforms(),b.transforms.items,b.transforms.count) &&
-           transform_origin_equal(a.transform_origin, b.transform_origin) &&
-           frozen_array_equal(av.text_shadows(),b.text_shadows.items,b.text_shadows.count) &&
-           frozen_array_equal(av.box_shadows(),b.box_shadows.items,b.box_shadows.count) &&
-           border_radii_equal(a.border_radii, b.border_radii) &&
-           a.opacity == b.opacity &&
-           std::strncmp(a.font_family.data(), b.font_family, sizeof(a.font_family)) == 0 &&
-           a.font_size == b.font_size &&
-           a.font_weight == b.font_weight &&
-           a.line_height == b.line_height &&
-           a.text_align == b.text_align &&
-           a.text_transform == b.text_transform &&
-           a.white_space == b.white_space &&
-           a.overflow_x == b.overflow_x &&
-           a.overflow_y == b.overflow_y &&
-           a.cursor == b.cursor &&
-           a.pointer_events == b.pointer_events &&
-            a.visible == b.visible &&
-            a.z_index == b.z_index &&
-            a.z_index_kind == b.z_index_kind &&
-            a.transition_properties == b.transition_properties &&
-            a.transition_duration == b.transition_duration &&
-            a.transition_delay == b.transition_delay &&
-            a.transition_timing == b.transition_timing;
 }
 
 rule_index_s aether_style_runtime_s::prepare_rule_index(const aether_style_runtime_s* runtime,
@@ -454,12 +291,12 @@ static bool try_parse_generated_content(const std::string& source, std::string& 
 }
 
 static PreparedNodeResult* compute_node(aether_style_runtime_s* runtime, aether_node_s* node,
-                                          PreparedNodeResult* parent, uint32_t inherited_parent_impact,
+                                          PreparedNodeResult* parent, uint32_t /* inherited_parent_impact */,
                                           uint32_t& impact, uint32_t& inherited_change_impact,
                                           std::optional<std::string>* generated_content = nullptr) {
     // The legacy subtree entry point starts an isolated inheritance scope.
     // Contextual preparation never installs this compatibility boundary.
-    if (node == runtime->legacy_inheritance_root) { parent = nullptr; inherited_parent_impact = 0; }
+    if (node == runtime->legacy_inheritance_root) parent = nullptr;
     auto* registry = style_property_registry_get_global();
     const auto parent_view=parent ? std::optional<ComputedStyleReadView>(parent->style->view()) : std::nullopt;
     MutableStyleBuilder next_builder;
@@ -646,7 +483,6 @@ static PreparedNodeResult* compute_node(aether_style_runtime_s* runtime, aether_
     }
 
     auto found = runtime->states.find(node);
-    const auto previous_style = found==runtime->states.end() ? std::optional<ComputedStyleReadView>{} : std::optional<ComputedStyleReadView>{found->second->style_view()};
 
     auto apply_property_value = [&](const style_property_definition_s& definition,
                                     aether_computed_style_t& style,
@@ -687,8 +523,6 @@ static PreparedNodeResult* compute_node(aether_style_runtime_s* runtime, aether_
         color_references.text_shadow_uses_current_color =
             copy_text_color_flags(*parent->color_references);
     }
-    uint32_t declared_impact = STYLE_IMPACT_NONE;
-    uint32_t declared_inherited_impact = STYLE_IMPACT_NONE;
     auto apply_definition = [&](size_t i) {
         if (!cascade[i].is_set) return false;
         const auto& definition = registry->definitions[i];
@@ -766,34 +600,6 @@ static PreparedNodeResult* compute_node(aether_style_runtime_s* runtime, aether_
         };
         measure_apply_state_s selected_measures(*measures, definition.name);
         if (!apply_selected(next, color_references, true, selected_measures)) return false;
-        bool property_changed = !previous_style;
-        if (previous_style) {
-            MutableStyleBuilder probe_builder;
-            auto& probe=probe_builder.value;
-            if (computed_style_deep_copy(*previous_style, &probe) == AETHER_OK) {
-                color_resolution_state_s probe_references = copy_color_state(*found->second->color_references());
-                // Read the candidate AFTER the winning declaration, while the
-                // flat and symbolic color references deliberately start at OLD.
-                measure_property_delta_s delta;
-                measure_apply_state_s probe_measures(*measures, delta, definition.name);
-                if (apply_selected(probe, probe_references, false, probe_measures)) {
-                    resolve_symbolic_colors(probe, probe_references);
-                    normalize_overflow_axes(probe);
-                    property_changed = !style_equal(*previous_style, probe);
-                } else {
-                    property_changed = true;
-                }
-
-            } else {
-                throw std::bad_alloc();
-            }
-
-        }
-        if (property_changed) {
-            declared_impact |= definition.impact;
-            if ((definition.impact & STYLE_IMPACT_INHERITED) != 0)
-                declared_inherited_impact |= definition.impact;
-        }
         return true;
     };
 
@@ -827,81 +633,28 @@ static PreparedNodeResult* compute_node(aether_style_runtime_s* runtime, aether_
         const auto* display = registry->try_get("display");
         if (display && !cascade[static_cast<size_t>(display->id)].is_set) {
             next.display = AETHER_DISPLAY_LINE_BREAK;
-            declared_impact |= display->impact;
         }
     }
 
     measure_recompute_dependencies(*measures);
     const bool is_new_node = found == runtime->states.end();
-    const auto* old_measures = is_new_node ? nullptr : found->second->measures().get();
-    const bool contextual_geometry_changed = old_measures &&
-        (std::memcmp(&old_measures->scalars().row_gap, &measures->row_gap, sizeof(aether_css_length)) != 0 ||
-         std::memcmp(&old_measures->scalars().column_gap, &measures->column_gap, sizeof(aether_css_length)) != 0 ||
-         static_cast<int>(old_measures->scalars().line_height_kind) != static_cast<int>(measures->line_height.kind) ||
-         old_measures->scalars().line_height_value != measures->line_height.value);
-    if (contextual_geometry_changed) declared_impact |= STYLE_IMPACT_LAYOUT | STYLE_IMPACT_TEXT_LAYOUT;
-
-    const uint32_t inherited_symbolic_impact = !is_new_node &&
-        !text_color_flags_equal(*found->second->color_references(), color_references.text_shadow_uses_current_color)
-        ? STYLE_IMPACT_PAINT | STYLE_IMPACT_INHERITED : STYLE_IMPACT_NONE;
-    const bool changed = is_new_node || contextual_geometry_changed || !style_equal(found->second->style_view(), next);
-    if (!changed) {
-        impact = STYLE_IMPACT_NONE;
-        inherited_change_impact = inherited_symbolic_impact;
-        declared_impact=found->second->declared_impact();
-        declared_inherited_impact=found->second->declared_inherited_impact();
-    } else if (is_new_node) {
-        impact = STYLE_IMPACT_ALL_BITS;
-        inherited_change_impact = declared_inherited_impact | inherited_parent_impact;
-    } else if (!transform_origin_equal(found->second->style_view().scalars().transform_origin, next.transform_origin) &&
-               [&] {
-                   // Removal or computed-invalid origin can occur after any
-                   // number of no-op resolves. Compare the final scalar delta,
-                   // not historical declaration impacts. This copy only borrows.
-                   auto comparison = found->second->style_view().scalars();
-                   comparison.transform_origin = next.transform_origin;
-                   return style_equal(found->second->style_view().with_scalars(comparison), next);
-               }()) {
-        const auto* origin = registry->try_get("transform-origin");
-        impact = origin ? origin->impact : STYLE_IMPACT_ALL_BITS;
-        inherited_change_impact = STYLE_IMPACT_NONE;
-    } else if (found->second->style_view().scalars().visible != next.visible) {
-        // Compare the final computed delta, not the declarations still present.
-        // Removing visibility can otherwise reuse historical geometric impacts;
-        // removing width alongside visibility can miss those same impacts.
-        // Copy only scalar values. Payload stays readonly under the old record pin.
-        auto comparison = found->second->style_view().scalars();
-        comparison.visible = next.visible;
-        const auto* visibility = registry->try_get("visibility");
-        impact = visibility && style_equal(found->second->style_view().with_scalars(comparison), next)
-            ? visibility->impact
-            : STYLE_IMPACT_ALL_BITS;
-        inherited_change_impact = impact;
+    // One final semantic comparison per existing node. Neither historical
+    // declaration masks nor the parent's delta determine this node's work.
+    StyleDiff diff;
+    if (is_new_node) {
+        diff.own_impact = STYLE_IMPACT_ALL_BITS;
+        diff.inherited_value_impact = STYLE_IMPACT_ALL_BITS;
+        diff.style_storage_equivalent = false;
     } else {
-        impact = declared_impact | inherited_parent_impact;
-        if (impact == STYLE_IMPACT_NONE) {
-            impact = found->second->declared_impact();
-        }
-        if (impact == STYLE_IMPACT_NONE) {
-            // Safety net for computed-style changes produced outside a concrete
-            // property applicator. This should be rare; known CSS properties
-            // should flow through their registry impact instead of this path.
-            impact = STYLE_IMPACT_ALL_BITS;
-        }
-        inherited_change_impact = declared_inherited_impact | inherited_parent_impact;
-        if (inherited_change_impact == STYLE_IMPACT_NONE)
-            inherited_change_impact = found->second->declared_inherited_impact();
+        const auto& previous = *found->second;
+        diff = classify_style_diff(previous.style_view(), *previous.measures(),
+            *previous.color_references(), next, *measures, color_references);
     }
-    inherited_change_impact |= inherited_symbolic_impact;
-    if (!is_new_node) {
-        const auto previous = found->second->style_view();
-        const bool before_context = !previous.transforms().empty() || !previous.backdrop_filters().empty();
-        const bool after_context = next.transforms.count > 0 || next.backdrop_filters.count > 0;
-        if (before_context != after_context) impact |= STYLE_IMPACT_LAYOUT;
-    }
+    impact = diff.own_impact;
+    inherited_change_impact = diff.inherited_value_impact;
     auto state = std::make_unique<PreparedNodeResult>();
-    if(!changed && complete_background_payload_equal(found->second->style_view(),next)) state->style=found->second->style();
-    else require_style_status(freeze_style(next,state->style));
+    if (diff.style_storage_equivalent) state->style = found->second->style();
+    else require_style_status(freeze_style(next, state->style));
     state->measures = measures;
     state->custom_properties = std::move(scope);
     state->backdrop_custom_properties = std::move(backdrop_scope);
@@ -909,8 +662,8 @@ static PreparedNodeResult* compute_node(aether_style_runtime_s* runtime, aether_
     // prepare_tree visits descendants regardless of parent impact: explicit background
     // inherit must observe concrete <-> currentColor changes with the same parent RGBA.
     require_style_status(freeze_color_metadata(color_references,state->color_references));
-    state->declared_impact = declared_impact;
-    state->declared_inherited_impact = declared_inherited_impact;
+    state->declared_impact = diff.own_impact;
+    state->declared_inherited_impact = diff.inherited_value_impact;
     state->inherited_change_impact = inherited_change_impact;
     auto* result = state.get();
     state->impact=impact;

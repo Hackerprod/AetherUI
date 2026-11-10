@@ -168,7 +168,8 @@ int main(void) {
     {
         aether_doc_t doc = NULL;
         aether_node_t body, child, after;
-        const char* expected[] = {"", "", "bang", "literal&amp;\r\n"};
+        /* HTML source preprocessing normalizes CRLF to LF, including comments. */
+        const char* expected[] = {"", "", "bang", "literal&amp;\n"};
         int ok;
         if (aether_doc_create(&doc) != AETHER_OK || !doc) return 1;
         ok = aether_doc_parse_html(doc,
