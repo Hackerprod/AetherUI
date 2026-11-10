@@ -377,6 +377,10 @@ if(AETHERUI_BUILD_TESTS)
     target_link_libraries(aether_flex_intrinsic_basis_test PRIVATE AetherUI::Core)
     add_test(NAME aether.flex-intrinsic-basis COMMAND aether_flex_intrinsic_basis_test)
 
+    add_executable(aether_descendant_intrinsic_width_test tests/test_descendant_intrinsic_width.cpp)
+    target_link_libraries(aether_descendant_intrinsic_width_test PRIVATE AetherUI::Core)
+    add_test(NAME aether.descendant-intrinsic-width COMMAND aether_descendant_intrinsic_width_test)
+
     add_executable(aether_intrinsic_sizing_test tests/test_intrinsic_sizing.cpp src/layout/intrinsic_sizing.cpp)
     target_include_directories(aether_intrinsic_sizing_test PRIVATE src/layout)
     target_link_libraries(aether_intrinsic_sizing_test PRIVATE AetherUI::Core)
@@ -1392,6 +1396,13 @@ if(AETHERUI_BUILD_TESTS)
     target_include_directories(aether_flex_intrinsic_basis_lifetime_test PRIVATE include src)
     target_compile_definitions(aether_flex_intrinsic_basis_lifetime_test PRIVATE AETHER_EXPORTS)
     add_test(NAME aether.flex-intrinsic-basis-lifetime COMMAND aether_flex_intrinsic_basis_lifetime_test)
+
+    add_executable(aether_descendant_intrinsic_width_lifetime_test
+        tests/test_descendant_intrinsic_width_lifetime.cpp
+        $<TARGET_OBJECTS:aether_flex_text_test_core>)
+    target_include_directories(aether_descendant_intrinsic_width_lifetime_test PRIVATE include src)
+    target_compile_definitions(aether_descendant_intrinsic_width_lifetime_test PRIVATE AETHER_EXPORTS)
+    add_test(NAME aether.descendant-intrinsic-width-lifetime COMMAND aether_descendant_intrinsic_width_lifetime_test)
 
     # The test includes the authentic layout engine to exercise its private
     # final validator. Compile every other core source exactly once, without a DSO.

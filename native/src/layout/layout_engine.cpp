@@ -1933,15 +1933,24 @@ float measure_child_natural_width(
 {
     auto child_style = get_style(styles, child);
     auto child_margin = resolve_margin_edges(engine, child_style.margin, maximum, child_style);
+    const auto measures = layout_measures(styles, child);
     // A percentage width is indefinite while this intrinsic contribution is
     // calculated. CSS Sizing therefore treats it as auto at this stage.
     const bool percentage_dependent_width =
-        layout_measure_has_percentage(layout_measures(styles, child), "width", child_style.width);
+        layout_measure_has_percentage(measures, "width", child_style.width);
     const float specified = percentage_dependent_width
         ? NAN
         : resolve(engine, child_style.width, maximum, child_style);
     auto child_padding = resolve_padding_edges(engine, child_style.padding, maximum, child_style);
     auto child_border  = resolve_border_edges(engine, child_style, maximum);
+    const float decorations = aether_thicknessf_horizontal(child_padding) +
+                              aether_thicknessf_horizontal(child_border);
+    const auto checked = [](float value) {
+        if (!std::isfinite(value))
+            throw std::overflow_error("Non-finite intrinsic width contribution");
+        return value;
+    };
+    checked(decorations);
 
     float width;
     if (std::isfinite(specified)) {
@@ -1952,7 +1961,36 @@ float measure_child_natural_width(
         width = measure_intrinsic_width(engine, styles, child, child_style,
                                         child_padding, child_border, maximum, result, mode);
     }
-    return width + aether_thicknessf_horizontal(child_margin);
+    // Validate before clamping: a finite max must not disguise overflow in the
+    // preferred/intrinsic size or its conversion to a border-box contribution.
+    checked(width);
+    const bool table_box = child_style.display == AETHER_DISPLAY_TABLE ||
+        child_style.display == AETHER_DISPLAY_TABLE_ROW ||
+        child_style.display == AETHER_DISPLAY_TABLE_CELL;
+    if (!table_box) {
+        // This is a descendant's contribution, not the raw intrinsic size of
+        // the flex root. Table boxes retain their existing sizing policy; the
+        // exclusion is local, after recursively measuring their descendants.
+        // Ordinary inline descendants are flattened by the inline collector;
+        // inline elements reaching here as flex items are blockified for sizing.
+        const auto border_limit = [&](float value) {
+            return checked(value + (child_style.box_sizing == AETHER_BOX_SIZING_CONTENT_BOX
+                ? decorations : 0.f));
+        };
+        // Intrinsic percentage bases are indefinite. A percentage maximum
+        // remains unbounded, including calc(0% + Xpx) recorded in the metadata.
+        // A percentage minimum uses zero, retaining calc's absolute component.
+        const float max_width = layout_measure_has_percentage(measures, "max-width", child_style.max_width)
+            ? NAN : resolve(engine, child_style.max_width, 0.f, child_style);
+        const float min_width = resolve(engine, child_style.min_width, 0.f, child_style);
+        const float max_border = std::isfinite(max_width) ? border_limit(max_width) : NAN;
+        const float min_border = std::isfinite(min_width) ? border_limit(min_width) : NAN;
+        if (std::isfinite(max_border)) width = std::min(width, max_border);
+        if (std::isfinite(min_border)) width = std::max(width, min_border);
+        width = std::max(decorations, width);
+    }
+    // Signed margins contribute once, outside the size constraints.
+    return checked(width + checked(aether_thicknessf_horizontal(child_margin)));
 }
 
 /* ══════════════════════════════════════════════════════════════════════
