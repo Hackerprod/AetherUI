@@ -191,6 +191,25 @@ struct nth_expression_s {
     int step   = 0;
     int offset = 0;
 
+    // DOM positions may exceed INT_MAX. Compare the An+B expression without
+    // narrowing or forming position-offset, which can overflow even size_t.
+    bool matches_position(size_t position) const {
+        if (position == 0) return false;
+        if (step == 0) return offset > 0 && position == static_cast<size_t>(offset);
+        if (step < 0) {
+            if (offset <= 0 || position > static_cast<size_t>(offset)) return false;
+            const auto magnitude = static_cast<uint64_t>(-static_cast<int64_t>(step));
+            return (static_cast<size_t>(offset) - position) % magnitude == 0;
+        }
+        const auto divisor = static_cast<uint64_t>(step);
+        if (offset >= 0) {
+            return position >= static_cast<size_t>(offset) &&
+                (position - static_cast<size_t>(offset)) % divisor == 0;
+        }
+        const auto magnitude = static_cast<uint64_t>(-static_cast<int64_t>(offset));
+        return (position % divisor + magnitude % divisor) % divisor == 0;
+    }
+
     bool matches(int one_based_index) const {
         if (step == 0) return one_based_index == offset;
         const int64_t diff = static_cast<int64_t>(one_based_index) - static_cast<int64_t>(offset);

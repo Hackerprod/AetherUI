@@ -12,6 +12,8 @@
 #include "../primitives/html_space_tokens.h"
 #include "style_property_registry_internal.h"
 #include "style_runtime_types.h"
+#include "selector_match_context.h"
+#include <cassert>
 #include "style_source_limits.h"
 #include "style_diff.h"
 #include "css_variable_tokens.h"
@@ -310,6 +312,7 @@ static bool try_parse_generated_content(const std::string& source, std::string& 
 static PreparedNodeResult* compute_node(aether_style_runtime_s* runtime, aether_node_s* node,
                                           PreparedNodeResult* parent, uint32_t /* inherited_parent_impact */,
                                           uint32_t& impact, uint32_t& inherited_change_impact,
+                                          selector_match_context_s& selector_context,
                                           std::optional<std::string>* generated_content = nullptr) {
     // The legacy subtree entry point starts an isolated inheritance scope.
     // Contextual preparation never installs this compatibility boundary.
@@ -354,7 +357,7 @@ static PreparedNodeResult* compute_node(aether_style_runtime_s* runtime, aether_
     for (const auto* rule : candidates) {
         if (rule->selector.pseudo_element != node->pseudo_element) continue;
         if (!media_condition_matches(rule->condition, &runtime->environment) ||
-            !selector_match(rule->selector, node)) continue;
+            !selector_match(rule->selector, node, selector_context)) continue;
         for (const auto& declaration : rule->declarations) {
             cascade_priority_t priority{
                 declaration.important, false, rule->layer, rule->selector.specificity,
@@ -467,7 +470,7 @@ static PreparedNodeResult* compute_node(aether_style_runtime_s* runtime, aether_
     for (const auto* rule : candidates) {
         if (rule->selector.pseudo_element != node->pseudo_element) continue;
         if (!media_condition_matches(rule->condition, &runtime->environment) ||
-            !selector_match(rule->selector, node)) continue;
+            !selector_match(rule->selector, node, selector_context)) continue;
         for (const auto& declaration : rule->shorthand_declarations) {
             offer_shorthand(declaration, cascade_priority_t{
                 declaration.important, false, rule->layer, rule->selector.specificity,
@@ -702,7 +705,7 @@ static std::shared_ptr<aether_node_s> create_generated_node() {
 }
 static std::shared_ptr<aether_node_s> prepare_generated_pseudo(
     aether_style_runtime_s* staged, aether_node_s* host, PreparedNodeResult* host_state,
-    aether_pseudo_element_t pseudo) {
+    aether_pseudo_element_t pseudo, selector_match_context_s& selector_context) {
     if (!staged->index.may_target_pseudo(pseudo)) return {};
     auto generated = create_generated_node();
     generated->type = AETHER_NODE_ELEMENT; generated->parent = host;
@@ -713,7 +716,7 @@ static std::shared_ptr<aether_node_s> prepare_generated_pseudo(
     uint32_t impact = 0, inherited = 0;
     std::optional<std::string> content;
     compute_node(staged, generated.get(), host_state,
-        host_state ? host_state->inherited_change_impact : 0, impact, inherited, &content);
+        host_state ? host_state->inherited_change_impact : 0, impact, inherited, selector_context, &content);
     if (!content) { staged->prepared.erase(generated.get()); return {}; }
     if (!content->empty()) {
         auto text = std::make_unique<aether_node_s>(); text->type = AETHER_NODE_TEXT;
@@ -724,25 +727,26 @@ static std::shared_ptr<aether_node_s> prepare_generated_pseudo(
 }
 static void prepare_tree(aether_style_runtime_s* staged, aether_node_s* node,
     PreparedNodeResult* parent, uint32_t inherited_parent,
-    std::vector<prepared_children_s>& links, std::vector<aether_node_s*>& order) {
+    std::vector<prepared_children_s>& links, std::vector<aether_node_s*>& order,
+    selector_match_context_s& selector_context) {
     if (!node || node->is_generated) return;
     auto* next_parent = parent;
     uint32_t next_inherited = inherited_parent;
     if (node->type == AETHER_NODE_ELEMENT) {
         uint32_t impact = 0;
-        next_parent = compute_node(staged, node, parent, inherited_parent, impact, next_inherited);
+        next_parent = compute_node(staged, node, parent, inherited_parent, impact, next_inherited, selector_context);
         order.push_back(node);
         prepared_children_s link; link.host = node;
         link.children.reserve(node->children.size() + 2); link.storage.reserve(2);
-        auto before = prepare_generated_pseudo(staged, node, next_parent, aether_pseudo_element_t::before);
-        auto after = prepare_generated_pseudo(staged, node, next_parent, aether_pseudo_element_t::after);
+        auto before = prepare_generated_pseudo(staged, node, next_parent, aether_pseudo_element_t::before, selector_context);
+        auto after = prepare_generated_pseudo(staged, node, next_parent, aether_pseudo_element_t::after, selector_context);
         if (before) { link.children.push_back(before.get()); order.push_back(before.get()); link.storage.push_back(std::move(before)); }
         for (auto* child : node->children) if (!child->is_generated) link.children.push_back(child);
         if (after) { link.children.push_back(after.get()); order.push_back(after.get()); link.storage.push_back(std::move(after)); }
         links.push_back(std::move(link));
     }
     for (auto* child : node->children)
-        if (!child->is_generated) prepare_tree(staged, child, next_parent, next_inherited, links, order);
+        if (!child->is_generated) prepare_tree(staged, child, next_parent, next_inherited, links, order, selector_context);
 }
 
 AETHER_API aether_status_t aether_style_runtime_create(
@@ -953,7 +957,18 @@ static aether_status_t prepare_revision_impl(
                 staged.states.emplace(entry.first, entry.second);
         }
         std::vector<aether_node_s*> order;
-        prepare_tree(&staged, document, nullptr, 0, transaction->links, order);
+        {
+            // No external callbacks or DOM publication occur during traversal.
+            // Diagnostics are buffered; generated child links are staged. Destroy
+            // nth scratch state before freezing records, commit, or callbacks.
+#ifndef NDEBUG
+            const auto* identity = document->identity.get();
+            const auto structure_epoch = identity->structure_epoch;
+#endif
+            selector_match_context_s selector_context;
+            prepare_tree(&staged, document, nullptr, 0, transaction->links, order, selector_context);
+            assert(document->identity.get() == identity && identity->structure_epoch == structure_epoch);
+        }
         std::unordered_set<aether_node_s*> current_nodes(order.begin(), order.end());
         // Freeze document once, only after root-font bootstrap and complete traversal.
         StyleRevisionInput revision_input;
