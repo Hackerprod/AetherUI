@@ -2,11 +2,19 @@
 #define AETHER_INLINE_UNITS_FIXTURE_ONLY
 #include "test_inline_units.cpp"
 
+static std::string text_bytes(aether_node_t n) {
+ if(aether_node_get_type(n)==AETHER_NODE_TEXT || aether_node_get_type(n)==AETHER_NODE_COMMENT){
+  char* value=aether_node_get_text_content(n);
+  need(value!=nullptr,"owned text bytes");
+  std::string result=value;aether_string_free(value);return result;
+ }
+ std::string result;
+ for(int i=0;i<aether_node_get_child_count(n);++i)result+=text_bytes(aether_node_get_child(n,i));
+ return result;
+}
 static void bytes(aether_node_t n, const std::string& expected) {
  need(n != nullptr,"text owner exists");
- char* value=aether_node_get_text_content(n);
- check(value && expected==value,"exact DOM text bytes");
- aether_string_free(value);
+ check(text_bytes(n)==expected,"exact DOM text bytes");
 }
 static void dom_cases() {
  struct Sample {const char* source; const char* expected;};
@@ -24,7 +32,7 @@ static void dom_cases() {
  };
  aether_doc_t doc{};need(aether_doc_create(&doc)==AETHER_OK,"create reusable document");
  for(int repeat=0;repeat<3;++repeat)for(const auto&s:samples)for(bool eof:{false,true}){
-  scenario="Data bytes/reparse/"+std::to_string(repeat)+(eof?"/EOF":"/close");
+  scenario="Data bytes/reparse/"+std::to_string(repeat)+"/sample"+std::to_string(&s-samples)+(eof?"/EOF":"/close");
   const std::string html=std::string("<body><div id=target>")+s.source+(eof?"":"</div></body>");
   need(aether_doc_parse_html(doc,html.c_str())==AETHER_OK,"parse Data sample");
   auto target=aether_doc_get_element_by_id(doc,"target");bytes(target,s.expected);

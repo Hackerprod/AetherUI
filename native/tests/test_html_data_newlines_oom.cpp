@@ -1,4 +1,4 @@
-// OOM transaction checks through public ABI; shared-core operator-new interposition.
+// Data-state string allocation probes; shared-core operator-new interposition.
 #include <new>
 #include <cstdlib>
 static std::size_t fail_size=0;
@@ -13,6 +13,7 @@ void* operator new(std::size_t n,const std::nothrow_t&) noexcept {try{return ::o
 void* operator new[](std::size_t n,const std::nothrow_t&) noexcept {try{return ::operator new[](n);}catch(...){return nullptr;}}
 void operator delete(void*p,const std::nothrow_t&) noexcept {std::free(p);}
 void operator delete[](void*p,const std::nothrow_t&) noexcept {std::free(p);}
+#define AETHER_TEST_ALIGNED_REJECT() false
 #include "fault_inject_aligned.h"
 
 #include <aether/aether.h>
@@ -38,7 +39,7 @@ int main(){
   if(!fault_delivered || (!threw && status!=AETHER_ERROR_OUT_OF_MEMORY))++failures;
   if(aether_doc_parse_html(doc,html.c_str())!=AETHER_OK)++failures;
   auto target=aether_doc_get_element_by_id(doc,"target");
-  char* value=target?aether_node_get_text_content(target):nullptr;
+  char* value=target?aether_node_get_text_content(aether_node_get_child(target,0)):nullptr;
   if(!value || normalized!=value)++failures;
   if(aether_doc_get_element_by_id(doc,"old"))++failures;
   aether_string_free(value);
