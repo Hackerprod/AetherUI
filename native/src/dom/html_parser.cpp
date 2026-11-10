@@ -126,6 +126,19 @@ class HtmlParser {
         if (pos <= start) return;
 
         std::string raw(src + start, pos - start);
+        // Normalize source newlines within this Data-state interval only.
+        // Markup separates intervals; references such as &#13; must retain
+        // their decoded CR, so this must precede html_decode.
+        size_t written = 0;
+        for (size_t read = 0; read < raw.size(); ++read) {
+            if (raw[read] == '\r') {
+                if (read + 1 < raw.size() && raw[read + 1] == '\n') ++read;
+                raw[written++] = '\n';
+            } else {
+                raw[written++] = raw[read];
+            }
+        }
+        raw.resize(written);
         std::string decoded = aether::html_decode(raw.c_str());
         if (!decoded.empty()) {
             parent->children.push_back(create_text(decoded, doc));

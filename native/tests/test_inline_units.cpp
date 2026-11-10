@@ -65,11 +65,11 @@ int main(){
   scenario=std::string("narrow separator ")+mode;
   Fixture narrow("<span>abc</span><span> </span><span>def</span>",mode_css(mode));
   near(narrow.rect().height,(std::string(mode)=="normal"||std::string(mode)=="pre-line")?40:20,"separator wrap mode");
-  scenario=std::string("split CRLF ")+mode;
+  scenario=std::string("source newlines separated by markup ")+mode;
   Fixture cr("<span>abc\r</span><span>\ndef</span>",mode_css(mode,100));
   bool forced=std::string(mode)=="pre"||std::string(mode)=="pre-line";
-  near(cr.rect().height,forced?40:20,"CRLF is one separator/break");
-  auto rr=cr.runs();need(!rr.empty(),"CRLF fragments");near(rr.back().rect.y-cr.rect().y,forced?20:0,"no double CRLF line");near(rr.back().rect.x-cr.rect().x,forced?0:40,"CRLF collapse width");
+  near(cr.rect().height,forced?60:20,"markup prevents source CRLF pairing");
+  auto rr=cr.runs();need(!rr.empty(),"CRLF fragments");near(rr.back().rect.y-cr.rect().y,forced?40:0,"two source breaks survive markup");near(rr.back().rect.x-cr.rect().x,forced?0:40,"CRLF collapse width");
   scenario=std::string("br forced ")+mode;Fixture br("<span>abc</span><br><span>def</span>",mode_css(mode,100));
   near(br.rect().height,40,"br preserved");br.expect({{"abc",{0,0,30,20}},{"def",{0,20,30,20}}});
  }

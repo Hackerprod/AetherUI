@@ -41,12 +41,12 @@ int main(){
   }
  }
  for(const char*mode:{"normal","pre-line","nowrap","pre"}){
-  scenario=std::string("intrinsic split CRLF ")+mode;
+  scenario=std::string("intrinsic source newlines separated by markup ")+mode;
   Fixture f("<span>aa\r</span><span></span><span>\nbb</span>",mode_css(mode,100));
   bool forced=std::string(mode)=="pre"||std::string(mode)=="pre-line";
   near(intrinsic(f,false,M::min_content,1),forced?20:std::string(mode)=="nowrap"?50:20,"CRLF min");
   near(intrinsic(f,false,M::max_content,1),forced?20:50,"CRLF max");
-  near(intrinsic(f,true,M::max_content,100),forced?40:20,"height CRLF once");
+  near(intrinsic(f,true,M::max_content,100),forced?60:20,"two source breaks separated by markup");
   Fixture joined("<span>abc</span><span>def</span>",mode_css(mode));
   near(intrinsic(joined,true,M::max_content,50),20,"intrinsic overflow word stays intact");
  }
