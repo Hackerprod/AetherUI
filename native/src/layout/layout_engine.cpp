@@ -1,3 +1,4 @@
+#include "layout_scroll_bounds.h"
 /* ── Layout Engine — core box layout, flow, inline, and intrinsic sizing ─ */
 #include "layout_internal.h"
 #include "inline_line_resolver.h"
@@ -222,6 +223,9 @@ static int count_distributable_spaces(const aether_layout_box_s* parent, const l
 }
 
 static void expand_box_width(aether_layout_box_s* box, float extra_width) {
+    // Legacy justification never receives hanging-line fragments. Do not retain
+    // a stale shape if this generic mutator is reused for such a box later.
+    box->scroll_proxy.valid = false;
     box->margin_box.width += extra_width;
     box->border_box.width += extra_width;
     box->padding_box.width += extra_width;
@@ -1043,6 +1047,21 @@ static float layout_hanging_inline_items(
             if (line[i].metrics.whitespace) gaps += static_cast<int>(line[i].text.size());
         const float extra = end == inline_line_end::soft && align == AETHER_TEXT_ALIGN_JUSTIFY ?
             aether_text_justify_extra_per_gap(available_width, summary.alignment_width, gaps) : 0.f;
+        const double line_left = x;
+        double justify_advance = 0.;
+        for (size_t i = summary.justify_begin; i < summary.justify_end; ++i) {
+            if (!line[i].metrics.whitespace) continue;
+            const float expanded = line[i].metrics.width + extra * static_cast<float>(line[i].text.size());
+            justify_advance += double(expanded) - line[i].metrics.width;
+        }
+        // This is the line's real aligned interval, not the containing width.
+        // An overlong word must retain its genuine overflow.
+        const double line_right = line_left + summary.alignment_width + justify_advance;
+        if (summary.hanging_width > 0.f) {
+            aether_check_scroll_coordinate(line_left);
+            aether_check_scroll_coordinate(line_right);
+            if (line_right < line_left) throw std::invalid_argument("inverted hanging interval");
+        }
         for (size_t i = 0; i < line.size(); ++i) {
             const auto& fragment = line[i];
             const auto& item = items[fragment.item_index];
@@ -1065,6 +1084,16 @@ static float layout_hanging_inline_items(
                 box->content_box = {x, start_y + y + std::max(0.f, summary.ascent - fragment.metrics.baseline),
                     width, fragment.metrics.height};
                 box->padding_box = box->border_box = box->margin_box = box->content_box;
+                if (summary.hanging_width > 0.f) {
+                    const auto& rect = box->content_box;
+                    box->scroll_proxy = {rect.x, rect.y,
+                        std::clamp(double(rect.x), line_left, line_right), rect.y,
+                        std::clamp(double(rect.x) + rect.width, line_left, line_right),
+                        double(rect.y) + rect.height, true};
+                    // Validate before publication, with the same helper used by
+                    // both scroll domains. Physical paint/hit geometry is intact.
+                    (void)aether_scroll_own_bounds(box);
+                }
                 if (result->records_boxes) result->paint_order.push_back(box);
             }
             parent_box->add_child(box);

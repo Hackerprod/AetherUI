@@ -83,6 +83,15 @@ struct block_static_anchor_s {
     float block_offset = 0.f;
 };
 
+// Own scroll contribution only. Keep the original content origin rather than a
+// delta from a distant physical fragment: subtracting huge coordinates would
+// lose a small hanging edge. Readers add only the observable float movement.
+struct layout_scroll_proxy_s {
+    float reference_content_x = 0.f, reference_content_y = 0.f;
+    double left = 0., top = 0., right = 0., bottom = 0.;
+    bool valid = false;
+};
+
 struct aether_layout_box_s {
     aether_layout_result_s* owner = nullptr;
     layout_box_kind_t kind = LAYOUT_BOX_ELEMENT;
@@ -119,6 +128,7 @@ struct aether_layout_box_s {
     aether_rectf border_box{};
     aether_rectf padding_box{};
     aether_rectf content_box{};
+    layout_scroll_proxy_s scroll_proxy{};
     float scroll_flow_height = 0.f;
     float scroll_base_height = NAN;
     uint8_t scroll_completion_flags = 0;

@@ -71,6 +71,7 @@ aether_layout_box_s* clone_box_tree(aether_layout_result_s* destination, const a
     box->kind = source->kind; box->element = source->element; box->style = source->style;
     box->text = source->text; box->is_atomic_control = source->is_atomic_control;
     box->control_display_text = source->control_display_text; box->control_shows_placeholder = source->control_shows_placeholder;
+    box->scroll_proxy = source->scroll_proxy;
     box->scroll_flow_height = source->scroll_flow_height;
     box->scroll_base_height = source->scroll_base_height;
     box->scroll_completion_flags = source->scroll_completion_flags;

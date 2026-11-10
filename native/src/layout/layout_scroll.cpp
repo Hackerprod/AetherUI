@@ -1,5 +1,6 @@
 /* ── Scroll metrics — descendant-overflow accumulation ──────────────── */
 #include "layout_internal.h"
+#include "layout_scroll_bounds.h"
 
 #include <algorithm>
 #include <cmath>
@@ -27,10 +28,7 @@ bool aether_overflow_is_clip(int32_t overflow) {
 // Apply that box's clips before its transform can mix the two axes; only the
 // final caller chooses which axes contribute to its own scroll range.
 namespace {
-struct OverflowBounds {
-    double left = 0, top = 0, right = 0, bottom = 0;
-    bool empty = true;
-};
+using OverflowBounds = layout_scroll_bounds_s;
 
 void unite(OverflowBounds& result, const OverflowBounds& contribution) {
     if (contribution.empty) return;
@@ -41,9 +39,6 @@ void unite(OverflowBounds& result, const OverflowBounds& contribution) {
     result.bottom = std::max(result.bottom, contribution.bottom);
 }
 
-OverflowBounds rectangle(aether_rectf rect) {
-    return {rect.x, rect.y, double(rect.x) + rect.width, double(rect.y) + rect.height, false};
-}
 
 void check_coordinate(double coordinate) {
     if (!std::isfinite(coordinate) || std::abs(coordinate) > std::numeric_limits<float>::max())
@@ -86,9 +81,7 @@ bool establishes_fixed_container(const aether_layout_box_s* box) {
 }
 
 OverflowBounds subtree_bounds(const aether_layout_box_s* box, bool fixed_container) {
-    const bool positioned = box->kind == LAYOUT_BOX_ELEMENT &&
-        (box->style.position == AETHER_POSITION_ABSOLUTE || box->style.position == AETHER_POSITION_FIXED);
-    OverflowBounds result = rectangle(positioned ? box->border_box : box->margin_box);
+    OverflowBounds result = aether_scroll_own_bounds(box);
     fixed_container = fixed_container || establishes_fixed_container(box);
     for (const auto* child : box->children) {
         if (child->style.position == AETHER_POSITION_FIXED && !fixed_container) continue;
@@ -108,11 +101,9 @@ OverflowBounds subtree_bounds(const aether_layout_box_s* box, bool fixed_contain
 void accumulate_legacy(const aether_layout_box_s* parent, bool include_x, bool include_y,
     float& right, float& bottom) {
     for (const auto* child : parent->children) {
-        const bool positioned = child->kind == LAYOUT_BOX_ELEMENT &&
-            (child->style.position == AETHER_POSITION_ABSOLUTE || child->style.position == AETHER_POSITION_FIXED);
-        const auto& own = positioned ? child->border_box : child->margin_box;
-        if (include_x) right = std::max(right, own.x + own.width);
-        if (include_y) bottom = std::max(bottom, own.y + own.height);
+        const auto own = aether_scroll_own_bounds(child);
+        if (include_x) right = std::max(right, float(own.right));
+        if (include_y) bottom = std::max(bottom, float(own.bottom));
         const bool descend_x = include_x && child->style.overflow_x == AETHER_OVERFLOW_VISIBLE;
         const bool descend_y = include_y && child->style.overflow_y == AETHER_OVERFLOW_VISIBLE;
         if (descend_x || descend_y)

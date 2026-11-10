@@ -23,7 +23,7 @@ static void paint(Fixture&f,aether_display_list_builder_t builder,aether_style_m
 
 static void contextual_overflow_cases(){
  struct Projection {const char*css;float visible_x,visible_y,clip_x,clip_y;};
- for(auto c:std::vector<Projection>{{"translate(7px,11px)",17,11,7,11},{"scale(2,.5)",70,0,50,0},{"rotate(90deg)",10,20,0,10},{"skewX(45deg)",50,0,40,0}}){
+ for(auto c:std::vector<Projection>{{"translate(7px,11px)",7,11,7,11},{"scale(2,.5)",50,0,50,0},{"rotate(90deg)",0,10,0,10},{"skewX(45deg)",40,0,40,0}}){
   for(bool clip:{false,true}){
    scenario=std::string("contextual projected hanging overflow ")+c.css+(clip?" clipped":" visible");
    Fixture f("aa    bb",std::string("#outer{height:40px;overflow:auto}#host{transform-origin:0 0;transform:")+c.css+";"+(clip?"overflow:hidden;":"")+"}");

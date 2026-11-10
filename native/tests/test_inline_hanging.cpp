@@ -72,20 +72,20 @@ int main(){
  {scenario="mixed baseline";Fixture f("aa<span style='font-size:38px'>    </span>bb",column(false),true);near(f.rect().height,56,"baseline minimum");f.expect({{"aa",{0,0,20,20}},{"    ",{20,16,40,20}},{"bb",{0,36,20,20}}});}
  {scenario="contextual callbacks";Fixture f("aa    bb",column(false),false,true);near(f.rect().height,40,"contextual height");check(f.meter.contextual>0,"contextual called");bool spaces=false;for(auto&s:f.meter.calls)spaces|=s=="    ";check(spaces,"full space span measured");f.layout();near(f.rect().height,40,"repeat layout");}
  {scenario="text transform";Fixture f("aa    bb","#host{text-transform:uppercase}");near(f.rect().height,40,"transformed height");f.expect({{"AA",{0,0,20,20}},{"    ",{20,0,40,20}},{"BB",{0,20,20,20}}});char*t=aether_node_get_text_content(aether_node_get_child(aether_doc_get_element_by_id(f.doc,"host"),0));check(t&&!std::strcmp(t,"aa    bb"),"DOM unchanged");aether_string_free(t);}
- {scenario="conservative physical scroll overflow";Fixture f("aa    bb","#host{overflow:auto}");auto m=aether_layout_box_get_scroll_metrics(f.box());near(m.scrollable_overflow_x,10,"full physical spaces retained in scroll");near(m.scrollable_overflow_y,0,"two lines fit");}
+ {scenario="hanging excluded from scroll overflow";Fixture f("aa    bb","#host{overflow:auto}");auto m=aether_layout_box_get_scroll_metrics(f.box());near(m.scrollable_overflow_x,0,"hanging spaces excluded from scroll");near(m.scrollable_overflow_y,0,"two lines fit");}
 
  for(const char*align:{"start","center","end"}){
   std::string a=align;float k=a=="center"?.5f:a=="end"?1.f:0.f;
   scenario="trailing conditional alignment "+a;
   Fixture f("aa    ","#host{text-align:"+a+";overflow:auto}");
   near(f.rect().height,20,"EOF height");f.expect({{"aa",{0,0,20,20}},{"    ",{20,0,40,20}}});
-  near(aether_layout_box_get_scroll_metrics(f.box()).scrollable_overflow_x,10,"EOF physical overflow");
+  near(aether_layout_box_get_scroll_metrics(f.box()).scrollable_overflow_x,0,"EOF hanging overflow excluded");
   scenario="short trailing alignment "+a;
   Fixture g("aa  ","#host{text-align:"+a+"}");
   g.expect({{"aa",{10*k,0,20,20}},{"  ",{20+10*k,0,20,20}}});
   scenario="soft hanging physical scroll "+a;
   Fixture h("aa    bb","#host{text-align:"+a+";overflow:auto}");
-  near(aether_layout_box_get_scroll_metrics(h.box()).scrollable_overflow_x,10+30*k,"aligned physical scroll");
+  near(aether_layout_box_get_scroll_metrics(h.box()).scrollable_overflow_x,0,"aligned hanging overflow excluded");
  }
  {scenario="full preserved advance participates in fit";Fixture f("aa  bb");near(f.rect().height,40,"not fit after subtracting suffix");f.expect({{"aa",{0,0,20,20}},{"  ",{20,0,20,20}},{"bb",{0,20,20,20}}});}
  {scenario="nowrap unit across runs";Fixture f("aa  <span style='white-space:nowrap'>b<span>b</span> cc</span>");near(f.rect().height,40,"one indivisible nowrap second line");f.expect({{"aa",{0,0,20,20}},{"  ",{20,0,20,20}},{"b",{0,20,10,20}},{"b",{10,20,10,20}},{" ",{20,20,10,20}},{"cc",{30,20,20,20}}});}

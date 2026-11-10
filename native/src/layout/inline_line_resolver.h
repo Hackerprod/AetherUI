@@ -8,7 +8,7 @@
 
 // Operation-local, pure line decisions. The caller owns text, style snapshots,
 // owners and boxes; this class never measures text or invokes external code.
-// Physical advances stay intact. Hanging affects alignment, not scroll bounds.
+// Physical advances stay intact. Hanging determines alignment and the caller's private scroll proxy.
 enum class inline_line_end { soft, forced, paragraph_end };
 struct inline_line_metrics {
     float width = 0.f, height = 0.f, baseline = 0.f;
