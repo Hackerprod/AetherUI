@@ -191,25 +191,25 @@ void metadata_and_index() {
     }
     rule_index_s index;
     for (const auto& rule : actual.rules) rule_index_add(&index,&rule);
-    require(index.by_id.empty() && index.by_type.empty() && index.by_class.size() == 2 &&
-            index.universal.size() == 5 &&
+    require(index.by_id().empty() && index.by_type().empty() && index.by_class().size() == 2 &&
+            index.universal().size() == 5 &&
             index.dependencies == (SELECTOR_DEP_SELF_CLASS | SELECTOR_DEP_SELF_ID),
             "universal and outer-class buckets, no nested-anchor promotion or discarded state dependency");
-    require(index.by_class.at("item") == std::vector<const compiled_rule_s*>{&actual.rules[3]} &&
-            index.by_class.at("safe") == std::vector<const compiled_rule_s*>{&actual.rules[4]},
+    require(index.by_class().at("item") == std::vector<const compiled_rule_s*>{&actual.rules[3]} &&
+            index.by_class().at("safe") == std::vector<const compiled_rule_s*>{&actual.rules[4]},
             "class buckets contain only their outer anchored rule");
     node_style_info_s plain{"ghost","div",{}};
     std::vector<const compiled_rule_s*> candidates;
     rule_index_get_candidates(&index,&plain,candidates);
-    require(candidates == index.universal, "universal candidates retained even for selectors that cannot match");
+    require(candidates == index.universal(), "universal candidates retained even for selectors that cannot match");
     candidates.clear();
     node_style_info_s classes{"ghost","div",{"item","safe"}};
     rule_index_get_candidates(&index,&classes,candidates);
     require(candidates.size() == 7 && std::unordered_set<const compiled_rule_s*>(candidates.begin(),candidates.end()).size() == 7,
             "class plus universal candidates retain every rule once");
     rule_index_clear(&index);
-    require(index.dependencies == SELECTOR_DEP_NONE && index.universal.empty() && index.by_class.empty() &&
-            index.by_id.empty() && index.by_type.empty(), "index cleanup resets every bucket and dependency");
+    require(index.dependencies == SELECTOR_DEP_NONE && index.universal().empty() && index.by_class().empty() &&
+            index.by_id().empty() && index.by_type().empty(), "index cleanup resets every bucket and dependency");
 }
 } // namespace
 int main() {

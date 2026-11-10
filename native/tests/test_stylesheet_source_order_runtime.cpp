@@ -70,7 +70,7 @@ struct fixture {
         const auto sheets = runtime->sheets.size();
         const auto states = runtime->states.size();
         auto* current = runtime->states.at(node).get();
-        const auto bucket = runtime->index.by_class.at("a");
+        const auto bucket = runtime->index.by_class().at("a");
         int64_t handle = -123; int32_t count = -456;
         const int before = limit_diagnostics;
         check(aether_style_runtime_add_stylesheet(runtime, source, 2, "rejected", &handle, &count) ==
@@ -80,7 +80,7 @@ struct fixture {
             "rejected counters untouched");
         check(runtime->sheets.size() == sheets && runtime->states.size() == states &&
             runtime->states.at(node).get() == current, "rejected sheets and cached state untouched");
-        check(runtime->index.by_class.at("a") == bucket, "rejected index unchanged");
+        check(runtime->index.by_class().at("a") == bucket, "rejected index unchanged");
         check(limit_diagnostics == before + 1, "one limit diagnostic");
     }
 };
@@ -248,7 +248,7 @@ void failed_callback(const char* code, const char*, const char*, const char*, vo
               f.runtime->next_rule_id == INT32_MAX - 1, "R7 complete rollback before first callback");
         check(f.runtime->states.at(f.node).get() == c.original_state,
               "R7 failed outer has not invalidated existing cache");
-        check(f.runtime->index.by_class.at("a").size() == 1,
+        check(f.runtime->index.by_class().at("a").size() == 1,
               "R7 failed outer has published no staged index entries");
         near(f.resolve().opacity, .4f, "R7 original sheet visible during failure callback");
         c.nested = f.add(".a{opacity:.8}");

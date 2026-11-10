@@ -222,23 +222,23 @@ void anchors_and_index() {
     require(out.rules[5].selector.anchor.type_name == "a" && out.rules[5].selector.anchor.id.empty(),"hash CDC ID remains ancestor, not subject anchor");
     rule_index_s index;
     for (const auto& rule : out.rules) rule_index_add(&index,&rule);
-    require(index.by_id.empty() && index.by_class.size() == 2 && index.by_type.size() == 1 && index.universal.size() == 3,
+    require(index.by_id().empty() && index.by_class().size() == 2 && index.by_type().size() == 1 && index.universal().size() == 3,
             "no numeric, ghost, or CDC class bucket");
     require((index.dependencies & SELECTOR_DEP_SELF_STATE) == 0,"discarded hover never reaches index");
-    require(index.by_class.at("item") == std::vector<const compiled_rule_s*>{&out.rules[3]} &&
-            index.by_class.at("safe") == std::vector<const compiled_rule_s*>{&out.rules[4]} &&
-            index.by_type.at("a") == std::vector<const compiled_rule_s*>{&out.rules[5]},"exact survivor buckets");
+    require(index.by_class().at("item") == std::vector<const compiled_rule_s*>{&out.rules[3]} &&
+            index.by_class().at("safe") == std::vector<const compiled_rule_s*>{&out.rules[4]} &&
+            index.by_type().at("a") == std::vector<const compiled_rule_s*>{&out.rules[5]},"exact survivor buckets");
     node_style_info_s node{"123","span",{"123","--"}};
     std::vector<const compiled_rule_s*> candidates;
     rule_index_get_candidates(&index,&node,candidates);
-    require(candidates == index.universal,"numeric DOM values do not retrieve phantom rules");
+    require(candidates == index.universal(),"numeric DOM values do not retrieve phantom rules");
     node_style_info_s valid{"","a",{"safe","item"}};
     candidates.clear(); rule_index_get_candidates(&index,&valid,candidates);
     require(candidates.size() == 6 && std::unordered_set<const compiled_rule_s*>(candidates.begin(),candidates.end()).size() == 6,
             "all legitimate rules retrieved once including impossible logical rule");
     rule_index_clear(&index);
-    require(index.dependencies == SELECTOR_DEP_NONE && index.by_id.empty() && index.by_class.empty() &&
-            index.by_type.empty() && index.universal.empty(),"index cleanup");
+    require(index.dependencies == SELECTOR_DEP_NONE && index.by_id().empty() && index.by_class().empty() &&
+            index.by_type().empty() && index.universal().empty(),"index cleanup");
 }
 
 void capacity() {

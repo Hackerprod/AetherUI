@@ -91,6 +91,16 @@ struct aether_style_runtime_s {
     aether_node_s* legacy_inheritance_root = nullptr; // Candidate-only compatibility boundary.
     std::thread::id owner_thread = std::this_thread::get_id();
     rule_index_s index;
+    void copy_index_for_preparation(const aether_style_runtime_s& source) {
+        index = source.index;
+        // Unlike a generic copy, synchronous preparation borrows only stable,
+        // runtime-owned sheets. No callbacks run while preparing, mutations are
+        // guarded, and sheet_epoch rejects stale commits before rule use.
+        index.before_possible_ = source.index.before_possible_;
+        index.after_possible_ = source.index.after_possible_;
+        index.pseudo_capabilities_complete_ = source.index.pseudo_capabilities_complete_;
+        index.disjoint_runtime_rules_ = source.index.disjoint_runtime_rules_;
+    }
     static rule_index_s prepare_rule_index(const aether_style_runtime_s* runtime,
         const compiled_style_sheet_s* extra = nullptr, int64_t omit = 0);
 };
@@ -181,7 +191,10 @@ rule_index_s aether_style_runtime_s::prepare_rule_index(const aether_style_runti
     // No match/media/state/content filtering: even a content-free pseudo rule
     // can produce diagnostics. Unknown future kinds force the full path.
     bool complete = true;
+    bool unique_ids = true;
+    std::unordered_set<int32_t> rule_ids;
     for (const auto* sheet : sheets) for (const auto& rule : sheet->rules) {
+        if (!rule_ids.insert(rule.rule_id).second) unique_ids = false;
         switch (rule.selector.pseudo_element) {
         case aether_pseudo_element_t::none: break;
         case aether_pseudo_element_t::before: prepared.before_possible_ = true; break;
@@ -189,7 +202,11 @@ rule_index_s aether_style_runtime_s::prepare_rule_index(const aether_style_runti
         default: complete = false; break;
         }
     }
+    // Rebuild inserts every record once into one private bucket. Ownership and
+    // rule-vector stability are guaranteed here, not by generic rebuild callers.
+    // Publish certificates only after all fallible validation has completed.
     prepared.pseudo_capabilities_complete_ = complete;
+    prepared.disjoint_runtime_rules_ = unique_ids;
     return prepared;
 }
 
@@ -918,7 +935,7 @@ static aether_status_t prepare_revision_impl(
         staged.options = runtime->options; staged.environment = requested_environment;
         if (isolate_legacy_root && root != document && root->parent && root->parent->type != AETHER_NODE_DOCUMENT)
             staged.legacy_inheritance_root = root;
-        staged.index = runtime->index;
+        staged.copy_index_for_preparation(*runtime);
         staged.document_measures = std::make_shared<document_measure_context_s>();
         staged.document_measures->viewport_width = requested_environment.viewport_width;
         staged.document_measures->viewport_height = requested_environment.viewport_height;

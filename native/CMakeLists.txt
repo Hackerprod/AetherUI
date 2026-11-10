@@ -925,6 +925,35 @@ if(AETHERUI_BUILD_TESTS)
     endif()
     add_test(NAME aether.stylesheet-source-order-runtime COMMAND aether_stylesheet_source_order_runtime_test)
 
+    # Certificate and fault coverage use authentic runtime code without ABI hooks.
+    get_target_property(rule_index_test_sources aether_core SOURCES)
+    list(REMOVE_ITEM rule_index_test_sources src/style_runtime/style_runtime_core.cpp)
+    add_library(aether_rule_index_test_core OBJECT ${rule_index_test_sources})
+    target_include_directories(aether_rule_index_test_core PRIVATE include)
+    target_compile_definitions(aether_rule_index_test_core PRIVATE AETHER_EXPORTS)
+    if(MSVC)
+        target_compile_options(aether_rule_index_test_core PRIVATE /W4 /utf-8)
+        target_compile_definitions(aether_rule_index_test_core PRIVATE _CRT_SECURE_NO_WARNINGS NOMINMAX)
+    else()
+        target_compile_options(aether_rule_index_test_core PRIVATE -Wall -Wextra -pedantic -ffp-contract=off)
+    endif()
+    add_executable(aether_rule_index_test tests/test_rule_index.cpp
+        $<TARGET_OBJECTS:aether_rule_index_test_core>)
+    target_include_directories(aether_rule_index_test PRIVATE include)
+    target_compile_definitions(aether_rule_index_test PRIVATE AETHER_EXPORTS)
+    add_test(NAME aether.rule-index COMMAND aether_rule_index_test)
+    add_executable(aether_rule_index_runtime_test tests/test_rule_index_runtime.cpp
+        $<TARGET_OBJECTS:aether_rule_index_test_core>)
+    target_include_directories(aether_rule_index_runtime_test PRIVATE include)
+    target_compile_definitions(aether_rule_index_runtime_test PRIVATE AETHER_EXPORTS)
+    add_test(NAME aether.rule-index-runtime COMMAND aether_rule_index_runtime_test)
+    # Opt-in public-ABI benchmark, compilable unchanged against base/candidate.
+    add_executable(aether_rule_index_runtime_benchmark EXCLUDE_FROM_ALL
+        tests/benchmark_rule_index_runtime.cpp)
+    target_link_libraries(aether_rule_index_runtime_benchmark PRIVATE AetherUI::Core)
+
+
+
     # Pseudo-name identity and recursive metadata without exporting private AST types.
     add_executable(aether_pseudo_name_parser_test tests/test_pseudo_name_parser.cpp
         src/style_runtime/selector_parser.cpp)

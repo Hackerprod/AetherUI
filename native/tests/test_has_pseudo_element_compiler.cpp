@@ -291,11 +291,11 @@ void metadata_and_index() {
             "rejected-only IS is present-empty, not removed or replaced with universal");
     rule_index_s index;
     for (const auto& rule : actual.rules) rule_index_add(&index,&rule);
-    require(index.by_id.empty() && index.by_type.empty() && index.universal.empty() &&
-            index.by_class.size() == 2 && index.dependencies == dependencies,
+    require(index.by_id().empty() && index.by_type().empty() && index.universal().empty() &&
+            index.by_class().size() == 2 && index.dependencies == dependencies,
             "index retains valid impossible dependencies without promoting nested anchors");
-    require(index.by_class.at("safe") == std::vector<const compiled_rule_s*>{&actual.rules[0]} &&
-            index.by_class.at("card").size() == 8, "index buckets contain only published rules");
+    require(index.by_class().at("safe") == std::vector<const compiled_rule_s*>{&actual.rules[0]} &&
+            index.by_class().at("card").size() == 8, "index buckets contain only published rules");
     std::vector<const compiled_rule_s*> candidates;
     node_style_info_s poison{"poison","div",{}};
     rule_index_get_candidates(&index,&poison,candidates);
@@ -305,8 +305,8 @@ void metadata_and_index() {
     require(candidates.size() == 9 && std::unordered_set<const compiled_rule_s*>(candidates.begin(),candidates.end()).size() == 9,
             "every retained rule is retrieved once including impossible selectors");
     rule_index_clear(&index);
-    require(index.dependencies == SELECTOR_DEP_NONE && index.by_class.empty() && index.by_id.empty() &&
-            index.by_type.empty() && index.universal.empty(), "index cleanup");
+    require(index.dependencies == SELECTOR_DEP_NONE && index.by_class().empty() && index.by_id().empty() &&
+            index.by_type().empty() && index.universal().empty(), "index cleanup");
 }
 } // namespace
 int main() {

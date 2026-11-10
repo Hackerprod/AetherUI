@@ -484,10 +484,22 @@ bool variable_resolve(
 // ═══ Rule index ════════════════════════════════════════════════
 
 struct rule_index_s {
-    std::unordered_map<std::string, std::vector<const compiled_rule_s*>> by_id;
-    std::unordered_map<std::string, std::vector<const compiled_rule_s*>> by_class;
-    std::unordered_map<std::string, std::vector<const compiled_rule_s*>> by_type;
-    std::vector<const compiled_rule_s*> universal;
+    using bucket_type = std::vector<const compiled_rule_s*>;
+    using bucket_map = std::unordered_map<std::string, bucket_type>;
+
+    rule_index_s() = default;
+    // A generic copy borrows rules; it cannot acquire runtime ownership promises.
+    rule_index_s(const rule_index_s& other);
+    rule_index_s& operator=(const rule_index_s& other);
+    rule_index_s(rule_index_s&& other) noexcept;
+    rule_index_s& operator=(rule_index_s&& other) noexcept;
+    friend void swap(rule_index_s& left, rule_index_s& right) noexcept;
+
+    // Buckets cannot be changed without invalidating runtime certificates.
+    const bucket_map& by_id() const noexcept { return by_id_; }
+    const bucket_map& by_class() const noexcept { return by_class_; }
+    const bucket_map& by_type() const noexcept { return by_type_; }
+    const bucket_type& universal() const noexcept { return universal_; }
     selector_dependency_flags dependencies = SELECTOR_DEP_NONE;
 
     // Only the opaque runtime certifies a complete set of runtime-owned rules.
@@ -500,12 +512,21 @@ struct rule_index_s {
         default: return true;
         }
     }
-    void invalidate_pseudo_capabilities() noexcept { pseudo_capabilities_complete_ = false; }
+    bool has_disjoint_runtime_rules() const noexcept { return disjoint_runtime_rules_; }
 private:
     friend struct aether_style_runtime_s;
+    friend void rule_index_clear(rule_index_s*);
+    friend void rule_index_add(rule_index_s*, const compiled_rule_s*);
+    void invalidate_capabilities() noexcept {
+        pseudo_capabilities_complete_ = false;
+        disjoint_runtime_rules_ = false;
+    }
+    bucket_map by_id_, by_class_, by_type_;
+    bucket_type universal_;
     bool before_possible_ = false;
     bool after_possible_ = false;
     bool pseudo_capabilities_complete_ = false;
+    bool disjoint_runtime_rules_ = false;
 };
 
 void rule_index_clear(rule_index_s* idx);

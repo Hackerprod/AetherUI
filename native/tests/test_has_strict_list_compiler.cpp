@@ -138,8 +138,8 @@ void recovery_and_index() {
     }
     rule_index_s index;
     for (const auto& rule : actual.rules) rule_index_add(&index,&rule);
-    require(index.by_id.empty() && index.by_type.empty() && index.universal.empty() &&
-            index.by_class.size() == 2 && index.dependencies == SELECTOR_DEP_SELF_CLASS,
+    require(index.by_id().empty() && index.by_type().empty() && index.universal().empty() &&
+            index.by_class().size() == 2 && index.dependencies == SELECTOR_DEP_SELF_CLASS,
             "rejected has cannot add index buckets or dependencies");
     node_style_info_s poison{"poison","div",{}};
     std::vector<const compiled_rule_s*> candidates;
@@ -149,7 +149,7 @@ void recovery_and_index() {
     rule_index_get_candidates(&index,&safe,candidates);
     require(candidates.size() == 3, "valid anchors retain all candidates");
     rule_index_clear(&index);
-    require(index.dependencies == SELECTOR_DEP_NONE && index.by_class.empty(), "index cleanup");
+    require(index.dependencies == SELECTOR_DEP_NONE && index.by_class().empty(), "index cleanup");
 }
 } // namespace
 int main() {

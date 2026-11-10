@@ -162,11 +162,11 @@ void anchors_and_candidates() {
     require(out.rules.size() == 14 && next == 215, "one rule per selector despite ID multiplicity");
     rule_index_s index;
     for (const auto& rule : out.rules) rule_index_add(&index,&rule);
-    require(index.by_id.size() == 2 && index.by_id.at("a").size() == 4 && index.by_id.at("b").size() == 1 &&
-            index.by_class.size() == 1 && index.by_class.at("ready").size() == 3 &&
-            index.by_type.size() == 1 && index.by_type.at("div").size() == 2 && index.universal.size() == 4,
+    require(index.by_id().size() == 2 && index.by_id().at("a").size() == 4 && index.by_id().at("b").size() == 1 &&
+            index.by_class().size() == 1 && index.by_class().at("ready").size() == 3 &&
+            index.by_type().size() == 1 && index.by_type().at("div").size() == 2 && index.universal().size() == 4,
             "single direct-rightmost bucket per rule; no logical or ancestor ID promotion");
-    require(index.by_id.at("b") == std::vector<const compiled_rule_s*>{&out.rules[2]} &&
+    require(index.by_id().at("b") == std::vector<const compiled_rule_s*>{&out.rules[2]} &&
             out.rules[1].selector.anchor.id == "a" && out.rules[2].selector.anchor.id == "b",
             "first direct ID determines bucket for both contradictory permutations");
     require((index.dependencies & (SELECTOR_DEP_SELF_ID | SELECTOR_DEP_ANCESTOR |
@@ -189,8 +189,8 @@ void anchors_and_candidates() {
     candidates("leaf","span",{},{205,206,207,208});
     candidates("","span",{"ready","ready"},{205,206,207,208,209,212,214});
     rule_index_clear(&index);
-    require(index.by_id.empty() && index.by_class.empty() && index.by_type.empty() &&
-            index.universal.empty() && index.dependencies == SELECTOR_DEP_NONE, "clear resets buckets and metadata");
+    require(index.by_id().empty() && index.by_class().empty() && index.by_type().empty() &&
+            index.universal().empty() && index.dependencies == SELECTOR_DEP_NONE, "clear resets buckets and metadata");
 }
 
 void capacity_and_rollback() {
