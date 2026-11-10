@@ -19,9 +19,9 @@ inline layout_scroll_bounds_s aether_scroll_own_bounds(const aether_layout_box_s
     const auto& proxy = box->scroll_proxy;
     if (proxy.valid && box->kind == LAYOUT_BOX_TEXT) {
         const double dx = double(box->content_box.x) - double(proxy.reference_content_x);
-        const double dy = double(box->content_box.y) - double(proxy.reference_content_y);
+        const double top = double(box->content_box.y);
         const layout_scroll_bounds_s bounds{
-            proxy.left + dx, proxy.top + dy, proxy.right + dx, proxy.bottom + dy, false};
+            proxy.left + dx, top, proxy.right + dx, top + double(box->content_box.height), false};
         aether_check_scroll_coordinate(bounds.left);
         aether_check_scroll_coordinate(bounds.top);
         aether_check_scroll_coordinate(bounds.right);

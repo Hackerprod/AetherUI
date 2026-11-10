@@ -1086,10 +1086,9 @@ static float layout_hanging_inline_items(
                 box->padding_box = box->border_box = box->margin_box = box->content_box;
                 if (summary.hanging_width > 0.f) {
                     const auto& rect = box->content_box;
-                    box->scroll_proxy = {rect.x, rect.y,
-                        std::clamp(double(rect.x), line_left, line_right), rect.y,
+                    box->scroll_proxy = {std::clamp(double(rect.x), line_left, line_right),
                         std::clamp(double(rect.x) + rect.width, line_left, line_right),
-                        double(rect.y) + rect.height, true};
+                        rect.x, true};
                     // Validate before publication, with the same helper used by
                     // both scroll domains. Physical paint/hit geometry is intact.
                     (void)aether_scroll_own_bounds(box);

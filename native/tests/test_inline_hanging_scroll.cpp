@@ -14,7 +14,7 @@ void* operator new[](std::size_t n,const std::nothrow_t&) noexcept {try{return :
 void operator delete(void*p,const std::nothrow_t&) noexcept {std::free(p);}
 void operator delete[](void*p,const std::nothrow_t&) noexcept {std::free(p);}
 #include "fault_inject_aligned.h"
-// Hanging scroll uses a private two-dimensional proxy; physical text stays intact.
+// Hanging scroll uses a private horizontal proxy; physical text stays intact.
 #define main hanging_geometry_suite
 #include "test_inline_hanging.cpp"
 #undef main
@@ -124,11 +124,9 @@ static void public_projections() {
         }
     }
 }
-static void set_proxy(aether_layout_box_s* box,double l,double t,double r,double b) {
+static void set_proxy(aether_layout_box_s* box,double l,double r) {
     box->scroll_proxy.reference_content_x=box->content_box.x;
-    box->scroll_proxy.reference_content_y=box->content_box.y;
-    box->scroll_proxy.left=l;box->scroll_proxy.top=t;
-    box->scroll_proxy.right=r;box->scroll_proxy.bottom=b;box->scroll_proxy.valid=true;
+    box->scroll_proxy.left=l;box->scroll_proxy.right=r;box->scroll_proxy.valid=true;
 }
 static void check_bounds(const layout_scroll_bounds_s& b,OracleRect expected,const char* what) {
     check(!b.empty,what);exact(b.left,expected.l,"proxy left");exact(b.top,expected.t,"proxy top");
@@ -191,15 +189,14 @@ static void anchored_extremes_and_clone() {
     for(float x:{1.e9f,1.e38f,-1.e9f,-1.e38f}) {
         scenario="anchored extreme "+std::to_string(x);
         Fixture f("aa    bb");auto* text=f.box()->children.at(1);
-        text->content_box={x,x,40,20};set_proxy(text,20,0,20,20);
+        text->content_box={x,0,40,20};set_proxy(text,20,20);
         check_bounds(aether_scroll_own_bounds(text),{20,0,20,20},"initial extreme retains small edge");
         const auto reference=text->scroll_proxy;
         for(float delta:{1.f,128.f,-128.f}) {
-            text->content_box.x=x+delta;text->content_box.y=x-delta;
-            const double dx=double(text->content_box.x)-double(x),dy=double(text->content_box.y)-double(x);
+            text->content_box.x=x+delta;text->content_box.y=-delta;
+            const double dx=double(text->content_box.x)-double(x),dy=double(text->content_box.y);
             check_bounds(aether_scroll_own_bounds(text),{20+dx,dy,20+dx,20+dy},"observable offset");
             exact(text->scroll_proxy.reference_content_x,reference.reference_content_x,"reference x never reanchors");
-            exact(text->scroll_proxy.reference_content_y,reference.reference_content_y,"reference y never reanchors");
         }
         aether_layout_result_t clone{};need(aether_layout_clone_snapshot(f.result,&clone)==AETHER_OK,"extreme clone");
         auto* copied=aether_layout_result_find_primary_box(clone,aether_doc_get_element_by_id(f.doc,"host"))->children.at(1);
@@ -207,17 +204,17 @@ static void anchored_extremes_and_clone() {
         const auto a=aether_scroll_own_bounds(text),b=aether_scroll_own_bounds(copied);
         check_bounds(b,{a.left,a.top,a.right,a.bottom},"clone retains exact anchor and proxy");
         exact(copied->scroll_proxy.reference_content_x,reference.reference_content_x,"clone preserves original x reference");
-        exact(copied->scroll_proxy.reference_content_y,reference.reference_content_y,"clone preserves original y reference");
         aether_layout_result_destroy(clone);
     }
 }
 // Exercise both consumers with a real result-owned box; restore tree membership
 // before destruction. No test-only allocations participate in the accumulators.
-static void segment_projection_and_clips() {
+static void segment_projection_and_clips(float initial_y = 0) {
     Fixture f("aa    bb");auto* parent=f.box();auto* text=parent->children.at(1);
     const auto children=parent->children;parent->children={text};
     text->content_box=text->margin_box=text->border_box=text->padding_box={1.e9f,0,40,20};
-    set_proxy(text,20,0,20,20);
+    text->content_box.y=initial_y;set_proxy(text,20,20);
+    text->content_box.y-=initial_y;
     for(auto m:std::vector<aether_transform_matrix>{{1,0,0,1,0,0},{1,0,0,1,7,11},{-2,0,0,-1,80,60},{0,0,0,0,8,9},{0,1,-1,0,100,0},{.70710678f,.70710678f,-.70710678f,.70710678f,20,0},{1,0,1,1,0,0}}) {
         scenario="degenerate four-corner projection";
         parent->visual_sample_valid=true;text->visual_sample_valid=true;text->visual_has_transform=true;text->visual_transform=m;
@@ -260,8 +257,8 @@ static void segment_projection_and_clips() {
     near(right,20,"point clip right");near(bottom,10,"point clip bottom");
     scenario="opposite disjoint proxies cannot bridge clip";
     auto* sibling=children.at(0);sibling->content_box={-10,0,0,20};
-    set_proxy(sibling,-10,0,-10,20);sibling->visual_has_transform=false;
-    set_proxy(text,30,0,30,20);parent->children={sibling,text};parent->padding_box={0,0,20,20};
+    set_proxy(sibling,-10,-10);sibling->visual_has_transform=false;
+    set_proxy(text,30,30);parent->children={sibling,text};parent->padding_box={0,0,20,20};
     right=bottom=-1000;accumulate_scrollable_descendant_extent(grand,true,true,right,bottom);
     near(right,0,"separate clipped contributions never bridge horizontally");near(bottom,0,"disjoint proxies never retain phantom height");
     grand->children=grand_children;parent->children=children;
@@ -317,13 +314,19 @@ static void clone_faults_and_numeric_rollback() {
     check(finished&&delivered>10,"clone sweep reaches success after allocations");
     std::printf("hanging clone OOM: %d failures injected\n",delivered);
     struct SavedVisual {aether_layout_box_s* box;bool valid,has; aether_transform_matrix matrix;float opacity;int64_t time;aether_scroll_metrics_t scroll;};
-    for(int invalid=0;invalid<4;++invalid) {
+    const auto content=text->content_box;
+    for(int invalid=0;invalid<9;++invalid) {
         scenario="invalid proxy transaction "+std::to_string(invalid);
-        text->scroll_proxy=proxy;
+        text->scroll_proxy=proxy;text->content_box=content;
         if(invalid==0)text->scroll_proxy.right=std::numeric_limits<double>::infinity();
         if(invalid==1)text->scroll_proxy.left=proxy.right+1;
         if(invalid==2)text->scroll_proxy.reference_content_x=std::numeric_limits<float>::quiet_NaN();
-        if(invalid==3)text->scroll_proxy.bottom=double(std::numeric_limits<float>::max())*2;
+        if(invalid==3)text->content_box.y=std::numeric_limits<float>::infinity();
+        if(invalid==4)text->content_box.y=std::numeric_limits<float>::quiet_NaN();
+        if(invalid==5)text->content_box.height=std::numeric_limits<float>::infinity();
+        if(invalid==6)text->content_box.height=std::numeric_limits<float>::quiet_NaN();
+        if(invalid==7)text->content_box.height=-1;
+        if(invalid==8){text->content_box.y=std::numeric_limits<float>::max();text->content_box.height=std::numeric_limits<float>::max();}
         std::vector<SavedVisual> states;
         for(auto* box:f.result->paint_order)states.push_back({box,box->visual_sample_valid,box->visual_has_transform,box->visual_transform,box->visual_opacity,box->visual_timestamp,box->scroll});
         check(aether_contextual_transition_finalize_layout(f.result,nullptr)==AETHER_ERROR_INVALID_STATE,"invalid proxy rejects finalize");
@@ -334,7 +337,7 @@ static void clone_faults_and_numeric_rollback() {
             check(std::memcmp(&box->scroll,&old.scroll,sizeof(old.scroll))==0,"scroll metrics roll back");}
         // Invalid data remains untouched, rather than being silently reanchored.
         if(invalid==0)check(std::isinf(text->scroll_proxy.right),"failed read never repairs proxy");
-        unchanged_runs(saved,f.runs());
+        text->content_box=content;unchanged_runs(saved,f.runs());
     }
     text->scroll_proxy=proxy;need(aether_contextual_transition_finalize_layout(f.result,nullptr)==AETHER_OK,"retry after proxy numeric rejection");
 }
@@ -393,8 +396,42 @@ static void shifted_layout_and_scroll_input() {
     aether_layout_result_destroy(result);
 }
 
+static void public_vertical_cancellation() {
+    // Exercise production relative positioning/offset_box, without private mutation.
+    for(const char* css:{
+        "#host{margin-top:100000000000000000000000000000000000000px;position:relative;top:-100000000000000000000000000000000000000px}",
+        "#outer{padding-top:100000000000000000000000000000000000000px}#host{position:relative;top:-100000000000000000000000000000000000000px}"})for(bool ctx:{false,true}) {
+        scenario="public vertical placement cancellation";Fixture f("aa    ",css);
+        if(ctx)contextual(f);
+        for(auto* text:f.box()->children)if(text->scroll_proxy.valid){
+            auto b=aether_scroll_own_bounds(text);
+            exact(text->content_box.y,0,"production placement canceled huge y");
+            exact(b.top,0,"public placement proxy top");exact(b.bottom,20,"public placement preserves height");
+        }
+    }
+}
+
+static void vertical_cancellation_regression() {
+    for(float y:{1.e38f,-1.e38f,1.e9f,-1.e9f})for(float height:{0.f,20.f}) {
+        scenario="vertical cancellation retains current physical height";
+        Fixture f("aa    bb");auto* text=f.box()->children.at(1);
+        text->content_box=text->margin_box=text->border_box=text->padding_box={20,y,40,height};
+        set_proxy(text,20,20);
+        for(auto* rect:{&text->content_box,&text->margin_box,&text->border_box,&text->padding_box})rect->y-=y;
+        check_bounds(aether_scroll_own_bounds(text),{20,0,20,height},"cancel huge y to zero");
+        for(auto* rect:{&text->content_box,&text->margin_box,&text->border_box,&text->padding_box}){rect->x+=7;rect->y+=9;}
+        check_bounds(aether_scroll_own_bounds(text),{27,9,27,9+height},"small offset after cancellation");
+        aether_layout_result_t clone{};
+        need(aether_layout_clone_snapshot(f.result,&clone)==AETHER_OK,"vertical cancellation clone");
+        auto* copied=aether_layout_result_find_primary_box(clone,aether_doc_get_element_by_id(f.doc,"host"))->children.at(1);
+        check_bounds(aether_scroll_own_bounds(copied),{27,9,27,9+height},"clone retains restored height");
+        aether_layout_result_destroy(clone);
+    }
+}
+
 int main() {
-    basic_cases();public_projections();physical_proxy_coverage();stable_alignment_summaries();real_fragmented_extremes();anchored_extremes_and_clone();segment_projection_and_clips();clone_faults_and_numeric_rollback();transition_reuse();shifted_layout_and_scroll_input();
+    static_assert(sizeof(layout_scroll_proxy_s)==24,"horizontal proxy stays compact");
+    public_vertical_cancellation();vertical_cancellation_regression();basic_cases();public_projections();physical_proxy_coverage();stable_alignment_summaries();real_fragmented_extremes();anchored_extremes_and_clone();segment_projection_and_clips();segment_projection_and_clips(1.e38f);segment_projection_and_clips(-1.e38f);clone_faults_and_numeric_rollback();transition_reuse();shifted_layout_and_scroll_input();
     std::printf("sizeof(layout_box)=%zu sizeof(scroll_proxy)=%zu\n",sizeof(aether_layout_box_s),sizeof(layout_scroll_proxy_s));
     std::printf("inline-hanging-scroll: %d checks, %d failures\n",checks,failures);return failures?1:0;
 }

@@ -83,12 +83,13 @@ struct block_static_anchor_s {
     float block_offset = 0.f;
 };
 
-// Own scroll contribution only. Keep the original content origin rather than a
-// delta from a distant physical fragment: subtracting huge coordinates would
-// lose a small hanging edge. Readers add only the observable float movement.
+// Own horizontal scroll contribution only. Keep the original x origin rather
+// than a delta from a distant fragment, preserving a small hanging edge.
+// Vertical bounds always come from current physical content geometry: storing
+// a distant y origin would lose height when a large placement cancels to zero.
 struct layout_scroll_proxy_s {
-    float reference_content_x = 0.f, reference_content_y = 0.f;
-    double left = 0., top = 0., right = 0., bottom = 0.;
+    double left = 0., right = 0.;
+    float reference_content_x = 0.f;
     bool valid = false;
 };
 
