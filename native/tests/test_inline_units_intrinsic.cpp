@@ -134,12 +134,12 @@ int main(){
   near(intrinsic(outer,false,M::min_content,1),60,"outer word survives nested layout");
   check(re.entered,"nested layout during source measurement");check(re.calls==2,"outer callbacks not repeated");
  }
- {scenario="pre-wrap split CRLF geometry remains existing contract";
+ {scenario="pre-wrap source newlines separated by markup";
   Fixture f("<span>aa\r</span><span></span><span>\nbb</span>",mode_css("pre-wrap",100));
-  near(f.rect().height,60,"split CRLF geometry remains unchanged");
+  near(f.rect().height,60,"markup separates two source breaks");
   near(intrinsic(f,true,M::max_content,100),60,"height measurement not routed to sizing-only units");
-  near(intrinsic(f,false,M::min_content,100),20,"split CRLF intrinsic min");
-  near(intrinsic(f,false,M::max_content,100),20,"split CRLF intrinsic max");
+  near(intrinsic(f,false,M::min_content,100),20,"two source breaks intrinsic min");
+  near(intrinsic(f,false,M::max_content,100),20,"two source breaks intrinsic max");
  }
  for(int map_mode=0;map_mode<3;++map_mode){
   scenario="pre-wrap sizing map producer "+std::to_string(map_mode);Fixture f("<span>abc</span><span>def</span>",mode_css("pre-wrap"),false,true);

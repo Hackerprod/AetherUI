@@ -33,8 +33,13 @@ at a line edge. A soft break is permitted only at an actual collapsed space,
 before the next entire word. Pre-line source newlines force a line break.
 Nowrap uses the same collapse without soft wrapping. Pre preserves all spaces,
 including leading, trailing, and whitespace-only text, without soft wrapping.
-CRLF is one source newline even across transparent or empty inline spans.
-BR explicitly interrupts that source-newline pairing.
+HTML Data-state source bytes are normalized before character-reference decoding:
+contiguous CRLF becomes LF and an isolated CR becomes LF. Markup and comments
+separate source intervals, so `<span>aa\r</span><span>\nbb</span>` produces two LF
+characters, not one CRLF pair. In preserving modes this is three lines (60px
+with a 20px line height). See [Data-state newlines](html-data-newlines.md).
+The layout resolver's separate handling of literal DOM CR/LF is unchanged;
+character references that decode to CR are not source newline normalization.
 
 Previously discarded whitespace-only direct text items remain available to the
 new path. They and new admission-only markers are skipped by all old consumers;

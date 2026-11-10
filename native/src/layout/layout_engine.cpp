@@ -801,7 +801,7 @@ static bool uses_source_unit_resolver(const std::vector<inline_item_s>& items,
                                      bool intrinsic_width = false) {
     const auto mode = parent_style.white_space;
     // PRE_WRAP is admitted only for intrinsic widths. Its hanging/geometry
-    // resolver (including existing split-CRLF height behavior) stays unchanged.
+    // resolver stays unchanged; HTML newlines separated by markup remain two breaks.
     if (!(intrinsic_width && mode == AETHER_WHITE_SPACE_PRE_WRAP) &&
         mode != AETHER_WHITE_SPACE_NORMAL && mode != AETHER_WHITE_SPACE_PRE_LINE &&
         mode != AETHER_WHITE_SPACE_NOWRAP && mode != AETHER_WHITE_SPACE_PRE) return false;
