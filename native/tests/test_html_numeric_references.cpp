@@ -146,10 +146,11 @@ void run(const std::string& name, const std::string& html, const std::vector<Nod
 }
 
 const std::string replacement = "\xEF\xBF\xBD";
-void matrix(const std::string& name, const std::string& input, const std::string& expected) {
+void matrix(const std::string& name, const std::string& input, const std::string& expected,
+            const std::string* data_expected = nullptr) {
     const std::string src = "P" + input + "Z", out = "P" + expected + "Z";
     run(name + "/text", "<body><div>" + src + "</div><p id=after>tail</p></body>",
-        {element("div", {}, {text(out)}), after()});
+        {element("div", {}, {text(data_expected ? "P" + *data_expected + "Z" : out)}), after()});
     if (input.find('\'') == std::string::npos)
         run(name + "/single", "<body><div data-v='" + src + "'></div><p id=after>tail</p></body>",
             {element("div", {{"data-v", out}}), after()});
@@ -535,10 +536,14 @@ void lexical() {
     for (char ws : std::string(" \t\r\n\f\v")) {
         for (const std::string prefix : {"&#", "&#x", "&#X"}) {
             const auto input = prefix + ws + "65;";
-            matrix("whitespace/" + std::to_string(int(ws)), input, input);
+            // Only source CR in Data-state changes; attribute expectations and
+            // character-reference-created CR elsewhere in this matrix do not.
+            const auto data = prefix + (ws == '\r' ? '\n' : ws) + "65;";
+            matrix("whitespace/" + std::to_string(int(ws)), input, input, &data);
         }
+        const auto data = "A" + std::string(1, ws == '\r' ? '\n' : ws) + "tail;";
         matrix("termination-space/" + std::to_string(int(ws)), "&#65" + std::string(1, ws) + "tail;",
-               "A" + std::string(1, ws) + "tail;");
+               "A" + std::string(1, ws) + "tail;", &data);
     }
 }
 void scale() {

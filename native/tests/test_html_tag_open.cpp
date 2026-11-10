@@ -222,7 +222,7 @@ void originals() {
     fixture("original/tab after angle", "a<\tspan>b", {text("a<\tspan>b")});
     fixture("original/line feed after angle", "a<\nspan>b", {text("a<\nspan>b")});
     fixture("original/form feed after angle", "a<\fspan>b", {text("a<\fspan>b")});
-    fixture("original/carriage return after angle", "a<\rspan>b", {text("a<\rspan>b")});
+    fixture("original/carriage return after angle", "a<\rspan>b", {text("a<\nspan>b")});
     fixture("original/real following tag swallowed", "A < 2 <span id='after'>B</span>C",
             {text("A < 2 "), span(), text("C")});
     fixture("original/terminal angle", "angle <", {text("angle <")});
@@ -241,7 +241,9 @@ void invalid_openings() {
              {"space", " "}, {"tab", "\t"}, {"LF", "\n"}, {"FF", "\f"},
              {"CR", "\r"}, {"CRLF", "\r\n"}, {"VT", "\v"}}) {
         const auto input = "a<" + whitespace.second + "span>b";
-        fixture("whitespace/" + whitespace.first, input, {text(input)});
+        const auto expected = "a<" + (whitespace.first == "CR" || whitespace.first == "CRLF"
+                                     ? std::string("\n") : whitespace.second) + "span>b";
+        fixture("whitespace/" + whitespace.first, input, {text(expected)});
     }
     for (const char sign : std::string("$=>\"'()[]+*%&`")) {
         const std::string input = std::string("a<") + sign + "x>b";
@@ -257,10 +259,12 @@ void invalid_openings() {
         if ((byte >= 'A' && byte <= 'Z') || (byte >= 'a' && byte <= 'z') ||
             byte == '!' || byte == '/' || byte == '?') continue;
         const auto input = std::string("<") + static_cast<char>(byte);
-        run("ASCII invalid EOF/" + std::to_string(byte), "<body id=fixture>" + input, {body({text(input)})});
+        const auto expected = std::string("<") + static_cast<char>(byte == 13 ? 10 : byte);
+        run("ASCII invalid EOF/" + std::to_string(byte), "<body id=fixture>" + input, {body({text(expected)})});
     }
     for (const auto& input : {"<", "<<", "<<<", "< ", "<7", "<\r\n", "< <7 << 2"})
-        run(std::string("real EOF/") + input, std::string("<body id=fixture>") + input, {body({text(input)})});
+        run(std::string("real EOF/") + input, std::string("<body id=fixture>") + input,
+            {body({text(std::string(input) == "<\r\n" ? "<\n" : input)})});
     const std::string repeated(4096, '<');
     run("4096 angles progress", "<body id=fixture>" + repeated, {body({text(repeated)})});
     run("document-level literal", "<7", {text("<7")}, false);
