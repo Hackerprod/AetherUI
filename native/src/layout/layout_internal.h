@@ -179,12 +179,17 @@ float measure_intrinsic_height(
     aether_thicknessf padding, aether_thicknessf border,
     float available_width);
 
+// Only the measured child's own percentage edges use this context. Recursing
+// into its intrinsic content always measures new intrinsic contributions.
+enum class child_width_context_e { intrinsic_contribution, inline_height };
+
 float measure_child_natural_width(
     const aether_layout_engine_s* engine,
     const StyleLookup* styles,
     aether_node_s* child, float maximum,
     aether_layout_result_s* result,
-    aether_intrinsic_size_mode_e mode);
+    aether_intrinsic_size_mode_e mode,
+    child_width_context_e context);
 
 float measure_intrinsic_table_width(
     const aether_layout_engine_s* engine,

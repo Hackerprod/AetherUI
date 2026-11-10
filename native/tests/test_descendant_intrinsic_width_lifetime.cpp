@@ -385,7 +385,8 @@ static void numeric_edges() {
         const StyleLookup lookup(map, nullptr, original->style());
         for (auto mode : {aether_intrinsic_size_mode_e::min_content, aether_intrinsic_size_mode_e::max_content}) {
             bool threw = false;
-            try { (void)measure_child_natural_width(f.engine, &lookup, node, 500, nullptr, mode); }
+            try { (void)measure_child_natural_width(f.engine, &lookup, node, 500, nullptr, mode,
+                child_width_context_e::intrinsic_contribution); }
             catch (const std::overflow_error&) { threw = true; }
             if (!threw) std::fprintf(stderr, "numeric case %d failed to reject invalid width\n", kind);
             REQUIRE(threw);

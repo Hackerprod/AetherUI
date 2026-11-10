@@ -1650,7 +1650,8 @@ static float measure_inline_items_intrinsic_width(
         }
         if (item.is_atomic) {
             fragments.push_back({aether_inline_fragment_kind_e::atomic,
-                measure_child_natural_width(engine, styles, item.element, maximum, result, mode)});
+                measure_child_natural_width(engine, styles, item.element, maximum, result, mode,
+                    child_width_context_e::intrinsic_contribution)});
             continue;
         }
         for (const auto& token : aether_tokenize_inline_text(item.text, item.style.white_space)) {
@@ -1715,7 +1716,8 @@ float measure_intrinsic_width(
         if (role != inline_node_role_e::block_content) continue;
         flush_inline();
         content_width = std::max(content_width,
-            measure_child_natural_width(engine, styles, child, maximum, result, mode));
+            measure_child_natural_width(engine, styles, child, maximum, result, mode,
+                child_width_context_e::intrinsic_contribution));
     }
     flush_inline();
     return content_width + aether_thicknessf_horizontal(padding) + aether_thicknessf_horizontal(border);
@@ -1814,7 +1816,8 @@ static float measure_inline_items_height(
             const auto padding = resolve_padding_edges(engine, style.padding, available_width, style);
             const auto border = resolve_border_edges(engine, style, available_width);
             const float width = measure_child_natural_width(engine, styles, item.element,
-                available_width, result, aether_intrinsic_size_mode_e::max_content);
+                available_width, result, aether_intrinsic_size_mode_e::max_content,
+                child_width_context_e::inline_height);
             const float height = measure_intrinsic_height(engine, styles, result, item.element,
                 style, padding, border, available_width);
             return measured_inline_fragment{index, {}, {width, height, 0.f, false, false, style.white_space}, nullptr, {}};
@@ -1861,7 +1864,8 @@ static float measure_inline_items_height(
             const auto padding = resolve_padding_edges(engine, style.padding, available_width, style);
             const auto border = resolve_border_edges(engine, style, available_width);
             const float width = measure_child_natural_width(
-                engine, styles, item.element, available_width, result, aether_intrinsic_size_mode_e::max_content);
+                engine, styles, item.element, available_width, result, aether_intrinsic_size_mode_e::max_content,
+                child_width_context_e::inline_height);
             const float height = measure_intrinsic_height(
                 engine, styles, result, item.element, style, padding, border, available_width);
             append_fragment(width, height, false, false, true);
@@ -1916,7 +1920,8 @@ static float measure_intrinsic_flex_width(
 
     std::vector<float> child_widths;
     for (auto* child : children) {
-        child_widths.push_back(measure_child_natural_width(engine, styles, child, maximum, result, mode));
+        child_widths.push_back(measure_child_natural_width(engine, styles, child, maximum, result, mode,
+            child_width_context_e::intrinsic_contribution));
     }
     const float content = aether_intrinsic_flex_main_contribution(
         child_widths, style.flex_direction == AETHER_FLEX_DIRECTION_COLUMN,
@@ -1929,10 +1934,20 @@ float measure_child_natural_width(
     const StyleLookup* styles,
     aether_node_s* child, float maximum,
     aether_layout_result_s* result,
-    aether_intrinsic_size_mode_e mode)
+    aether_intrinsic_size_mode_e mode,
+    child_width_context_e context)
 {
     auto child_style = get_style(styles, child);
-    auto child_margin = resolve_margin_edges(engine, child_style.margin, maximum, child_style);
+    const bool table_box = child_style.display == AETHER_DISPLAY_TABLE ||
+        child_style.display == AETHER_DISPLAY_TABLE_ROW ||
+        child_style.display == AETHER_DISPLAY_TABLE_CELL;
+    // A descendant's percentage margins/padding are cyclic while calculating
+    // its intrinsic contribution. Resolve against zero, preserving absolute
+    // calc terms and signed margins. Keep maximum for all other measurements.
+    // Table boxes retain their existing local policy, not their descendants'.
+    const float edge_reference = context == child_width_context_e::intrinsic_contribution && !table_box
+        ? 0.f : maximum;
+    auto child_margin = resolve_margin_edges(engine, child_style.margin, edge_reference, child_style);
     const auto measures = layout_measures(styles, child);
     // A percentage width is indefinite while this intrinsic contribution is
     // calculated. CSS Sizing therefore treats it as auto at this stage.
@@ -1941,7 +1956,7 @@ float measure_child_natural_width(
     const float specified = percentage_dependent_width
         ? NAN
         : resolve(engine, child_style.width, maximum, child_style);
-    auto child_padding = resolve_padding_edges(engine, child_style.padding, maximum, child_style);
+    auto child_padding = resolve_padding_edges(engine, child_style.padding, edge_reference, child_style);
     auto child_border  = resolve_border_edges(engine, child_style, maximum);
     const float decorations = aether_thicknessf_horizontal(child_padding) +
                               aether_thicknessf_horizontal(child_border);
@@ -1964,9 +1979,6 @@ float measure_child_natural_width(
     // Validate before clamping: a finite max must not disguise overflow in the
     // preferred/intrinsic size or its conversion to a border-box contribution.
     checked(width);
-    const bool table_box = child_style.display == AETHER_DISPLAY_TABLE ||
-        child_style.display == AETHER_DISPLAY_TABLE_ROW ||
-        child_style.display == AETHER_DISPLAY_TABLE_CELL;
     if (!table_box) {
         // This is a descendant's contribution, not the raw intrinsic size of
         // the flex root. Table boxes retain their existing sizing policy; the

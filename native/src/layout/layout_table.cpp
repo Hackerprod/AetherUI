@@ -52,10 +52,10 @@ static std::vector<aether_table_column_contribution_s> measure_table_columns(
         for (size_t column = 0; column < row.cells.size(); ++column) {
             const float minimum = measure_child_natural_width(
                 engine, styles, row.cells[column], maximum, result,
-                aether_intrinsic_size_mode_e::min_content);
+                aether_intrinsic_size_mode_e::min_content, child_width_context_e::intrinsic_contribution);
             const float preferred = measure_child_natural_width(
                 engine, styles, row.cells[column], maximum, result,
-                aether_intrinsic_size_mode_e::max_content);
+                aether_intrinsic_size_mode_e::max_content, child_width_context_e::intrinsic_contribution);
             columns[column].min_content = std::max(columns[column].min_content, minimum);
             columns[column].max_content = std::max(columns[column].max_content, preferred);
         }
