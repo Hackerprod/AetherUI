@@ -2,9 +2,11 @@
 #include <new>
 #include <cstdlib>
 static std::size_t fail_size=0;
+static bool observe_first_allocation=false, first_allocation_before_replace=false;
+static bool old_dom_present();
 static bool fault_delivered=false;
 static int matching_allocations_to_skip=0;
-void* operator new(std::size_t n){if(fail_size && n==fail_size && matching_allocations_to_skip--==0){fail_size=0;fault_delivered=true;throw std::bad_alloc();}if(void*p=std::malloc(n?n:1))return p;throw std::bad_alloc();}
+void* operator new(std::size_t n){if(observe_first_allocation){observe_first_allocation=false;first_allocation_before_replace=old_dom_present();}if(fail_size && n==fail_size && matching_allocations_to_skip--==0){fail_size=0;fault_delivered=true;throw std::bad_alloc();}if(void*p=std::malloc(n?n:1))return p;throw std::bad_alloc();}
 void* operator new[](std::size_t n){return ::operator new(n);}
 void operator delete(void*p)noexcept{std::free(p);}
 void operator delete[](void*p)noexcept{std::free(p);}
@@ -21,11 +23,26 @@ void operator delete[](void*p,const std::nothrow_t&) noexcept {std::free(p);}
 #include <cstdio>
 #include <string>
 #include <cstring>
-// This parser's legacy ABI does not promise rollback on OOM. Probe the two
+static aether_doc_t observed_doc{};
+static bool old_dom_present(){return aether_node_get_child_count(reinterpret_cast<aether_node_t>(observed_doc))!=0;}
+// This parser's legacy ABI does not promise rollback on OOM. Probe the three
 // allocation boundaries for the source buffer and normalized text, catch legacy exceptions,
 // and require a successful retry with exact bytes. No transactional claim.
 int main(){
  int failures=0;
+ // Observe the first parser allocation around the implementation's actual
+ // empty-string capacity, rather than hard-coding a vendor's SSO threshold.
+ const size_t inline_capacity=std::string{}.capacity();
+ for(size_t length=1;length<=inline_capacity+2;++length){
+  const std::string input(length,'\r');
+  if(aether_doc_create(&observed_doc)!=AETHER_OK)return 2;
+  if(aether_doc_parse_html(observed_doc,"<p>old</p>")!=AETHER_OK)return 2;
+  first_allocation_before_replace=false;observe_first_allocation=true;
+  if(aether_doc_parse_html(observed_doc,input.c_str())!=AETHER_OK)++failures;
+  observe_first_allocation=false;
+  if(first_allocation_before_replace!=(length>inline_capacity))++failures;
+  aether_doc_destroy(observed_doc);observed_doc=nullptr;
+ }
  std::string source,normalized;
  for(int i=0;i<1024;++i){source+="A\r\nB";normalized+="A\nB";}
  const std::string html="<body><div id=target>"+source+"</div></body>";
