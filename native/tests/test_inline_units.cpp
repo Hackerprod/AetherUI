@@ -166,6 +166,14 @@ int main(){
   paint_matches(outer);paint_matches(inner);
  }
 
+
+ {scenario="fallback capitalization keeps legacy whitespace boundary";
+  Fixture f("<span>ab</span> <span>cd!</span>",mode_css("normal",100)+"#host{text-transform:capitalize}");
+  f.expect({{"Ab",{0,0,20,20}},{"Cd!",{20,0,30,20}}});paint_matches(f);
+  Fixture within("ab <span>cd!</span>",mode_css("normal",100)+"#host{text-transform:capitalize}");
+  within.expect({{"Ab",{0,0,20,20}},{" ",{20,0,10,20}},{"Cd!",{30,0,30,20}}});paint_matches(within);
+ }
+
  // Unsupported whole sequences keep the old behavior rather than partly adopting units.
  for(const char* body:{"<span>abc</span><span style='padding-left:1px'>def</span>","<span>abc</span><span style='white-space:pre'>def</span>","<span>abc</span><span>de!</span>","<span>abc</span><span>de\xc3\xa9</span>"}){
   scenario=std::string("excluded fallback ")+body;Fixture f(body,mode_css("normal"));near(f.rect().height,std::strstr(body,"white-space:pre")?20:40,"legacy whole-sequence wrap");

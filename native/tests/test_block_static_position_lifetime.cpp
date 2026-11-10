@@ -319,8 +319,11 @@ static void callback_mutation(int action) {
 }
 static void callback_nonparticipation() {
     ++scenarios;
-    Fixture plain("<html><body><div id='host'>ab<!--same text partition-->cd</div></body></html>");
-    Fixture anchored("<html><body><div id='host'>ab<div id='c'></div>cd</div></body></html>");
+    // Punctuation deliberately selects the same legacy inline path on both sides.
+    // This isolates marker nonparticipation from cross-path tokenization differences;
+    // replacing ab with a! preserves this fixture's measured width.
+    Fixture plain("<html><body><div id='host'>a!<!--same text partition-->cd</div></body></html>");
+    Fixture anchored("<html><body><div id='host'>a!<div id='c'></div>cd</div></body></html>");
     plain.callback.calls=anchored.callback.calls=0;
     auto* a=plain.layout(false); auto* b=anchored.layout(false);
     REQUIRE(plain.callback.calls>0 && plain.callback.calls==anchored.callback.calls);

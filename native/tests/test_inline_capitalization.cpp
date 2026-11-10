@@ -294,8 +294,8 @@ static void continuity() {
            "style='text-transform:lowercase'>WORLD</span><span>end</span>",
            "heLloworldend");
     simple("collected space", "<span>hel </span><span>lo</span>", "Hel Lo");
-    simple("direct omitted space", "<span>hel</span> <span>lo</span>",
-           "HelLo"); // Existing omission, not a rendered-space assertion.
+    simple("direct separator retained", "<span>hel</span> <span>lo</span>",
+           "Hel Lo"); // The admitted stream retains whitespace-only source nodes.
     simple("collected VT", "<span>hel\v</span><span>lo</span>", "Hel Lo");
     simple("collected FF", "<span>hel\f</span><span>lo</span>", "Hel Lo");
     simple("omitted VT", "<span>hel</span>\v<span>lo</span>", "HelLo");
@@ -325,12 +325,14 @@ static void continuity() {
     expect(br, "HelLo", "HelLo");
     REQUIRE(b.size() == 2);
     CHECK(b[1].rect.y > b[0].rect.y);
-    scenario = "soft break retains lowercase";
+    scenario = "indivisible overflow word retains lowercase";
     Fixture wrap("hel<span>lo</span>", "#host{width:30px}");
     auto w = wrap.runs();
     expect(wrap, "Hello", "Hello");
     REQUIRE(w.size() == 2);
-    CHECK(w[1].rect.y > w[0].rect.y);
+    CHECK(near(w[1].rect.y, w[0].rect.y));
+    CHECK(near(w[1].rect.x - w[0].rect.x, 27));
+    CHECK(near(w[0].rect.width + w[1].rect.width, 41));
     scenario = "44px corrected height";
     Fixture fit("hel<span>lo</span>", "#host{width:44px}");
     auto r = fit.runs();
@@ -644,7 +646,7 @@ static void public_sizing_and_isolation() {
                     "#host{display:flex;width:20px}#sized{flex:0 1 auto}");
     box = aether_layout_result_find_primary_box(minimum.result, minimum.node("sized"));
     REQUIRE(box);
-    CHECK(near(aether_layout_box_get_width(box), 27));
+    CHECK(near(aether_layout_box_get_width(box), 41));
     CHECK(seen(minimum.meter, "Hel"));
     CHECK(seen(minimum.meter, "lo"));
 }

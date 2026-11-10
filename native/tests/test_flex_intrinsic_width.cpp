@@ -182,8 +182,8 @@ static void collapsed_height_case(const char* name, const std::string& text,
     if (reject_marked_space) {
         int measured_spaces = 0;
         for (const auto& t : measurement_trace) if (t == " ") ++measured_spaces;
-        // One callback belongs to intrinsic width; height must not add another.
-        near(float(measured_spaces), 1, "marked space measured only by intrinsic width");
+        // The shared stream discards the redundant separator before every consumer.
+        near(float(measured_spaces), 0, "redundant marked space is never measured");
     }
 }
 static void collapsed_height_regressions() {
@@ -191,8 +191,8 @@ static void collapsed_height_regressions() {
     collapsed_height_case("split", "<span>aa </span><span> bb</span>", 20, 30, 0, 1);
     collapsed_height_case("nested", "<span>aa </span><span><span> </span> bb</span>", 20, 30, 0, 1);
     collapsed_height_case("marked", "<span>aa </span><span style='font-size:37px'> </span><span>bb</span>", 20, 30, 0, 1, true);
-    collapsed_height_case("word reset", "a <span>a </span><span> bb</span>", 40, 0, 20, 2);
-    collapsed_height_case("br", "<span>aa </span><br><span> bb</span>", 40, 0, 20, 1);
+    collapsed_height_case("word reset", "a <span>a </span><span> bb</span>", 40, 0, 20, 1);
+    collapsed_height_case("br", "<span>aa </span><br><span> bb</span>", 40, 0, 20, 0);
     collapsed_height_case("atomic", "<span>aa </span><span style='display:inline-block;width:10px;height:20px'></span><span> bb</span>", 40, 0, 20, 2);
     for (const char* mode : {"nowrap", "pre-line"})
         collapsed_height_case(mode, "<span>aa </span><span style='white-space:"+std::string(mode)+"'> bb</span>", 20, 30, 0, 1);
@@ -202,7 +202,7 @@ static void collapsed_height_regressions() {
     }
     collapsed_height_case("normal CRLF", "<span>aa </span><span>\r\n bb</span>", 20, 30, 0, 1);
     collapsed_height_case("pre-line CRLF", "<span>aa </span><span style='white-space:pre-line'>\r\n bb</span>", 40, 0, 20, 1);
-    collapsed_height_case("break resets state", "aa <br>b <span>bb</span>", 40, 20, 20, 2);
+    collapsed_height_case("break resets state", "aa <br>b <span>bb</span>", 40, 20, 20, 1);
 }
 // Equal heights can still require a taller line when run baselines differ.
 // These public-ABI checks compare the flex automatic minimum with final geometry.
@@ -249,10 +249,11 @@ static void baseline_height_regressions() {
     baseline_height_case("br resets", "<span>A</span><span>B</span><br><span>B</span>", 56,
                          {{"A",0,0},{"B",10,16},{"B",0,36}});
     baseline_height_case("separate lines", "A<br>B", 40, {{"A",0,0},{"B",0,20}});
-    baseline_height_case("wrap before metrics", "<span>AAAA</span><span>BBBB</span>", 40,
-                         {{"AAAA",0,0},{"BBBB",0,20}});
-    baseline_height_case("wrap after tall line", "<span>A</span><span>B</span><span>AAAA</span>", 56,
-                         {{"A",0,0},{"B",10,16},{"AAAA",0,36}});
+    // No separator exists: both physical fragments belong to one overflowing word.
+    baseline_height_case("joined word baseline union", "<span>AAAA</span><span>BBBB</span>", 36,
+                         {{"AAAA",0,0},{"BBBB",40,16}});
+    baseline_height_case("joined word retains tall baseline", "<span>A</span><span>B</span><span>AAAA</span>", 36,
+                         {{"A",0,0},{"B",10,16},{"AAAA",20,0}});
     baseline_height_case("leading rejected space", "<span style='font-size:38px'> </span>A", 20, {{"A",0,0}});
     baseline_height_case("redundant rejected space", "<span>A </span><span style='font-size:38px'> </span>A", 20,
                          {{"A",0,0},{" ",10,0},{"A",20,0}});

@@ -857,6 +857,16 @@ float layout_flow_children(
 
     auto flush_inline = [&]() {
         if (!has_legacy_inline_content(inline_items)) { inline_items.clear(); return; }
+        // An eligible all-collapsed sequence has no line at all. In particular,
+        // nested whitespace must not consume the margin separating two blocks.
+        if (uses_source_unit_resolver(inline_items, parent_style) &&
+            std::none_of(inline_items.begin(), inline_items.end(), [&](const inline_item_s& item) {
+                return item.is_line_break ||
+                    aether_inline_text_has_visible_content(item.text, parent_style.white_space);
+            })) {
+            inline_items.clear();
+            return;
+        }
         if (has_pending_margin) {
             cursor_y += pending_margin;
             has_pending_margin = false;
@@ -1552,9 +1562,15 @@ static inline_node_role_e append_inline_node(
 {
     if (node->type == AETHER_NODE_TEXT) {
         if (!aether_inline_text_has_visible_content(node->text, parent_style.white_space)) {
-            const size_t begin = output.size();
-            collect_text_items(parent, parent_style, node->text, output, context);
-            for (size_t i = begin; i < output.size(); ++i) output[i].legacy_ignored = true;
+            if (!node->text.empty()) {
+                // These bytes are exclusively presentation whitespace. Retain
+                // the raw evidence without introducing a transformation step;
+                // capitalization state follows the exact legacy update below.
+                auto item = inline_item_s::text_item(parent, parent_style, node->text);
+                item.legacy_ignored = true;
+                output.push_back(std::move(item));
+                context.starts_word = aether::presentation_space_byte(static_cast<unsigned char>(node->text.back())) != 0;
+            }
             return inline_node_role_e::ignored;
         }
         collect_text_items(parent, parent_style, node->text, output, context);

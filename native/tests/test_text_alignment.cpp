@@ -97,23 +97,40 @@ static aether_layout_box_t paragraph_box(layout_fixture_s& fixture) {
     return box;
 }
 
+static void expect_fragment(aether_layout_box_t paragraph, int index, const char* text,
+                            float x, float y, float width) {
+    auto* fragment = aether_layout_box_get_child(paragraph, index);
+    require(fragment && text_of(fragment) == text, "explicit fragment text/order");
+    const auto host = aether_layout_box_get_border_box(paragraph);
+    const auto actual = aether_layout_box_get_border_box(fragment);
+    require(nearly_equal(actual.x - host.x, x) && nearly_equal(actual.y - host.y, y) &&
+            nearly_equal(actual.width, width), "explicit fragment line-edge geometry");
+}
+
 int main() {
     {
         auto fixture = layout_fixture("<body><div id=\"paragraph\">aa bb cc dd ee</div></body>");
         auto* paragraph = paragraph_box(fixture);
-        require(aether_layout_box_get_child_count(paragraph) == 9,
-            "wrapped paragraph must retain word and whitespace fragments");
+        require(aether_layout_box_get_child_count(paragraph) == 8,
+            "wrapped paragraph retains interior gaps but discards the soft-break separator");
         auto* first_gap = aether_layout_box_get_child(paragraph, 1);
         auto* second_gap = aether_layout_box_get_child(paragraph, 3);
-        auto* trailing_gap = aether_layout_box_get_child(paragraph, 5);
-        auto* final_gap = aether_layout_box_get_child(paragraph, 7);
+        auto* final_gap = aether_layout_box_get_child(paragraph, 6);
         require(text_of(first_gap) == " " && text_of(second_gap) == " ",
             "interior gaps must remain individual layout fragments");
-        require(nearly_equal(aether_layout_box_get_width(first_gap), 1.5f) &&
-                nearly_equal(aether_layout_box_get_width(second_gap), 1.5f),
+        require(nearly_equal(aether_layout_box_get_width(first_gap), 2.f) &&
+                nearly_equal(aether_layout_box_get_width(second_gap), 2.f),
             "only interior gaps of a non-final line must receive distributed width");
-        require(nearly_equal(aether_layout_box_get_width(trailing_gap), 1.f),
-            "a trailing line space must not receive justified width");
+        // Six glyph units and two expanded gaps fill width 10. The separator
+        // before dd is discarded, not stored as a ninth trailing fragment.
+        expect_fragment(paragraph, 0, "aa", 0, 0, 2);
+        expect_fragment(paragraph, 1, " ", 2, 0, 2);
+        expect_fragment(paragraph, 2, "bb", 4, 0, 2);
+        expect_fragment(paragraph, 3, " ", 6, 0, 2);
+        expect_fragment(paragraph, 4, "cc", 8, 0, 2);
+        expect_fragment(paragraph, 5, "dd", 0, 1, 2);
+        expect_fragment(paragraph, 6, " ", 2, 1, 1);
+        expect_fragment(paragraph, 7, "ee", 3, 1, 2);
         require(nearly_equal(aether_layout_box_get_width(final_gap), 1.f),
             "the final line must remain start aligned");
     }
@@ -121,14 +138,25 @@ int main() {
     {
         auto fixture = layout_fixture("<body><div id=\"paragraph\">aa bb cc<br>dd ee ff gg</div></body>");
         auto* paragraph = paragraph_box(fixture);
-        require(aether_layout_box_get_child_count(paragraph) == 12,
-            "forced-break paragraph must retain all inline fragments");
+        require(aether_layout_box_get_child_count(paragraph) == 11,
+            "forced-break paragraph discards only the automatic-break separator");
         auto* forced_break_gap = aether_layout_box_get_child(paragraph, 1);
         auto* second_line_gap = aether_layout_box_get_child(paragraph, 6);
         require(nearly_equal(aether_layout_box_get_width(forced_break_gap), 1.f),
             "a line before br must not justify by default");
-        require(nearly_equal(aether_layout_box_get_width(second_line_gap), 1.5f),
+        require(nearly_equal(aether_layout_box_get_width(second_line_gap), 2.f),
             "a non-terminal automatic line after br must still justify");
+        expect_fragment(paragraph, 0, "aa", 0, 0, 2);
+        expect_fragment(paragraph, 1, " ", 2, 0, 1);
+        expect_fragment(paragraph, 2, "bb", 3, 0, 2);
+        expect_fragment(paragraph, 3, " ", 5, 0, 1);
+        expect_fragment(paragraph, 4, "cc", 6, 0, 2);
+        expect_fragment(paragraph, 5, "dd", 0, 1, 2);
+        expect_fragment(paragraph, 6, " ", 2, 1, 2);
+        expect_fragment(paragraph, 7, "ee", 4, 1, 2);
+        expect_fragment(paragraph, 8, " ", 6, 1, 2);
+        expect_fragment(paragraph, 9, "ff", 8, 1, 2);
+        expect_fragment(paragraph, 10, "gg", 0, 2, 2);
     }
 
     {
