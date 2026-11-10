@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <limits>
+#include <stdexcept>
 
 namespace {
 
@@ -187,6 +188,18 @@ float aether_flex_resolve_automatic_minimum(
     return result;
 }
 
+float aether_flex_resolve_hypothetical_size(float base, const aether_flex_item_input_s& item) {
+    const auto optional_size_valid = [](float value) { return std::isfinite(value) || std::isnan(value); };
+    if (!std::isfinite(base) || !std::isfinite(item.main_decoration_size) ||
+        !optional_size_valid(item.min_main_size) || !optional_size_valid(item.max_main_size) ||
+        !std::isfinite(item.automatic_minimum.content_size_suggestion) ||
+        !optional_size_valid(item.automatic_minimum.specified_size_suggestion) ||
+        !optional_size_valid(item.automatic_minimum.transferred_size_suggestion) ||
+        !optional_size_valid(item.automatic_minimum.max_main_size))
+        throw std::overflow_error("Non-finite hypothetical flex size");
+    return static_cast<float>(clamp_main_size(base, item));
+}
+
 aether_flex_resolve_result_s aether_resolve_flexible_lengths(
     const aether_flex_resolve_input_s& input) {
     aether_flex_resolve_result_s output{};
@@ -199,7 +212,7 @@ aether_flex_resolve_result_s aether_resolve_flexible_lengths(
         // A border-box basis smaller than its decoration has a negative inner
         // base (§9.2). Retain it; flooring the base here changes grow allocation.
         result.inner_flex_base_size = result.flex_base_size - non_negative(items[index].main_decoration_size);
-        result.hypothetical_main_size = static_cast<float>(clamp_main_size(result.flex_base_size, items[index]));
+        result.hypothetical_main_size = aether_flex_resolve_hypothetical_size(result.flex_base_size, items[index]);
         result.target_main_size = result.flex_base_size;
     }
 

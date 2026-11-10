@@ -40,3 +40,9 @@ float aether_intrinsic_flex_main_contribution(
     bool wraps,
     float gap,
     aether_intrinsic_size_mode_e mode);
+
+// Decide before measuring the hypothetical size or automatic minimum. Inputs
+// are border-box sizes without margins. An indefinite base is ignored.
+bool aether_intrinsic_flex_needs_hypothetical(
+    float contribution, float base, bool base_is_definite,
+    float flex_grow, float flex_shrink);

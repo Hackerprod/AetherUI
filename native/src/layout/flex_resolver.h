@@ -55,6 +55,10 @@ struct aether_flex_item_input_s {
     float main_decoration_size = 0.f; // Non-flexible main-axis padding + border.
 };
 
+// Shared border-box hypothetical-size clamp. Validates sizes before applying
+// min/max or decoration floors; NaN remains the absent-constraint sentinel.
+float aether_flex_resolve_hypothetical_size(float base, const aether_flex_item_input_s& item);
+
 struct aether_flex_item_result_s {
     float flex_base_size = 0.f;
     float hypothetical_main_size = 0.f;

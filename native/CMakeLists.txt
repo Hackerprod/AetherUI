@@ -1662,3 +1662,22 @@ if(AETHERUI_BUILD_TESTS)
     target_link_libraries(aether_html_source_newlines_test PRIVATE AetherUI::Core)
     add_test(NAME aether.html-source-newlines COMMAND aether_html_source_newlines_test)
 endif()
+
+if(AETHERUI_BUILD_TESTS)
+    add_executable(aether_flex_inflexible_intrinsic_test tests/test_flex_inflexible_intrinsic.cpp)
+    target_link_libraries(aether_flex_inflexible_intrinsic_test PRIVATE AetherUI::Core)
+    add_test(NAME aether.flex-inflexible-intrinsic COMMAND aether_flex_inflexible_intrinsic_test)
+
+    add_executable(aether_flex_inflexible_intrinsic_pure_test
+        tests/test_flex_inflexible_intrinsic_pure.cpp
+        src/layout/flex_resolver.cpp src/layout/intrinsic_sizing.cpp)
+    target_include_directories(aether_flex_inflexible_intrinsic_pure_test PRIVATE include src/layout)
+    add_test(NAME aether.flex-inflexible-intrinsic-pure COMMAND aether_flex_inflexible_intrinsic_pure_test)
+
+    add_executable(aether_flex_inflexible_intrinsic_lifetime_test
+        tests/test_flex_inflexible_intrinsic_lifetime.cpp
+        $<TARGET_OBJECTS:aether_flex_text_test_core>)
+    target_include_directories(aether_flex_inflexible_intrinsic_lifetime_test PRIVATE include src)
+    target_compile_definitions(aether_flex_inflexible_intrinsic_lifetime_test PRIVATE AETHER_EXPORTS)
+    add_test(NAME aether.flex-inflexible-intrinsic-lifetime COMMAND aether_flex_inflexible_intrinsic_lifetime_test)
+endif()

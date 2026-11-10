@@ -2,6 +2,8 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
+#include <stdexcept>
 
 float aether_intrinsic_min_from_unbreakable_fragments(const std::vector<float>& fragment_widths) {
     float result = 0.f;
@@ -48,6 +50,24 @@ float aether_intrinsic_flex_main_contribution(
     bool wraps,
     float gap,
     aether_intrinsic_size_mode_e mode) {
+    // A nowrap row retains signed outer contributions until after every gap.
+    // Accumulate in double so intermediate float overflow cannot erase a later
+    // negative margin; reject a non-finite input before any clamp can hide it.
+    if (!column_direction && !wraps) {
+        if (!std::isfinite(gap))
+            throw std::overflow_error("Non-finite intrinsic flex gap");
+        double total = 0.0;
+        for (const float width : child_contributions) {
+            if (!std::isfinite(width))
+                throw std::overflow_error("Non-finite intrinsic flex contribution");
+            total += width;
+        }
+        if (!child_contributions.empty())
+            total += static_cast<double>(std::max(0.f, gap)) * (child_contributions.size() - 1);
+        if (!std::isfinite(total) || total > std::numeric_limits<float>::max())
+            throw std::overflow_error("Intrinsic flex sum overflow");
+        return static_cast<float>(std::max(0.0, total));
+    }
     if (child_contributions.empty()) return 0.f;
     const auto largest = *std::max_element(child_contributions.begin(), child_contributions.end());
     // Horizontal column sizing and a wrapping row's minimum use the widest
@@ -59,4 +79,15 @@ float aether_intrinsic_flex_main_contribution(
     float result = 0.f;
     for (const float width : child_contributions) result += std::max(0.f, width);
     return result + std::max(0.f, gap) * static_cast<float>(child_contributions.size() - 1);
+}
+
+bool aether_intrinsic_flex_needs_hypothetical(
+    float contribution, float base, bool base_is_definite,
+    float flex_grow, float flex_shrink) {
+    if (!std::isfinite(contribution) || !std::isfinite(flex_grow) ||
+        !std::isfinite(flex_shrink) || (base_is_definite && !std::isfinite(base)))
+        throw std::overflow_error("Non-finite intrinsic flex selection");
+    return base_is_definite &&
+        ((contribution > base && flex_grow == 0.f) ||
+         (contribution < base && flex_shrink == 0.f));
 }

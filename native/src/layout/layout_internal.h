@@ -183,6 +183,8 @@ float measure_intrinsic_height(
 // into its intrinsic content always measures new intrinsic contributions.
 enum class child_width_context_e { intrinsic_contribution, inline_height };
 
+bool flex_automatic_minimum_is_zero_for_overflow(int32_t overflow);
+
 float measure_child_natural_width(
     const aether_layout_engine_s* engine,
     const StyleLookup* styles,

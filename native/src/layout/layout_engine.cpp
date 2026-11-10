@@ -1900,6 +1900,17 @@ static float measure_inline_items_height(
     return total_height;
 }
 
+static float checked_intrinsic_width(float value) {
+    if (!std::isfinite(value))
+        throw std::overflow_error("Non-finite intrinsic width contribution");
+    return value;
+}
+
+static float measure_intrinsic_flex_item_width(
+    const aether_layout_engine_s* engine, const StyleLookup* styles,
+    aether_node_s* child, float maximum, aether_layout_result_s* result,
+    aether_intrinsic_size_mode_e mode);
+
 static float measure_intrinsic_flex_width(
     const aether_layout_engine_s* engine,
     const StyleLookup* styles,
@@ -1915,21 +1926,39 @@ static float measure_intrinsic_flex_width(
     // text run and gives flex-shrink an artificially small automatic minimum.
     const auto& children = collect_flex_items(styles, result, element, style);
     if (children.empty()) {
-        return aether_thicknessf_horizontal(padding) + aether_thicknessf_horizontal(border);
+        return checked_intrinsic_width(
+            aether_thicknessf_horizontal(padding) + aether_thicknessf_horizontal(border));
     }
 
     std::vector<float> child_widths;
+    child_widths.reserve(children.size());
+    const bool nowrap_row = style.flex_direction != AETHER_FLEX_DIRECTION_COLUMN && !style.flex_wrap;
     for (auto* child : children) {
-        child_widths.push_back(measure_child_natural_width(engine, styles, child, maximum, result, mode,
-            child_width_context_e::intrinsic_contribution));
+        child_widths.push_back(nowrap_row
+            ? measure_intrinsic_flex_item_width(engine, styles, child, maximum, result, mode)
+            : measure_child_natural_width(engine, styles, child, maximum, result, mode,
+                child_width_context_e::intrinsic_contribution));
     }
     const float content = aether_intrinsic_flex_main_contribution(
         child_widths, style.flex_direction == AETHER_FLEX_DIRECTION_COLUMN,
         style.flex_wrap, layout_used_gap(styles, element, style, false, 0.f, false), mode);
-    return content + aether_thicknessf_horizontal(padding) + aether_thicknessf_horizontal(border);
+    // The caller may apply a finite max-width. Reject overflow here, before
+    // that clamp can disguise an invalid content-plus-decoration result.
+    return checked_intrinsic_width(content + aether_thicknessf_horizontal(padding) +
+                                   aether_thicknessf_horizontal(border));
 }
 
-float measure_child_natural_width(
+struct intrinsic_child_width_s {
+    float border_box;
+    float margins;
+    // Reuse an already measured raw minimum. A specified width does not provide
+    // this suggestion, even if its generic contribution happens to be smaller.
+    float raw_min_content = NAN;
+    aether_thicknessf padding;
+    aether_thicknessf border;
+};
+
+static intrinsic_child_width_s measure_child_intrinsic_width_parts(
     const aether_layout_engine_s* engine,
     const StyleLookup* styles,
     aether_node_s* child, float maximum,
@@ -1960,14 +1989,11 @@ float measure_child_natural_width(
     auto child_border  = resolve_border_edges(engine, child_style, maximum);
     const float decorations = aether_thicknessf_horizontal(child_padding) +
                               aether_thicknessf_horizontal(child_border);
-    const auto checked = [](float value) {
-        if (!std::isfinite(value))
-            throw std::overflow_error("Non-finite intrinsic width contribution");
-        return value;
-    };
+    const auto checked = checked_intrinsic_width;
     checked(decorations);
 
     float width;
+    float raw_min_content = NAN;
     if (std::isfinite(specified)) {
         width = (child_style.box_sizing == AETHER_BOX_SIZING_CONTENT_BOX)
             ? specified + aether_thicknessf_horizontal(child_padding) + aether_thicknessf_horizontal(child_border)
@@ -1975,6 +2001,7 @@ float measure_child_natural_width(
     } else {
         width = measure_intrinsic_width(engine, styles, child, child_style,
                                         child_padding, child_border, maximum, result, mode);
+        if (mode == aether_intrinsic_size_mode_e::min_content) raw_min_content = width;
     }
     // Validate before clamping: a finite max must not disguise overflow in the
     // preferred/intrinsic size or its conversion to a border-box contribution.
@@ -2001,8 +2028,94 @@ float measure_child_natural_width(
         if (std::isfinite(min_border)) width = std::max(width, min_border);
         width = std::max(decorations, width);
     }
+    return {width, checked(aether_thicknessf_horizontal(child_margin)), raw_min_content,
+            child_padding, child_border};
+}
+
+float measure_child_natural_width(
+    const aether_layout_engine_s* engine, const StyleLookup* styles,
+    aether_node_s* child, float maximum, aether_layout_result_s* result,
+    aether_intrinsic_size_mode_e mode, child_width_context_e context) {
+    const auto natural = measure_child_intrinsic_width_parts(
+        engine, styles, child, maximum, result, mode, context);
     // Signed margins contribute once, outside the size constraints.
-    return checked(width + checked(aether_thicknessf_horizontal(child_margin)));
+    return checked_intrinsic_width(natural.border_box + natural.margins);
+}
+
+static float measure_intrinsic_flex_item_width(
+    const aether_layout_engine_s* engine, const StyleLookup* styles,
+    aether_node_s* child, float maximum, aether_layout_result_s* result,
+    aether_intrinsic_size_mode_e mode) {
+    const auto natural = measure_child_intrinsic_width_parts(engine, styles, child, maximum,
+        result, mode, child_width_context_e::intrinsic_contribution);
+    const auto child_style = get_style(styles, child);
+    const bool table_box = child_style.display == AETHER_DISPLAY_TABLE ||
+        child_style.display == AETHER_DISPLAY_TABLE_ROW || child_style.display == AETHER_DISPLAY_TABLE_CELL;
+    const auto outside = [&](float border_box) {
+        return checked_intrinsic_width(border_box + natural.margins);
+    };
+    // Preserve the current individual contribution of tables. Their signed
+    // outer widths still participate in the enclosing nowrap sum.
+    if (table_box) return outside(natural.border_box);
+
+    const auto measures = layout_measures(styles, child);
+    aether_css_length basis_length;
+    const char* basis_property;
+    if (child_style.flex_basis.kind == AETHER_FLEX_BASIS_LENGTH) {
+        basis_length = child_style.flex_basis.length;
+        basis_property = "flex-basis";
+    } else if (child_style.flex_basis.kind == AETHER_FLEX_BASIS_AUTO) {
+        basis_length = child_style.width;
+        basis_property = "width";
+    } else {
+        return outside(natural.border_box);
+    }
+    // A probing maximum never makes a percentage basis definite, even when
+    // calc simplification removed a zero-percent term from the scalar value.
+    if (basis_length.unit == AETHER_CSS_UNIT_AUTO ||
+        layout_measure_has_percentage(measures, basis_property, basis_length))
+        return outside(natural.border_box);
+
+    // Reuse the exact edges used by C: percentage padding is cyclic, while
+    // borders retain the existing natural-contribution resolution policy.
+    const auto padding = natural.padding;
+    const auto border = natural.border;
+    const float decoration = checked_intrinsic_width(
+        aether_thicknessf_horizontal(padding) + aether_thicknessf_horizontal(border));
+    const auto border_size = [&](aether_css_length length) {
+        const float used = resolve(engine, length, 0.f, child_style);
+        if (length.unit == AETHER_CSS_UNIT_AUTO) return NAN;
+        return checked_intrinsic_width(std::max(0.f, used) +
+            (child_style.box_sizing == AETHER_BOX_SIZING_CONTENT_BOX ? decoration : 0.f));
+    };
+    const float base = border_size(basis_length);
+    if (!aether_intrinsic_flex_needs_hypothetical(natural.border_box, base, true,
+            child_style.flex_grow, child_style.flex_shrink))
+        return outside(natural.border_box);
+
+    // Only a selected replacement needs H or a raw min-content walk. Do not
+    // measure the generic contribution again: its min/max clamps are not the
+    // automatic minimum's content-size suggestion.
+    aether_flex_item_input_s item{};
+    item.main_decoration_size = decoration;
+    item.min_main_size = border_size(child_style.min_width);
+    item.max_main_size = layout_measure_has_percentage(measures, "max-width", child_style.max_width)
+        ? NAN : border_size(child_style.max_width);
+    if (child_style.min_width.unit == AETHER_CSS_UNIT_AUTO) {
+        item.automatic_minimum.is_scroll_container =
+            flex_automatic_minimum_is_zero_for_overflow(child_style.overflow_x);
+        if (!item.automatic_minimum.is_scroll_container) {
+            item.automatic_minimum.content_size_suggestion = std::isfinite(natural.raw_min_content)
+                ? natural.raw_min_content
+                : checked_intrinsic_width(measure_intrinsic_width(engine, styles, child, child_style,
+                    padding, border, maximum, result, aether_intrinsic_size_mode_e::min_content));
+            item.automatic_minimum.specified_size_suggestion =
+                layout_measure_has_percentage(measures, "width", child_style.width)
+                    ? NAN : border_size(child_style.width);
+            item.automatic_minimum.max_main_size = item.max_main_size;
+        }
+    }
+    return outside(aether_flex_resolve_hypothetical_size(base, item));
 }
 
 /* ══════════════════════════════════════════════════════════════════════

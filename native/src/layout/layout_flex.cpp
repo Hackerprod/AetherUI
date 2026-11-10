@@ -238,7 +238,7 @@ static bool flex_cross_margins_are_auto(const BoxStyleSnapshot& style, bool hori
 // overflow:hidden participates here even though it never creates scroll offsets.
 // Enumerating the values deliberately keeps a future overflow:clip out of this
 // category until that value has its own CSS Overflow semantics implemented.
-static bool flex_automatic_minimum_is_zero_for_overflow(int32_t overflow) {
+bool flex_automatic_minimum_is_zero_for_overflow(int32_t overflow) {
     switch (overflow) {
         case AETHER_OVERFLOW_HIDDEN:
         case AETHER_OVERFLOW_AUTO:
