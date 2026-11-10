@@ -224,12 +224,9 @@ static void opacity_numeric_endpoints() {
         require(aether_transition_runtime_opacity_override(transitions,node,&value)==AETHER_TRUE,"numeric midpoint override");
         require(value==(before.opacity+c.expected)*.5f,"numeric midpoint exact, including tiny positive");
         require(aether_transition_runtime_tick(transitions,1000)==AETHER_FALSE,"numeric complete");
-        // Existing legacy transitions use float interpolation without endpoint
-        // snapping, and ignore deltas <=1e-4. For 1 -> 1e-7 the final native
-        // value is exactly 2^-23, not the parsed endpoint. Preserve that scope
-        // limit while proving a tiny positive endpoint is not normalized away.
-        const float legacy_end=c.expected==1e-7f ? 0x1p-23f : c.expected;
-        require(aether_transition_runtime_opacity_override(transitions,node,&value)==AETHER_TRUE && value==legacy_end,"numeric endpoint existing float interpolation");
+        // Completion copies the parsed endpoint, including tiny positive values;
+        // interior samples still use the existing float interpolation above.
+        require(aether_transition_runtime_opacity_override(transitions,node,&value)==AETHER_TRUE && value==c.expected,"numeric endpoint exact");
         if (c.expected==1e-7f) require(value>0,"tiny endpoint stays positive");
         after.transition_duration=0;
         require(aether_transition_runtime_observe(transitions,node,&before,&after,1100)==AETHER_OK,"numeric zero duration");

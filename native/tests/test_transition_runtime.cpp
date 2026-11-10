@@ -629,6 +629,7 @@ static void test_opacity_invalid_arguments(aether_node_t node, aether_node_t oth
 static void test_shorthand_roundtrip();
 
 #include "transition_time_cases.h"
+#include "transition_endpoint_cases.h"
 
 int main() {
     aether_doc_t doc = nullptr;
@@ -640,6 +641,7 @@ int main() {
     require(node_a != nullptr && node_b != nullptr, "element lookup failed");
 
     transition_time_cases::run(node_a, node_b);
+    transition_endpoint_cases::run(node_a);
     test_opacity_linear(node_a, node_b);
     test_transform_linear(node_a);
     test_no_transition(node_a);

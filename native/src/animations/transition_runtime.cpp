@@ -155,9 +155,19 @@ uint64_t transition_elapsed_ms(const active_transition_s& transition, int64_t no
     return magnitude + delay; // Proven strictly below duration.
 }
 
-// One clock sample is shared by interruption, initial negative delay and tick.
-float sample_transition(active_transition_s& transition, int64_t now_ms) {
-    const float p = std::clamp(static_cast<float>(transition_elapsed_ms(transition, now_ms)) /
+// One integer clock sample controls both exact endpoints and completion.
+// Interior interpolation may round to 1 before the duration has elapsed.
+bool sample_transition(active_transition_s& transition, int64_t now_ms) {
+    const auto elapsed = transition_elapsed_ms(transition, now_ms);
+    const bool finished = elapsed >= static_cast<uint64_t>(transition.duration_ms);
+    if (elapsed == 0 || finished) {
+        if (transition.property == AETHER_TRANSITION_PROPERTY_OPACITY)
+            transition.current_opacity = finished ? transition.opacity_to : transition.opacity_from;
+        else
+            transition.current_matrix = finished ? transition.matrix_to : transition.matrix_from;
+        return finished;
+    }
+    const float p = std::clamp(static_cast<float>(elapsed) /
         static_cast<float>(transition.duration_ms), 0.f, 1.f);
     const float eased = apply_timing(transition.timing, p);
     if (transition.property == AETHER_TRANSITION_PROPERTY_OPACITY)
@@ -165,7 +175,7 @@ float sample_transition(active_transition_s& transition, int64_t now_ms) {
             (transition.opacity_to - transition.opacity_from) * eased;
     else
         transition.current_matrix = matrix_lerp(transition.matrix_from, transition.matrix_to, eased);
-    return p;
+    return false;
 }
 
 } // namespace
@@ -251,7 +261,7 @@ AETHER_API aether_status_t aether_transition_runtime_observe(
     const auto install = [&](active_transition_s transition) {
         transition.observed_ms = now_ms;
         transition.delay_ms = delay_ms;
-        if (sample_transition(transition, now_ms) >= 1.f) {
+        if (sample_transition(transition, now_ms)) {
             runtime->finished.push_back({node, transition.property,
                 transition.current_opacity, transition.current_matrix});
         } else {
@@ -309,8 +319,7 @@ AETHER_API aether_bool_t aether_transition_runtime_tick(aether_transition_runtim
     auto& active = runtime->active;
     for (auto it = active.begin(); it != active.end();) {
         active_transition_s& transition = *it;
-        const float p = sample_transition(transition, now_ms);
-        if (p >= 1.f) {
+        if (sample_transition(transition, now_ms)) {
             finished_transition_s done{};
             done.node = transition.node;
             done.property = transition.property;
