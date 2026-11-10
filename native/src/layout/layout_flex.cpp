@@ -274,6 +274,8 @@ static resolved_flex_children_s resolve_flex_children(
     output.boxes.reserve(children.size());
     std::vector<aether_layout_box_s*> base_boxes;
     base_boxes.reserve(children.size());
+    std::vector<aether_flex_item_input_s> inputs;
+    inputs.reserve(children.size());
 
     // CSS Flexbox §9.2.3: a single-line stretched item with an automatic
     // cross-size measures its flex base size against the container's definite
@@ -286,6 +288,27 @@ static resolved_flex_children_s resolve_flex_children(
         detached_layout_scope_s detached(result);
         for (auto* child : children) {
             const auto child_style = get_style(styles, child);
+            const auto measures = layout_measures(styles, child);
+            aether_flex_item_input_s item{};
+            item.basis.kind = child_style.flex_basis.kind;
+            item.basis.specified_main_size = resolve_flex_main_border_size(
+                engine, child_style, content, horizontal, main_size_is_definite,
+                horizontal ? child_style.width : child_style.height, measures, horizontal ? "width" : "height");
+            item.basis.resolved_length = resolve_flex_main_border_size(
+                engine, child_style, content, horizontal, main_size_is_definite,
+                child_style.flex_basis.length, measures, "flex-basis");
+            item.basis.length_is_definite = child_style.flex_basis.kind == AETHER_FLEX_BASIS_LENGTH &&
+                flex_length_is_definite(child_style.flex_basis.length, main_size_is_definite, measures, "flex-basis");
+            const bool uses_content_basis = item.basis.kind == AETHER_FLEX_BASIS_CONTENT ||
+                (item.basis.kind == AETHER_FLEX_BASIS_LENGTH
+                    ? !(item.basis.length_is_definite && std::isfinite(item.basis.resolved_length))
+                    : !std::isfinite(item.basis.specified_main_size));
+            // Reuse this existing layout pass for the raw content base. Columns
+            // also need it for their independent automatic-minimum suggestion,
+            // even when the used basis is a definite length or specified height.
+            // Rows with a definite basis keep their previous measurement path.
+            const intrinsic_measurement_s measurement{child,
+                horizontal ? intrinsic_axis_e::width : intrinsic_axis_e::height};
             const bool stretch_base_cross = single_line_container && cross_size_is_definite &&
                 flex_item_stretches_on_cross_axis(parent_style, child_style, horizontal);
             const auto margin = resolve_margin_edges(engine, child_style.margin, content.width, child_style);
@@ -298,28 +321,19 @@ static resolved_flex_children_s resolve_flex_children(
                 horizontal ? 0.f : forced_border_cross, stretch_base_cross && !horizontal,
                 horizontal ? forced_border_cross : 0.f, stretch_base_cross && horizontal
                     ? forced_height_kind_e::definite : forced_height_kind_e::none,
-                true, result));
+                true, result, nullptr, nullptr,
+                uses_content_basis || !horizontal ? &measurement : nullptr));
+            item.basis.content_main_size = flex_box_main_size(base_boxes.back(), horizontal);
+            inputs.push_back(item);
         }
     }
 
-    std::vector<aether_flex_item_input_s> inputs;
-    inputs.reserve(children.size());
     for (size_t index = 0; index < children.size(); ++index) {
         const auto child_style = get_style(styles, children[index]);
         const auto measures = layout_measures(styles, children[index]);
         const char* main_property = horizontal ? "width" : "height";
         const auto* base_box = base_boxes[index];
-        aether_flex_item_input_s item{};
-        item.basis.kind = child_style.flex_basis.kind;
-        item.basis.content_main_size = flex_box_main_size(base_box, horizontal);
-        item.basis.specified_main_size = resolve_flex_main_border_size(
-            engine, child_style, content, horizontal, main_size_is_definite,
-            horizontal ? child_style.width : child_style.height, measures, main_property);
-        item.basis.resolved_length = resolve_flex_main_border_size(
-            engine, child_style, content, horizontal, main_size_is_definite,
-            child_style.flex_basis.length, measures, "flex-basis");
-        item.basis.length_is_definite = child_style.flex_basis.kind == AETHER_FLEX_BASIS_LENGTH &&
-            flex_length_is_definite(child_style.flex_basis.length, main_size_is_definite, measures, "flex-basis");
+        auto& item = inputs[index];
         // Follow the used basis: auto can transfer a definite specified main size;
         // content and unresolved percentage bases remain content-dependent.
         const auto semantic_main_is_definite = [&](aether_css_length length, float resolved, const char* property) {
@@ -355,16 +369,11 @@ static resolved_flex_children_s resolve_flex_children(
         // for the latter. Re-measuring through a parallel intrinsic-height walk loses the
         // horizontal constraints of nested rows and can let a column shrink an item below
         // its painted descendant extent.
-        const auto main_size_property = horizontal ? child_style.width : child_style.height;
-        const bool automatic_main_size = !flex_length_is_definite(main_size_property, main_size_is_definite, measures, main_property);
         const float content_size_suggestion = horizontal
             ? measure_intrinsic_width(engine, styles, children[index], child_style,
                                       child_padding, child_border, content.width, result,
                                       aether_intrinsic_size_mode_e::min_content)
-            : automatic_main_size
-                ? flex_box_main_size(base_box, false)
-                : measure_intrinsic_height(engine, styles, result, children[index], child_style,
-                                           child_padding, child_border, content.width);
+            : flex_box_main_size(base_box, false);
         const int32_t main_axis_overflow = horizontal ? child_style.overflow_x : child_style.overflow_y;
         item.automatic_minimum = {
             flex_automatic_minimum_is_zero_for_overflow(main_axis_overflow),
@@ -378,7 +387,6 @@ static resolved_flex_children_s resolve_flex_children(
             flex_box_outer_main_size(base_box, horizontal) - flex_box_main_size(base_box, horizontal);
         item.flex_grow = child_style.flex_grow;
         item.flex_shrink = child_style.flex_shrink;
-        inputs.push_back(item);
     }
 
     const float available_main_size = main_size_is_definite
@@ -502,7 +510,8 @@ float layout_flex_children(
     bool has_definite_height,
     percentage_height_s container_height_reference,
     float height_decorations,
-    aether_layout_result_s* result)
+    aether_layout_result_s* result,
+    const intrinsic_measurement_s* intrinsic_measurement)
 {
     const auto& children = collect_flex_items(styles, result, parent, style);
 
@@ -528,10 +537,13 @@ float layout_flex_children(
     for (const auto& line : lines) {
         natural_cross_size += flex_line_cross_size(resolved.boxes, line, horizontal);
     }
+    const float natural_cross_height = has_definite_height ? content.height : natural_cross_size;
+    const bool intrinsic_height = intrinsic_measurement &&
+        intrinsic_measurement->ignores(parent, intrinsic_axis_e::height);
     const float used_cross_size = horizontal
-        ? clamp_border_height(engine, style,
-              (has_definite_height ? content.height : natural_cross_size) + height_decorations,
-              container_height_reference.value_or(NAN), height_decorations, true, parent) - height_decorations
+        ? intrinsic_height ? natural_cross_height
+            : clamp_border_height(engine, style, natural_cross_height + height_decorations,
+                container_height_reference.value_or(NAN), height_decorations, true, parent) - height_decorations
         : content.width;
     // Only the effective initial/stretch policy is represented by the style.
     // A wrapping container keeps natural lines on overflow, even for one line.

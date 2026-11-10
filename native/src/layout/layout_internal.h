@@ -51,6 +51,19 @@ using percentage_height_s = std::optional<float>;
 enum class forced_height_kind_e { none, definite, indefinite };
 bool length_depends_on_percentage(aether_css_length value);
 
+// A content measurement changes sizing inputs only for this root and physical
+// axis. Never mutate the stored style or inherit the exception into children.
+// The same root may itself be a flex row, where height is its cross axis.
+enum class intrinsic_axis_e { width, height };
+struct intrinsic_measurement_s {
+    const aether_node_s* root;
+    intrinsic_axis_e axis;
+
+    bool ignores(const aether_node_s* node, intrinsic_axis_e physical_axis) const {
+        return root == node && axis == physical_axis;
+    }
+};
+
 // A row-owned continuation, never an owner or a cross-layout cache. Natural
 // in-flow children remain attached; only the completion tail is deferred.
 struct element_completion_s {
@@ -83,7 +96,8 @@ aether_layout_box_s* layout_element(
        box's scroll metrics. Null for every non-root element; the root's own
        computed overflow stays untouched (paint keeps the used value). */
     const int32_t* viewport_overflow_override = nullptr,
-    element_completion_s* deferred_completion = nullptr);
+    element_completion_s* deferred_completion = nullptr,
+    const intrinsic_measurement_s* intrinsic_measurement = nullptr);
 
 float layout_flow_children(
     const aether_layout_engine_s* engine,
@@ -122,7 +136,8 @@ float layout_flex_children(
     bool has_definite_height,
     percentage_height_s container_height_reference,
     float height_decorations,
-    aether_layout_result_s* result);
+    aether_layout_result_s* result,
+    const intrinsic_measurement_s* intrinsic_measurement = nullptr);
 
 float layout_table_children(
     const aether_layout_engine_s* engine,

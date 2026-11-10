@@ -266,11 +266,15 @@ static void baseline_height_regressions() {
     baseline_height_case("pre newline", "A\nB", 40, {{"A",0,0},{"B",0,20}}, "#inner{white-space:pre}");
     baseline_height_case("min-height zero", "<span>A</span><span>B</span>", 20,
                          {{"A",0,0},{"B",10,16}}, "#inner{min-height:0}");
-    // Preserve existing atomic intrinsic-height behavior; only text contributes
-    // ascent/descent. The explicit atomic box remains 40px in final geometry.
-    baseline_height_case("atomic mixed", "A<span id='atom' style='display:inline-block;width:10px;height:40px'></span>B", 36,
+    // Column auto-min now uses real content layout at the resolved cross width.
+    // This checks AetherUI's existing top-aligned atomic policy, not CSS's
+    // default inline-block baseline alignment or a browser-equivalence oracle.
+    // The text baseline union is 36px, but the top-aligned atomic box is 40px:
+    // max(36, 40) is 40 for the mixed line; the atomic-only line is also 40px.
+    // The old intrinsic-height walk skipped the atomic's specified height.
+    baseline_height_case("atomic mixed", "A<span id='atom' style='display:inline-block;width:10px;height:40px'></span>B", 40,
                          {{"A",0,0},{"B",20,16}});
-    baseline_height_case("atomic only", "<span id='atom' style='display:inline-block;width:10px;height:40px'></span>", 20, {});
+    baseline_height_case("atomic only", "<span id='atom' style='display:inline-block;width:10px;height:40px'></span>", 40, {});
     baseline_height_case("empty forced line", "A<br><br>B", 60, {{"A",0,0},{"B",0,40}});
 }
 // Leading preserved whitespace is content, including on a newly forced line.

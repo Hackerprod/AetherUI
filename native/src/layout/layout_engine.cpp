@@ -411,9 +411,14 @@ aether_layout_box_s* layout_element(
     bool is_independent_layout_item,
     aether_layout_result_s* result,
     const int32_t* viewport_overflow_override,
-    element_completion_s* deferred_completion)
+    element_completion_s* deferred_completion,
+    const intrinsic_measurement_s* intrinsic_measurement)
 {
     auto style = get_style(styles, element);
+    const bool intrinsic_width = intrinsic_measurement &&
+        intrinsic_measurement->ignores(element, intrinsic_axis_e::width);
+    const bool intrinsic_height = intrinsic_measurement &&
+        intrinsic_measurement->ignores(element, intrinsic_axis_e::height);
     auto* box = result->create_box();
     box->kind = LAYOUT_BOX_ELEMENT;
     box->element = element;
@@ -433,7 +438,8 @@ aether_layout_box_s* layout_element(
     box->collapsed_margin_after = margin.bottom;
 
     float available_border_width = std::max(0.f, containing_block.width - aether_thicknessf_horizontal(margin));
-    float specified_width = resolve(engine, style.width, containing_block.width, style);
+    float specified_width = intrinsic_width ? NAN
+        : resolve(engine, style.width, containing_block.width, style);
     float border_width = specified_width;
 
     if (has_forced_border_width) {
@@ -447,7 +453,8 @@ aether_layout_box_s* layout_element(
         border_width += aether_thicknessf_horizontal(padding) + aether_thicknessf_horizontal(border);
     }
 
-    float max_width = resolve(engine, style.max_width, containing_block.width, style);
+    float max_width = intrinsic_width ? NAN
+        : resolve(engine, style.max_width, containing_block.width, style);
     if (std::isfinite(max_width)) {
         float max_border = (style.box_sizing == AETHER_BOX_SIZING_CONTENT_BOX)
             ? max_width + aether_thicknessf_horizontal(padding) + aether_thicknessf_horizontal(border)
@@ -455,7 +462,8 @@ aether_layout_box_s* layout_element(
         border_width = std::min(border_width, max_border);
     }
 
-    float min_width = resolve(engine, style.min_width, containing_block.width, style);
+    float min_width = intrinsic_width ? NAN
+        : resolve(engine, style.min_width, containing_block.width, style);
     if (std::isfinite(min_width)) {
         float min_border = (style.box_sizing == AETHER_BOX_SIZING_CONTENT_BOX)
             ? min_width + aether_thicknessf_horizontal(padding) + aether_thicknessf_horizontal(border)
@@ -495,7 +503,8 @@ aether_layout_box_s* layout_element(
             : forced_border_height;
         has_explicit_height = true;
     } else {
-        explicit_height = resolve_semantic_height(engine, style.height, containing_height, style, element, "height");
+        explicit_height = intrinsic_height ? NAN
+            : resolve_semantic_height(engine, style.height, containing_height, style, element, "height");
         has_explicit_height = std::isfinite(explicit_height);
     }
 
@@ -526,14 +535,15 @@ aether_layout_box_s* layout_element(
     float semantic_border_height = NAN;
     if (forced_height_kind == forced_height_kind_e::definite) {
         semantic_border_height = forced_border_height;
-    } else if (forced_height_kind == forced_height_kind_e::none) {
+    } else if (forced_height_kind == forced_height_kind_e::none && !intrinsic_height) {
         const float specified = resolve_semantic_height(engine, style.height, containing_height, style, element, "height");
         if (std::isfinite(specified)) semantic_border_height = specified +
             (style.box_sizing == AETHER_BOX_SIZING_CONTENT_BOX ? height_decorations : 0.f);
     }
     if (std::isfinite(semantic_border_height)) {
-        semantic_border_height = clamp_border_height(engine, style, semantic_border_height,
-            containing_height.value_or(NAN), height_decorations, true, element);
+        semantic_border_height = intrinsic_height ? std::max(height_decorations, semantic_border_height)
+            : clamp_border_height(engine, style, semantic_border_height,
+                containing_height.value_or(NAN), height_decorations, true, element);
         child_percentage_height = std::max(0.f, semantic_border_height - height_decorations);
     }
     if (child_percentage_height) child_containing_height = *child_percentage_height;
@@ -551,7 +561,7 @@ aether_layout_box_s* layout_element(
                                               style,
                                               std::isfinite(definite_content_height),
                                               containing_height, height_decorations,
-                                              result);
+                                              result, intrinsic_measurement);
     } else if (style.display == AETHER_DISPLAY_TABLE) {
         content_height = layout_table_children(engine, styles, box, element,
                                                {content_x, content_y, content_width, child_containing_height},
@@ -632,8 +642,9 @@ aether_layout_box_s* layout_element(
            : explicit_height)
         : content_height + aether_thicknessf_vertical(padding) + aether_thicknessf_vertical(border);
 
-    border_height = clamp_border_height(engine, style, border_height,
-        containing_height.value_or(NAN), height_decorations, true, element);
+    border_height = intrinsic_height ? std::max(height_decorations, border_height)
+        : clamp_border_height(engine, style, border_height,
+            containing_height.value_or(NAN), height_decorations, true, element);
 
     box->scroll_flow_height = content_height;
     box->scroll_base_height = viewport_overflow_override
