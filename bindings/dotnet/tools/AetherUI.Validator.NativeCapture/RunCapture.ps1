@@ -3,6 +3,7 @@
 param([Parameter(Mandatory)][ValidateSet('self-test','capture')][string]$Mode)
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
+$PSNativeCommandUseErrorActionPreference=$false # Record the fixed SDK probe exit immediately.
 $root = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '../../../..'))
 Set-Location $root
 $evidence = Join-Path $root 'artifacts/validator-native-capture/evidence'
@@ -22,14 +23,13 @@ if ($Mode -eq 'capture') {
 }
 function Save-Record { $record | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath $recordPath -Encoding utf8 }
 Save-Record
-$dotnet = (Get-Command dotnet -CommandType Application -ErrorAction Stop).Source
-$start = [Diagnostics.ProcessStartInfo]::new($dotnet)
+$start = [Diagnostics.ProcessStartInfo]::new()
 $start.WorkingDirectory=$root
 $start.UseShellExecute=$false
 $start.RedirectStandardOutput=$true
 $start.RedirectStandardError=$true
 $start.CreateNoWindow=$true
-$arguments = @((Join-Path $bin 'AetherUI.Validator.NativeCapture.dll'),$Mode,'--output',$output)
+[string[]]$arguments = @((Join-Path $bin 'AetherUI.Validator.NativeCapture.dll'),$Mode,'--output',$output)
 if ($Mode -eq 'capture') {
     $arguments += @('--page',(Join-Path $root 'bindings/dotnet/tools/AetherUI.Validator/Pages/flexbox_runtime_validation.html'),
         '--expected-sha256','eab17055687df3296d8b911b0217dfb0429c306a6aa57ab49895937a6a34b837','--viewport','1440x900','--dpi','96','--driver','warp')
@@ -39,6 +39,35 @@ $process=[Diagnostics.Process]::new()
 $process.StartInfo=$start
 $stdout=$null; $stderr=$null; $outTask=$null; $errTask=$null; $started=$false; $killAttempted=$false
 try {
+    # Never enumerate PATH here: Get-Command can return multiple installations, which
+    # PowerShell stringifies into one invalid executable name. No global SDK fallback.
+    if ([string]::IsNullOrWhiteSpace($env:RUNNER_TEMP) -or [string]::IsNullOrWhiteSpace($env:DOTNET_ROOT)) {
+        throw 'The isolated Actions SDK location is unavailable.'
+    }
+    [string]$isolatedRoot=[IO.Path]::TrimEndingDirectorySeparator([IO.Path]::GetFullPath((Join-Path $env:RUNNER_TEMP 'aetherui-dotnet-10.0.302')))
+    [string]$configuredRoot=[IO.Path]::TrimEndingDirectorySeparator([IO.Path]::GetFullPath($env:DOTNET_ROOT))
+    if (-not [string]::Equals($isolatedRoot,$configuredRoot,[StringComparison]::OrdinalIgnoreCase) -or $build.sdk -ne '10.0.302') {
+        throw 'SDK root or prior build SDK differs from the approved isolated installation.'
+    }
+    $hostFile=Get-Item -LiteralPath (Join-Path $isolatedRoot 'dotnet.exe') -ErrorAction Stop
+    $sdkFile=Get-Item -LiteralPath (Join-Path $isolatedRoot 'sdk/10.0.302/dotnet.dll') -ErrorAction Stop
+    if ($hostFile -isnot [IO.FileInfo] -or $sdkFile -isnot [IO.FileInfo] -or $hostFile.Length -le 0 -or $sdkFile.Length -le 0) {
+        throw 'The approved isolated host and SDK files must exist and be nonempty.'
+    }
+    [string]$dotnet=$hostFile.FullName
+    $versionLines=@(& $dotnet '--version')
+    $versionExit=$LASTEXITCODE
+    $record.sdkProbeExitCode=$versionExit
+    if ($versionExit -ne 0 -or $versionLines.Count -ne 1 -or $versionLines[0].Trim() -ne '10.0.302') {
+        throw 'The exact isolated host did not select SDK 10.0.302.'
+    }
+    $record.hostIdentity=[ordered]@{source='actions/setup-dotnet@v4 isolated installation';file='dotnet.exe';sdk='10.0.302';
+        hostSha256=(Get-FileHash -LiteralPath $dotnet -Algorithm SHA256).Hash.ToLowerInvariant();
+        sdkSha256=(Get-FileHash -LiteralPath $sdkFile.FullName -Algorithm SHA256).Hash.ToLowerInvariant()}
+    # FileName is a single absolute path. ArgumentList preserves each path (including
+    # spaces) as one argument; no shell, joined command line, or alternate executable.
+    $start.FileName=$dotnet
+    Save-Record
     $stdout=[IO.File]::Open((Join-Path $logs "$Mode.stdout.txt"),[IO.FileMode]::CreateNew,[IO.FileAccess]::Write)
     $stderr=[IO.File]::Open((Join-Path $logs "$Mode.stderr.txt"),[IO.FileMode]::CreateNew,[IO.FileAccess]::Write)
     if (-not $process.Start()) { throw 'The fixed native capture executable failed to start.' }
