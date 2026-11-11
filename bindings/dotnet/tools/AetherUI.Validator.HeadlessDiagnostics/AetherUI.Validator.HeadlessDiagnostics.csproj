@@ -1,0 +1,26 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <OutputType>Exe</OutputType>
+    <AssemblyName>AetherUI.Validator.HeadlessDiagnostics</AssemblyName>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <SelfContained>false</SelfContained>
+    <UseAppHost>false</UseAppHost>
+    <IsPackable>false</IsPackable>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="Program.cs" />
+    <Reference Include="AetherUI.Core"><HintPath>$(CandidateBin)/AetherUI.Core.dll</HintPath><Private>true</Private></Reference>
+    <Reference Include="AetherUI.Core.Native.Interop"><HintPath>$(CandidateBin)/AetherUI.Core.Native.Interop.dll</HintPath><Private>true</Private></Reference>
+    <Content Include="$(CandidateBin)/aether_core.dll" Link="aether_core.dll" CopyToOutputDirectory="Always" />
+  </ItemGroup>
+  <Target Name="RequireVerifiedCandidate" BeforeTargets="PrepareForBuild">
+    <Error Condition="'$(CandidateBin)' == ''" Text="CandidateBin is required; rebuilding product dependencies is forbidden." />
+    <Error Condition="!Exists('$(CandidateBin)/AetherUI.Core.dll') Or !Exists('$(CandidateBin)/AetherUI.Core.Native.Interop.dll') Or !Exists('$(CandidateBin)/aether_core.dll')" Text="Verified candidate binaries are missing." />
+    <Error Condition="'$(Configuration)' != 'Release' Or '$(RuntimeIdentifier)' != 'win-x64' Or '$(SelfContained)' != 'false'" Text="Release win-x64 framework-dependent only." />
+  </Target>
+</Project>

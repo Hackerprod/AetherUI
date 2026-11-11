@@ -404,17 +404,66 @@ function Get-ScopePolicy {
         @{ path='bindings/dotnet/tools/AetherUI.Validator.NativeCapture/TrackedLoader.cs'; status='A'; before=$null
             after=@{ mode='100644'; type='blob'; blob='2c01ffa1e3feb6f7ccdbbe8d35d3f76cd7444e62' }; sha256='e7e81ff567276fa114010c68b5466e03a3cece92282442a94ea49ff889704419' }
     )
+    # FFD layer is applied AFTER the frozen M/C inventory. Pins are frozen before publication.
+    $diagnostics = @(
+        @{ path='bindings/dotnet/tools/AetherUI.Validator.HeadlessDiagnostics/AetherUI.Validator.HeadlessDiagnostics.csproj'; status='A'; before=$null; beforeSha256=$null
+            after=@{ mode='100644'; type='blob'; blob='85bfb468b0a1e494cd5d92feefea14c83302facf' }; sha256='65842f64e8a55d5b02ef2040b83397e73516676ea461e866fdfb1f8fd659862a' },
+        @{ path='bindings/dotnet/tools/AetherUI.Validator.HeadlessDiagnostics/Program.cs'; status='A'; before=$null; beforeSha256=$null
+            after=@{ mode='100644'; type='blob'; blob='a38ecb10b33b4e14518682839aa5c9dd7f700b5d' }; sha256='3fe25b04465b353239c1803918b65b603241a0c28588591831f3b31618423232' },
+        @{ path='bindings/dotnet/tools/AetherUI.Validator.HeadlessDiagnostics/Run.ps1'; status='A'; before=$null; beforeSha256=$null
+            after=@{ mode='100644'; type='blob'; blob='75935e0129e526539f4d928b0f6073f108db848d' }; sha256='48dd7377ddd82e387928a9201afcc41dd84546ca0f75c09e072f7aa9efc59a5e' },
+        @{ path='bindings/dotnet/tools/AetherUI.Validator.HeadlessDiagnostics/Contract.Tests.ps1'; status='A'; before=$null; beforeSha256=$null
+            after=@{ mode='100644'; type='blob'; blob='6a2a0b75a480d7c9297ef6e14f57c5e351cc74c7' }; sha256='0cfbca462ab3a18ccc6cb65f6ddfbd42fe78b6019e32fec0b2f3f5409adaff21' },
+        @{ path='.github/workflows/validator-managed-diagnostics.yml'; status='M'; before=@{ mode='100644'; type='blob'; blob='2c89a5bd0b527d5f2f3a46f9ff19a057c14732de' }; beforeSha256='b766a0961f8d74205a9af7698ae98452a0b6408e79a697cd988d1188734f4882'
+            after=@{ mode='100644'; type='blob'; blob='b18bff572d27218f45f983fc01007e1f414c4298' }; sha256='420892445231234e8890a310c90f57863e166622a05c4fdf64070bfbcd41ed53' }
+    )
     $controls = @(
         @{ path='bindings/dotnet/tests/AetherUI.Metrics.Preflight/Prepare.ps1'; blob='978f28c4145b4fe9c77d4bc1786f567cd3250743'; sha256='3bce21acbc685a5b26a9b0e77e4879bee1e114fe2835d8d395aed4f7e9a5166e' },
-        @{ path='bindings/dotnet/tests/AetherUI.Metrics.Preflight/Scope.Tests.ps1'; blob='ffeeb9969852f10d6b2fed9ce1f4e535a12fee13'; sha256='ce25b9d1513eb9db28afaf387e6068360961bbd1a9f16fc56c0911973b5beca1' }
+        @{ path='bindings/dotnet/tests/AetherUI.Metrics.Preflight/Scope.Tests.ps1'; blob='4eb95e3c3a4a8535650fb8a2ab4c2f8d74b58674'; sha256='f60fa05d10baedcbf08e304b71923179d601ec75d2bfdf6e1b98fcba1e270204' }
     )
-    return @{ identities=$identities; overlay=$overlay; controls=$controls
+    return @{ identities=$identities; overlay=$overlay; controls=$controls; diagnostics=$diagnostics
         helper='bindings/dotnet/tests/AetherUI.Metrics.Preflight/Scope.ps1' }
 }
 function Copy-ScopeInventory($InputMap, $Context = $null) {
     $copy = New-ScopeMap
     foreach ($path in $InputMap.Keys) { Assert-ScopeTime $Context; $copy.Add($path, $InputMap[$path]) }
     return ,$copy
+}
+function Assert-ScopeFields($Value, [string[]] $Names) {
+    if ($null -eq $Value -or $Value -isnot [Collections.IDictionary] -or $Value.Count -ne $Names.Count) { Stop-Scope 'diagnostics-fields' }
+    foreach ($name in $Names) {
+        if (-not @($Value.Keys | Where-Object { Test-ScopeEqual ([string]$_) $name }).Count) { Stop-Scope 'diagnostics-fields' }
+    }
+}
+function Add-ScopeDiagnostics($Expected, $Entries, $Context = $null) {
+    if ($null -eq $Entries -or $Entries.Count -ne 5) { Stop-Scope 'diagnostics-count' }
+    $paths = @(
+        'bindings/dotnet/tools/AetherUI.Validator.HeadlessDiagnostics/AetherUI.Validator.HeadlessDiagnostics.csproj',
+        'bindings/dotnet/tools/AetherUI.Validator.HeadlessDiagnostics/Program.cs',
+        'bindings/dotnet/tools/AetherUI.Validator.HeadlessDiagnostics/Run.ps1',
+        'bindings/dotnet/tools/AetherUI.Validator.HeadlessDiagnostics/Contract.Tests.ps1',
+        '.github/workflows/validator-managed-diagnostics.yml')
+    for ($i = 0; $i -lt $paths.Count; $i++) {
+        Assert-ScopeTime $Context
+        $entry = $Entries[$i]; $path = $paths[$i]
+        Assert-ScopeFields $entry @('path','status','before','beforeSha256','after','sha256')
+        Assert-ScopeFields $entry.after @('mode','type','blob')
+        if (-not (Test-ScopeEqual $entry.path $path)) { Stop-Scope 'diagnostics-path' }
+        if ($i -lt 4) {
+            if (-not (Test-ScopeEqual $entry.status 'A') -or $null -ne $entry.before -or
+                $null -ne $entry.beforeSha256 -or $Expected.ContainsKey($path)) { Stop-Scope 'diagnostics-status' }
+        } else {
+            if (-not (Test-ScopeEqual $entry.status 'M') -or -not $Expected.ContainsKey($path)) { Stop-Scope 'diagnostics-status' }
+            Assert-ScopeFields $entry.before @('mode','type','blob')
+            if ($entry.beforeSha256 -cnotmatch '\A[0-9a-f]{64}\z') { Stop-Scope 'diagnostics-before' }
+            foreach ($field in @('mode','type','blob')) {
+                if (-not (Test-ScopeEqual $Expected[$path][$field] $entry.before[$field])) { Stop-Scope 'diagnostics-before' }
+            }
+        }
+        if (-not (Test-ScopeEqual $entry.after.mode '100644') -or -not (Test-ScopeEqual $entry.after.type 'blob') -or
+            $entry.after.blob -cnotmatch '\A[0-9a-f]{40}\z' -or $entry.sha256 -cnotmatch '\A[0-9a-f]{64}\z') { Stop-Scope 'diagnostics-after' }
+        $Expected[$path] = @{path=$path; mode=$entry.after.mode; type=$entry.after.type; blob=$entry.after.blob}
+    }
 }
 function Get-ScopeExpected($Metrics, $Capture, $Head, $Policy, $Context = $null) {
     $expected = Copy-ScopeInventory $Metrics $Context
@@ -436,6 +485,7 @@ function Get-ScopeExpected($Metrics, $Capture, $Head, $Policy, $Context = $null)
         $expected[$path] = @{ path=$path; mode=$entry.after.mode; type=$entry.after.type; blob=$entry.after.blob }
     }
     Assert-ScopeInventory $expected $Capture $Context
+    Add-ScopeDiagnostics $expected $Policy.diagnostics $Context
     foreach ($control in $Policy.controls) {
         if ($control.blob -cnotmatch '\A[0-9a-f]{40}\z' -or $control.sha256 -cnotmatch '\A[0-9a-f]{64}\z') { Stop-Scope 'control-pin' }
         $expected[$control.path] = @{ path=$control.path; mode='100644'; type='blob'; blob=$control.blob }
@@ -448,9 +498,12 @@ function Get-ScopeExpected($Metrics, $Capture, $Head, $Policy, $Context = $null)
     return ,$expected
 }
 function Assert-ScopeHashes($Expected, $Blobs, $Policy, $Context = $null) {
-    foreach ($entry in @($Policy.overlay) + @($Policy.controls)) {
+    foreach ($entry in @($Policy.overlay) + @($Policy.controls) + @($Policy.diagnostics)) {
         Assert-ScopeTime $Context
         if (-not $Expected.ContainsKey($entry.path)) { Stop-Scope 'pinned-hash' }
+        if ($entry.ContainsKey('beforeSha256') -and $null -ne $entry.beforeSha256) {
+            if (-not $Blobs.ContainsKey($entry.before.blob) -or -not (Test-ScopeEqual (Get-ScopeHash $Blobs[$entry.before.blob]) $entry.beforeSha256)) { Stop-Scope 'pinned-before-hash' }
+        }
         $oid = $Expected[$entry.path].blob
         if (-not $Blobs.ContainsKey($oid) -or -not (Test-ScopeEqual (Get-ScopeHash $Blobs[$oid]) $entry.sha256)) { Stop-Scope 'pinned-hash' }
     }
@@ -534,6 +587,7 @@ function Invoke-MetricsScope([string] $Root, $Manifest, $Stage) {
         Assert-ScopeFlags (Invoke-ScopeGit $context @('ls-files','-v','-z')) $expected $context
         $ids = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
         foreach ($entry in $expected.Values) { $null = $ids.Add($entry.blob) }
+        foreach ($entry in $policy.diagnostics) { if ($null -ne $entry.before) { $null = $ids.Add($entry.before.blob) } }
         [string[]]$orderedIds = @($ids); [Array]::Sort($orderedIds, [StringComparer]::Ordinal)
         $inputBytes = [Text.Encoding]::ASCII.GetBytes(($orderedIds -join "`n") + "`n")
         # A single binary batch, with per-blob limits and exact EOF validated below.
@@ -555,7 +609,7 @@ function Invoke-MetricsScope([string] $Root, $Manifest, $Stage) {
             source=[ordered]@{ commit=$head; tree=$headTree; nativeTree=$nativeTree; managedSourceTree=$managedTree
                 productMatchesBaseline=$false; reviewedMetricsProductionDelta=$history.production
                 reviewedMetricsSinceP=$history.sinceP; changedSinceP=@($actualSinceP.Values); changedSinceB=@($actualSinceB.Values)
-                nativeAndDependencyInputsMatchBaseline=$true; identities=$policy.identities; overlay=$policy.overlay
+                nativeAndDependencyInputsMatchBaseline=$true; identities=$policy.identities; overlay=$policy.overlay; diagnostics=$policy.diagnostics; controls=$policy.controls
                 inventory=@($expected.Values); files=$physical; sourceSeconds=$context.Clock.Elapsed.TotalSeconds
                 scopeTrust='External independent review of final commit; no self-hash claim; physical helper matches HEAD.'
                 captureStatus='Exact reviewed source overlay only; no visual or runtime acceptance.'

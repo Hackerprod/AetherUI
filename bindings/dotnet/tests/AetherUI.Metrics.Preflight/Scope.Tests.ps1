@@ -114,7 +114,7 @@ function Invoke-ScopeTests($Product, [string] $Root, $EvidenceStage) {
     }
     foreach ($path in @('native/extra.cpp','global.extra.json','bindings/Directory.Build.props',
         'bindings/dotnet/src/AetherUI.Core/New.cs','bindings/dotnet/src/AetherUI.Windows/New.cs',
-        'bindings/dotnet/tests/AetherUI.Metrics.Export/New.cs','NuGet.Config','outside.txt')) {
+        'bindings/dotnet/tests/AetherUI.Metrics.Export/New.cs','bindings/dotnet/tools/AetherUI.Validator.HeadlessDiagnostics/Extra.cs','NuGet.Config','outside.txt')) {
         $actual = Copy-ScopeTestMap $Product.expected
         $actual.Add($path, [ordered]@{path=$path;mode='100644';type='blob';blob=$one})
         Invoke-ScopeTestCase $state "addition-$path" 'inventory' { Assert-ScopeInventory $Product.expected $actual }
@@ -219,6 +219,85 @@ function Invoke-ScopeTests($Product, [string] $Root, $EvidenceStage) {
     $manifest.source = $null; $manifest.status = 'passed'
     Invoke-ScopeTestCase $state 'owned-manifest-state' 'owned-state' { Get-ScopeOwned $manifest $stage }
     Invoke-ScopeTestCase $state 'overlay-positive-full' '' { Get-ScopeExpected $Product.trees['M'] $Product.trees['C'] $Product.head $Product.policy }
+    # Exercise the actual post-C diagnostic layer, without replacing historical negatives.
+    $newLayerBase = Copy-ScopeInventory $Product.trees['C']
+    Invoke-ScopeTestCase $state 'diagnostics-positive' '' {
+        Add-ScopeDiagnostics (Copy-ScopeInventory $newLayerBase) $Product.policy.diagnostics
+    }
+    foreach ($count in @(0,4,6)) {
+        $policy = Get-ScopePolicy
+        $entries = if ($count -eq 0) { @() } elseif ($count -eq 4) { @($policy.diagnostics[0..3]) } else { @($policy.diagnostics) + @($policy.diagnostics[0]) }
+        Invoke-ScopeTestCase $state "diagnostics-count-$count" 'diagnostics-count' {
+            Add-ScopeDiagnostics (Copy-ScopeInventory $newLayerBase) $entries
+        }
+    }
+    for ($i = 0; $i -lt 5; $i++) {
+        foreach ($field in @('path','status','before','beforeSha256','after','sha256')) {
+            $policy = Get-ScopePolicy; $policy.diagnostics[$i].Remove($field)
+            Invoke-ScopeTestCase $state "diagnostics-missing-$i-$field" 'diagnostics-fields' {
+                Add-ScopeDiagnostics (Copy-ScopeInventory $newLayerBase) $policy.diagnostics
+            }
+        }
+        $policy = Get-ScopePolicy; $policy.diagnostics[$i]['extra'] = $true
+        Invoke-ScopeTestCase $state "diagnostics-extra-$i" 'diagnostics-fields' {
+            Add-ScopeDiagnostics (Copy-ScopeInventory $newLayerBase) $policy.diagnostics
+        }
+        foreach ($field in @('mode','type','blob')) {
+            $policy = Get-ScopePolicy; $policy.diagnostics[$i].after.Remove($field)
+            Invoke-ScopeTestCase $state "diagnostics-after-missing-$i-$field" 'diagnostics-fields' {
+                Add-ScopeDiagnostics (Copy-ScopeInventory $newLayerBase) $policy.diagnostics
+            }
+            $policy = Get-ScopePolicy
+            $policy.diagnostics[$i].after[$field] = switch ($field) { 'mode' {'120000'}; 'type' {'commit'}; 'blob' {'bad'} }
+            Invoke-ScopeTestCase $state "diagnostics-after-invalid-$i-$field" 'diagnostics-after' {
+                Add-ScopeDiagnostics (Copy-ScopeInventory $newLayerBase) $policy.diagnostics
+            }
+        }
+        $policy = Get-ScopePolicy; $policy.diagnostics[$i].after['extra'] = 'bad'
+        Invoke-ScopeTestCase $state "diagnostics-after-extra-$i" 'diagnostics-fields' {
+            Add-ScopeDiagnostics (Copy-ScopeInventory $newLayerBase) $policy.diagnostics
+        }
+        $policy = Get-ScopePolicy; $policy.diagnostics[$i].path += '.renamed'
+        Invoke-ScopeTestCase $state "diagnostics-renamed-$i" 'diagnostics-path' {
+            Add-ScopeDiagnostics (Copy-ScopeInventory $newLayerBase) $policy.diagnostics
+        }
+        $policy = Get-ScopePolicy; $policy.diagnostics[$i].status = 'D'
+        Invoke-ScopeTestCase $state "diagnostics-status-$i" 'diagnostics-status' {
+            Add-ScopeDiagnostics (Copy-ScopeInventory $newLayerBase) $policy.diagnostics
+        }
+        $policy = Get-ScopePolicy; $policy.diagnostics[$i].after.blob = $zero
+        Invoke-ScopeTestCase $state "diagnostics-blob-$i" 'inventory' {
+            Get-ScopeExpected $Product.trees['M'] $Product.trees['C'] $Product.head $policy
+        }
+        $policy = Get-ScopePolicy; $policy.diagnostics[$i].sha256 = '0' * 64
+        Invoke-ScopeTestCase $state "diagnostics-hash-$i" 'pinned-hash' {
+            Assert-ScopeHashes $Product.expected $Product.blobs $policy
+        }
+        $path = $Product.policy.diagnostics[$i].path
+        foreach ($flag in @('h','S','s')) {
+            $onePath = New-ScopeMap; $onePath.Add($path, $Product.expected[$path])
+            Invoke-ScopeTestCase $state "diagnostics-index-flag-$i-$flag" 'index-flag' {
+                Assert-ScopeFlags ($ascii.GetBytes("$flag $path`0")) $onePath
+            }
+        }
+        Invoke-ScopeTestCase $state "diagnostics-physical-dirty-$i" 'physical-bytes' {
+            Assert-ScopePhysicalBytes $path $lf $binary
+        }
+    }
+    foreach ($field in @('mode','type','blob')) {
+        $policy = Get-ScopePolicy; $policy.diagnostics[4].before[$field] = 'bad'
+        Invoke-ScopeTestCase $state "diagnostics-before-$field" 'diagnostics-before' {
+            Add-ScopeDiagnostics (Copy-ScopeInventory $newLayerBase) $policy.diagnostics
+        }
+    }
+    $policy = Get-ScopePolicy; $policy.diagnostics[4].before['extra'] = 'bad'
+    Invoke-ScopeTestCase $state 'diagnostics-before-extra' 'diagnostics-fields' {
+        Add-ScopeDiagnostics (Copy-ScopeInventory $newLayerBase) $policy.diagnostics
+    }
+    $policy = Get-ScopePolicy; $policy.diagnostics[4].beforeSha256 = '0' * 64
+    Invoke-ScopeTestCase $state 'diagnostics-before-hash' 'pinned-before-hash' {
+        Assert-ScopeHashes $Product.expected $Product.blobs $policy
+    }
     Invoke-ScopeTestCase $state 'pinned-hashes-positive' '' { Assert-ScopeHashes $Product.expected $Product.blobs $Product.policy }
     for ($i = 0; $i -lt $Product.policy.overlay.Count; $i++) {
         $policy = Get-ScopePolicy

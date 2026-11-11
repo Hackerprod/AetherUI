@@ -28,6 +28,23 @@ jobs:
       run:
         shell: pwsh
     steps:
+      # This is an observable monotonic anchor, not GitHub's actual job start.
+      # Run metadata stays outside the checkout and cannot supply executable code.
+      - name: Record conservative diagnostic budget anchor
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $anchor = Join-Path $env:RUNNER_TEMP 'aether-headless-budget-anchor.json'
+          if (Test-Path -LiteralPath $anchor) { throw 'budget-anchor-already-exists' }
+          $record = [ordered]@{
+            schema = 'headless-budget-anchor-v1'
+            runId = $env:GITHUB_RUN_ID
+            runAttempt = $env:GITHUB_RUN_ATTEMPT
+            jobId = $env:GITHUB_JOB
+            tickCount64 = [Environment]::TickCount64
+            utc = [DateTimeOffset]::UtcNow.ToString('O')
+          }
+          [IO.File]::WriteAllText($anchor, ($record | ConvertTo-Json -Compress), [Text.UTF8Encoding]::new($false, $true))
+          "AETHER_HEADLESS_BUDGET_ANCHOR=$anchor" >> $env:GITHUB_ENV
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
@@ -82,3 +99,38 @@ jobs:
             artifacts/validator-metrics/evidence/stage-export-baseline-run.json
             artifacts/validator-metrics/evidence/stage-export-candidate-run.json
             artifacts/validator-metrics/evidence/stage-export-compare.json
+      # C/T evidence above remains a prerequisite, not independent acceptance of this tree.
+      - name: Diagnose one headless full-fixture load in six fresh processes
+        if: ${{ success() }}
+        timeout-minutes: 8
+        run: ./bindings/dotnet/tools/AetherUI.Validator.HeadlessDiagnostics/Run.ps1
+      - name: Retain public headless diagnostic evidence only
+        if: ${{ always() && env.AETHER_HEADLESS_EVIDENCE_INITIALIZED == 'true' }}
+        timeout-minutes: 1
+        uses: actions/upload-artifact@v4
+        with:
+          name: validator-headless-full-fixture-${{ github.sha }}-${{ github.run_attempt }}
+          retention-days: 7
+          if-no-files-found: error
+          path: |
+            artifacts/validator-headless-diagnostics/evidence/identities.json
+            artifacts/validator-headless-diagnostics/evidence/source-manifest.json
+            artifacts/validator-headless-diagnostics/evidence/stage-source.json
+            artifacts/validator-headless-diagnostics/evidence/dependencies.json
+            artifacts/validator-headless-diagnostics/evidence/contract-tests.json
+            artifacts/validator-headless-diagnostics/evidence/process-results.json
+            artifacts/validator-headless-diagnostics/evidence/canonical-vectors.json
+            artifacts/validator-headless-diagnostics/evidence/witnesses.json
+            artifacts/validator-headless-diagnostics/evidence/summary.json
+            artifacts/validator-headless-diagnostics/evidence/warmup.result.json
+            artifacts/validator-headless-diagnostics/evidence/warmup.events.jsonl
+            artifacts/validator-headless-diagnostics/evidence/sample-1.result.json
+            artifacts/validator-headless-diagnostics/evidence/sample-1.events.jsonl
+            artifacts/validator-headless-diagnostics/evidence/sample-2.result.json
+            artifacts/validator-headless-diagnostics/evidence/sample-2.events.jsonl
+            artifacts/validator-headless-diagnostics/evidence/sample-3.result.json
+            artifacts/validator-headless-diagnostics/evidence/sample-3.events.jsonl
+            artifacts/validator-headless-diagnostics/evidence/sample-4.result.json
+            artifacts/validator-headless-diagnostics/evidence/sample-4.events.jsonl
+            artifacts/validator-headless-diagnostics/evidence/sample-5.result.json
+            artifacts/validator-headless-diagnostics/evidence/sample-5.events.jsonl
