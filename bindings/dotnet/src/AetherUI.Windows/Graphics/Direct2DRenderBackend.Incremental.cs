@@ -61,6 +61,13 @@ public sealed partial class Direct2DRenderBackend
             return false;
         }
 
+        // Only an armed, no-damage capture needs the caller's normal full-render fallback.
+        if (_diagnosticCaptureRequest is not null && plan.DirtyRects.Count == 0)
+        {
+            CheckDiagnosticRenderThread();
+            return false;
+        }
+
         if (plan.DirtyRects.Count == 0)
         {
             if (_incrementalDebug)
@@ -79,8 +86,18 @@ public sealed partial class Direct2DRenderBackend
         _lastTransformPops = 0;
         _lastIncrementalScannedCommands = 0;
         _lastIncrementalPaintedCommands = 0;
-        RenderIncrementalCore(displayList, clearColor, plan, allowDeviceRetry: true);
-        _lastIncrementalStartIndex = plan.FirstChangedIndex;
+        CheckDiagnosticRenderThread();
+        try
+        {
+            RenderIncrementalCore(displayList, clearColor, plan, allowDeviceRetry: true);
+            _lastIncrementalStartIndex = plan.FirstChangedIndex;
+            CompleteDiagnosticRender();
+        }
+        catch
+        {
+            InvalidateDiagnosticCaptureResult();
+            throw;
+        }
         return true;
     }
 
@@ -136,11 +153,7 @@ public sealed partial class Direct2DRenderBackend
             result.CheckError();
         }
 
-        if (_diagnosticCaptureRequested)
-        {
-            _diagnosticCapturedFrame = CopyBackBufferForDiagnostics();
-            _diagnosticCaptureRequested = false;
-        }
+        CopyDiagnosticCandidate();
 
         UpdateRetainedFrameCache(target, displayList, plan.DirtyRects);
 

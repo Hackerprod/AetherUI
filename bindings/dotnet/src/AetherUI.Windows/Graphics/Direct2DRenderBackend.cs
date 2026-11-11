@@ -59,8 +59,6 @@ public sealed partial class Direct2DRenderBackend : IRenderBackendWithText, IInc
 
     private int _lastTransformPushes;
     private int _lastTransformPops;
-    private bool _diagnosticCaptureRequested;
-    private byte[]? _diagnosticCapturedFrame;
 
     // A clip is expressed in the coordinate space that was active when it was pushed. Keeping
     // that matrix with the clip is essential when a text-shadow cache miss or backdrop snapshot
@@ -74,42 +72,6 @@ public sealed partial class Direct2DRenderBackend : IRenderBackendWithText, IInc
 
     internal int LastTransformPushes => _lastTransformPushes;
     internal int LastTransformPops => _lastTransformPops;
-
-    /// <summary>
-    /// Renders through the production swap-chain path and copies that exact completed
-    /// frame before Present changes the current flip-sequential back buffer.
-    /// </summary>
-    internal byte[] RenderAndCaptureBackBufferForDiagnostics(DisplayList displayList, ColorRgba clearColor)
-    {
-        RequestBackBufferCaptureForDiagnostics();
-        try
-        {
-            Render(displayList, clearColor);
-            return TakeBackBufferCaptureForDiagnostics();
-        }
-        finally
-        {
-            _diagnosticCaptureRequested = false;
-            _diagnosticCapturedFrame = null;
-        }
-    }
-
-    /// <summary>Arms one production render for a deterministic, pre-Present back-buffer copy.</summary>
-    internal void RequestBackBufferCaptureForDiagnostics()
-    {
-        _diagnosticCapturedFrame = null;
-        _diagnosticCaptureRequested = true;
-    }
-
-    /// <summary>Returns the frame requested by <see cref="RequestBackBufferCaptureForDiagnostics"/>.</summary>
-    internal byte[] TakeBackBufferCaptureForDiagnostics()
-    {
-        var capture = _diagnosticCapturedFrame
-            ?? throw new InvalidOperationException("The Direct2D diagnostic frame was not captured before Present.");
-        _diagnosticCaptureRequested = false;
-        _diagnosticCapturedFrame = null;
-        return capture;
-    }
 
     private unsafe byte[] CopyBackBufferForDiagnostics()
     {
@@ -129,7 +91,7 @@ public sealed partial class Direct2DRenderBackend : IRenderBackendWithText, IInc
         context.CopyResource(staging, source);
         context.Flush();
 
-        var pixels = new byte[_targetPixelWidth * _targetPixelHeight * 4];
+        var pixels = new byte[checked(_targetPixelWidth * _targetPixelHeight * 4)];
         var mapped = context.Map(staging, 0, MapMode.Read, Vortice.Direct3D11.MapFlags.None);
         try
         {
@@ -243,6 +205,7 @@ public sealed partial class Direct2DRenderBackend : IRenderBackendWithText, IInc
             return;
         }
 
+        InvalidateDiagnosticCaptureResult();
         _textShadowMasks.Clear();
         ReleaseBackdropCompositionResources();
         if (sizeChanged)
@@ -272,7 +235,17 @@ public sealed partial class Direct2DRenderBackend : IRenderBackendWithText, IInc
             _scrollTileCache.Clear();
             _scrollTileDisplayListGeneration = displayList.Generation;
         }
-        RenderCore(displayList, clearColor, allowDeviceRetry: true);
+        CheckDiagnosticRenderThread();
+        try
+        {
+            RenderCore(displayList, clearColor, allowDeviceRetry: true);
+            CompleteDiagnosticRender();
+        }
+        catch
+        {
+            InvalidateDiagnosticCaptureResult();
+            throw;
+        }
     }
 
     private void RenderCore(DisplayList displayList, ColorRgba clearColor, bool allowDeviceRetry)
@@ -493,11 +466,7 @@ public sealed partial class Direct2DRenderBackend : IRenderBackendWithText, IInc
             }
         }
 
-        if (_diagnosticCaptureRequested)
-        {
-            _diagnosticCapturedFrame = CopyBackBufferForDiagnostics();
-            _diagnosticCaptureRequested = false;
-        }
+        CopyDiagnosticCandidate();
 
         UpdateRetainedFrameCache(target, displayList);
 
@@ -1088,6 +1057,8 @@ public sealed partial class Direct2DRenderBackend : IRenderBackendWithText, IInc
 
     private void ReleaseDeviceResources()
     {
+        InvalidateDiagnosticCaptureResult();
+        _diagnosticDeviceGeneration++;
         _isDrawSegmentActive = false;
         _textShadowMasks.Clear();
         _scrollTileCache.Clear();

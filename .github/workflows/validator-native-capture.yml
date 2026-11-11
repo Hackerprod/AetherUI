@@ -1,0 +1,65 @@
+name: Validator Aether-only native capture
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/validator-native-capture.yml'
+      - 'bindings/dotnet/tools/AetherUI.Validator.NativeCapture/**'
+      - 'bindings/dotnet/tools/AetherUI.Validator/RawHtmlFileComponent.cs'
+      - 'bindings/dotnet/tools/AetherUI.Validator/PerfReporter.cs'
+      - 'bindings/dotnet/tools/AetherUI.Validator/ValidationReport.cs'
+      - 'bindings/dotnet/src/AetherUI.Core/**'
+      - 'bindings/dotnet/src/AetherUI.Core.Native.Interop/**'
+      - 'bindings/dotnet/src/AetherUI.Windows/**'
+      - 'native/**'
+      - 'global.json'
+      - 'bindings/dotnet/Directory.*.props'
+permissions:
+  contents: read
+concurrency:
+  group: validator-native-capture-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  native-capture:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-dotnet@v4
+        env:
+          DOTNET_INSTALL_DIR: ${{ runner.temp }}/aetherui-dotnet-10.0.302
+        with:
+          dotnet-version: '10.0.302'
+      - name: Build only the Aether capture console and validate dependency closure
+        run: ./bindings/dotnet/tools/AetherUI.Validator.NativeCapture/PrepareCapture.ps1
+      - name: Run focal Aether WARP self-tests once (60 seconds)
+        run: ./bindings/dotnet/tools/AetherUI.Validator.NativeCapture/RunCapture.ps1 -Mode self-test
+      - name: Capture the immutable validator fixture once (180 seconds)
+        run: ./bindings/dotnet/tools/AetherUI.Validator.NativeCapture/RunCapture.ps1 -Mode capture
+      - name: Preserve explicitly allowed evidence including incomplete captures
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: validator-native-capture-${{ github.sha }}-${{ github.run_attempt }}
+          retention-days: 7
+          if-no-files-found: error
+          path: |
+            artifacts/validator-native-capture/evidence/build.json
+            artifacts/validator-native-capture/evidence/dependencies.json
+            artifacts/validator-native-capture/evidence/source.json
+            artifacts/validator-native-capture/evidence/self-test-process.json
+            artifacts/validator-native-capture/evidence/capture-process.json
+            artifacts/validator-native-capture/evidence/self-test/manifest.json
+            artifacts/validator-native-capture/evidence/self-test/tests.json
+            artifacts/validator-native-capture/evidence/self-test/encoding-pattern.png
+            artifacts/validator-native-capture/evidence/self-test/captured-pattern.png
+            artifacts/validator-native-capture/evidence/self-test/report.log
+            artifacts/validator-native-capture/evidence/capture/manifest.json
+            artifacts/validator-native-capture/evidence/capture/native.png
+            artifacts/validator-native-capture/evidence/capture/report.log
