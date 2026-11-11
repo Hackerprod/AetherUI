@@ -20,8 +20,8 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  baseline-preparation:
-    name: Baseline build and headless preflight
+  candidate-validation:
+    name: Focal host phase build and tests
     runs-on: windows-latest
     timeout-minutes: 20
     defaults:
@@ -39,15 +39,15 @@ jobs:
           DOTNET_INSTALL_DIR: ${{ runner.temp }}/aetherui-dotnet-10.0.302
         with:
           dotnet-version: '10.0.302'
-      # Preparation only. This does not execute the Validator, a drawing backend,
+      # Headless C/T after independently accepted P. Does not execute Validator or a drawing backend,
       # a browser, native tests or the general managed test runner.
-      - name: Build the unchanged product and run one public smoke fixture
+      - name: Build the candidate and run focal headless phase tests
         run: ./bindings/dotnet/tests/AetherUI.Metrics.Preflight/Prepare.ps1
-      - name: Retain public preparation evidence only
+      - name: Retain public focal evidence only
         if: ${{ always() }}
         uses: actions/upload-artifact@v4
         with:
-          name: validator-managed-preparation-${{ github.sha }}-${{ github.run_attempt }}
+          name: validator-managed-phases-${{ github.sha }}-${{ github.run_attempt }}
           retention-days: 7
           if-no-files-found: error
           path: |
@@ -67,3 +67,18 @@ jobs:
             artifacts/validator-metrics/evidence/stage-preflight-restore.json
             artifacts/validator-metrics/evidence/stage-preflight-build.json
             artifacts/validator-metrics/evidence/stage-preflight-run.json
+            artifacts/validator-metrics/evidence/tests.json
+            artifacts/validator-metrics/evidence/export-baseline.json
+            artifacts/validator-metrics/evidence/export-candidate.json
+            artifacts/validator-metrics/evidence/comparison.json
+            artifacts/validator-metrics/evidence/stage-tests-restore.json
+            artifacts/validator-metrics/evidence/stage-tests-build.json
+            artifacts/validator-metrics/evidence/stage-tests-run.json
+            artifacts/validator-metrics/evidence/stage-export-source.json
+            artifacts/validator-metrics/evidence/stage-export-baseline-restore.json
+            artifacts/validator-metrics/evidence/stage-export-baseline-build.json
+            artifacts/validator-metrics/evidence/stage-export-candidate-restore.json
+            artifacts/validator-metrics/evidence/stage-export-candidate-build.json
+            artifacts/validator-metrics/evidence/stage-export-baseline-run.json
+            artifacts/validator-metrics/evidence/stage-export-candidate-run.json
+            artifacts/validator-metrics/evidence/stage-export-compare.json

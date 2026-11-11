@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <OutputType>Exe</OutputType>
+    <AssemblyName>AetherUI.Metrics.Tests</AssemblyName>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../../src/AetherUI.Core/AetherUI.Core.csproj" />
+    <Compile Include="../../tools/AetherUI.Validator/PerfReporter.cs" Link="Production/PerfReporter.cs" />
+    <Compile Include="../../tools/AetherUI.Validator/ValidationReport.cs" Link="Production/ValidationReport.cs" />
+  </ItemGroup>
+</Project>

@@ -20,6 +20,17 @@ public readonly record struct UiDocumentHostMetrics(
     long RenderTimestampTicks,
     AetherUI.Core.Native.NativeStyleImpact LastStyleImpact)
 {
+    // Non-positional additions preserve source constructor/Deconstruct usage, not binary layout.
+    public long LayoutInteropTimestampTicks { get; init; }
+    public long LayoutProjectionTimestampTicks { get; init; }
+    public long LayoutProjections { get; init; }
+
+    public double LayoutInteropMilliseconds =>
+        LayoutInteropTimestampTicks * 1000d / System.Diagnostics.Stopwatch.Frequency;
+
+    public double LayoutProjectionMilliseconds =>
+        LayoutProjectionTimestampTicks * 1000d / System.Diagnostics.Stopwatch.Frequency;
+
     public double StyleResolutionMilliseconds =>
         StyleResolutionTimestampTicks * 1000d / System.Diagnostics.Stopwatch.Frequency;
 

@@ -1,4 +1,4 @@
-# Baseline preparation only. Fail closed; no retries, alternate engines or UI execution.
+# Candidate C/T after independently accepted P. Fail closed; no retries or UI execution.
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 $PSNativeCommandUseErrorActionPreference = $false # Native exits are recorded immediately below.
@@ -24,10 +24,14 @@ $validatorOptions = $common + @('-p:EnableWindowsTargeting=true', '-p:UseAppHost
 if (Test-Path $evidence) { throw 'Preparation evidence already exists; preserve the previous attempt.' }
 New-Item -ItemType Directory -Path $evidence, $logs | Out-Null
 $script:manifest = [ordered]@{
-    schema = 'managed-preparation-v1'; status = 'incomplete'
+    schema = 'managed-phase-validation-v2'; status = 'incomplete'
+    priorPreparation = [ordered]@{ commit = '667c4441a299d5dd6c2c313697a5154389978ed7'
+        tree = '07c6767ef77ca3e8ee899668f2fe61498643d51a'; run = '43041106442'; artifact = '13866275100'
+        artifactSha256 = 'fa6ff572438b1ee1def41b24925bb789a99aa1d772ff85cb1958eeb40b534f80'
+        independentReviewSha256 = 'd8c9e542d109e1715eb2809b3a4705c029199266ccbae96137133157102e24c4'; gate = 'P PASS' }
     baselineCommit = $baseline; baselineTree = $baselineTree
     source = $null; toolchain = $null; build = [ordered]@{}
-    stageFiles = @(); scope = 'Baseline preparation, not metrics implementation or a performance verdict.'
+    stageFiles = @(); scope = 'Candidate focal C/T evidence; independent T5 and final S review required; no performance verdict.'
 }
 $script:dependencies = [ordered]@{ schema = 'managed-preparation-dependencies-v1'; restores = @() }
 $script:stage = $null
@@ -116,8 +120,7 @@ function Get-PeIdentity([string] $Path) {
     $identity.verification = 'MZ signature, bounded e_lfanew, PE signature and COFF Machine via BinaryReader'
     return $identity
 }
-function Invoke-Preflight {
-    $arguments = @("$probeOutput/AetherUI.Metrics.Preflight.dll", '--output', "$evidence/preflight.json")
+function Invoke-Bounded([string] $Name, [string[]] $Arguments) {
     $record = [ordered]@{ file = 'dotnet'; arguments = $arguments; exitCode = $null
         timeoutMilliseconds = 30000; timedOut = $false; termination = 'not-needed'; logsComplete = $false }
     $script:stage.commands += $record
@@ -131,12 +134,12 @@ function Invoke-Preflight {
     foreach ($argument in $arguments) { $start.ArgumentList.Add($argument) }
     $process = [Diagnostics.Process]::new()
     $process.StartInfo = $start
-    $stdout = [IO.File]::Create((Join-Path $root "$logs/preflight.stdout.txt"))
-    $stderr = [IO.File]::Create((Join-Path $root "$logs/preflight.stderr.txt"))
+    $stdout = [IO.File]::Open((Join-Path $root "$logs/$Name.stdout.txt"), [IO.FileMode]::CreateNew, [IO.FileAccess]::Write)
+    $stderr = [IO.File]::Open((Join-Path $root "$logs/$Name.stderr.txt"), [IO.FileMode]::CreateNew, [IO.FileAccess]::Write)
     $started = $false
     $terminationAttempted = $false
     try {
-        if (-not $process.Start()) { throw 'Preflight did not start.' }
+        if (-not $process.Start()) { throw "$Name did not start." }
         $started = $true
         # Drain both pipes asynchronously to files while retaining the Process object.
         $outTask = $process.StandardOutput.BaseStream.CopyToAsync($stdout)
@@ -149,7 +152,7 @@ function Invoke-Preflight {
             $terminationAttempted = $true
             $process.Kill($true)
             $finished = $process.WaitForExit(5000)
-            if (-not $finished) { throw 'Preflight timed out; process-tree termination is uncertain.' }
+            if (-not $finished) { throw "$Name timed out; process-tree termination is uncertain." }
             $record.exitCode = $process.ExitCode
             $record.termination = 'exited-after-tree-kill'
         } else {
@@ -157,19 +160,11 @@ function Invoke-Preflight {
         }
         Save-Stage
         if (-not $outTask.Wait(5000) -or -not $errTask.Wait(5000)) {
-            throw 'Preflight stdout/stderr capture is incomplete.'
+            throw "$Name stdout/stderr capture is incomplete."
         }
         $record.logsComplete = $true
-        if ($record.timedOut) { throw 'Preflight exceeded its 30 second limit.' }
-        if ($record.exitCode -ne 0) { throw "Preflight exited $($record.exitCode)." }
-        $result = Get-Content -Raw -LiteralPath "$evidence/preflight.json" | ConvertFrom-Json -AsHashtable
-        if ($result.schema -ne 'managed-preparation-v1' -or $result.status -ne 'passed' -or
-            $result.checks.Count -ne 19 -or @($result.checks | Where-Object { $_.passed -ne $true }).Count -ne 0 -or
-            $result.source.commit -ne $script:manifest.source.commit -or
-            $result.loadedNative.sha256 -ne $script:manifest.build.native.sha256) {
-            throw 'Preflight evidence is missing, incomplete or inconsistent.'
-        }
-        $script:stage.details = Get-Identity "$evidence/preflight.json"
+        if ($record.timedOut) { throw "$Name exceeded its 30 second limit." }
+        if ($record.exitCode -ne 0) { throw "$Name exited $($record.exitCode)." }
     } catch {
         # An unexpected capture/wrapper failure must not abandon a live child.
         # If a tree kill already failed, retain uncertainty instead of retrying it.
@@ -192,11 +187,23 @@ function Invoke-Preflight {
         $process.Dispose()
         Save-Stage
         # These are only this fixed public fixture's logs. They are not artifact inputs.
-        Write-Host '--- preflight stdout ---'
-        Get-Content -LiteralPath "$logs/preflight.stdout.txt" | Out-Host
-        Write-Host '--- preflight stderr ---'
-        Get-Content -LiteralPath "$logs/preflight.stderr.txt" | Out-Host
+        Write-Host "--- $Name stdout ---"
+        Get-Content -LiteralPath "$logs/$Name.stdout.txt" | Out-Host
+        Write-Host "--- $Name stderr ---"
+        Get-Content -LiteralPath "$logs/$Name.stderr.txt" | Out-Host
     }
+}
+
+function Invoke-Preflight {
+    Invoke-Bounded 'preflight' @("$probeOutput/AetherUI.Metrics.Preflight.dll", '--output', "$evidence/preflight.json")
+        $result = Get-Content -Raw -LiteralPath "$evidence/preflight.json" | ConvertFrom-Json -AsHashtable
+        if ($result.schema -ne 'managed-preparation-v1' -or $result.status -ne 'passed' -or
+            $result.checks.Count -ne 19 -or @($result.checks | Where-Object { $_.passed -ne $true }).Count -ne 0 -or
+            $result.source.commit -ne $script:manifest.source.commit -or
+            $result.loadedNative.sha256 -ne $script:manifest.build.native.sha256) {
+            throw 'Preflight evidence is missing, incomplete or inconsistent.'
+        }
+        $script:stage.details = Get-Identity "$evidence/preflight.json"
 }
 
 Save-Manifest
@@ -210,19 +217,46 @@ try {
         if ($actualBaselineTree -ne $baselineTree -or $commit -ne $env:GITHUB_SHA) {
             throw 'The baseline tree or checked out push SHA is not the expected identity.'
         }
+        # P has already passed. C/T deliberately allows exactly the reviewed production delta,
+        # rather than dropping the baseline source guard when instrumentation changes it.
         $protected = @('native', 'bindings/dotnet/src', 'bindings/dotnet/tools/AetherUI.Validator',
             'bindings/dotnet/Directory.Build.props', 'bindings/dotnet/Directory.Packages.props', 'global.json')
-        $null = Invoke-Native 'git' (@('diff', '--exit-code', $baseline, 'HEAD', '--') + $protected)
-        $null = Invoke-Native 'git' (@('diff', '--exit-code', 'HEAD', '--') + $protected)
+        $productionAllowed = @('bindings/dotnet/src/AetherUI.Core/Runtime/UiDocumentHost.cs',
+            'bindings/dotnet/src/AetherUI.Core/Runtime/UiDocumentHostMetrics.cs',
+            'bindings/dotnet/tools/AetherUI.Validator/PerfReporter.cs')
+        $changedProduct = @(Invoke-Native 'git' (@('diff', '--name-only', $baseline, 'HEAD', '--') + $protected))
+        if ($changedProduct.Count -ne 3 -or @($changedProduct | Where-Object { $_ -notin $productionAllowed }).Count -ne 0) {
+            throw 'Candidate production diff must contain only the three reviewed metrics files.'
+        }
+        $unchanged = @('native', 'global.json', 'bindings/dotnet/Directory.Build.props', 'bindings/dotnet/Directory.Packages.props')
+        $null = Invoke-Native 'git' (@('diff', '--exit-code', $baseline, 'HEAD', '--') + $unchanged)
+        $null = Invoke-Native 'git' @('diff', '--exit-code', 'HEAD', '--')
+        $prior = $script:manifest.priorPreparation
+        $priorTree = @(Invoke-Native 'git' @('rev-parse', "$($prior.commit)^{tree}"))[-1].Trim()
+        if ($priorTree -ne $prior.tree) { throw 'Prior P source tree is not the reviewed source.' }
+        $allowed = $productionAllowed + @('.github/workflows/validator-managed-diagnostics.yml',
+            'bindings/dotnet/tests/AetherUI.Metrics.Preflight/Prepare.ps1',
+            'bindings/dotnet/tests/AetherUI.Metrics.Preflight/Validate.ps1',
+            'bindings/dotnet/tests/AetherUI.Metrics.Tests/AetherUI.Metrics.Tests.csproj',
+            'bindings/dotnet/tests/AetherUI.Metrics.Tests/Program.cs',
+            'bindings/dotnet/tests/AetherUI.Metrics.Export/AetherUI.Metrics.Export.csproj',
+            'bindings/dotnet/tests/AetherUI.Metrics.Export/Program.cs',
+            'bindings/dotnet/docs/host-phase-metrics.md')
+        $changed = @(Invoke-Native 'git' @('diff', '--name-only', $prior.commit, 'HEAD', '--'))
+        if (@($changed | Where-Object { $_ -notin $allowed }).Count -ne 0) {
+            throw 'Candidate contains changes outside the reviewed C/T allowlist.'
+        }
         $files = @('.github/workflows/validator-managed-diagnostics.yml', 'global.json',
             'bindings/dotnet/Directory.Build.props', 'bindings/dotnet/Directory.Packages.props',
             $core, $interop, $windows, $validator, $probe,
             'bindings/dotnet/src/AetherUI.Core/Layout/ITextMeasurer.cs',
             'bindings/dotnet/tests/AetherUI.Metrics.Preflight/Program.cs',
-            'bindings/dotnet/tests/AetherUI.Metrics.Preflight/Prepare.ps1')
+            'bindings/dotnet/tests/AetherUI.Metrics.Preflight/Prepare.ps1') + $allowed
         $script:manifest.source = [ordered]@{ commit = $commit; tree = $tree; nativeTree = $nativeTree
-            managedSourceTree = $managedTree; productMatchesBaseline = $true
-            files = @($files | ForEach-Object { Get-Identity $_ }) }
+            managedSourceTree = $managedTree; productMatchesBaseline = $false
+            productionDelta = $changedProduct; changedSinceP = $changed; allowedChanges = $allowed
+            nativeAndDependencyInputsMatchBaseline = $true
+            files = @($files | Select-Object -Unique | ForEach-Object { Get-Identity $_ }) }
     }
     Invoke-Stage 'toolchain' {
         $version = @(Invoke-Native 'dotnet' @('--version'))[-1].Trim()
@@ -298,7 +332,8 @@ try {
         )
     }
     Invoke-Stage 'preflight-run' { Invoke-Preflight }
-    $script:manifest.status = 'preparation-steps-passed-awaiting-review'
+    . (Join-Path $PSScriptRoot 'Validate.ps1')
+    $script:manifest.status = 'focal-C-T-steps-passed-awaiting-independent-review'
 } catch {
     $script:manifest.status = 'failed'
     throw

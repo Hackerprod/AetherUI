@@ -43,6 +43,9 @@ public sealed partial class UiDocumentHost : IDisposable
     private long _styleResolutionCount;
     private long _styleUpdatedElementCount;
     private long _layoutBuildCount;
+    private long _layoutProjectionCount;
+    private long _layoutInteropTimestampTicks;
+    private long _layoutProjectionTimestampTicks;
     private long _displayListBuildCount;
     private long _paintChunkBuildCount;
     private long _scrollCompositionCount;
@@ -152,13 +155,21 @@ public sealed partial class UiDocumentHost : IDisposable
         Interlocked.Read(ref _styleResolutionTimestampTicks),
         Interlocked.Read(ref _displayListBuildTimestampTicks),
         Interlocked.Read(ref _renderTimestampTicks),
-        _lastStyleImpact);
+        _lastStyleImpact)
+    {
+        LayoutInteropTimestampTicks = Interlocked.Read(ref _layoutInteropTimestampTicks),
+        LayoutProjectionTimestampTicks = Interlocked.Read(ref _layoutProjectionTimestampTicks),
+        LayoutProjections = Interlocked.Read(ref _layoutProjectionCount)
+    };
 
     public void ResetMetrics()
     {
         Interlocked.Exchange(ref _styleResolutionCount, 0);
         Interlocked.Exchange(ref _styleUpdatedElementCount, 0);
         Interlocked.Exchange(ref _layoutBuildCount, 0);
+        Interlocked.Exchange(ref _layoutProjectionCount, 0);
+        Interlocked.Exchange(ref _layoutInteropTimestampTicks, 0);
+        Interlocked.Exchange(ref _layoutProjectionTimestampTicks, 0);
         Interlocked.Exchange(ref _displayListBuildCount, 0);
         Interlocked.Exchange(ref _paintChunkBuildCount, 0);
         Interlocked.Exchange(ref _scrollCompositionCount, 0);
@@ -225,9 +236,16 @@ public sealed partial class UiDocumentHost : IDisposable
             _nativeLayout = null;
             _nativeLayoutStyleMap?.Dispose();
             _nativeLayoutStyleMap = _nativeStyleRuntime.CreateResolvedStyleMap(_nativeDom!.Native);
+            var layoutInteropStart = Stopwatch.GetTimestamp();
             _nativeLayout = _layoutInterop.CreateNativeLayout(_nativeDom, _nativeLayoutStyleMap, _viewport);
+            var layoutInteropEnd = Stopwatch.GetTimestamp();
+            Interlocked.Add(ref _layoutInteropTimestampTicks, layoutInteropEnd - layoutInteropStart);
             Interlocked.Increment(ref _layoutBuildCount);
+            var layoutProjectionStart = Stopwatch.GetTimestamp();
             _layout = _layoutInterop.Project(_nativeLayout, _nativeDom, _styles!, _viewport);
+            var layoutProjectionEnd = Stopwatch.GetTimestamp();
+            Interlocked.Add(ref _layoutProjectionTimestampTicks, layoutProjectionEnd - layoutProjectionStart);
+            Interlocked.Increment(ref _layoutProjectionCount);
             RebuildScrollBoxIndex();
             _invalidation &= ~VisualInvalidation.Layout;
             _invalidation |= VisualInvalidation.DisplayList;
