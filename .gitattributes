@@ -6,3 +6,6 @@
 *.cmd text eol=crlf
 *.png binary
 *.ico binary
+
+# Preserve the byte-exact uploaded validation fixture across checkouts.
+bindings/dotnet/tools/AetherUI.Validator/Pages/flexbox_runtime_validation.html -text whitespace=cr-at-eol
