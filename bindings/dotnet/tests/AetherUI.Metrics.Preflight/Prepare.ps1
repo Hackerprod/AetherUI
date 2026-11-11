@@ -69,6 +69,9 @@ function Invoke-Native([string] $File, [string[]] $Arguments) {
     $script:stage.commands += $record
     Save-Stage
     $log = "$logs/$($script:stage.name)-$($script:stage.commands.Count).txt"
+    # Tee-Object may never open its file when a successful command emits no lines.
+    # Create an empty log first; CreateNew also refuses to overwrite an earlier log.
+    [IO.File]::Open((Join-Path $root $log), [IO.FileMode]::CreateNew, [IO.FileAccess]::Write).Dispose()
     & $File @Arguments 2>&1 | Tee-Object -FilePath $log | Out-Host
     $code = $LASTEXITCODE
     $record.exitCode = $code
