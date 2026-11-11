@@ -52,8 +52,7 @@ double line_free_space(const std::vector<aether_flex_item_input_s>& items,
 
 void resolve_line(const std::vector<aether_flex_item_input_s>& items,
                   std::vector<aether_flex_item_result_s>& results,
-                  const aether_flex_line_s& line, float available_main_size, float gap,
-                  std::vector<double>& violations) {
+                  const aether_flex_line_s& line, float available_main_size, float gap) {
     if (!std::isfinite(available_main_size)) return;
 
     const bool using_grow = line.hypothetical_outer_main_size < available_main_size;
@@ -78,6 +77,7 @@ void resolve_line(const std::vector<aether_flex_item_input_s>& items,
     // This budget is measured after the initial freeze and never changes as
     // later min/max violations freeze more items.
     const double initial_free_space = line_free_space(items, results, line, available_main_size, gap);
+    std::vector<double> violations(line.item_indices.size(), 0.0);
 
     while (true) {
         double remaining_free_space = line_free_space(items, results, line, available_main_size, gap);
@@ -95,12 +95,6 @@ void resolve_line(const std::vector<aether_flex_item_input_s>& items,
             }
         }
         if (unfrozen_count == 0) return;
-
-        // Active positions are overwritten before they are read. Keep the
-        // invocation-local scratch for later lines; frozen lines need none.
-        if (violations.size() < line.item_indices.size()) {
-            violations.resize(line.item_indices.size());
-        }
 
         // The partial budget uses unscaled factors in BOTH modes. An active
         // zero-inner-base item still contributes its factor despite zero weight.
@@ -238,9 +232,8 @@ aether_flex_resolve_result_s aether_resolve_flexible_lengths(
     }
     if (!current.item_indices.empty()) output.lines.push_back(std::move(current));
 
-    std::vector<double> violations;
     for (const auto& line : output.lines) {
-        resolve_line(items, output.items, line, input.available_main_size, std::max(0.f, input.gap), violations);
+        resolve_line(items, output.items, line, input.available_main_size, std::max(0.f, input.gap));
     }
     return output;
 }
