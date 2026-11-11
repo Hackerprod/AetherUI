@@ -39,6 +39,7 @@ class HtmlParser {
     const char* src;
     size_t len;
     size_t pos;
+    bool skip_leading_lf = false;
 
     char current() const { return pos < len ? src[pos] : '\0'; }
     bool end() const { return pos >= len; }
@@ -126,6 +127,12 @@ class HtmlParser {
 
         std::string raw(src + start, pos - start);
         std::string decoded = aether::html_decode(raw.c_str());
+        // pre/listing suppress exactly one eligible character token, after
+        // source preprocessing and reference decoding, never at DOM mutation.
+        if (skip_leading_lf) {
+            skip_leading_lf = false;
+            if (!decoded.empty() && decoded.front() == '\n') decoded.erase(0, 1);
+        }
         if (!decoded.empty()) {
             parent->children.push_back(create_text(decoded, doc));
             parent->children.back()->parent = parent;
@@ -377,8 +384,9 @@ class HtmlParser {
         }
         std::string tag_name = read_name();
         // read_name still has its narrower legacy alphabet. Do not let a
-        // truncated name such as "textarea+foo" accidentally enable RCDATA.
-        const bool rcdata_name_boundary = !end() && is_raw_text_end_boundary(current());
+        // truncated name such as "textarea+foo" or "pre+foo" enable special
+        // text handling just because its stored DOM name matches.
+        const bool special_text_name_boundary = !end() && is_raw_text_end_boundary(current());
         // Canonical HTML element identity. Attribute names are normalized at
         // their own storage boundary below; values remain untouched.
         tag_name = aether::ascii_lowercase(std::move(tag_name));
@@ -438,7 +446,7 @@ class HtmlParser {
 
         // HTML ignores the self-closing flag for these non-void elements.
         // This path owns its close/EOF and never exposes RCDATA to dispatch.
-        if (rcdata_name_boundary && (tag_name == "textarea" || tag_name == "title")) {
+        if (special_text_name_boundary && (tag_name == "textarea" || tag_name == "title")) {
             parse_rcdata(element, doc);
             return;
         }
@@ -447,6 +455,8 @@ class HtmlParser {
             return;
 
         stack.push_back(element);
+        if (special_text_name_boundary && (tag_name == "pre" || tag_name == "listing"))
+            skip_leading_lf = true;
         if (aether::ascii_iequals(element->tag_name, "style") ||
             aether::ascii_iequals(element->tag_name, "script")) {
             parse_raw_text(element, doc);
@@ -466,6 +476,16 @@ public:
                 parse_text(stack.back(), doc);
                 continue;
             }
+
+            // The exact empty end-tag spelling emits no token. It neither
+            // consumes nor rearms the pending opportunity, even when repeated.
+            if (starts_with("</>")) {
+                pos += 3;
+                continue;
+            }
+            // Every other markup path consumes it, including ignored tokens
+            // and an invalid '<' emitted literally by parse_start_tag.
+            skip_leading_lf = false;
 
             if (starts_with("<!--")) {
                 parse_comment(stack.back(), doc);

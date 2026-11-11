@@ -1755,6 +1755,16 @@ if(AETHERUI_BUILD_TESTS)
 endif()
 
 if(AETHERUI_BUILD_TESTS)
+    add_executable(aether_html_pre_leading_lf_test tests/test_html_pre_leading_lf.cpp)
+    target_link_libraries(aether_html_pre_leading_lf_test PRIVATE AetherUI::Core)
+    add_test(NAME aether.html-pre-leading-lf COMMAND aether_html_pre_leading_lf_test)
+
+    add_executable(aether_html_pre_leading_lf_consumers_test tests/test_html_pre_leading_lf_consumers.cpp)
+    target_link_libraries(aether_html_pre_leading_lf_consumers_test PRIVATE AetherUI::Core)
+    add_test(NAME aether.html-pre-leading-lf-consumers COMMAND aether_html_pre_leading_lf_consumers_test)
+endif()
+
+if(AETHERUI_BUILD_TESTS)
     add_executable(aether_flex_inflexible_intrinsic_test tests/test_flex_inflexible_intrinsic.cpp)
     target_link_libraries(aether_flex_inflexible_intrinsic_test PRIVATE AetherUI::Core)
     add_test(NAME aether.flex-inflexible-intrinsic COMMAND aether_flex_inflexible_intrinsic_test)
