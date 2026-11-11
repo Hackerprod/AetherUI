@@ -13,10 +13,40 @@
 #include <string>
 #include <vector>
 #include <algorithm>
+#include <limits>
+#include <cstdint>
+#if defined(__linux__)
+#include <sys/resource.h>
+#endif
 
 using Clock = std::chrono::steady_clock;
 static std::ofstream report;
 static int checks = 0, failures = 0;
+static uint64_t text_measure_calls = 0, text_measure_bytes = 0;
+// Process-wide CPU and high-water RSS include test/export work, not just the engine.
+// Linux ru_maxrss is KiB. It is not current RSS, an allocation count, or GPU memory.
+static double process_cpu_ms() {
+#if defined(__linux__)
+    rusage usage{};
+    if (getrusage(RUSAGE_SELF, &usage) == 0)
+        return (usage.ru_utime.tv_sec + usage.ru_stime.tv_sec) * 1000.0
+             + (usage.ru_utime.tv_usec + usage.ru_stime.tv_usec) / 1000.0;
+#endif
+    return std::numeric_limits<double>::quiet_NaN();
+}
+static void process_metrics(const char* stage) {
+#if defined(__linux__)
+    rusage usage{};
+    if (getrusage(RUSAGE_SELF, &usage) == 0) {
+        report << "process_sample=" << stage
+               << ",cpu_user_ms=" << (usage.ru_utime.tv_sec * 1000.0 + usage.ru_utime.tv_usec / 1000.0)
+               << ",cpu_system_ms=" << (usage.ru_stime.tv_sec * 1000.0 + usage.ru_stime.tv_usec / 1000.0)
+               << ",peak_rss_kib=" << usage.ru_maxrss << '\n';
+    } else report << "process_sample=" << stage << ",unavailable=getrusage_failed\n";
+#else
+    report << "process_sample=" << stage << ",unavailable=platform_not_instrumented\n";
+#endif
+}
 static void check(bool ok, const std::string& name) {
     ++checks;
     if (!ok) { ++failures; report << "FAIL " << name << '\n'; std::cerr << "FAIL " << name << '\n'; }
@@ -48,6 +78,8 @@ static void nodes(aether_node_t n, std::vector<aether_node_t>& out) {
 // Deliberately deterministic approximate metrics, not native font shaping.
 static aether_text_metrics_t measure(const char* text, const aether_computed_style_t* style,
                                      float available, void*) {
+    ++text_measure_calls;
+    text_measure_bytes += text ? std::strlen(text) : 0;
     const float size = style && style->font_size > 0 ? style->font_size : 16.f;
     size_t glyphs = 0;
     for (const unsigned char* p = reinterpret_cast<const unsigned char*>(text); p && *p; ++p)
@@ -151,21 +183,35 @@ int main(int argc, char** argv) {
         report << std::unitbuf;
         report << "scope=native page pipeline + structural invariants + five selected semantic cases\n"
                << "not_validated=398 remaining semantic cases; browser parity; raster pixels; Direct2D; actual fonts; image decode\n"
+               << "cpu_metrics=Linux getrusage process CPU; NaN on unsupported platforms\n"
                << "text_metrics=synthetic UTF-8 codepoint widths, approximate wrapping\nviewport=" << width << 'x' << height << '\n';
+        const auto validator_start = Clock::now();
+        const auto validator_cpu_start = process_cpu_ms();
+        const auto read_start = Clock::now();
         std::ifstream input(argv[1], std::ios::binary);
         require(bool(input), "fixture readable");
         std::string html((std::istreambuf_iterator<char>(input)), {});
-        report << "fixture_bytes=" << html.size() << '\n';
+        const auto read_end = Clock::now();
+        report << "fixture_bytes=" << html.size() << '\n'
+               << "fixture_read_ms=" << std::chrono::duration<double, std::milli>(read_end-read_start).count() << '\n';
         Pipeline p;
         auto time = Clock::now();
-        auto timing = [&](const char* name) {
+        auto cpu_time = process_cpu_ms();
+        double native_pipeline_wall_ms = 0, native_pipeline_cpu_ms = 0;
+        auto reset_timing = [&] { time = Clock::now(); cpu_time = process_cpu_ms(); };
+        auto timing = [&](const char* name, bool native_pipeline = false) {
             const auto now = Clock::now();
-            report << name << "_ms=" << std::chrono::duration<double, std::milli>(now-time).count() << '\n';
-            time = now;
+            const auto cpu_now = process_cpu_ms();
+            const auto wall_ms = std::chrono::duration<double, std::milli>(now-time).count();
+            const auto cpu_ms = cpu_now-cpu_time;
+            report << name << "_ms=" << wall_ms << '\n' << name << "_cpu_ms=" << cpu_ms << '\n';
+            if (native_pipeline) { native_pipeline_wall_ms += wall_ms; native_pipeline_cpu_ms += cpu_ms; }
+            process_metrics(name);
+            reset_timing();
         };
         require(aether_doc_create(&p.doc) == AETHER_OK, "create document");
         require(aether_doc_parse_html(p.doc, html.c_str()) == AETHER_OK, "parse entire HTML");
-        timing("parse");
+        timing("parse", true);
         std::vector<aether_node_t> all; nodes(aether_doc_get_document_element(p.doc), all);
         std::string css;
         int articles = 0, sheets = 0;
@@ -180,21 +226,29 @@ int main(int argc, char** argv) {
         require(articles == 403, "403 case articles parsed (inventory, not semantic PASS)");
         require(sheets > 0 && !css.empty(), "embedded stylesheet extracted from DOM");
         report << "dom_nodes=" << all.size() << "\ncase_inventory=" << articles << "\nstyle_elements=" << sheets << '\n';
+        timing("dom_inventory_css_extract");
         aether_style_runtime_options_t options{};
         aether_style_environment_t environment{width, height, 1, 16, 0, 0, 0};
         require(aether_style_runtime_create(&options, &environment, nullptr, nullptr, &p.runtime) == AETHER_OK, "create runtime");
         int64_t sheet{}; int32_t rules{};
         require(aether_style_runtime_add_stylesheet(p.runtime, aether_style_runtime_defaults_css(), 0, "aether-defaults.css", &sheet, &rules) == AETHER_OK, "load engine UA defaults");
+        timing("style_runtime_ua_setup", true);
         require(aether_style_runtime_add_stylesheet(p.runtime, css.c_str(), 2, "flexbox-page", &sheet, &rules) == AETHER_OK, "compile page CSS");
         require(rules > 0, "nonempty compiled page CSS");
+        timing("css_compile", true);
         p.update_count = aether_style_runtime_resolve_subtree(p.runtime, aether_doc_get_document_element(p.doc), &p.updates);
         require(p.update_count > 0, "resolve page styles");
+        timing("style_resolve_subtree", true);
         require(aether_style_runtime_create_resolved_style_map(p.runtime, p.doc, &p.styles) == AETHER_OK, "resolved map");
+        timing("resolved_style_map", true);
         report << "css_rules=" << rules << "\nstyle_updates=" << p.update_count << '\n';
-        timing("css_resolve");
+        reset_timing();
         require(aether_layout_create(measure, nullptr, &p.engine) == AETHER_OK, "create layout");
         require(aether_layout_layout(p.engine, p.doc, p.styles, width, height, nullptr, nullptr, &p.layout) == AETHER_OK, "layout entire page");
-        timing("layout");
+        timing("layout", true);
+        report << "layout_text_measure_calls=" << text_measure_calls << "\nlayout_text_measure_bytes=" << text_measure_bytes << '\n';
+        text_measure_calls = 0; text_measure_bytes = 0;
+        reset_timing();
         int count = 0; boxes(aether_layout_result_get_root(p.layout), count);
         require(count > 403, "nontrivial page layout tree");
         report << "layout_boxes=" << count << '\n';
@@ -227,6 +281,9 @@ int main(int argc, char** argv) {
         timing("invariants_export");
         require(aether_display_list_builder_create(measure, nullptr, &p.builder) == AETHER_OK, "create painter");
         require(aether_display_list_build(p.builder, p.layout, nullptr, &p.list) == AETHER_OK, "build display list");
+        timing("display_list_build", true);
+        report << "paint_text_measure_calls=" << text_measure_calls << "\npaint_text_measure_bytes=" << text_measure_bytes << '\n';
+        reset_timing();
         const int commands = aether_display_list_get_count(p.list);
         require(commands > 0, "nonempty display list");
         for (int i = 0; i < commands; ++i) {
@@ -235,8 +292,17 @@ int main(int argc, char** argv) {
             aether_paint_command_free(&command);
         }
         report << "display_commands=" << commands << '\n';
-        timing("display_list");
+        // Includes API readback/free plus command assertions, not renderer/raster time.
+        timing("display_list_readback_checks");
         geometry.flush(); check(bool(geometry), "geometry written successfully");
+        const auto validator_end = Clock::now();
+        const auto validator_cpu_end = process_cpu_ms();
+        report << "native_pipeline_wall_ms=" << native_pipeline_wall_ms
+               << "\nnative_pipeline_cpu_ms=" << native_pipeline_cpu_ms
+               << "\nvalidator_observed_wall_ms=" << std::chrono::duration<double, std::milli>(validator_end-validator_start).count()
+               << "\nvalidator_observed_cpu_ms=" << validator_cpu_end-validator_cpu_start
+               << "\nmetric_scope=pipeline includes parse, runtime/UA setup, CSS compile, style resolve/map, layout, display-list build; includes lightweight API-result checks; excludes file read, DOM inventory/CSS extraction, invariant assertions/export, command readback/checks, destruction, process startup, raster, GPU, presentation\n";
+        process_metrics("end");
     } catch (const CheckFailure& e) {
         report << "ERROR " << e.what() << '\n'; std::cerr << e.what() << '\n';
     } catch (const std::exception& e) {

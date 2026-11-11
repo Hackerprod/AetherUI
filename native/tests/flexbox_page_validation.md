@@ -45,3 +45,27 @@ The test exits nonzero on failed assertions or I/O/API errors. Release builds
 retain all assertions (no dependency on C `assert` or `NDEBUG`).
 
 `aether.validator-artifact-metrics` runs eight offline pixel-metric unit tests when Python 3 is available. These tests use synthetic RGBA buffers, not renderer output.
+
+## Resource and timing metrics
+
+The native log separates parse, runtime/UA setup, CSS compilation, subtree style
+resolution, style-map creation, layout, and display-list construction. The
+`native_pipeline_*` totals sum those phases and include lightweight API-result
+checks. They exclude input I/O, DOM inventory/CSS extraction, invariant assertions
+and CSV export, display-command readback/checks, destruction, startup and any
+raster/GPU/presentation work. Validator wall/CPU totals are separately labelled.
+
+On Linux, process CPU uses `getrusage`; user/system CPU is in milliseconds and
+`peak_rss_kib` is the process high-water resident set in KiB, not current RSS,
+allocations or GPU memory. Process-wide samples include harness/export overhead.
+CPU is reported as NaN and resource samples as unavailable on other platforms.
+Text counters report callback calls and input UTF-8 bytes, not glyphs or actual
+DirectWrite shaping time. Every run is one process; multi-run medians require
+separate invocations with the same build and environment.
+
+The Windows validator's `--perf` snapshots additionally include process CPU,
+working set, peak working set, private bytes and managed heap bytes. These cover
+the validator process/native STA, excluding WebView2 child processes and GPU
+memory. Average core-equivalent usage is process CPU divided by elapsed time,
+not presented FPS or a CPU percentage normalized to logical processors. These
+Windows additions are statically reviewed, not runtime-tested on Linux.

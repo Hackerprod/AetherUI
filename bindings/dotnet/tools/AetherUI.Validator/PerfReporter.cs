@@ -14,8 +14,33 @@ public sealed class PerfReporter : IDisposable
     private bool _hasMetrics, _disposed;
     private long _samples;
     private double _lastReportMs;
+    private readonly double? _initialCpuMs;
 
-    public PerfReporter(string label, ValidationReport report) { _label = label; _report = report; }
+    public PerfReporter(string label, ValidationReport report)
+    {
+        _label = label;
+        _report = report;
+        _initialCpuMs = ReadProcessResources().CpuTotalMs;
+    }
+
+    private sealed record ProcessResources(string Status, double? CpuTotalMs, long? WorkingSetBytes,
+        long? PeakWorkingSetBytes, long? PrivateMemoryBytes, long? ManagedHeapBytes);
+
+    private static ProcessResources ReadProcessResources()
+    {
+        try
+        {
+            using var process = Process.GetCurrentProcess();
+            process.Refresh();
+            return new("measured", process.TotalProcessorTime.TotalMilliseconds, process.WorkingSet64,
+                process.PeakWorkingSet64, process.PrivateMemorySize64, GC.GetTotalMemory(false));
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or System.ComponentModel.Win32Exception
+            or NotSupportedException)
+        {
+            return new("unavailable", null, null, null, null, null);
+        }
+    }
 
     public void Report(UiDocumentHostMetrics metrics)
     {
@@ -39,8 +64,15 @@ public sealed class PerfReporter : IDisposable
     private void Emit(string kind)
     {
         var m = _latest;
+        var resources = ReadProcessResources();
+        var elapsedMs = _clock.Elapsed.TotalMilliseconds;
+        var cpuMs = resources.CpuTotalMs is double current && _initialCpuMs is double initial
+            ? Math.Max(0, current - initial) : (double?)null;
         _report.Write(kind, new { label = _label, status = _hasMetrics ? "measured" : "not-run", samples = _samples,
-            elapsedMs = _clock.Elapsed.TotalMilliseconds, renders = m.RenderCalls,
+            elapsedMs, process = resources, processCpuMsSinceReporterStart = cpuMs,
+            processAverageCoreEquivalent = elapsedMs > 0 && cpuMs.HasValue ? cpuMs / elapsedMs : null,
+            processScope = "validator process including native STA; excludes WebView2 child processes and GPU memory",
+            renders = m.RenderCalls,
             incrementalRenders = m.IncrementalRenderCalls, styleResolutions = m.StyleResolutions,
             styleUpdatedElements = m.StyleUpdatedElements, layoutBuilds = m.LayoutBuilds,
             displayListBuilds = m.DisplayListBuilds, paintChunkBuilds = m.PaintChunkBuilds,
@@ -49,7 +81,7 @@ public sealed class PerfReporter : IDisposable
             displayListMs = m.DisplayListBuildMilliseconds, renderMs = m.RenderMilliseconds,
             averageRenderMs = m.RenderCalls > 0 ? m.RenderMilliseconds / m.RenderCalls : (double?)null,
             averageDisplayListMs = m.DisplayListBuilds > 0 ? m.DisplayListBuildMilliseconds / m.DisplayListBuilds : (double?)null,
-            interpretation = "cumulative CPU host counters; not FPS; render time includes host pipeline work" });
+            interpretation = "cumulative host operation counters and elapsed pipeline timings; process CPU reported separately; not FPS" });
     }
 
     public void Dispose()
