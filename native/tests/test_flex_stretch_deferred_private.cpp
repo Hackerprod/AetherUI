@@ -79,9 +79,15 @@ static const char* scenario = "setup";
 static long layout_failures = 0;
 static long clone_failures = 0;
 static long text_calls = 0;
+static bool fixture_column = false;
 static bool same(float a, float b) { return std::isfinite(a) && std::fabs(a - b) < .01f; }
 static bool same(aether_rectf a, aether_rectf b) {
     return same(a.x, b.x) && same(a.y, b.y) && same(a.width, b.width) && same(a.height, b.height);
+}
+// Snapshot/clone stability is exact; tolerances belong only to independent
+// expected CSS geometry, never to retained state checks.
+static bool exact(aether_rectf a, aether_rectf b) {
+    return std::memcmp(&a, &b, sizeof(a)) == 0;
 }
 static aether_text_metrics_t measure(const char* text, const aether_computed_style_t*, float, void*) {
     ++text_calls;
@@ -106,21 +112,25 @@ struct BoxSnapshot {
     aether_rectf border;
     aether_rectf margin;
     aether_rectf content;
+    aether_rectf padding;
+    aether_scroll_metrics_t scroll;
     std::vector<aether_layout_box_s*> children;
     std::string text;
 };
 static std::vector<BoxSnapshot> capture_boxes(aether_layout_result_t frame) {
     std::vector<BoxSnapshot> boxes;
     for (auto* box : frame->allocated_boxes) {
-        boxes.push_back({box, box->border_box, box->margin_box, box->content_box, box->children, box->text});
+        boxes.push_back({box, box->border_box, box->margin_box, box->content_box, box->padding_box, box->scroll, box->children, box->text});
     }
     return boxes;
 }
 static void intact_boxes(const std::vector<BoxSnapshot>& boxes) {
     for (const auto& saved : boxes) {
-        REQUIRE(same(saved.box->border_box, saved.border));
-        REQUIRE(same(saved.box->margin_box, saved.margin));
-        REQUIRE(same(saved.box->content_box, saved.content));
+        REQUIRE(exact(saved.box->border_box, saved.border));
+        REQUIRE(exact(saved.box->margin_box, saved.margin));
+        REQUIRE(exact(saved.box->content_box, saved.content));
+        REQUIRE(exact(saved.box->padding_box, saved.padding));
+        REQUIRE(std::memcmp(&saved.box->scroll, &saved.scroll, sizeof(saved.scroll)) == 0);
         REQUIRE(saved.box->children == saved.children);
         REQUIRE(saved.box->text == saved.text);
     }
@@ -164,13 +174,15 @@ struct Fixture {
     size_t base_count = 0;
     uint64_t structure = 0, mutation = 0, style_epoch = 0;
 
-    explicit Fixture(MapMode m, const char* extra = "") : mode(m) {
+    explicit Fixture(MapMode m, const char* extra = "", const char* markup = html) : mode(m) {
         REQUIRE(aether_doc_create(&doc) == AETHER_OK);
-        REQUIRE(aether_doc_parse_html(doc, html) == AETHER_OK);
+        REQUIRE(aether_doc_parse_html(doc, markup) == AETHER_OK);
         aether_style_runtime_options_t options{};
         aether_style_environment_t env{500, 400, 1, 16, 0, 0, 0};
         REQUIRE(aether_style_runtime_create(&options, &env, nullptr, nullptr, &runtime) == AETHER_OK);
-        add(std::string(base_css) + extra);
+        add(std::string(base_css) + (fixture_column ?
+            "#p{flex-direction:column;}#a,#z,#table,#content,#fixed{min-height:0;}"
+            "#fixed{width:24px;align-self:flex-start;}" : "") + extra);
         resolve();
         REQUIRE(aether_layout_create(measure, nullptr, &engine) == AETHER_OK);
         REQUIRE(aether_display_list_builder_create(measure, nullptr, &painter) == AETHER_OK);
@@ -220,16 +232,19 @@ struct Fixture {
         else map = next;
         REQUIRE(map->current && map->current->mode() == mode);
         base = map->current; base_count = base->backing()->size();
+        remember_styles();
+        dom.clear(); capture(doc, dom);
+        structure = doc->identity->structure_epoch;
+        mutation = doc->identity->mutation_epoch;
+        style_epoch = doc->identity->style_tree_epoch;
+    }
+    void remember_styles() {
         // Keep both old and new frozen owners: neither publication may mutate.
         for (const auto& entry : base->backing()->entries()) {
             FrozenSnapshot saved{entry.second,{}};
             std::memcpy(saved.bytes.data(), &entry.second->style_view().scalars(), sizeof(StyleScalars));
             frozen.push_back(saved);
         }
-        dom.clear(); capture(doc, dom);
-        structure = doc->identity->structure_epoch;
-        mutation = doc->identity->mutation_epoch;
-        style_epoch = doc->identity->style_tree_epoch;
     }
     void frozen_intact() const {
         for (const auto& saved : frozen)
@@ -314,7 +329,9 @@ static void compare_clone(aether_layout_result_t source, aether_layout_result_t 
         auto* a = source->paint_order[i]; auto* b = clone->paint_order[i];
         REQUIRE(a != b && a->element == b->element && a->kind == b->kind);
         REQUIRE(a->style.style_owner() == b->style.style_owner());
-        REQUIRE(same(a->border_box, b->border_box) && same(a->content_box, b->content_box));
+        REQUIRE(exact(a->border_box, b->border_box) && exact(a->content_box, b->content_box)
+            && exact(a->margin_box, b->margin_box) && exact(a->padding_box, b->padding_box));
+        REQUIRE(std::memcmp(&a->scroll, &b->scroll, sizeof(a->scroll)) == 0);
         REQUIRE(a->text == b->text && a->children.size() == b->children.size());
         for (size_t j = 0; j < a->children.size(); ++j) {
             auto where = std::find(source->paint_order.begin(), source->paint_order.end(), a->children[j]);
@@ -333,8 +350,9 @@ static void allocation_sweeps(MapMode mode, bool prepared) {
     scenario = prepared ? "OOM prepared" : "OOM ordinary";
     Fixture f(mode);
     auto* source = f.layout(prepared); ownership(source); f.intact(); f.paint(source);
-    REQUIRE(same(f.box(source, "a")->border_box.height, 160));
-    REQUIRE(same(f.box(source, "z")->border_box.height, 156));
+    REQUIRE(same(f.box(source, "a")->border_box.height, fixture_column ? 70 : 160));
+    if (fixture_column) REQUIRE(same(f.box(source, "a")->border_box.width, 400));
+    REQUIRE(same(f.box(source, "z")->border_box.height, fixture_column ? 70 : 156));
     const auto geometry = capture_boxes(source);
     const auto primary = source->primary_boxes;
     const auto order = source->paint_order;
@@ -372,8 +390,8 @@ static void allocation_sweeps(MapMode mode, bool prepared) {
         }
         REQUIRE(completed && failures > 0);
         (clone ? clone_failures : layout_failures) += failures;
-        std::printf("stretch private OOM: mode=%d prepared=%d clone=%d ordinals=%ld\n",
-            static_cast<int>(mode), prepared, clone, failures);
+        std::printf("stretch private OOM: column=%d mode=%d prepared=%d clone=%d ordinals=%ld\n",
+            fixture_column, static_cast<int>(mode), prepared, clone, failures);
     }
     aether_layout_result_destroy(source); ++scenarios;
 }
@@ -388,17 +406,18 @@ static void retained_sequence(MapMode mode, bool prepared) {
     const auto source_boxes = capture_boxes(source), clone_boxes = capture_boxes(clone);
     const auto assets = clone->assets;
     const auto saved_box = f.box(source, "a")->border_box;
-    const auto hit = aether_layout_result_hit_test(source, saved_box.x + 1, saved_box.y + 90);
+    const auto hit = aether_layout_result_hit_test(source, saved_box.x + 1, saved_box.y + (fixture_column ? 40 : 90));
     REQUIRE(hit == f.node("a"));
-    REQUIRE(aether_layout_result_hit_test(clone, saved_box.x + 1, saved_box.y + 90) == hit);
+    REQUIRE(aether_layout_result_hit_test(clone, saved_box.x + 1, saved_box.y + (fixture_column ? 40 : 90)) == hit);
     std::vector<std::pair<const aether_node_s*, std::string>> synthetic;
     for (const auto& entry : assets->synthetic->ordered_entries())
         synthetic.emplace_back(entry->node(), entry->node()->text);
     f.add("#p{width:450px;height:220px;}#a{background:blue;}#tall{height:50px;}"); f.resolve();
     auto* next = f.layout(prepared, source); ownership(next); f.intact(); f.paint(next);
     REQUIRE(next->assets->base != assets->base);
-    REQUIRE(same(f.box(next, "a")->border_box.height, 220));
-    REQUIRE(same(f.box(next, "z")->border_box.height, 216));
+    REQUIRE(same(f.box(next, "a")->border_box.height, fixture_column ? 70 : 220));
+    if (fixture_column) REQUIRE(same(f.box(next, "a")->border_box.width, 450));
+    REQUIRE(same(f.box(next, "z")->border_box.height, fixture_column ? 70 : 216));
     intact_boxes(source_boxes); intact_boxes(clone_boxes); f.paint(source); f.paint(clone);
     aether_layout_result_destroy(next);
     aether_layout_result_destroy(source);
@@ -409,11 +428,11 @@ static void retained_sequence(MapMode mode, bool prepared) {
     REQUIRE(aether_layout_clone_snapshot(clone, &second) == AETHER_OK);
     compare_clone(clone, second); ownership(second); aether_layout_result_destroy(clone);
     f.paint(second);
-    REQUIRE(aether_layout_result_hit_test(second, saved_box.x + 1, saved_box.y + 90) == hit);
+    REQUIRE(aether_layout_result_hit_test(second, saved_box.x + 1, saved_box.y + (fixture_column ? 40 : 90)) == hit);
     aether_doc_destroy(f.doc); f.doc = nullptr;
     f.frozen_intact();
     for (const auto& entry : synthetic) REQUIRE(entry.first->text == entry.second);
-    REQUIRE(aether_layout_result_hit_test(second, saved_box.x + 1, saved_box.y + 90) == nullptr);
+    REQUIRE(aether_layout_result_hit_test(second, saved_box.x + 1, saved_box.y + (fixture_column ? 40 : 90)) == nullptr);
     auto* output = second;
     REQUIRE(aether_layout_clone_snapshot(second, &output) == AETHER_ERROR_INVALID_STATE && output == second);
     aether_display_list_t list = nullptr;
@@ -478,7 +497,16 @@ struct Callback {
 static void callback_case(MapMode mode, bool contextual, Action action, const char* target,
                           float bad = 0, int trigger = 1) {
     scenario = target;
-    Fixture f(mode), inner(mode, "#p{height:90px;}");
+    std::string markup(html);
+    if (trigger > 1) {
+        // The eliminated natural pass must not be required merely to reach
+        // callback two. Supply a second text block in the final subtree.
+        const std::string original = "<div id='last'>DEFERZ</div>";
+        const auto offset = markup.find(original); REQUIRE(offset != std::string::npos);
+        markup.replace(offset, original.size(),
+            "<div id='last'>DEFERZ<div>DEFERZLATE</div></div>");
+    }
+    Fixture f(mode, "", markup.c_str()), inner(mode, "#p{height:90px;}");
     auto* retained = f.layout(); const auto saved = capture_boxes(retained);
     const auto primary = retained->primary_boxes;
     const auto order = retained->paint_order;
@@ -495,6 +523,7 @@ static void callback_case(MapMode mode, bool contextual, Action action, const ch
     tracking = !mutation;
     const auto status = aether_layout_layout(c.engine, f.doc, f.map, 500, 400, nullptr, nullptr, &output);
     tracking = false;
+    if (!c.fired_at) std::fprintf(stderr,"unfired column=%d mode=%d contextual=%d action=%d target=%s trigger=%d calls=%d target_calls=%d status=%d\n",fixture_column,int(mode),contextual,int(action),target,trigger,c.calls,c.target_calls,int(status));
     REQUIRE(c.fired_at > 0); engine_clean(c.engine);
     const bool invalid = mutation || action == Action::bad_width || action == Action::bad_height ||
                          action == Action::bad_baseline;
@@ -532,7 +561,18 @@ static void numeric_overflow(MapMode mode) {
         "#a{border-top:3e38px solid;border-bottom:3e38px solid;}",
         "#p{height:3e38px;}#a{margin-top:-3e38px;}",
         "#z{margin-top:3e38%;}"}) {
-        Fixture bad(mode, css);
+        std::string transformed(css);
+        if (fixture_column) {
+            for (const auto& replacement : {std::pair{"top", "left"},
+                    std::pair{"bottom", "right"}, std::pair{"height", "width"}}) {
+                size_t offset = 0;
+                while ((offset = transformed.find(replacement.first, offset)) != std::string::npos) {
+                    transformed.replace(offset, std::strlen(replacement.first), replacement.second);
+                    offset += std::strlen(replacement.second);
+                }
+            }
+        }
+        Fixture bad(mode, transformed.c_str());
         auto* output = retained;
         REQUIRE(live_allocations == 0 && live_bytes == 0);
         tracking = true;
@@ -540,7 +580,8 @@ static void numeric_overflow(MapMode mode) {
             500, 400, nullptr, nullptr, &output);
         tracking = false;
         if (status != AETHER_ERROR_INVALID_STATE)
-            std::fprintf(stderr, "overflow mode=%d css=%s status=%d\n", int(mode), css, int(status));
+            std::fprintf(stderr, "overflow column=%d mode=%d css=%s status=%d\n",
+                fixture_column, int(mode), transformed.c_str(), int(status));
         REQUIRE(status == AETHER_ERROR_INVALID_STATE && output == retained);
         REQUIRE(live_allocations == 0 && live_bytes == 0);
         engine_clean(bad.engine); bad.intact(); good.intact(); intact_boxes(saved);
@@ -550,31 +591,120 @@ static void numeric_overflow(MapMode mode) {
     aether_layout_result_destroy(retained);
 }
 
-int main() {
-    for (auto mode : {MapMode::legacy_partial, MapMode::legacy_complete, MapMode::contextual}) {
-        numeric_overflow(mode);
-        for (bool prepared : {false, true}) {
-            allocation_sweeps(mode, prepared);
-            retained_sequence(mode, prepared);
+static void frozen_minimum(Fixture& f, bool genuine_auto, int overflow_x, int overflow_y) {
+    REQUIRE(f.base->mode() == MapMode::legacy_partial);
+    auto* node = f.node("a");
+    const auto original = f.base->backing()->find_owner(node);
+    auto scalars = original->style_view().scalars();
+    if (genuine_auto) scalars.min_height = aether_css_length_auto();
+    scalars.overflow_x = overflow_x; scalars.overflow_y = overflow_y;
+    NodeRecordInput input;
+    input.origin = original->origin(); input.node = node;
+    input.style = std::make_shared<const FrozenStyle>(scalars,original->style()->payload_owner());
+    input.measures = original->measures(); input.custom_properties = original->custom_properties();
+    input.color_references = original->color_references();
+    input.declared_impact = original->declared_impact();
+    input.declared_inherited_impact = original->declared_inherited_impact();
+    input.inherited_change_impact = original->inherited_change_impact();
+    input.document_identity = original->document_identity(); input.node_identity = original->node_identity();
+    input.node_lifetime = original->node_lifetime(); input.document_lifetime = original->document_lifetime();
+    FrozenNodeRef record; REQUIRE(freeze_node_record(input,record) == AETHER_OK);
+    BackingBuildInput backing{f.base->backing()->entries()}; backing.entries[node] = record;
+    MapVersionInput version; REQUIRE(freeze_backing(backing,version.backing) == AETHER_OK);
+    version.mode = MapMode::legacy_partial;
+    REQUIRE(make_map_version(version,f.map->current) == AETHER_OK);
+    f.base = f.map->current; f.remember_styles();
+}
+
+static void column_minimum_and_percentage() {
+    scenario = "column frozen automatic minimum";
+    fixture_column = true;
+    struct Case { int x, y; float height; };
+    for (bool genuine_auto : {false,true}) {
+        for (const auto& test : {
+                Case{AETHER_OVERFLOW_VISIBLE,AETHER_OVERFLOW_VISIBLE,80},
+                Case{AETHER_OVERFLOW_VISIBLE,AETHER_OVERFLOW_HIDDEN,50},
+                Case{AETHER_OVERFLOW_VISIBLE,AETHER_OVERFLOW_AUTO,50},
+                Case{AETHER_OVERFLOW_VISIBLE,AETHER_OVERFLOW_SCROLL,50},
+                Case{AETHER_OVERFLOW_HIDDEN,AETHER_OVERFLOW_VISIBLE,80},
+                Case{AETHER_OVERFLOW_AUTO,AETHER_OVERFLOW_VISIBLE,80},
+                Case{AETHER_OVERFLOW_SCROLL,AETHER_OVERFLOW_VISIBLE,80}}) {
+            Fixture f(MapMode::legacy_partial,
+                "#p{height:50px;}#a{flex:0 1 100px;}#leaf{flex:0 0 80px;height:80px;}",
+                "<html><body><div id='p'><div id='a'><div id='leaf'>MINIMUM</div></div></div></body></html>");
+            frozen_minimum(f,genuine_auto,test.x,test.y);
+            aether_layout_result_t frame = nullptr;
+            REQUIRE(aether_layout_layout(f.engine,f.doc,f.map,500,400,nullptr,nullptr,&frame) == AETHER_OK);
+            REQUIRE(same(f.box(frame,"a")->border_box.height,genuine_auto ? test.height : 50));
+            REQUIRE(same(f.box(frame,"a")->border_box.width,400));
+            REQUIRE(same(f.box(frame,"leaf")->border_box.height,80));
+            f.intact(); f.paint(frame); engine_clean(f.engine);
+            aether_layout_result_destroy(frame); ++scenarios;
         }
-        for (bool contextual : {false, true}) {
-            for (const char* target : {"CONTENT", "TABLE", "DEFERA", "DEFERZ"}) {
-                for (auto action : {Action::detach, Action::attribute, Action::text, Action::same_engine,
-                                    Action::nested_engine, Action::copy_style})
-                    callback_case(mode, contextual, action, target);
-                for (float bad : {-1.f, std::numeric_limits<float>::infinity(),
-                                  -std::numeric_limits<float>::infinity(), std::numeric_limits<float>::quiet_NaN()}) {
-                    callback_case(mode, contextual, Action::bad_width, target, bad);
-                    callback_case(mode, contextual, Action::bad_height, target, bad);
-                    // Finite negative baselines are accepted by the API; only
-                    // width and height have nonnegative contracts.
-                    if (bad != -1.f) callback_case(mode, contextual, Action::bad_baseline, target, bad);
-                }
+    }
+    scenario = "column semantic percentage definiteness";
+    for (auto mode : {MapMode::legacy_partial,MapMode::legacy_complete,MapMode::contextual}) {
+        for (bool definite : {false,true}) {
+            Fixture f(mode, definite ?
+                "#p{height:100px;}#a{flex:0 0 40px;}#leaf{display:block;flex:0 0 auto;height:50%;}" :
+                "#p{height:auto;}#a{flex:0 0 40px;}#leaf{display:block;flex:0 0 auto;height:50%;}",
+                "<html><body><div id='p'><div id='a'><div id='leaf'>PERCENT</div></div></div></body></html>");
+            aether_layout_result_t frame = nullptr;
+            REQUIRE(aether_layout_layout(f.engine,f.doc,f.map,500,400,nullptr,nullptr,&frame) == AETHER_OK);
+            REQUIRE(same(f.box(frame,"a")->border_box.height,40));
+            REQUIRE(same(f.box(frame,"a")->border_box.width,400));
+            // Fixed flex basis supplies final main definiteness even when the
+            // outer column has auto height; it is not inferred from its number.
+            REQUIRE(same(f.box(frame,"leaf")->border_box.height,20));
+            f.intact(); f.paint(frame); engine_clean(f.engine);
+            aether_layout_result_destroy(frame); ++scenarios;
+        }
+    }
+    // A numerical 40px minimum does not make a content basis definite. Its
+    // 50% descendant must keep its 19.2px intrinsic line box, not resolve to 20px.
+    for (auto mode : {MapMode::legacy_partial,MapMode::legacy_complete,MapMode::contextual}) {
+        Fixture f(mode,
+            "#p{height:auto;}#a{display:block;flex:0 0 content;min-height:40px;}"
+            "#leaf{display:block;flex:0 0 auto;height:50%;}",
+            "<html><body><div id='p'><div id='a'><div id='leaf'>INDEFINITE</div></div></div></body></html>");
+        aether_layout_result_t frame = nullptr;
+        REQUIRE(aether_layout_layout(f.engine,f.doc,f.map,500,400,nullptr,nullptr,&frame) == AETHER_OK);
+        REQUIRE(same(f.box(frame,"a")->border_box.height,40));
+        REQUIRE(same(f.box(frame,"leaf")->border_box.height,19.2f));
+        f.intact(); f.paint(frame); engine_clean(f.engine);
+        aether_layout_result_destroy(frame); ++scenarios;
+    }
+}
+
+int main() {
+    column_minimum_and_percentage();
+    for (bool column : {false, true}) {
+        fixture_column = column;
+        for (auto mode : {MapMode::legacy_partial, MapMode::legacy_complete, MapMode::contextual}) {
+            numeric_overflow(mode);
+            for (bool prepared : {false, true}) {
+                allocation_sweeps(mode, prepared);
+                retained_sequence(mode, prepared);
             }
-            // Fail on a later callback from an item whose final box has already
-            // begun construction rather than only its first measurement.
-            callback_case(mode, contextual, Action::bad_width, "DEFERZ",
-                std::numeric_limits<float>::quiet_NaN(), 2);
+            for (bool contextual : {false, true}) {
+                for (const char* target : {"CONTENT", "TABLE", "DEFERA", "DEFERZ"}) {
+                    for (auto action : {Action::detach, Action::attribute, Action::text, Action::same_engine,
+                                        Action::nested_engine, Action::copy_style})
+                        callback_case(mode, contextual, action, target);
+                    for (float bad : {-1.f, std::numeric_limits<float>::infinity(),
+                                      -std::numeric_limits<float>::infinity(), std::numeric_limits<float>::quiet_NaN()}) {
+                        callback_case(mode, contextual, Action::bad_width, target, bad);
+                        callback_case(mode, contextual, Action::bad_height, target, bad);
+                        // Finite negative baselines are accepted by the API; only
+                        // width and height have nonnegative contracts.
+                        if (bad != -1.f) callback_case(mode, contextual, Action::bad_baseline, target, bad);
+                    }
+                }
+                // Fail on a later callback from an item whose final box has already
+                // begun construction rather than only its first measurement.
+                callback_case(mode, contextual, Action::bad_width, "DEFERZ",
+                    std::numeric_limits<float>::quiet_NaN(), 2);
+            }
         }
     }
     std::printf("flex stretch deferred private: scenarios=%d layout OOM=%ld clone OOM=%ld callbacks=%d; "

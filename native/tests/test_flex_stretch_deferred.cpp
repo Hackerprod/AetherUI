@@ -209,8 +209,12 @@ void sizes_and_controls() {
     scenario("one wrapped line control", "#p{flex-wrap:wrap}", {{"a",0,0,80,100},{"b",80,0,80,20}});
     scenario("multiple wrapped lines control", "#p{width:100px;flex-wrap:wrap;gap:10px}#b{height:auto;min-height:20px}",
              {{"p",0,0,100,100},{"a",0,0,80,45},{"b",0,55,80,45}});
-    scenario("column control", "#p{flex-direction:column;height:200px}#a,#b{width:auto}",
+    scenario("column nowrap deferred stretch", "#p{flex-direction:column;height:200px}#a,#b{width:auto}",
              {{"p",0,0,200,200},{"a",0,0,200,80},{"b",0,80,200,80}});
+    scenario("column wrap remains excluded", "#p{flex-direction:column;flex-wrap:wrap;height:200px}#a,#b{width:auto}",
+             {{"p",0,0,200,200},{"a",0,0,200,80},{"b",0,80,200,80}});
+    scenario("column opposite cross margins remain excluded", "#p{flex-direction:column;height:200px}#a,#b{width:auto}#a{margin-left:10px;margin-right:-10px}",
+             {{"a",10,0,200,80},{"d",10,0,200,20},{"b",0,80,200,80}});
     scenario("forced by stretch ancestor", "#outer{display:flex;width:200px;height:100px}#p{height:auto;min-width:0;flex:0 0 200px}",
              {{"p",0,0,200,100},{"a",0,0,80,100},{"b",80,0,80,20}},
              "<body><div id='outer'><div id='p'><div id='a'><div id='d'></div></div><div id='b'></div></div></div></body>");

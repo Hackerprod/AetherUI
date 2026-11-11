@@ -20,6 +20,7 @@
 #include "text_justify.h"
 #include "table_layout.h"
 
+#include <algorithm>
 #include <optional>
 #include <string>
 #include <vector>
@@ -124,6 +125,20 @@ float layout_inline_items(
 float clamp_border_height(const aether_layout_engine_s* engine,
     const BoxStyleSnapshot& style, float height, float reference, float decorations,
     bool semantic_reference, aether_node_s* element);
+
+// Keep the content-box round trip ordered: subtract/add padding and border
+// separately. Grouping decorations changes observable float geometry/scroll.
+inline float explicit_height_from_forced_border(const BoxStyleSnapshot& style,
+    float height, float padding, float border) {
+    return style.box_sizing == AETHER_BOX_SIZING_CONTENT_BOX
+        ? std::max(0.f, height - padding - border) : height;
+}
+
+inline float border_height_from_explicit(const BoxStyleSnapshot& style,
+    float height, float padding, float border) {
+    return style.box_sizing == AETHER_BOX_SIZING_CONTENT_BOX
+        ? height + padding + border : height;
+}
 
 float layout_flex_children(
     const aether_layout_engine_s* engine,

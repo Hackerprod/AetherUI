@@ -187,7 +187,11 @@ struct resolved_flex_children_s {
     // A null slot is valid only while this explicit state is pending. The
     // final tree is built in the existing stretch phase, preserving the public
     // registration/paint order of mixed stretched and non-stretched siblings.
-    std::vector<bool> pending_stretch;
+    struct pending_stretch_s {
+        bool pending = false;
+        float main_size = 0.f;
+    };
+    std::vector<pending_stretch_s> pending_stretch;
 };
 
 static bool flex_length_is_definite(aether_css_length length, bool main_size_is_definite,
@@ -263,6 +267,33 @@ static bool flex_item_stretches_on_cross_axis(const BoxStyleSnapshot& container,
     }
     return horizontal ? item.height.unit == AETHER_CSS_UNIT_AUTO
                       : item.width.unit == AETHER_CSS_UNIT_AUTO;
+}
+
+static std::optional<float> deferred_column_stretch_main_size(
+    const aether_layout_engine_s* engine, aether_node_s* child,
+    const BoxStyleSnapshot& style, float target, float containing_width,
+    percentage_height_s containing_height) {
+    const auto margin = resolve_margin_edges(engine, style.margin, containing_width, style);
+    // The ordinary stretch pass subtracts border width from outer width. Even
+    // opposite nonzero margins can round differently, so neither is eligible.
+    if (margin.left != 0.f || margin.right != 0.f || !std::isfinite(target))
+        return std::nullopt;
+    const auto padding = resolve_padding_edges(engine, style.padding, containing_width, style);
+    const auto border = resolve_border_edges(engine, style, containing_width);
+    const float p = aether_thicknessf_vertical(padding);
+    const float b = aether_thicknessf_vertical(border);
+    const float decorations = p + b;
+    const float explicit_height = explicit_height_from_forced_border(style, target, p, b);
+    const float natural_height = border_height_from_explicit(style, explicit_height, p, b);
+    if (!std::isfinite(decorations) || !std::isfinite(explicit_height) ||
+        !std::isfinite(natural_height) ||
+        !std::isfinite(aether_thicknessf_horizontal(padding) + aether_thicknessf_horizontal(border)))
+        return std::nullopt;
+    // The skipped natural tree never receives intrinsic_measurement. Keep its
+    // ordinary clamp, even when the enclosing flex container is intrinsic.
+    const float clamped = clamp_border_height(engine, style, natural_height,
+        containing_height.value_or(NAN), decorations, true, child);
+    return std::isfinite(clamped) ? std::optional<float>(clamped) : std::nullopt;
 }
 
 static resolved_flex_children_s resolve_flex_children(
@@ -442,17 +473,22 @@ static resolved_flex_children_s resolve_flex_children(
         const bool table_item = child_style.display == AETHER_DISPLAY_TABLE ||
             child_style.display == AETHER_DISPLAY_TABLE_ROW ||
             child_style.display == AETHER_DISPLAY_TABLE_CELL;
+        const float target_main_size = output.resolution.items[index].target_main_size;
         if (defer_stretched_items && !table_item &&
             flex_item_stretches_on_cross_axis(parent_style, child_style, horizontal)) {
-            // The row's final line cross-size is already certified. Its natural
-            // tree supplies no remaining sizing input, but constructing the
-            // final tree here would change the observable registration order.
-            if (output.pending_stretch.empty()) output.pending_stretch.resize(children.size(), false);
-            output.pending_stretch[index] = true;
-            output.boxes.push_back(nullptr);
-            continue;
+            const auto main_size = horizontal ? std::optional<float>(target_main_size)
+                : deferred_column_stretch_main_size(engine, children[index], child_style,
+                    target_main_size, content.width, containing_height);
+            if (main_size) {
+                // The final line cross-size is certified. Preserve the natural
+                // scalar height without building its discarded tree. Defer the
+                // final tree to stretch to retain public registration order.
+                if (output.pending_stretch.empty()) output.pending_stretch.resize(children.size());
+                output.pending_stretch[index] = {true, *main_size};
+                output.boxes.push_back(nullptr);
+                continue;
+            }
         }
-        const float target_main_size = output.resolution.items[index].target_main_size;
         output.boxes.push_back(layout_element(engine, styles, children[index],
             {content.x, content.y, content.width, content.height}, containing_height, content.y,
             false,
@@ -500,18 +536,16 @@ static void stretch_flex_line_items(
         if (!flex_item_stretches_on_cross_axis(container_style, child_style, horizontal)) continue;
 
         auto* previous = resolved.boxes[index];
-        const bool pending = !resolved.pending_stretch.empty() && resolved.pending_stretch[index];
-        // Only rows with a definite line may be pending. The old natural pass
-        // clamped target_main_size, then stretch applied the same width clamp
-        // again. That max/min/decoration-floor clamp is idempotent and has no
-        // height dependency, so one final application has the same used width.
-        const float main_size = pending ? resolved.resolution.items[index].target_main_size
+        const bool pending = !resolved.pending_stretch.empty() && resolved.pending_stretch[index].pending;
+        // Rows retain the idempotent width clamp. Columns retain the exact
+        // natural content-box round trip and height clamp in the saved scalar.
+        const float main_size = pending ? resolved.pending_stretch[index].main_size
                                         : flex_box_main_size(previous, horizontal);
         // The outer-minus-border difference is the signed margin sum. Negative
         // fixed margins enlarge the stretched border box; auto margins are zero.
         const float cross_margins = pending
-            ? aether_thicknessf_vertical(resolve_margin_edges(
-                engine, child_style.margin, content.width, child_style))
+            ? horizontal ? aether_thicknessf_vertical(resolve_margin_edges(
+                engine, child_style.margin, content.width, child_style)) : 0.f
             : flex_box_cross_size(previous, horizontal) - flex_box_border_cross_size(previous, horizontal);
         const float available_border_cross_size = target_cross_size - cross_margins;
         if (pending && (!std::isfinite(cross_margins) || !std::isfinite(available_border_cross_size)))
@@ -527,7 +561,7 @@ static void stretch_flex_line_items(
             horizontal || resolved.definite_main_heights[index]
                 ? forced_height_kind_e::definite : forced_height_kind_e::indefinite,
             true, result);
-        if (pending) resolved.pending_stretch[index] = false;
+        if (pending) resolved.pending_stretch[index].pending = false;
     }
 }
 
@@ -598,8 +632,10 @@ float layout_flex_children(
             : content.width;
     };
     const std::optional<float> definite_line_cross_size =
-        horizontal && !style.flex_wrap && has_definite_height && containing_height.has_value()
-            ? std::optional<float>(used_cross_size_for_height(content.height)) : std::nullopt;
+        !style.flex_wrap && !horizontal && std::isfinite(content.width)
+            ? std::optional<float>(content.width)
+            : horizontal && !style.flex_wrap && has_definite_height && containing_height.has_value()
+                ? std::optional<float>(used_cross_size_for_height(content.height)) : std::nullopt;
     auto resolved = resolve_flex_children(engine, styles, children, parent, content, containing_height, style,
         horizontal, main_size_is_definite, cross_size_is_definite, definite_line_cross_size.has_value(), result);
     const float gap = layout_used_gap(styles, parent, style, !horizontal,

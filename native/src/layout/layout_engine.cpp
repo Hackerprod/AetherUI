@@ -498,9 +498,8 @@ aether_layout_box_s* layout_element(
     float explicit_height;
     bool has_explicit_height;
     if (forced_height_kind != forced_height_kind_e::none) {
-        explicit_height = (style.box_sizing == AETHER_BOX_SIZING_CONTENT_BOX)
-            ? std::max(0.f, forced_border_height - aether_thicknessf_vertical(padding) - aether_thicknessf_vertical(border))
-            : forced_border_height;
+        explicit_height = explicit_height_from_forced_border(style, forced_border_height,
+            aether_thicknessf_vertical(padding), aether_thicknessf_vertical(border));
         has_explicit_height = true;
     } else {
         explicit_height = intrinsic_height ? NAN
@@ -637,9 +636,8 @@ aether_layout_box_s* layout_element(
     // out positioned descendants: their containing block is the finished padding box, so a
     // min-height:100vh body anchors bottom-inset descendants to the viewport bottom like Chrome.
     float border_height = has_explicit_height
-        ? (style.box_sizing == AETHER_BOX_SIZING_CONTENT_BOX
-           ? explicit_height + aether_thicknessf_vertical(padding) + aether_thicknessf_vertical(border)
-           : explicit_height)
+        ? border_height_from_explicit(style, explicit_height,
+            aether_thicknessf_vertical(padding), aether_thicknessf_vertical(border))
         : content_height + aether_thicknessf_vertical(padding) + aether_thicknessf_vertical(border);
 
     border_height = intrinsic_height ? std::max(height_decorations, border_height)

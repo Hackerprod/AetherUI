@@ -130,7 +130,7 @@ int main() {
         const bool stretched = kind == "stretch" || kind == "column-stretch";
         const bool column_auto_min = kind == "column-auto-min" || kind == "column-overflow-x";
         const bool optimized = kind != "auto-min" && kind != "content" &&
-            !column_auto_min && kind != "column-margins" && !stretched;
+            !column_auto_min && kind != "column-margins" && kind != "stretch";
         const int maximum = optimized ? 64 : stretched ? 8 : 16;
         for (int depth = 1; depth <= maximum; ++depth) {
             if (depth > 16 && depth != 32 && depth != 64) continue;
@@ -175,7 +175,7 @@ int main() {
                 require(near(leaf.height, column ? 200.f : 20.f), "nested leaf height retained");
                 if (optimized) require(calls == 5, "exactly one five-token final layout, independent of depth");
                 if (kind == "auto-min" || column_auto_min) require(calls >= 10, "needed visible automatic minima retain content measurement");
-                if (kind == "content" || kind == "column-margins" || (stretched && depth > 1))
+                if (kind == "content" || kind == "column-margins" || (kind == "stretch" && depth > 1))
                     require(calls > 5, "noneligible control retains required extra layout work");
                 std::printf("mode=%s depth=%d pass=%d callbacks=%llu leaf=%g,%g,%g,%g\n",
                     mode, depth, pass, calls, leaf.x, leaf.y, leaf.width, leaf.height);
