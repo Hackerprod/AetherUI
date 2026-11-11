@@ -173,6 +173,15 @@ function Complete-ScopeWrite($Task) {
     try { $null = $Task.GetAwaiter().GetResult() }
     catch { Stop-Scope 'pipe-write' }
 }
+function Test-ScopeWorkReady([bool] $InputClosed, $InputTask, [bool] $OutputEof, $OutputTask,
+    [bool] $ErrorEof, $ErrorTask) {
+    return ((-not $InputClosed -and $InputTask.IsCompleted) -or
+        (-not $OutputEof -and $OutputTask.IsCompleted) -or (-not $ErrorEof -and $ErrorTask.IsCompleted))
+}
+function Test-ScopeShouldWait([bool] $Progress, [bool] $WorkReady) {
+    # Yield only while idle. Never add a timer delay per available data chunk.
+    return (-not $Progress -and -not $WorkReady)
+}
 # Bounded asynchronous byte pipes. No shell, line-oriented PowerShell native IO,
 # text filters, retries, repository writes, environment dumps or process log files.
 function Invoke-ScopeGit($Context, [string[]] $Arguments, [byte[]] $InputBytes = @(), [int] $OutputLimit = 8388608) {
@@ -199,14 +208,27 @@ function Invoke-ScopeGit($Context, [string[]] $Arguments, [byte[]] $InputBytes =
         $oeof = $false; $eeof = $false
         while ($true) {
             Assert-ScopeTransportTime $Context $watch.Elapsed.TotalSeconds $record
-            if (-not $closed -and $it.IsCompleted) { Complete-ScopeWrite $it; $process.StandardInput.Close(); $closed = $true }
-            Receive-ScopePipe $process.StandardOutput.BaseStream $out $ob ([ref]$ot) ([ref]$oeof) $OutputLimit 'git-output-limit'
-            Receive-ScopePipe $process.StandardError.BaseStream $err $eb ([ref]$et) ([ref]$eeof) 8MB 'git-error-limit'
+            $progress = $false
+            if (-not $closed -and $it.IsCompleted) {
+                Complete-ScopeWrite $it; $process.StandardInput.Close(); $closed = $true; $progress = $true
+            }
+            # Give each pipe one bounded read per pass, then recheck the deadline.
+            if (-not $oeof -and $ot.IsCompleted) {
+                Receive-ScopePipe $process.StandardOutput.BaseStream $out $ob ([ref]$ot) ([ref]$oeof) $OutputLimit 'git-output-limit'
+                $progress = $true
+            }
+            if (-not $eeof -and $et.IsCompleted) {
+                Receive-ScopePipe $process.StandardError.BaseStream $err $eb ([ref]$et) ([ref]$eeof) 8MB 'git-error-limit'
+                $progress = $true
+            }
             if ($process.HasExited) {
-                if ($null -eq $record.exitCode) { $record.exitCode = $process.ExitCode }
+                if ($null -eq $record.exitCode) { $record.exitCode = $process.ExitCode; $progress = $true }
                 if ($oeof -and $eeof -and $closed) { break }
             }
-            [Threading.Thread]::Sleep(1)
+            # A read/write may have become ready since its turn above. Recheck
+            # readiness before yielding; completed faulted tasks also need handling.
+            $ready = Test-ScopeWorkReady $closed $it $oeof $ot $eeof $et
+            if (Test-ScopeShouldWait $progress $ready) { [Threading.Thread]::Sleep(1) }
         }
         $record.complete = $true
         Assert-ScopeGitExit $record.exitCode
@@ -384,7 +406,7 @@ function Get-ScopePolicy {
     )
     $controls = @(
         @{ path='bindings/dotnet/tests/AetherUI.Metrics.Preflight/Prepare.ps1'; blob='978f28c4145b4fe9c77d4bc1786f567cd3250743'; sha256='3bce21acbc685a5b26a9b0e77e4879bee1e114fe2835d8d395aed4f7e9a5166e' },
-        @{ path='bindings/dotnet/tests/AetherUI.Metrics.Preflight/Scope.Tests.ps1'; blob='cd51954fe7dde92687b76a9415c2b33c0aa1b292'; sha256='3236d2ce44e1da8f45b601c177317955ea02c277d2906928c5c16bf96b143315' }
+        @{ path='bindings/dotnet/tests/AetherUI.Metrics.Preflight/Scope.Tests.ps1'; blob='ffeeb9969852f10d6b2fed9ce1f4e535a12fee13'; sha256='ce25b9d1513eb9db28afaf387e6068360961bbd1a9f16fc56c0911973b5beca1' }
     )
     return @{ identities=$identities; overlay=$overlay; controls=$controls
         helper='bindings/dotnet/tests/AetherUI.Metrics.Preflight/Scope.ps1' }

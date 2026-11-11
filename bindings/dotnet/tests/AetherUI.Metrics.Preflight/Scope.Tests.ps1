@@ -52,10 +52,40 @@ function Invoke-ScopeTestPipe([byte[]] $Bytes, [long] $Limit, [string] $LimitCod
         $task = $pipeSource.ReadAsync($buffer, 0, $buffer.Length)
         while (-not $eof) {
             Assert-ScopeTime $Context
+            $progress = -not $eof -and $task.IsCompleted
             Receive-ScopePipe $pipeSource $output $buffer ([ref]$task) ([ref]$eof) $Limit $LimitCode
+            $ready = -not $eof -and $task.IsCompleted
+            if (Test-ScopeShouldWait $progress $ready) { Stop-Scope 'test-pipe-unnecessary-wait' }
         }
         if (-not (Test-ScopeBytes $output.ToArray() $Bytes)) { Stop-Scope 'test-pipe' }
     } finally { $pipeSource.Dispose(); $output.Dispose() }
+}
+function Invoke-ScopeTestFairPipes($Context) {
+    $bytes = [byte[]](0..19)
+    $os = [IO.MemoryStream]::new($bytes, $false); $es = [IO.MemoryStream]::new($bytes, $false)
+    $output = [IO.MemoryStream]::new(); $errorOutput = [IO.MemoryStream]::new()
+    $ob = [byte[]]::new(3); $eb = [byte[]]::new(3); $oeof = $false; $eeof = $false
+    try {
+        $ot = $os.ReadAsync($ob, 0, 3); $et = $es.ReadAsync($eb, 0, 3)
+        while (-not ($oeof -and $eeof)) {
+            Assert-ScopeTime $Context
+            $beforeOut = $output.Length; $beforeErr = $errorOutput.Length
+            $beforeOeof = $oeof; $beforeEeof = $eeof
+            $emitted = @(
+                Receive-ScopePipe $os $output $ob ([ref]$ot) ([ref]$oeof) 20 'git-output-limit'
+                Receive-ScopePipe $es $errorOutput $eb ([ref]$et) ([ref]$eeof) 20 'git-error-limit'
+            )
+            if ($emitted.Count -ne 0) { Stop-Scope 'test-pipe-secondary-output' }
+            if ($output.Length - $beforeOut -gt 3 -or $errorOutput.Length - $beforeErr -gt 3 -or
+                $output.Length -ne $errorOutput.Length) { Stop-Scope 'test-pipe-fairness' }
+            $progress = $output.Length -gt $beforeOut -or $errorOutput.Length -gt $beforeErr -or
+                $oeof -ne $beforeOeof -or $eeof -ne $beforeEeof
+            $ready = Test-ScopeWorkReady $true $ot $oeof $ot $eeof $et
+            if (Test-ScopeShouldWait $progress $ready) { Stop-Scope 'test-pipe-unnecessary-wait' }
+        }
+        if (-not (Test-ScopeBytes $output.ToArray() $bytes) -or
+            -not (Test-ScopeBytes $errorOutput.ToArray() $bytes)) { Stop-Scope 'test-pipe-fairness' }
+    } finally { $os.Dispose(); $es.Dispose(); $output.Dispose(); $errorOutput.Dispose() }
 }
 function Invoke-ScopeTests($Product, [string] $Root, $EvidenceStage) {
     if ($null -eq $EvidenceStage) { throw 'scope-tests:evidence-stage' }
@@ -251,6 +281,50 @@ function Invoke-ScopeTests($Product, [string] $Root, $EvidenceStage) {
     Invoke-ScopeTestCase $state 'head-identity-mismatch' 'head-identity' { Assert-ScopeHeadIdentity $one $zero }
     Invoke-ScopeTestCase $state 'head-identity-format' 'head-identity' { Assert-ScopeHeadIdentity $one 'HEAD' }
     $record = @{timedOut=$false}
+    $pendingIo = [Threading.Tasks.TaskCompletionSource[int]]::new()
+    $readyIo = [Threading.Tasks.TaskCompletionSource[int]]::new(); $readyIo.SetResult(3)
+    foreach ($case in @(
+        @{name='stdout-ready-stderr-pending';closed=$true;oeof=$false;out=$readyIo.Task;eeof=$false;err=$pendingIo.Task;expected=$true},
+        @{name='stderr-ready-stdout-pending';closed=$true;oeof=$false;out=$pendingIo.Task;eeof=$false;err=$readyIo.Task;expected=$true},
+        @{name='both-pending';closed=$true;oeof=$false;out=$pendingIo.Task;eeof=$false;err=$pendingIo.Task;expected=$false},
+        @{name='both-eof';closed=$true;oeof=$true;out=$readyIo.Task;eeof=$true;err=$readyIo.Task;expected=$false},
+        @{name='eof-and-pending';closed=$true;oeof=$true;out=$readyIo.Task;eeof=$false;err=$pendingIo.Task;expected=$false},
+        @{name='input-ready';closed=$false;oeof=$true;out=$readyIo.Task;eeof=$true;err=$readyIo.Task;expected=$true}
+    )) {
+        Invoke-ScopeTestCase $state "transport-readiness-$($case.name)" '' {
+            $workReady = Test-ScopeWorkReady $case.closed $readyIo.Task $case.oeof $case.out $case.eeof $case.err
+            if ($workReady -ne $case.expected -or (Test-ScopeShouldWait $false $workReady) -eq $case.expected) {
+                Stop-Scope 'test-wait-policy'
+            }
+        }
+    }
+    foreach ($progress in @($false,$true)) {
+        foreach ($ready in @($false,$true)) {
+            $expectedWait = -not $progress -and -not $ready
+            Invoke-ScopeTestCase $state "transport-wait-policy-$progress-$ready" '' {
+                if ((Test-ScopeShouldWait $progress $ready) -ne $expectedWait) { Stop-Scope 'test-wait-policy' }
+            }
+        }
+    }
+    $readyWrite = [Threading.Tasks.TaskCompletionSource[int]]::new()
+    Invoke-ScopeTestCase $state 'transport-idle-must-yield' '' {
+        if (-not (Test-ScopeShouldWait $false $readyWrite.Task.IsCompleted)) { Stop-Scope 'test-wait-policy' }
+    }
+    $readyWrite.SetResult(1)
+    Invoke-ScopeTestCase $state 'transport-new-ready-task-must-not-wait' '' {
+        if (Test-ScopeShouldWait $false $readyWrite.Task.IsCompleted) { Stop-Scope 'test-wait-policy' }
+    }
+    Invoke-ScopeTestCase $state 'transport-fault-ready-must-not-wait' '' {
+        if (Test-ScopeShouldWait $false $failedWrite.Task.IsCompleted) { Stop-Scope 'test-wait-policy' }
+    }
+    Invoke-ScopeTestCase $state 'transport-progress-must-not-wait' '' {
+        if (Test-ScopeShouldWait $true $false) { Stop-Scope 'test-wait-policy' }
+    }
+    # Fragmented data and EOF must drain without an artificial wait per chunk.
+    Invoke-ScopeTestCase $state 'transport-two-pipes-fairness-no-secondary-output' '' { Invoke-ScopeTestFairPipes $pure }
+    Invoke-ScopeTestCase $state 'transport-many-ready-chunks-no-wait' '' {
+        Invoke-ScopeTestPipe ([byte[]](0..255)) 256 'git-output-limit' $pure
+    }
     Invoke-ScopeTestCase $state 'transport-time-positive' '' { Assert-ScopeTransportTime $pure 0 $record }
     Invoke-ScopeTestCase $state 'transport-timeout' 'git-timeout' { Assert-ScopeTransportTime $pure 10 $record }
     Invoke-ScopeTestCase $state 'transport-timeout-recorded' '' { if (-not $record.timedOut) { Stop-Scope 'test-timeout' } }
@@ -283,7 +357,9 @@ function Invoke-ScopeTests($Product, [string] $Root, $EvidenceStage) {
     Write-ScopeTestBytes $seed 'file.cs' $lf
     Write-ScopeTestBytes $seed 'script.ps1' $lf
     Write-ScopeTestBytes $seed 'fixture.html' $existingCr
-    Write-ScopeTestBytes $seed 'binary.dat' $binary
+    $fixtureBinary = [byte[]]::new(32769)
+    for ($i = 0; $i -lt $fixtureBinary.Length; $i++) { $fixtureBinary[$i] = [byte]($i % 256) }
+    Write-ScopeTestBytes $seed 'binary.dat' $fixtureBinary
     $null = Invoke-ScopeGit $integration @('add','--','.gitattributes','.gitignore','file.cs','script.ps1','fixture.html','binary.dat')
     $null = Invoke-ScopeGit $integration @('-c','user.name=Scope Fixture','-c','user.email=scope-fixture@example.invalid','-c','commit.gpgSign=false','commit','--quiet','-m','synthetic scope fixture')
     $seedCommit = Get-ScopeOid $integration 'HEAD^{commit}'; $seedTree = Get-ScopeOid $integration 'HEAD^{tree}'
@@ -296,6 +372,12 @@ function Invoke-ScopeTests($Product, [string] $Root, $EvidenceStage) {
     [string[]]$ids = @($fixtureExpected.Values | ForEach-Object { $_.blob } | Sort-Object -Unique)
     $raw = Invoke-ScopeGit $integration @('cat-file','--batch') ($ascii.GetBytes(($ids -join "`n") + "`n"))
     $fixtureBlobs = ConvertFrom-ScopeBatch $raw $ids $integration
+    Invoke-ScopeTestCase $state 'git-batch-multichunk-binary' '' {
+        $actualBinary = $fixtureBlobs[$fixtureExpected['binary.dat'].blob]
+        if ($actualBinary.Length -ne 32769 -or -not (Test-ScopeBytes $actualBinary $fixtureBinary)) {
+            Stop-Scope 'test-binary'
+        }
+    }
     Write-ScopeTestOwned $seed $owned
     Invoke-ScopeTestCase $state 'git-checkout-positive' '' { Assert-ScopeCheckout $integration $fixtureExpected $fixtureBlobs $owned }
     Invoke-ScopeTestCase $state 'git-index-positive' '' { Assert-ScopeInventory $fixtureExpected (ConvertFrom-ScopeTree (Invoke-ScopeGit $integration @('ls-files','--stage','-z')) $true) }
