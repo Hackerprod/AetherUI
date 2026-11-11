@@ -227,6 +227,26 @@ function Invoke-ScopeTests($Product, [string] $Root, $EvidenceStage) {
     Invoke-ScopeTestCase $state 'history-P-extra' 'prior-delta' { Assert-ScopeHistory $Product.trees['B'] $Product.trees['P'] $metrics }
     $expired = New-ScopeContext $Root 0
     Invoke-ScopeTestCase $state 'source-budget-fail-closed' 'budget' { Assert-ScopeTime $expired }
+    $writeCompletion = [Threading.Tasks.TaskCompletionSource[int]]::new()
+    $writeCompletion.SetResult(17)
+    Invoke-ScopeTestCase $state 'write-completion-emits-nothing' '' {
+        $emitted = @(Complete-ScopeWrite $writeCompletion.Task)
+        if ($emitted.Count -ne 0) { Stop-Scope 'test-write-output' }
+    }
+    $failedWrite = [Threading.Tasks.TaskCompletionSource[int]]::new()
+    $failedWrite.SetException([IO.IOException]::new('Synthetic write failure.'))
+    Invoke-ScopeTestCase $state 'write-completion-fails-closed' 'pipe-write' { Complete-ScopeWrite $failedWrite.Task }
+    $oidBytes = $ascii.GetBytes("$one`n")
+    Invoke-ScopeTestCase $state 'oid-bytes-positive' '' {
+        if (-not (Test-ScopeEqual (ConvertFrom-ScopeOid $oidBytes) $one)) { Stop-Scope 'test-oid' }
+    }
+    Invoke-ScopeTestCase $state 'oid-secondary-output' 'identity-format' { ConvertFrom-ScopeOid ([object[]]@(17,$oidBytes)) }
+    Invoke-ScopeTestCase $state 'oid-string-not-bytes' 'identity-format' { ConvertFrom-ScopeOid "$one`n" }
+    Invoke-ScopeTestCase $state 'oid-missing-lf' 'identity-format' { ConvertFrom-ScopeOid ($ascii.GetBytes($one)) }
+    Invoke-ScopeTestCase $state 'oid-crlf-rejected' 'identity-format' { ConvertFrom-ScopeOid ($ascii.GetBytes("$one`r`n")) }
+    Invoke-ScopeTestCase $state 'oid-extra-lf' 'identity-format' { ConvertFrom-ScopeOid ($ascii.GetBytes("$one`n`n")) }
+    Invoke-ScopeTestCase $state 'oid-uppercase-rejected' 'identity-format' { ConvertFrom-ScopeOid ($ascii.GetBytes(('A'*40)+"`n")) }
+    Invoke-ScopeTestCase $state 'oid-nonhex-rejected' 'identity-format' { ConvertFrom-ScopeOid ($ascii.GetBytes(('g'*40)+"`n")) }
     Invoke-ScopeTestCase $state 'head-identity-positive' '' { Assert-ScopeHeadIdentity $one $one }
     Invoke-ScopeTestCase $state 'head-identity-mismatch' 'head-identity' { Assert-ScopeHeadIdentity $one $zero }
     Invoke-ScopeTestCase $state 'head-identity-format' 'head-identity' { Assert-ScopeHeadIdentity $one 'HEAD' }
@@ -267,6 +287,11 @@ function Invoke-ScopeTests($Product, [string] $Root, $EvidenceStage) {
     $null = Invoke-ScopeGit $integration @('add','--','.gitattributes','.gitignore','file.cs','script.ps1','fixture.html','binary.dat')
     $null = Invoke-ScopeGit $integration @('-c','user.name=Scope Fixture','-c','user.email=scope-fixture@example.invalid','-c','commit.gpgSign=false','commit','--quiet','-m','synthetic scope fixture')
     $seedCommit = Get-ScopeOid $integration 'HEAD^{commit}'; $seedTree = Get-ScopeOid $integration 'HEAD^{tree}'
+    Invoke-ScopeTestCase $state 'git-wrapper-byte-array-contract' '' {
+        $actualBytes = Invoke-ScopeGit $integration @('rev-parse','--verify','HEAD^{commit}')
+        if ($actualBytes -isnot [byte[]] -or $actualBytes.Length -ne 41 -or
+            -not (Test-ScopeEqual (ConvertFrom-ScopeOid $actualBytes) $seedCommit)) { Stop-Scope 'test-git-bytes' }
+    }
     $fixtureExpected = Get-ScopeTree $integration $seedTree
     [string[]]$ids = @($fixtureExpected.Values | ForEach-Object { $_.blob } | Sort-Object -Unique)
     $raw = Invoke-ScopeGit $integration @('cat-file','--batch') ($ascii.GetBytes(($ids -join "`n") + "`n"))

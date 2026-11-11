@@ -167,6 +167,12 @@ function Receive-ScopePipe([IO.Stream] $Stream, [IO.MemoryStream] $Output, [byte
     $Output.Write($Buffer, 0, $count)
     $Task.Value = $Stream.ReadAsync($Buffer, 0, $Buffer.Length)
 }
+function Complete-ScopeWrite($Task) {
+    # PowerShell binds the runtime Task<T> awaiter, even when WriteAsync's
+    # declared return type is Task. Never emit its auxiliary completion value.
+    try { $null = $Task.GetAwaiter().GetResult() }
+    catch { Stop-Scope 'pipe-write' }
+}
 # Bounded asynchronous byte pipes. No shell, line-oriented PowerShell native IO,
 # text filters, retries, repository writes, environment dumps or process log files.
 function Invoke-ScopeGit($Context, [string[]] $Arguments, [byte[]] $InputBytes = @(), [int] $OutputLimit = 8388608) {
@@ -193,7 +199,7 @@ function Invoke-ScopeGit($Context, [string[]] $Arguments, [byte[]] $InputBytes =
         $oeof = $false; $eeof = $false
         while ($true) {
             Assert-ScopeTransportTime $Context $watch.Elapsed.TotalSeconds $record
-            if (-not $closed -and $it.IsCompleted) { $it.GetAwaiter().GetResult(); $process.StandardInput.Close(); $closed = $true }
+            if (-not $closed -and $it.IsCompleted) { Complete-ScopeWrite $it; $process.StandardInput.Close(); $closed = $true }
             Receive-ScopePipe $process.StandardOutput.BaseStream $out $ob ([ref]$ot) ([ref]$oeof) $OutputLimit 'git-output-limit'
             Receive-ScopePipe $process.StandardError.BaseStream $err $eb ([ref]$et) ([ref]$eeof) 8MB 'git-error-limit'
             if ($process.HasExited) {
@@ -215,13 +221,17 @@ function Invoke-ScopeGit($Context, [string[]] $Arguments, [byte[]] $InputBytes =
         $out.Dispose(); $err.Dispose(); $process.Dispose()
     }
 }
+function ConvertFrom-ScopeOid([object] $Bytes) {
+    # Enforce the transport's single byte[] result without coercing other output.
+    if ($Bytes -isnot [byte[]] -or $Bytes.Length -ne 41 -or $Bytes[40] -ne 10) { Stop-Scope 'identity-format' }
+    $value = [Text.Encoding]::ASCII.GetString($Bytes, 0, 40)
+    if ($value -cnotmatch '\A[0-9a-f]{40}\z') { Stop-Scope 'identity-format' }
+    return $value
+}
 function Get-ScopeOid($Context, [string] $Reference) {
     $bytes = Invoke-ScopeGit $Context @('rev-parse','--verify',$Reference)
     # rev-parse emits exactly one ASCII object ID and LF (not arbitrary Trim()).
-    if ($bytes.Length -ne 41 -or $bytes[40] -ne 10) { Stop-Scope 'identity-format' }
-    $value = [Text.Encoding]::ASCII.GetString($bytes, 0, 40)
-    if ($value -cnotmatch '\A[0-9a-f]{40}\z') { Stop-Scope 'identity-format' }
-    return $value
+    return (ConvertFrom-ScopeOid $bytes)
 }
 function Assert-ScopeIdentity($Context, [string] $Commit, [string] $Tree) {
     $actual = Get-ScopeOid $Context "$Commit`^{commit}"
@@ -374,7 +384,7 @@ function Get-ScopePolicy {
     )
     $controls = @(
         @{ path='bindings/dotnet/tests/AetherUI.Metrics.Preflight/Prepare.ps1'; blob='978f28c4145b4fe9c77d4bc1786f567cd3250743'; sha256='3bce21acbc685a5b26a9b0e77e4879bee1e114fe2835d8d395aed4f7e9a5166e' },
-        @{ path='bindings/dotnet/tests/AetherUI.Metrics.Preflight/Scope.Tests.ps1'; blob='9b7e8fc82627e766d8dcfe9051d4e41200f8b1ba'; sha256='b1fd496e2f2f78e4ee38b52e880e54179d03a8c5edf51e08522d2175da649a4c' }
+        @{ path='bindings/dotnet/tests/AetherUI.Metrics.Preflight/Scope.Tests.ps1'; blob='cd51954fe7dde92687b76a9415c2b33c0aa1b292'; sha256='3236d2ce44e1da8f45b601c177317955ea02c277d2906928c5c16bf96b143315' }
     )
     return @{ identities=$identities; overlay=$overlay; controls=$controls
         helper='bindings/dotnet/tests/AetherUI.Metrics.Preflight/Scope.ps1' }
