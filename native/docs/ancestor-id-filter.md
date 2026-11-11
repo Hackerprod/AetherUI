@@ -7,9 +7,11 @@ it makes no browser, Windows, Direct2D or full CSS-conformance claim.
 
 ## Admission and lifetime
 
-Only the preparation-local matching context opts in, and only when the captured
-original diagnostic callback is null. Default contexts and generic matching retain
-the existing behavior. All scratch dies before freeze, commit and callback delivery.
+The reviewed experimental activation opted in only from the preparation-local
+matching context when the captured original diagnostic callback was null. Current
+normal preparation is disabled as recorded below. Private opt-in tests preserve
+the design; default contexts and generic matching retain the existing behavior.
+All experimental scratch dies before freeze, commit and callback delivery.
 There are no persistent node maps, borrowed ID strings or revision epochs.
 
 Admission inspects the original subject before generated-subject normalization:
@@ -70,3 +72,43 @@ There are exactly two campaigns, 1080 measured processes and 192 excluded,
 retained process warmups. Required gates are evaluated per campaign, with no
 pooling, trimming, adaptive extension or replacement attempts. A failed, missing
 or inconclusive gate is NO PASS. No speedup is implied by the implementation.
+
+## Recorded checkpoint, 2026-11-11
+
+The ordinary focused matcher, bounded allocation-failure controls, public
+ID/reparent tests and nonmutating callback guard passed. Context size on the
+measured 64-bit GCC/libstdc++ ABI is 184 bytes (56 bytes above baseline).
+Complete public A/B style/display outputs matched at all three viewports;
+headers and 192 defined dynamic symbols remained identical, and installed C/C++
+consumers passed. These are limited regression results, not conformance claims.
+
+A separate counted run of the unchanged 1440 fixture observed 652080 admitted
+queries and exactly 652080 right-compound evaluations, 4173 original ancestor
+searches / 20712 original links, 1865 collection attempts / 14518 collection links
+and 3514 copied ID occurrences. Output geometry and existing checks matched the
+reference. These operation counts are diagnostic and establish no elapsed-time
+improvement.
+
+The frozen A/B campaigns are **NOT RUN**. The required sanitizer gate remains
+pending independent verification because the reported remote evidence could not
+be materialized within the allowed access boundary. Neither that gate nor global
+acceptance is PASS. The admission guard remains unchanged; no readiness flag is
+asserted merely to run the campaigns. This checkpoint preserves the experiment
+and reproducible tooling without accepting it as a validated optimization.
+
+## Activation restored to baseline
+
+Normal public preparation no longer enables the experimental filter, regardless
+of callback presence. Its context is default-constructed with the filter disabled,
+so every public selector call takes the original normalization/matching path.
+No ancestor inventory is constructed, no ID is copied and no negative lookup is
+short-circuited by this experiment in normal runtime use.
+
+The implementation and focused tests remain as a private opt-in experiment for
+reproducibility. On the measured ABI its dormant context still has a 56-byte
+additional stack footprint and the matcher checks a disabled boolean. There is
+no new ancestor scratch allocation. This restoration is of activation/behavior,
+not a claim of byte-identical binaries or zero residual instruction/stack cost.
+The experiment remains globally NO PASS, its performance campaigns NOT RUN and
+its remote sanitizer result unaudited independently. Historical results above
+refer to the explicitly enabled experimental checkpoint, not this restored state.

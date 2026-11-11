@@ -59,8 +59,9 @@ void run(bool callback){
     check(f.resolve(7)>0,"original parent fresh preparation");
     for(int i=0;i<4;++i){check(aether_element_set_attribute(f.root,"style",i%2?"opacity:1":"opacity:.5")==AETHER_OK,"ordinary root opacity mutation");check(f.resolve(7)>0,"repeated real resolution");}
 #ifdef AETHER_ANCESTOR_COUNTED
-    if(callback)check(ancestor_counters.disabled_entries>0&&!ancestor_counters.enabled_entries&&!ancestor_counters.admitted&&!ancestor_counters.collections,"original nonnull callback disables filter for every preparation");
-    else check(ancestor_counters.enabled_entries>0&&!ancestor_counters.disabled_entries&&ancestor_counters.admitted>0&&ancestor_counters.collections>0,"null callback exercises enabled production route");
+    check(ancestor_counters.disabled_entries>0&&!ancestor_counters.enabled_entries&&
+          !ancestor_counters.admitted&&!ancestor_counters.collections&&!ancestor_counters.copies,
+          "normal preparation keeps experiment disabled with or without a callback");
 #endif
 }
 }

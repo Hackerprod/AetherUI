@@ -965,8 +965,9 @@ static aether_status_t prepare_revision_impl(
             const auto* identity = document->identity.get();
             const auto structure_epoch = identity->structure_epoch;
 #endif
-            // Test the captured original recipient, not the staged collector.
-            selector_match_context_s selector_context(transaction->diagnostics->callback == nullptr);
+            // The ancestor-ID experiment is not accepted: normal preparation
+            // retains the original matcher path. Only private tests opt in.
+            selector_match_context_s selector_context;
             prepare_tree(&staged, document, nullptr, 0, transaction->links, order, selector_context);
             assert(document->identity.get() == identity && identity->structure_epoch == structure_epoch);
         }
