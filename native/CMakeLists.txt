@@ -1792,3 +1792,22 @@ if(AETHERUI_BUILD_TESTS)
     set_tests_properties(aether.flex-stretch-deferred aether.flex-stretch-deferred-private
         PROPERTIES TIMEOUT 120)
 endif()
+
+if(AETHERUI_BUILD_TESTS)
+    add_executable(aether_flex_column_basis_test tests/test_flex_column_basis.cpp)
+    target_link_libraries(aether_flex_column_basis_test PRIVATE AetherUI::Core)
+    add_test(NAME aether.flex-column-basis COMMAND aether_flex_column_basis_test)
+
+    add_executable(aether_flex_column_basis_private_test
+        tests/test_flex_column_basis_private.cpp
+        $<TARGET_OBJECTS:aether_flex_text_test_core>)
+    target_include_directories(aether_flex_column_basis_private_test PRIVATE include src)
+    target_compile_definitions(aether_flex_column_basis_private_test PRIVATE AETHER_EXPORTS)
+    add_test(NAME aether.flex-column-basis-private COMMAND aether_flex_column_basis_private_test)
+    if(NOT MSVC)
+        target_compile_options(aether_flex_column_basis_test PRIVATE -ffp-contract=off)
+        target_compile_options(aether_flex_column_basis_private_test PRIVATE -ffp-contract=off)
+    endif()
+    set_tests_properties(aether.flex-column-basis aether.flex-column-basis-private
+        PROPERTIES TIMEOUT 120)
+endif()

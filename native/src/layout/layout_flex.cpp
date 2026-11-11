@@ -308,22 +308,37 @@ static resolved_flex_children_s resolve_flex_children(
                 (item.basis.kind == AETHER_FLEX_BASIS_LENGTH
                     ? !(item.basis.length_is_definite && std::isfinite(item.basis.resolved_length))
                     : !std::isfinite(item.basis.specified_main_size));
-            // Reuse this existing layout pass for the raw content base. Columns
-            // also need it for their independent automatic-minimum suggestion,
-            // even when the used basis is a definite length or specified height.
-            // Non-table rows with a definite basis need no provisional tree:
-            // their only other input from that tree would be signed margins.
+            item.min_main_size = resolve_flex_main_border_size(
+                engine, child_style, content, horizontal, main_size_is_definite,
+                horizontal ? child_style.min_width : child_style.min_height, measures,
+                horizontal ? "min-width" : "min-height");
+            const int32_t main_axis_overflow = horizontal ? child_style.overflow_x : child_style.overflow_y;
+            item.automatic_minimum.is_scroll_container =
+                flex_automatic_minimum_is_zero_for_overflow(main_axis_overflow);
+            // A column also consumes the provisional block-size for a genuine
+            // automatic minimum. Resolve its inputs once so eligibility and the
+            // content-suggestion decision below cannot disagree. Rows measure
+            // their minimum inline-size separately and retain their fast path.
+            const bool needs_column_content_minimum = !horizontal &&
+                !std::isfinite(item.min_main_size) &&
+                !item.automatic_minimum.is_scroll_container;
             const intrinsic_measurement_s measurement{child,
                 horizontal ? intrinsic_axis_e::width : intrinsic_axis_e::height};
             const bool stretch_base_cross = single_line_container && cross_size_is_definite &&
                 flex_item_stretches_on_cross_axis(parent_style, child_style, horizontal);
             const auto margin = resolve_margin_edges(engine, child_style.margin, content.width, child_style);
+            // The measured column path obtains margins by subtracting the
+            // border size from its outer size. Direct addition can round
+            // differently for nonzero margins, changing line/scroll thresholds.
+            // Preserve that path even when the signed margins cancel each other.
+            const bool stable_main_margins = horizontal || (margin.top == 0.f && margin.bottom == 0.f);
             const bool table_item = child_style.display == AETHER_DISPLAY_TABLE ||
                 child_style.display == AETHER_DISPLAY_TABLE_ROW ||
                 child_style.display == AETHER_DISPLAY_TABLE_CELL;
-            if (horizontal && !uses_content_basis && !table_item) {
+            if (!uses_content_basis && !table_item && !needs_column_content_minimum && stable_main_margins) {
                 item.basis.content_main_size = 0.f;
-                item.outer_main_size = aether_thicknessf_horizontal(margin);
+                item.outer_main_size = horizontal
+                    ? aether_thicknessf_horizontal(margin) : aether_thicknessf_vertical(margin);
                 // Keep indices aligned with children/inputs. Only retained
                 // measurement paths may dereference a base box below.
                 base_boxes.push_back(nullptr);
@@ -366,9 +381,6 @@ static resolved_flex_children_s resolve_flex_children(
                                        item.basis.specified_main_size, main_property));
         output.definite_main_heights.push_back(!horizontal &&
             (containing_height.has_value() || used_basis_is_definite));
-        item.min_main_size = resolve_flex_main_border_size(
-            engine, child_style, content, horizontal, main_size_is_definite,
-            horizontal ? child_style.min_width : child_style.min_height, measures, horizontal ? "min-width" : "min-height");
         item.max_main_size = resolve_flex_main_border_size(
             engine, child_style, content, horizontal, main_size_is_definite,
             horizontal ? child_style.max_width : child_style.max_height, measures, horizontal ? "max-width" : "max-height");
@@ -387,8 +399,7 @@ static resolved_flex_children_s resolve_flex_children(
         // for the latter. Re-measuring through a parallel intrinsic-height walk loses the
         // horizontal constraints of nested rows and can let a column shrink an item below
         // its painted descendant extent.
-        const int32_t main_axis_overflow = horizontal ? child_style.overflow_x : child_style.overflow_y;
-        const bool zero_automatic_minimum = flex_automatic_minimum_is_zero_for_overflow(main_axis_overflow);
+        const bool zero_automatic_minimum = item.automatic_minimum.is_scroll_container;
         // An explicit minimum or scrollable overflow never consumes the content
         // suggestion. Keep the unused value finite for the resolver's validation.
         float content_size_suggestion = 0.f;

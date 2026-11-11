@@ -75,10 +75,10 @@ struct Fixture {
 };
 
 
-// The runtime's min-width parser currently accepts only nonnegative lengths.
+// The runtime's min-width/min-height parser accepts only nonnegative lengths.
 // Exercise real auto minima with new immutable legacy records, never by mutating
 // a frozen style or relying on a rejected CSS declaration.
-static void set_automatic_minima(Fixture& fixture) {
+static void set_automatic_minima(Fixture& fixture, bool column = false, bool horizontal_overflow_only = false) {
     using namespace aether::style;
     BackingBuildInput backing{fixture.styles->current->backing()->entries()};
     for (auto& entry : backing.entries) {
@@ -86,7 +86,13 @@ static void set_automatic_minima(Fixture& fixture) {
         if (node->tag_name != "div") continue;
         const auto original = entry.second;
         auto scalars = original->style_view().scalars();
-        scalars.min_width = aether_css_length_auto();
+        if (column) scalars.min_height = aether_css_length_auto();
+        else scalars.min_width = aether_css_length_auto();
+        if (horizontal_overflow_only) {
+            // Preserve the axis distinction without CSS overflow normalization.
+            scalars.overflow_x = AETHER_OVERFLOW_HIDDEN;
+            scalars.overflow_y = AETHER_OVERFLOW_VISIBLE;
+        }
         NodeRecordInput input;
         input.origin=original->origin(); input.node=original->node();
         input.style=std::make_shared<const FrozenStyle>(scalars,original->style()->payload_owner());
@@ -116,15 +122,20 @@ int main() {
     int cases = 0;
     for (const char* mode : {"fixed", "auto-width", "percentage", "calc-zero", "variable",
                              "overflow-hidden", "overflow-auto", "overflow-scroll",
-                             "explicit-min", "percent-min", "auto-min", "content", "column-fixed", "stretch"}) {
+                             "explicit-min", "percent-min", "auto-min", "content", "column-fixed",
+                             "column-auto-min", "column-overflow-hidden", "column-overflow-auto",
+                             "column-overflow-scroll", "column-overflow-x", "column-margins", "column-stretch", "stretch"}) {
         const std::string kind(mode);
+        const bool column = kind.rfind("column-", 0) == 0;
+        const bool stretched = kind == "stretch" || kind == "column-stretch";
+        const bool column_auto_min = kind == "column-auto-min" || kind == "column-overflow-x";
         const bool optimized = kind != "auto-min" && kind != "content" &&
-            kind != "column-fixed" && kind != "stretch";
-        const int maximum = optimized ? 64 : kind == "stretch" ? 8 : 16;
+            !column_auto_min && kind != "column-margins" && !stretched;
+        const int maximum = optimized ? 64 : stretched ? 8 : 16;
         for (int depth = 1; depth <= maximum; ++depth) {
             if (depth > 16 && depth != 32 && depth != 64) continue;
             std::string html = "<body>";
-            for (int i=0; i<depth; ++i) html += "<div class='n'>";
+            for (int i=0; i<depth; ++i) html += i == 0 ? "<div class='n' id='root'>" : "<div class='n'>";
             html += "<div id='leaf'>aaaa bb cc</div>";
             for (int i=0; i<depth; ++i) html += "</div>";
             html += "</body>";
@@ -141,22 +152,30 @@ int main() {
             if (kind == "explicit-min") css += ".n,#leaf{min-width:50px}";
             if (kind == "percent-min") css += ".n,#leaf{min-width:25%}";
             if (kind == "content") css += ".n,#leaf{flex-basis:content}";
-            if (kind == "column-fixed") css += ".n{flex-direction:column;height:200px;min-height:0;}"
+            if (column) css += ".n{flex-direction:column;height:200px;min-height:0;}"
                 "#leaf{height:200px;min-height:0;}";
-            if (kind == "stretch") css += ".n{align-items:stretch}";
+            if (kind == "column-margins") css += ".n:not(#root),#leaf{margin-top:-.125px;margin-bottom:.125px}";
+            if (stretched) css += ".n{align-items:stretch}";
+            if (kind == "column-stretch") css += ".n:not(#root),#leaf{width:auto}";
+            if (kind.rfind("column-overflow-", 0) == 0) {
+                if (kind == "column-overflow-x") css += ".n,#leaf{overflow-x:hidden;overflow-y:visible}";
+                else css += ".n,#leaf{overflow-y:" + kind.substr(16) + ";overflow-x:visible}";
+            }
             Fixture fixture(html.c_str(), css.c_str(), counted);
-            if (kind == "auto-min" || kind.rfind("overflow-", 0) == 0) set_automatic_minima(fixture);
+            if (kind == "auto-min" || kind.rfind("overflow-", 0) == 0 || column_auto_min ||
+                kind.rfind("column-overflow-", 0) == 0) set_automatic_minima(fixture, column, kind == "column-overflow-x");
             aether_layout_result_t first = nullptr;
             for (int pass=0; pass<2; ++pass) {
                 calls = 0;
                 auto result = fixture.layout(pass ? 1100.f : 900.f, 700);
                 const auto leaf = fixture.rect(result, "leaf");
-                require(near(leaf.x, 0) && near(leaf.y, 0), "nested leaf position retained");
+                require(near(leaf.x, 0) && near(leaf.y, kind == "column-margins" ? -.125f * depth : 0.f),
+                        "nested leaf position retained");
                 require(near(leaf.width, kind == "content" ? 100.f : 200.f), "nested leaf width retained");
-                require(near(leaf.height, kind == "column-fixed" ? 200.f : 20.f), "nested leaf height retained");
+                require(near(leaf.height, column ? 200.f : 20.f), "nested leaf height retained");
                 if (optimized) require(calls == 5, "exactly one five-token final layout, independent of depth");
-                if (kind == "auto-min") require(calls >= 10, "needed visible automatic minima retain content measurement");
-                if (kind == "content" || kind == "column-fixed" || (kind == "stretch" && depth > 1))
+                if (kind == "auto-min" || column_auto_min) require(calls >= 10, "needed visible automatic minima retain content measurement");
+                if (kind == "content" || kind == "column-margins" || (stretched && depth > 1))
                     require(calls > 5, "noneligible control retains required extra layout work");
                 std::printf("mode=%s depth=%d pass=%d callbacks=%llu leaf=%g,%g,%g,%g\n",
                     mode, depth, pass, calls, leaf.x, leaf.y, leaf.width, leaf.height);
