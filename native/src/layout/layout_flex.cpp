@@ -184,6 +184,10 @@ struct resolved_flex_children_s {
     std::vector<aether_layout_box_s*> boxes;
     aether_flex_resolve_result_s resolution;
     std::vector<bool> definite_main_heights;
+    // A null slot is valid only while this explicit state is pending. The
+    // final tree is built in the existing stretch phase, preserving the public
+    // registration/paint order of mixed stretched and non-stretched siblings.
+    std::vector<bool> pending_stretch;
 };
 
 static bool flex_length_is_definite(aether_css_length length, bool main_size_is_definite,
@@ -269,6 +273,7 @@ static resolved_flex_children_s resolve_flex_children(
     percentage_height_s containing_height,
     const BoxStyleSnapshot& parent_style,
     bool horizontal, bool main_size_is_definite, bool cross_size_is_definite,
+    bool defer_stretched_items,
     aether_layout_result_s* result) {
     resolved_flex_children_s output{};
     output.boxes.reserve(children.size());
@@ -422,6 +427,20 @@ static resolved_flex_children_s resolve_flex_children(
     base_boxes.clear();
 
     for (size_t index = 0; index < children.size(); ++index) {
+        const auto child_style = get_style(styles, children[index]);
+        const bool table_item = child_style.display == AETHER_DISPLAY_TABLE ||
+            child_style.display == AETHER_DISPLAY_TABLE_ROW ||
+            child_style.display == AETHER_DISPLAY_TABLE_CELL;
+        if (defer_stretched_items && !table_item &&
+            flex_item_stretches_on_cross_axis(parent_style, child_style, horizontal)) {
+            // The row's final line cross-size is already certified. Its natural
+            // tree supplies no remaining sizing input, but constructing the
+            // final tree here would change the observable registration order.
+            if (output.pending_stretch.empty()) output.pending_stretch.resize(children.size(), false);
+            output.pending_stretch[index] = true;
+            output.boxes.push_back(nullptr);
+            continue;
+        }
         const float target_main_size = output.resolution.items[index].target_main_size;
         output.boxes.push_back(layout_element(engine, styles, children[index],
             {content.x, content.y, content.width, content.height}, containing_height, content.y,
@@ -470,12 +489,23 @@ static void stretch_flex_line_items(
         if (!flex_item_stretches_on_cross_axis(container_style, child_style, horizontal)) continue;
 
         auto* previous = resolved.boxes[index];
-        const float main_size = flex_box_main_size(previous, horizontal);
+        const bool pending = !resolved.pending_stretch.empty() && resolved.pending_stretch[index];
+        // Only rows with a definite line may be pending. The old natural pass
+        // clamped target_main_size, then stretch applied the same width clamp
+        // again. That max/min/decoration-floor clamp is idempotent and has no
+        // height dependency, so one final application has the same used width.
+        const float main_size = pending ? resolved.resolution.items[index].target_main_size
+                                        : flex_box_main_size(previous, horizontal);
         // The outer-minus-border difference is the signed margin sum. Negative
         // fixed margins enlarge the stretched border box; auto margins are zero.
-        const float cross_margins = flex_box_cross_size(previous, horizontal) -
-            flex_box_border_cross_size(previous, horizontal);
-        const float forced_border_cross_size = std::max(0.f, target_cross_size - cross_margins);
+        const float cross_margins = pending
+            ? aether_thicknessf_vertical(resolve_margin_edges(
+                engine, child_style.margin, content.width, child_style))
+            : flex_box_cross_size(previous, horizontal) - flex_box_border_cross_size(previous, horizontal);
+        const float available_border_cross_size = target_cross_size - cross_margins;
+        if (pending && (!std::isfinite(cross_margins) || !std::isfinite(available_border_cross_size)))
+            throw std::overflow_error("Non-finite deferred flex stretch size");
+        const float forced_border_cross_size = std::max(0.f, available_border_cross_size);
         delete previous;
 
         resolved.boxes[index] = layout_element(engine, styles, children[index],
@@ -486,6 +516,7 @@ static void stretch_flex_line_items(
             horizontal || resolved.definite_main_heights[index]
                 ? forced_height_kind_e::definite : forced_height_kind_e::indefinite,
             true, result);
+        if (pending) resolved.pending_stretch[index] = false;
     }
 }
 
@@ -543,8 +574,23 @@ float layout_flex_children(
     const bool horizontal = style.flex_direction != AETHER_FLEX_DIRECTION_COLUMN;
     const bool main_size_is_definite = horizontal || has_definite_height;
     const bool cross_size_is_definite = !horizontal || containing_height.has_value();
+    const bool intrinsic_height = intrinsic_measurement &&
+        intrinsic_measurement->ignores(parent, intrinsic_axis_e::height);
+    // Use one formula for the certified line and the ordinary post-measurement
+    // result. A numeric auto/min-height is not a percentage-height proof, nor
+    // does flex-wrap become a single-line container merely by fitting one line.
+    const auto used_cross_size_for_height = [&](float height) {
+        return horizontal
+            ? intrinsic_height ? height
+                : clamp_border_height(engine, style, height + height_decorations,
+                    container_height_reference.value_or(NAN), height_decorations, true, parent) - height_decorations
+            : content.width;
+    };
+    const std::optional<float> definite_line_cross_size =
+        horizontal && !style.flex_wrap && has_definite_height && containing_height.has_value()
+            ? std::optional<float>(used_cross_size_for_height(content.height)) : std::nullopt;
     auto resolved = resolve_flex_children(engine, styles, children, parent, content, containing_height, style,
-                                          horizontal, main_size_is_definite, cross_size_is_definite, result);
+        horizontal, main_size_is_definite, cross_size_is_definite, definite_line_cross_size.has_value(), result);
     const float gap = layout_used_gap(styles, parent, style, !horizontal,
         horizontal ? content.width : content.height, horizontal || containing_height.has_value());
     const float cross_gap = layout_used_gap(styles, parent, style, horizontal,
@@ -555,17 +601,14 @@ float layout_flex_children(
     // second pass can reread each untouched line without temporary allocation.
     const auto& lines = resolved.resolution.lines;
     float natural_cross_size = cross_gap * static_cast<float>(lines.empty() ? 0 : lines.size() - 1);
-    for (const auto& line : lines) {
-        natural_cross_size += flex_line_cross_size(resolved.boxes, line, horizontal);
+    if (!definite_line_cross_size) {
+        for (const auto& line : lines) {
+            natural_cross_size += flex_line_cross_size(resolved.boxes, line, horizontal);
+        }
     }
     const float natural_cross_height = has_definite_height ? content.height : natural_cross_size;
-    const bool intrinsic_height = intrinsic_measurement &&
-        intrinsic_measurement->ignores(parent, intrinsic_axis_e::height);
-    const float used_cross_size = horizontal
-        ? intrinsic_height ? natural_cross_height
-            : clamp_border_height(engine, style, natural_cross_height + height_decorations,
-                container_height_reference.value_or(NAN), height_decorations, true, parent) - height_decorations
-        : content.width;
+    const float used_cross_size = definite_line_cross_size
+        ? *definite_line_cross_size : used_cross_size_for_height(natural_cross_height);
     // Only the effective initial/stretch policy is represented by the style.
     // A wrapping container keeps natural lines on overflow, even for one line.
     const float line_stretch = style.flex_wrap

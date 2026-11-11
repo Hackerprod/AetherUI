@@ -1777,3 +1777,18 @@ if(AETHERUI_BUILD_TESTS)
     # runs on slower hosts (ASan/UBSan with LSan takes about 150 s on a 4-core VPS).
     set_tests_properties(aether.flex-definite-basis-measurement PROPERTIES TIMEOUT 600)
 endif()
+
+if(AETHERUI_BUILD_TESTS)
+    add_executable(aether_flex_stretch_deferred_test tests/test_flex_stretch_deferred.cpp)
+    target_link_libraries(aether_flex_stretch_deferred_test PRIVATE AetherUI::Core)
+    add_test(NAME aether.flex-stretch-deferred COMMAND aether_flex_stretch_deferred_test)
+
+    add_executable(aether_flex_stretch_deferred_private_test
+        tests/test_flex_stretch_deferred_private.cpp
+        $<TARGET_OBJECTS:aether_flex_text_test_core>)
+    target_include_directories(aether_flex_stretch_deferred_private_test PRIVATE include src)
+    target_compile_definitions(aether_flex_stretch_deferred_private_test PRIVATE AETHER_EXPORTS)
+    add_test(NAME aether.flex-stretch-deferred-private COMMAND aether_flex_stretch_deferred_private_test)
+    set_tests_properties(aether.flex-stretch-deferred aether.flex-stretch-deferred-private
+        PROPERTIES TIMEOUT 120)
+endif()
