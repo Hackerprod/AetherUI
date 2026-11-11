@@ -16,6 +16,9 @@ public sealed class PageCatalogComponent : UiComponent
     private const int SwShow = 5;
 
     private readonly string _pagesDirectory;
+    private readonly ValidatorOptions _options;
+    private readonly ValidationReport _report;
+    public string InstanceWindowTitle { get; } = $"{WindowTitle} - {Guid.NewGuid():N}";
 
     [DllImport("user32.dll", CharSet = CharSet.Unicode)]
     private static extern nint FindWindow(string? className, string windowTitle);
@@ -23,9 +26,11 @@ public sealed class PageCatalogComponent : UiComponent
     [DllImport("user32.dll")]
     private static extern bool ShowWindow(nint windowHandle, int command);
 
-    public PageCatalogComponent(string pagesDirectory)
+    public PageCatalogComponent(string pagesDirectory, ValidatorOptions options, ValidationReport report)
     {
         _pagesDirectory = pagesDirectory;
+        _options = options;
+        _report = report;
         Directory.CreateDirectory(_pagesDirectory);
     }
 
@@ -221,27 +226,43 @@ public sealed class PageCatalogComponent : UiComponent
 
     private void Refresh() => StateHasChanged();
 
-    private static void OpenPage(string pagePath) => LaunchValidator("--page", pagePath);
+    private void OpenPage(string pagePath) => LaunchValidator("--page", pagePath);
 
-    private static void OpenModalDemo() => LaunchValidator("--modal");
+    private void OpenModalDemo() => LaunchValidator("--modal");
 
-    private static void LaunchValidator(params string[] arguments)
+    private void LaunchValidator(params string[] arguments)
     {
         var executable = Environment.ProcessPath
             ?? throw new InvalidOperationException("The Validator executable path is unavailable.");
         var startInfo = new ProcessStartInfo(executable)
         {
-            UseShellExecute = true,
+            UseShellExecute = false,
             WorkingDirectory = AppContext.BaseDirectory,
         };
+        if (string.Equals(Path.GetFileNameWithoutExtension(executable), "dotnet", StringComparison.OrdinalIgnoreCase))
+            startInfo.ArgumentList.Add(typeof(Program).Assembly.Location);
+        if (_options.Perf) startInfo.ArgumentList.Add("--perf");
+        startInfo.ArgumentList.Add("--output");
+        startInfo.ArgumentList.Add(_options.OutputRoot);
+        if (_options.Width is int width && _options.Height is int height)
+        {
+            startInfo.ArgumentList.Add("--viewport");
+            startInfo.ArgumentList.Add($"{width}x{height}");
+        }
         foreach (var argument in arguments)
         {
             startInfo.ArgumentList.Add(argument);
         }
 
-        var validator = Process.Start(startInfo)
-            ?? throw new InvalidOperationException("The Validator process could not be started.");
-        var catalogWindow = FindWindow(null, WindowTitle);
+        Process validator;
+        try { validator = Process.Start(startInfo)
+            ?? throw new InvalidOperationException("The Validator process could not be started."); }
+        catch (Exception ex)
+        {
+            _report.Write("child-start-failed", new { message = ex.Message });
+            return;
+        }
+        var catalogWindow = FindWindow(null, InstanceWindowTitle);
         if (catalogWindow != nint.Zero)
         {
             ShowWindow(catalogWindow, SwHide);
@@ -250,10 +271,11 @@ public sealed class PageCatalogComponent : UiComponent
         _ = RestoreCatalogWhenClosedAsync(validator, catalogWindow);
     }
 
-    private static async Task RestoreCatalogWhenClosedAsync(Process validator, nint catalogWindow)
+    private async Task RestoreCatalogWhenClosedAsync(Process validator, nint catalogWindow)
     {
-        await validator.WaitForExitAsync();
-        validator.Dispose();
+        try { await validator.WaitForExitAsync(); }
+        catch (Exception ex) { _report.Write("child-wait-failed", new { message = ex.Message }); }
+        finally { validator.Dispose(); }
         if (catalogWindow != nint.Zero)
         {
             ShowWindow(catalogWindow, SwShow);

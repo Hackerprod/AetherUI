@@ -1,72 +1,64 @@
+using System.Diagnostics;
 using AetherUI.Runtime;
 
 namespace AetherUI.Validator;
 
-public sealed class PerfReporter
+/// <summary>Cumulative host work, not presented FPS or GPU timings. Includes first and final samples.</summary>
+public sealed class PerfReporter : IDisposable
 {
     private readonly object _gate = new();
     private readonly string _label;
-    private DateTime _lastReport = DateTime.UtcNow;
-    private UiDocumentHostMetrics _lastMetrics;
-    private bool _hasLastMetrics;
+    private readonly ValidationReport _report;
+    private readonly Stopwatch _clock = Stopwatch.StartNew();
+    private UiDocumentHostMetrics _latest;
+    private bool _hasMetrics, _disposed;
+    private long _samples;
+    private double _lastReportMs;
 
-    public PerfReporter(string label)
-    {
-        _label = label;
-    }
+    public PerfReporter(string label, ValidationReport report) { _label = label; _report = report; }
 
     public void Report(UiDocumentHostMetrics metrics)
     {
         lock (_gate)
         {
-            var now = DateTime.UtcNow;
-            if (!_hasLastMetrics)
+            if (_disposed) return;
+            if (_hasMetrics && (metrics.RenderCalls < _latest.RenderCalls || metrics.LayoutBuilds < _latest.LayoutBuilds
+                || metrics.StyleResolutions < _latest.StyleResolutions || metrics.RenderTimestampTicks < _latest.RenderTimestampTicks))
+                _report.Write("metrics-reset", new { label = _label, reason = "Host counters decreased; totals start a new host epoch." });
+            _latest = metrics;
+            _hasMetrics = true;
+            _samples++;
+            if (_samples == 1 || _clock.Elapsed.TotalMilliseconds - _lastReportMs >= 1000)
             {
-                _lastMetrics = metrics;
-                _lastReport = now;
-                _hasLastMetrics = true;
-                return;
+                Emit("metrics-snapshot");
+                _lastReportMs = _clock.Elapsed.TotalMilliseconds;
             }
+        }
+    }
 
-            var elapsed = now - _lastReport;
-            if (elapsed.TotalMilliseconds < 1000)
-            {
-                return;
-            }
+    private void Emit(string kind)
+    {
+        var m = _latest;
+        _report.Write(kind, new { label = _label, status = _hasMetrics ? "measured" : "not-run", samples = _samples,
+            elapsedMs = _clock.Elapsed.TotalMilliseconds, renders = m.RenderCalls,
+            incrementalRenders = m.IncrementalRenderCalls, styleResolutions = m.StyleResolutions,
+            styleUpdatedElements = m.StyleUpdatedElements, layoutBuilds = m.LayoutBuilds,
+            displayListBuilds = m.DisplayListBuilds, paintChunkBuilds = m.PaintChunkBuilds,
+            scrollCompositions = m.ScrollCompositions, visualStyleMapBuilds = m.VisualStyleMapBuilds,
+            visualStyleMapUpdates = m.VisualStyleMapUpdates, styleMs = m.StyleResolutionMilliseconds,
+            displayListMs = m.DisplayListBuildMilliseconds, renderMs = m.RenderMilliseconds,
+            averageRenderMs = m.RenderCalls > 0 ? m.RenderMilliseconds / m.RenderCalls : (double?)null,
+            averageDisplayListMs = m.DisplayListBuilds > 0 ? m.DisplayListBuildMilliseconds / m.DisplayListBuilds : (double?)null,
+            interpretation = "cumulative CPU host counters; not FPS; render time includes host pipeline work" });
+    }
 
-            var renderCalls = metrics.RenderCalls - _lastMetrics.RenderCalls;
-            var incrementalRenders = metrics.IncrementalRenderCalls - _lastMetrics.IncrementalRenderCalls;
-            var styleMs = metrics.StyleResolutionMilliseconds - _lastMetrics.StyleResolutionMilliseconds;
-            var styleUpdates = metrics.StyleUpdatedElements - _lastMetrics.StyleUpdatedElements;
-            var paintChunks = metrics.PaintChunkBuilds - _lastMetrics.PaintChunkBuilds;
-            var visualStyleMapBuilds = metrics.VisualStyleMapBuilds - _lastMetrics.VisualStyleMapBuilds;
-            var visualStyleMapUpdates = metrics.VisualStyleMapUpdates - _lastMetrics.VisualStyleMapUpdates;
-            var displayListBuilds = metrics.DisplayListBuilds - _lastMetrics.DisplayListBuilds;
-            var displayListMs = metrics.DisplayListBuildMilliseconds - _lastMetrics.DisplayListBuildMilliseconds;
-            var renderMs = metrics.RenderMilliseconds - _lastMetrics.RenderMilliseconds;
-
-            Console.WriteLine(
-                "[perf:{0}] {1:0.0}s renders={2} incremental={3} style={4} styleUpdates={5} styleMs={6:0.###} visualMapBuilds={7} visualMapUpdates={8} layout={9} displayList={10} paintChunks={11} scroll={12} displayListMs={13:0.###} renderMs={14:0.###} avgRenderMs={15:0.###} avgDisplayListMs={16:0.###}",
-                _label,
-                elapsed.TotalSeconds,
-                renderCalls,
-                incrementalRenders,
-                metrics.StyleResolutions - _lastMetrics.StyleResolutions,
-                styleUpdates,
-                styleMs,
-                visualStyleMapBuilds,
-                visualStyleMapUpdates,
-                metrics.LayoutBuilds - _lastMetrics.LayoutBuilds,
-                displayListBuilds,
-                paintChunks,
-                metrics.ScrollCompositions - _lastMetrics.ScrollCompositions,
-                displayListMs,
-                renderMs,
-                renderCalls > 0 ? renderMs / renderCalls : 0,
-                displayListBuilds > 0 ? displayListMs / displayListBuilds : 0);
-
-            _lastMetrics = metrics;
-            _lastReport = now;
+    public void Dispose()
+    {
+        lock (_gate)
+        {
+            if (_disposed) return;
+            Emit("metrics-final");
+            _disposed = true;
         }
     }
 }

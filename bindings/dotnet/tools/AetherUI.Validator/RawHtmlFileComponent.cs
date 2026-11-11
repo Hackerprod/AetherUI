@@ -2,28 +2,12 @@ using AetherUI.Runtime;
 
 namespace AetherUI.Validator;
 
-/// <summary>
-/// Renders a plain .html file's contents verbatim through AetherUI's real pipeline (HTML parser,
-/// native CSS cascade, layout, Direct2D paint) with no Razor compilation step. The same
-/// file is loaded into a WebView2 control side by side, so both panes render from one source of
-/// truth — no risk of the two copies drifting apart.
-/// </summary>
+/// <summary>Immutable markup snapshots: file IO belongs to the watcher, never the render callback.</summary>
 public sealed class RawHtmlFileComponent : UiComponent
 {
-    private readonly string _path;
-
-    public RawHtmlFileComponent(string path)
-    {
-        _path = path;
-    }
-
-    protected override void BuildRenderTree(MarkupWriter writer)
-    {
-        var markup = File.Exists(_path)
-            ? File.ReadAllText(_path)
-            : $"<body><p>File not found: {_path}</p></body>";
-        writer.WriteLiteral(markup);
-    }
-
-    public void Reload() => StateHasChanged();
+    private string _markup;
+    public RawHtmlFileComponent(string markup) => _markup = markup;
+    protected override void BuildRenderTree(MarkupWriter writer) => writer.WriteLiteral(_markup);
+    // Called only on the native host thread through its message-loop dispatcher.
+    public void Reload(string markup) { _markup = markup; StateHasChanged(); }
 }

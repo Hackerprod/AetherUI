@@ -114,6 +114,25 @@ endif()
 if(AETHERUI_BUILD_TESTS)
     enable_testing()
 
+    # Full user fixture through the native pipeline; not 403 semantic passes.
+    add_executable(aether_flexbox_page_test tests/test_flexbox_page.cpp)
+    target_link_libraries(aether_flexbox_page_test PRIVATE AetherUI::Core)
+    foreach(viewport IN ITEMS 390 768 1440)
+        add_test(NAME aether.flexbox-page-${viewport}
+            COMMAND aether_flexbox_page_test
+                "${CMAKE_CURRENT_SOURCE_DIR}/../bindings/dotnet/tools/AetherUI.Validator/Pages/flexbox_runtime_validation.html"
+                "${CMAKE_CURRENT_BINARY_DIR}/flexbox-page/${viewport}" ${viewport} 900)
+        set_tests_properties(aether.flexbox-page-${viewport} PROPERTIES TIMEOUT 180 LABELS "integration;flexbox-page")
+    endforeach()
+
+    find_package(Python3 QUIET COMPONENTS Interpreter)
+    if(Python3_Interpreter_FOUND)
+        add_test(NAME aether.validator-artifact-metrics
+            COMMAND "${Python3_EXECUTABLE}" -m unittest discover -s
+                "${CMAKE_CURRENT_SOURCE_DIR}/../bindings/dotnet/tools/AetherUI.Validator/portable" -v)
+        set_tests_properties(aether.validator-artifact-metrics PROPERTIES TIMEOUT 30 LABELS "validator")
+    endif()
+
     add_executable(aether_smoke_test tests/test_smoke.cpp)
     target_link_libraries(aether_smoke_test PRIVATE AetherUI::Core)
     add_test(NAME aether.smoke COMMAND aether_smoke_test)

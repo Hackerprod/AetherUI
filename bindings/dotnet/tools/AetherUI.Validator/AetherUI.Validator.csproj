@@ -21,10 +21,8 @@
     <Content Include="sample.html">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>
-    <Content Include="../../../../.tmp/Pages/*.html"
-             Link="Pages/%(Filename)%(Extension)"
+    <Content Include="Pages/*.html"
              CopyToOutputDirectory="PreserveNewest"
-             CopyToPublishDirectory="PreserveNewest"
-             Condition="Exists('../../../../.tmp/Pages')" />
+             CopyToPublishDirectory="PreserveNewest" />
   </ItemGroup>
 </Project>
