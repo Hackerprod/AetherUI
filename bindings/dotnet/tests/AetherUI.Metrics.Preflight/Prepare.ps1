@@ -209,54 +209,15 @@ function Invoke-Preflight {
 Save-Manifest
 try {
     Invoke-Stage 'source' {
-        $commit = @(Invoke-Native 'git' @('rev-parse', 'HEAD'))[-1].Trim()
-        $tree = @(Invoke-Native 'git' @('rev-parse', 'HEAD^{tree}'))[-1].Trim()
-        $nativeTree = @(Invoke-Native 'git' @('rev-parse', 'HEAD:native'))[-1].Trim()
-        $managedTree = @(Invoke-Native 'git' @('rev-parse', 'HEAD:bindings/dotnet/src'))[-1].Trim()
-        $actualBaselineTree = @(Invoke-Native 'git' @('rev-parse', "$baseline`^{tree}"))[-1].Trim()
-        if ($actualBaselineTree -ne $baselineTree -or $commit -ne $env:GITHUB_SHA) {
-            throw 'The baseline tree or checked out push SHA is not the expected identity.'
-        }
-        # P has already passed. C/T deliberately allows exactly the reviewed production delta,
-        # rather than dropping the baseline source guard when instrumentation changes it.
-        $protected = @('native', 'bindings/dotnet/src', 'bindings/dotnet/tools/AetherUI.Validator',
-            'bindings/dotnet/Directory.Build.props', 'bindings/dotnet/Directory.Packages.props', 'global.json')
-        $productionAllowed = @('bindings/dotnet/src/AetherUI.Core/Runtime/UiDocumentHost.cs',
-            'bindings/dotnet/src/AetherUI.Core/Runtime/UiDocumentHostMetrics.cs',
-            'bindings/dotnet/tools/AetherUI.Validator/PerfReporter.cs')
-        $changedProduct = @(Invoke-Native 'git' (@('diff', '--name-only', $baseline, 'HEAD', '--') + $protected))
-        if ($changedProduct.Count -ne 3 -or @($changedProduct | Where-Object { $_ -notin $productionAllowed }).Count -ne 0) {
-            throw 'Candidate production diff must contain only the three reviewed metrics files.'
-        }
-        $unchanged = @('native', 'global.json', 'bindings/dotnet/Directory.Build.props', 'bindings/dotnet/Directory.Packages.props')
-        $null = Invoke-Native 'git' (@('diff', '--exit-code', $baseline, 'HEAD', '--') + $unchanged)
-        $null = Invoke-Native 'git' @('diff', '--exit-code', 'HEAD', '--')
-        $prior = $script:manifest.priorPreparation
-        $priorTree = @(Invoke-Native 'git' @('rev-parse', "$($prior.commit)^{tree}"))[-1].Trim()
-        if ($priorTree -ne $prior.tree) { throw 'Prior P source tree is not the reviewed source.' }
-        $allowed = $productionAllowed + @('.github/workflows/validator-managed-diagnostics.yml',
-            'bindings/dotnet/tests/AetherUI.Metrics.Preflight/Prepare.ps1',
-            'bindings/dotnet/tests/AetherUI.Metrics.Preflight/Validate.ps1',
-            'bindings/dotnet/tests/AetherUI.Metrics.Tests/AetherUI.Metrics.Tests.csproj',
-            'bindings/dotnet/tests/AetherUI.Metrics.Tests/Program.cs',
-            'bindings/dotnet/tests/AetherUI.Metrics.Export/AetherUI.Metrics.Export.csproj',
-            'bindings/dotnet/tests/AetherUI.Metrics.Export/Program.cs',
-            'bindings/dotnet/docs/host-phase-metrics.md')
-        $changed = @(Invoke-Native 'git' @('diff', '--name-only', $prior.commit, 'HEAD', '--'))
-        if (@($changed | Where-Object { $_ -notin $allowed }).Count -ne 0) {
-            throw 'Candidate contains changes outside the reviewed C/T allowlist.'
-        }
-        $files = @('.github/workflows/validator-managed-diagnostics.yml', 'global.json',
-            'bindings/dotnet/Directory.Build.props', 'bindings/dotnet/Directory.Packages.props',
-            $core, $interop, $windows, $validator, $probe,
-            'bindings/dotnet/src/AetherUI.Core/Layout/ITextMeasurer.cs',
-            'bindings/dotnet/tests/AetherUI.Metrics.Preflight/Program.cs',
-            'bindings/dotnet/tests/AetherUI.Metrics.Preflight/Prepare.ps1') + $allowed
-        $script:manifest.source = [ordered]@{ commit = $commit; tree = $tree; nativeTree = $nativeTree
-            managedSourceTree = $managedTree; productMatchesBaseline = $false
-            productionDelta = $changedProduct; changedSinceP = $changed; allowedChanges = $allowed
-            nativeAndDependencyInputsMatchBaseline = $true
-            files = @($files | Select-Object -Unique | ForEach-Object { Get-Identity $_ }) }
+        . (Join-Path $PSScriptRoot 'Scope.ps1')
+        $sourceAndTests = [Diagnostics.Stopwatch]::StartNew()
+        $scopeResult = Invoke-MetricsScope $root $script:manifest $script:stage
+        $script:manifest.source = $scopeResult.source
+        . (Join-Path $PSScriptRoot 'Scope.Tests.ps1')
+        $scopeTests = Invoke-ScopeTests -Product $scopeResult -Root $root -EvidenceStage $script:stage
+        if ($sourceAndTests.Elapsed.TotalSeconds -gt 360) { throw 'Scope source and tests exceeded 360 seconds.' }
+        $script:stage.details = [ordered]@{ source = 'passed'; tests = $scopeTests
+            elapsedSeconds = $sourceAndTests.Elapsed.TotalSeconds }
     }
     Invoke-Stage 'toolchain' {
         $version = @(Invoke-Native 'dotnet' @('--version'))[-1].Trim()
