@@ -4,7 +4,9 @@
 #include <limits>
 #include <optional>
 #include <stdexcept>
+#include <string>
 #include <unordered_map>
+#include <vector>
 
 struct aether_node_s;
 struct compiled_selector_s;
@@ -30,7 +32,10 @@ inline bool work_budget(size_t raw_count, size_t& budget) noexcept {
 // callbacks. Generic selector_match remains uncached for all other callers.
 class selector_match_context_s {
 public:
-    selector_match_context_s() = default;
+    // Only the verified, callback-free preparation opts in. Generic callers
+    // preserve their original matching path and allocate no ancestor scratch.
+    explicit selector_match_context_s(bool enable_ancestor_ids = false)
+        : ancestor_ids_enabled_(enable_ancestor_ids) {}
     selector_match_context_s(const selector_match_context_s&) = delete;
     selector_match_context_s& operator=(const selector_match_context_s&) = delete;
     selector_match_context_s(selector_match_context_s&&) = delete;
@@ -67,6 +72,16 @@ private:
     // Navigation identity is independent of nth positions and selector results.
     // No adjacent lookup means no extra heap allocation or wider nth entries.
     std::optional<previous_parents_s> previous_parents_;
+    enum class ancestor_state_s { unseen, complete, unavailable };
+    bool ancestor_ids_enabled_ = false;
+    aether_node_s* ancestor_subject_ = nullptr;
+    ancestor_state_s ancestor_state_ = ancestor_state_s::unseen;
+    // Delay even the container's construction; retain only one subject's owned
+    // ID copies. No node, rule, transaction or later preparation owns this data.
+    std::optional<std::vector<std::string>> ancestor_ids_;
+    void collect_ancestor_ids(aether_node_s* subject);
+    friend bool selector_match(const compiled_selector_s&, aether_node_s*,
+                               selector_match_context_s&);
     friend struct selector_match_context_test_access;
 };
 

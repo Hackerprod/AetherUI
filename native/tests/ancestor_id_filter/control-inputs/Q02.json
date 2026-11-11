@@ -1,0 +1,19 @@
+{
+  "name": "Q02",
+  "html": "<!doctype html><html><head></head><body><div id=\"present\"><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div><div class=\"target\"></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></body></html>",
+  "selector_source": "#missing .target",
+  "subject_selection": "the only ordinary element with class target",
+  "ancestor_links": 129,
+  "viewport": [
+    640,
+    480
+  ],
+  "subject_count": 1,
+  "diagnostics": "none; new context explicitly enabled in candidate, original equivalent baseline context",
+  "timed_operation": "create context, invoke contextual matcher exactly once on original subject, destroy context/scratch; parse/selector compilation/subject lookup and checksum validation outside time",
+  "expected_result": false,
+  "initial_untimed_operations": 1,
+  "warmup_operations": 5,
+  "measured_operations": 16,
+  "details": "Private focused matcher benchmark, not shared public pipeline and not standalone model. Each operation uses a fresh context and no reuse. Separate counters must show one RHS evaluation, one complete negative ancestor search, at most one bounded inventory attempt afterwards, and no second ancestor continuation."
+}

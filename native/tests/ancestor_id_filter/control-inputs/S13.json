@@ -1,0 +1,15 @@
+{
+  "name": "S13",
+  "viewport": [
+    640,
+    480
+  ],
+  "html": "<!doctype html><html><head></head><body><section id=\"hit\"><div class=\"movable\"><div class=\"target\"></div><div class=\"target\"></div><div class=\"target\"></div><div class=\"target\"></div><div class=\"target\"></div><div class=\"target\"></div><div class=\"target\"></div><div class=\"target\"></div><div class=\"target\"></div><div class=\"target\"></div><div class=\"target\"></div><div class=\"target\"></div><div class=\"target\"></div><div class=\"target\"></div><div class=\"target\"></div><div class=\"target\"></div><div class=\"target\"></div><div class=\"target\"></div><div class=\"target\"></div><div class=\"target\"></div><div class=\"target\"></div><div class=\"target\"></div><div class=\"target\"></div><div class=\"target\"></div><div class=\"target\"></div><div class=\"target\"></div><div class=\"target\"></div><div class=\"target\"></div><div class=\"target\"></div><div class=\"target\"></div><div class=\"target\"></div><div class=\"target\"></div></div></section><section id=\"other\"></section></body></html>",
+  "author_css": "#hit .target{width:17px}#other .target{width:23px}",
+  "stylesheet_layer": 2,
+  "add_UA_defaults": false,
+  "subject_count": 32,
+  "runtime_diagnostics": "null",
+  "details": "Capture the two section handles and movable subtree once outside timing. Before iteration i, move subtree to first section if even, second if odd. Set inactive section id=other; active section id=hit if even, unmatched if odd. Even target width is 17px; odd target width is initial auto. Common root-opacity mutation also applies. No mutation during resolution/callback.",
+  "common_mutation": "Before each warmup/measured resolve, set document-element inline style to opacity:0.5 on even iteration and opacity:1 on odd iteration. Use one sequence spanning 5 warmup and 16 measured iterations; initial setup resolve excluded."
+}

@@ -1,0 +1,15 @@
+{
+  "name": "S05",
+  "viewport": [
+    640,
+    480
+  ],
+  "html": "<!doctype html><html><head></head><body><div id=\"a0\"><div id=\"a1\"><div id=\"a2\"><div id=\"a3\"><div id=\"a4\"><div id=\"a5\"><div id=\"a6\"><div id=\"a7\"><div class=\"target\"></div><div class=\"target\"></div><div class=\"target\"></div><div class=\"target\"></div><div class=\"target\"></div><div class=\"target\"></div><div class=\"target\"></div><div class=\"target\"></div><div class=\"target\"></div><div class=\"target\"></div><div class=\"target\"></div><div class=\"target\"></div><div class=\"target\"></div><div class=\"target\"></div><div class=\"target\"></div><div class=\"target\"></div><div class=\"target\"></div><div class=\"target\"></div><div class=\"target\"></div><div class=\"target\"></div><div class=\"target\"></div><div class=\"target\"></div><div class=\"target\"></div><div class=\"target\"></div><div class=\"target\"></div><div class=\"target\"></div><div class=\"target\"></div><div class=\"target\"></div><div class=\"target\"></div><div class=\"target\"></div><div class=\"target\"></div><div class=\"target\"></div></div></div></div></div></div></div></div></div></body></html>",
+  "author_css": "#a0 .target{width:1px}#a1 .target{width:2px}#a2 .target{width:3px}#a3 .target{width:4px}#a4 .target{width:5px}#a5 .target{width:6px}#a6 .target{width:7px}#a7 .target{width:8px}#b0 .target{width:9px}#b1 .target{width:10px}#b2 .target{width:11px}#b3 .target{width:12px}#b4 .target{width:13px}#b5 .target{width:14px}#b6 .target{width:15px}#b7 .target{width:16px}",
+  "stylesheet_layer": 2,
+  "add_UA_defaults": false,
+  "subject_count": 32,
+  "runtime_diagnostics": "null",
+  "details": "Eight positive and eight negative required IDs.",
+  "common_mutation": "Before each warmup/measured resolve, set document-element inline style to opacity:0.5 on even iteration and opacity:1 on odd iteration. Use one sequence spanning 5 warmup and 16 measured iterations; initial setup resolve excluded."
+}

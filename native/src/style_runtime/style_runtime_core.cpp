@@ -960,12 +960,13 @@ static aether_status_t prepare_revision_impl(
         {
             // No external callbacks or DOM publication occur during traversal.
             // Diagnostics are buffered; generated child links are staged. Destroy
-            // nth scratch state before freezing records, commit, or callbacks.
+            // selector scratch before freezing records, commit, or callbacks.
 #ifndef NDEBUG
             const auto* identity = document->identity.get();
             const auto structure_epoch = identity->structure_epoch;
 #endif
-            selector_match_context_s selector_context;
+            // Test the captured original recipient, not the staged collector.
+            selector_match_context_s selector_context(transaction->diagnostics->callback == nullptr);
             prepare_tree(&staged, document, nullptr, 0, transaction->links, order, selector_context);
             assert(document->identity.get() == identity && identity->structure_epoch == structure_epoch);
         }

@@ -3,6 +3,7 @@
 #include "../dom/dom_types.h"
 #include "../primitives/ascii_text.h"
 #include "../primitives/html_space_tokens.h"
+#include <new>
 
 // Layout and paint share storage with generated content, but selector traversal
 // sees only the DOM. Never turn a generated traversal candidate into its host.
@@ -450,8 +451,86 @@ bool selector_match(const compiled_selector_s& sel, aether_node_s* element) {
     return match_step(sel, 0, element, nullptr, nullptr);
 }
 
+// A complete inventory proves only absence. Reuse the exact ancestor boundary
+// of match_ancestor, never the document's ID index or the subject's own ID.
+void selector_match_context_s::collect_ancestor_ids(aether_node_s* subject) {
+    constexpr size_t link_limit = 128;
+    constexpr size_t id_limit = 64;
+    constexpr size_t byte_limit = 4096;
+    constexpr size_t capacity_limit = 8192;
+    size_t links = 0, bytes = 0, string_capacity = 0;
+    ancestor_state_ = ancestor_state_s::unavailable;
+    for (auto* parent = dom_parent(subject); parent; parent = dom_parent(parent)) {
+        if (links == link_limit) { ancestor_ids_.reset(); return; }
+        ++links;
+        if (!is_selector_dom_element(parent)) continue;
+        const auto found = parent->attributes.find("id");
+        if (found == parent->attributes.end() || found->second.empty()) continue;
+        const auto& id = found->second;
+        if ((ancestor_ids_ && ancestor_ids_->size() == id_limit) ||
+            id.size() > byte_limit - bytes) { ancestor_ids_.reset(); return; }
+        // Only container/string scratch allocation is recoverable here. The
+        // original matcher and ordinary DOM reads are outside this catch.
+        try {
+            if (!ancestor_ids_) ancestor_ids_.emplace();
+            auto& ids = *ancestor_ids_;
+            if (ids.size() == ids.capacity()) {
+                const size_t capacity = ids.capacity();
+                ids.reserve(capacity ? std::min(id_limit, capacity * 2) : 1);
+                if (ids.capacity() > id_limit) { ancestor_ids_.reset(); return; }
+            }
+            ids.emplace_back(id);
+        } catch (const std::bad_alloc&) {
+            ancestor_ids_.reset();
+            return;
+        }
+        const auto capacity = ancestor_ids_->back().capacity();
+        if (capacity >= capacity_limit - string_capacity) {
+            ancestor_ids_.reset();
+            return;
+        }
+        string_capacity += capacity + 1;
+        bytes += id.size();
+    }
+    ancestor_state_ = ancestor_state_s::complete;
+}
+
+static bool admits_ancestor_id_filter(const compiled_selector_s& sel,
+                                     aether_node_s* original) {
+    if (!is_selector_dom_element(original) ||
+        sel.pseudo_element != aether_pseudo_element_t::none ||
+        sel.steps.size() != 2 || sel.steps[0].relation_to_next != COMB_DESCENDANT ||
+        sel.steps[1].relation_to_next != COMB_NONE ||
+        !sel.steps[0].compound.pseudos.empty()) return false;
+    const auto& left = sel.steps[1].compound;
+    return left.ids.size() == 1 && !left.ids.front().empty() && left.type_name.empty() &&
+        left.classes.empty() && left.attributes.empty() && left.pseudos.empty();
+}
+
 bool selector_match(const compiled_selector_s& sel, aether_node_s* element,
                     selector_match_context_s& context) {
+    // Admission precedes normalization: generated/anonymous subjects always
+    // take the unchanged entry path. An admitted RHS is evaluated only once.
+    if (context.ancestor_ids_enabled_ && admits_ancestor_id_filter(sel, element)) {
+        if (!matches_compound(sel.steps[0].compound, element, &context)) return false;
+        if (context.ancestor_subject_ != element) {
+            context.ancestor_ids_.reset();
+            context.ancestor_subject_ = element;
+            context.ancestor_state_ = selector_match_context_s::ancestor_state_s::unseen;
+        }
+        if (context.ancestor_state_ == selector_match_context_s::ancestor_state_s::complete) {
+            const auto& required = sel.steps[1].compound.ids.front();
+            if (!context.ancestor_ids_ ||
+                std::find(context.ancestor_ids_->begin(), context.ancestor_ids_->end(), required) ==
+                    context.ancestor_ids_->end()) return false;
+        }
+        const bool matched = match_ancestor(sel, 1, dom_parent(element), nullptr, &context);
+        if (!matched && context.ancestor_state_ == selector_match_context_s::ancestor_state_s::unseen)
+            context.collect_ancestor_ids(element);
+        // The first negative is already proved. Even cap/OOM cannot cause a
+        // second continuation; unseen positives never build or copy anything.
+        return matched;
+    }
     element = selector_subject(element);
     if (!element || sel.steps.empty()) return false;
     return match_step(sel, 0, element, nullptr, &context);

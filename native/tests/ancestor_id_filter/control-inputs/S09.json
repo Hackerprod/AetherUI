@@ -1,0 +1,15 @@
+{
+  "name": "S09",
+  "viewport": [
+    640,
+    480
+  ],
+  "html": "<!doctype html><html><head></head><body><div id=\"id000\"><div id=\"id001\"><div id=\"id002\"><div id=\"id003\"><div id=\"id004\"><div id=\"id005\"><div id=\"id006\"><div id=\"id007\"><div id=\"id008\"><div id=\"id009\"><div id=\"id010\"><div id=\"id011\"><div id=\"id012\"><div id=\"id013\"><div id=\"id014\"><div id=\"id015\"><div id=\"id016\"><div id=\"id017\"><div id=\"id018\"><div id=\"id019\"><div id=\"id020\"><div id=\"id021\"><div id=\"id022\"><div id=\"id023\"><div id=\"id024\"><div id=\"id025\"><div id=\"id026\"><div id=\"id027\"><div id=\"id028\"><div id=\"id029\"><div id=\"id030\"><div id=\"id031\"><div id=\"id032\"><div id=\"id033\"><div id=\"id034\"><div id=\"id035\"><div id=\"id036\"><div id=\"id037\"><div id=\"id038\"><div id=\"id039\"><div id=\"id040\"><div id=\"id041\"><div id=\"id042\"><div id=\"id043\"><div id=\"id044\"><div id=\"id045\"><div id=\"id046\"><div id=\"id047\"><div id=\"id048\"><div id=\"id049\"><div id=\"id050\"><div id=\"id051\"><div id=\"id052\"><div id=\"id053\"><div id=\"id054\"><div id=\"id055\"><div id=\"id056\"><div id=\"id057\"><div id=\"id058\"><div id=\"id059\"><div id=\"id060\"><div id=\"id061\"><div id=\"id062\"><div id=\"id063\"><div class=\"target\"></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></body></html>",
+  "author_css": "#id000 .target{width:7px}#missing .target{height:9px}",
+  "stylesheet_layer": 2,
+  "add_UA_defaults": false,
+  "subject_count": 1,
+  "runtime_diagnostics": "null",
+  "details": "64 nonempty ID occurrences; 67 parent links; no deduplication.",
+  "common_mutation": "Before each warmup/measured resolve, set document-element inline style to opacity:0.5 on even iteration and opacity:1 on odd iteration. Use one sequence spanning 5 warmup and 16 measured iterations; initial setup resolve excluded."
+}

@@ -1,0 +1,433 @@
+{
+  "version": 3,
+  "status": "lazy design preregistered pending independent PASS; not executed",
+  "A": "baseline standard Release shared library",
+  "B": "candidate standard Release shared library",
+  "campaigns": 2,
+  "cells": [
+    {
+      "name": "P1440",
+      "index": 0,
+      "pairs": 20,
+      "measured_resolutions": 1,
+      "viewport": [
+        1440,
+        900
+      ]
+    },
+    {
+      "name": "P390",
+      "index": 1,
+      "pairs": 20,
+      "measured_resolutions": 1,
+      "viewport": [
+        390,
+        900
+      ]
+    },
+    {
+      "name": "P768",
+      "index": 2,
+      "pairs": 20,
+      "measured_resolutions": 1,
+      "viewport": [
+        768,
+        900
+      ]
+    },
+    {
+      "name": "W1440",
+      "index": 3,
+      "pairs": 10,
+      "initial_setup_resolution": 1,
+      "warmup_resolutions": 5,
+      "measured_resolutions": 8,
+      "viewport": [
+        1440,
+        900
+      ]
+    },
+    {
+      "name": "S00",
+      "index": 4,
+      "pairs": 10,
+      "initial_setup_resolution": 1,
+      "warmup_resolutions": 5,
+      "measured_resolutions": 16,
+      "viewport": [
+        640,
+        480
+      ]
+    },
+    {
+      "name": "S01",
+      "index": 5,
+      "pairs": 10,
+      "initial_setup_resolution": 1,
+      "warmup_resolutions": 5,
+      "measured_resolutions": 16,
+      "viewport": [
+        640,
+        480
+      ]
+    },
+    {
+      "name": "S02",
+      "index": 6,
+      "pairs": 10,
+      "initial_setup_resolution": 1,
+      "warmup_resolutions": 5,
+      "measured_resolutions": 16,
+      "viewport": [
+        640,
+        480
+      ]
+    },
+    {
+      "name": "S03",
+      "index": 7,
+      "pairs": 10,
+      "initial_setup_resolution": 1,
+      "warmup_resolutions": 5,
+      "measured_resolutions": 16,
+      "viewport": [
+        640,
+        480
+      ]
+    },
+    {
+      "name": "S04",
+      "index": 8,
+      "pairs": 10,
+      "initial_setup_resolution": 1,
+      "warmup_resolutions": 5,
+      "measured_resolutions": 16,
+      "viewport": [
+        640,
+        480
+      ]
+    },
+    {
+      "name": "S05",
+      "index": 9,
+      "pairs": 10,
+      "initial_setup_resolution": 1,
+      "warmup_resolutions": 5,
+      "measured_resolutions": 16,
+      "viewport": [
+        640,
+        480
+      ]
+    },
+    {
+      "name": "S06",
+      "index": 10,
+      "pairs": 10,
+      "initial_setup_resolution": 1,
+      "warmup_resolutions": 5,
+      "measured_resolutions": 16,
+      "viewport": [
+        640,
+        480
+      ]
+    },
+    {
+      "name": "S07",
+      "index": 11,
+      "pairs": 10,
+      "initial_setup_resolution": 1,
+      "warmup_resolutions": 5,
+      "measured_resolutions": 16,
+      "viewport": [
+        640,
+        480
+      ]
+    },
+    {
+      "name": "S08",
+      "index": 12,
+      "pairs": 10,
+      "initial_setup_resolution": 1,
+      "warmup_resolutions": 5,
+      "measured_resolutions": 16,
+      "viewport": [
+        640,
+        480
+      ]
+    },
+    {
+      "name": "S09",
+      "index": 13,
+      "pairs": 10,
+      "initial_setup_resolution": 1,
+      "warmup_resolutions": 5,
+      "measured_resolutions": 16,
+      "viewport": [
+        640,
+        480
+      ]
+    },
+    {
+      "name": "S10",
+      "index": 14,
+      "pairs": 10,
+      "initial_setup_resolution": 1,
+      "warmup_resolutions": 5,
+      "measured_resolutions": 16,
+      "viewport": [
+        640,
+        480
+      ]
+    },
+    {
+      "name": "S11",
+      "index": 15,
+      "pairs": 10,
+      "initial_setup_resolution": 1,
+      "warmup_resolutions": 5,
+      "measured_resolutions": 16,
+      "viewport": [
+        640,
+        480
+      ]
+    },
+    {
+      "name": "S12",
+      "index": 16,
+      "pairs": 10,
+      "initial_setup_resolution": 1,
+      "warmup_resolutions": 5,
+      "measured_resolutions": 16,
+      "viewport": [
+        640,
+        480
+      ]
+    },
+    {
+      "name": "S13",
+      "index": 17,
+      "pairs": 10,
+      "initial_setup_resolution": 1,
+      "warmup_resolutions": 5,
+      "measured_resolutions": 16,
+      "viewport": [
+        640,
+        480
+      ]
+    },
+    {
+      "name": "S14",
+      "index": 18,
+      "pairs": 10,
+      "initial_setup_resolution": 1,
+      "warmup_resolutions": 5,
+      "measured_resolutions": 16,
+      "viewport": [
+        640,
+        480
+      ]
+    },
+    {
+      "name": "S15",
+      "index": 19,
+      "pairs": 10,
+      "initial_setup_resolution": 1,
+      "warmup_resolutions": 5,
+      "measured_resolutions": 16,
+      "viewport": [
+        640,
+        480
+      ]
+    },
+    {
+      "name": "S16",
+      "index": 20,
+      "pairs": 10,
+      "initial_setup_resolution": 1,
+      "warmup_resolutions": 5,
+      "measured_resolutions": 16,
+      "viewport": [
+        640,
+        480
+      ]
+    },
+    {
+      "name": "Q00",
+      "index": 21,
+      "pairs": 10,
+      "scope": "private standard Release matcher target, not shared pipeline",
+      "initial_untimed_operations": 1,
+      "separate_untimed_positive_sanity_queries": 1,
+      "sanity_order": "initial negative, one positive with fresh context, five negative warmups, sixteen measured negative operations",
+      "warmup_operations": 5,
+      "measured_operations": 16,
+      "timed_operation": "new context + exactly one negative contextual selector query + context/scratch destruction",
+      "outside_timing": "DOM parse, selector compile, target lookup, positive sanity query and checksum validation",
+      "viewport": [
+        640,
+        480
+      ]
+    },
+    {
+      "name": "Q01",
+      "index": 22,
+      "pairs": 10,
+      "scope": "private standard Release matcher target, not shared pipeline",
+      "initial_untimed_operations": 1,
+      "separate_untimed_positive_sanity_queries": 1,
+      "sanity_order": "initial negative, one positive with fresh context, five negative warmups, sixteen measured negative operations",
+      "warmup_operations": 5,
+      "measured_operations": 16,
+      "timed_operation": "new context + exactly one negative contextual selector query + context/scratch destruction",
+      "outside_timing": "DOM parse, selector compile, target lookup, positive sanity query and checksum validation",
+      "viewport": [
+        640,
+        480
+      ]
+    },
+    {
+      "name": "Q02",
+      "index": 23,
+      "pairs": 10,
+      "scope": "private standard Release matcher target, not shared pipeline",
+      "initial_untimed_operations": 1,
+      "separate_untimed_positive_sanity_queries": 1,
+      "sanity_order": "initial negative, one positive with fresh context, five negative warmups, sixteen measured negative operations",
+      "warmup_operations": 5,
+      "measured_operations": 16,
+      "timed_operation": "new context + exactly one negative contextual selector query + context/scratch destruction",
+      "outside_timing": "DOM parse, selector compile, target lookup, positive sanity query and checksum validation",
+      "viewport": [
+        640,
+        480
+      ]
+    }
+  ],
+  "campaign_cell_order": {
+    "1": [
+      "P1440",
+      "P390",
+      "P768",
+      "W1440",
+      "S00",
+      "S01",
+      "S02",
+      "S03",
+      "S04",
+      "S05",
+      "S06",
+      "S07",
+      "S08",
+      "S09",
+      "S10",
+      "S11",
+      "S12",
+      "S13",
+      "S14",
+      "S15",
+      "S16",
+      "Q00",
+      "Q01",
+      "Q02"
+    ],
+    "2": [
+      "Q02",
+      "Q01",
+      "Q00",
+      "S16",
+      "S15",
+      "S14",
+      "S13",
+      "S12",
+      "S11",
+      "S10",
+      "S09",
+      "S08",
+      "S07",
+      "S06",
+      "S05",
+      "S04",
+      "S03",
+      "S02",
+      "S01",
+      "S00",
+      "W1440",
+      "P768",
+      "P390",
+      "P1440"
+    ]
+  },
+  "excluded_process_warmups_per_cell_campaign": "ABBA",
+  "blocks": "alternate ABBA/BAAB; campaign1 first ABBA; campaign2 first BAAB",
+  "pairing": {
+    "ABBA": [
+      [
+        0,
+        1
+      ],
+      [
+        3,
+        2
+      ]
+    ],
+    "BAAB": [
+      [
+        1,
+        0
+      ],
+      [
+        2,
+        3
+      ]
+    ]
+  },
+  "unit": "fresh process; W/S mean actual resolver calls; Q mean complete new-context single-query destruction operations",
+  "measured_processes_total": 1080,
+  "excluded_process_warmups_total": 192,
+  "process_timeout_seconds": 30,
+  "bootstrap": {
+    "replicates": 10000,
+    "method": "percentile resampling of K complete four-process blocks with replacement, preserving adjacent pair correlation and order; K=10 for P, K=5 for W/S/Q",
+    "rng": "Python random.Random(seed).randrange(K)",
+    "seed": "20261111 + 1000*campaign_number + 10*cell_index + metric_index",
+    "confidence": 0.95,
+    "sorted_zero_based_interval_indices": [
+      249,
+      9749
+    ],
+    "metric_index": {
+      "pipeline": 0,
+      "style": 1,
+      "layout": 2,
+      "display_list": 3,
+      "process": 4,
+      "invariants_export": 5,
+      "destruction": 6,
+      "RSS": 7,
+      "private_match_operation": 8
+    }
+  },
+  "estimand": "ratio/difference of arm medians across process samples, each campaign separately",
+  "gates": {
+    "P1440_pipeline_ratio_max": 0.95,
+    "P1440_style_ratio_max": 0.9,
+    "P1440_ratio_CI_upper_strict_max": 1.0,
+    "secondary_margin_ms": "(mB-mA)-max(.03*mA,2.0); point and CI upper <= 0",
+    "warm_and_small_margin_ms": "(mB-mA)-max(.03*mA,.2); point and CI upper <= 0",
+    "RSS_margin_KiB": "(mB-mA)-max(.02*mA,2048); point and CI upper <= 0",
+    "Q_margin_ms": "(mB-mA)-max(.03*mA,.2); point and CI upper <= 0"
+  },
+  "stopping": "exactly two campaigns including all added cells; no adaptive extension, retries, trimming or pooling; any missing/failed/inconclusive required gate => NO PASS; new execution requires new parent-approved versioned preregistration",
+  "inventory_caps": {
+    "parent_links": 128,
+    "copied_nonempty_IDs": 64,
+    "copied_ID_bytes": 4096,
+    "retained_vector_capacity_max": 64,
+    "sum_string_capacity_plus_one_max": 8192,
+    "context_size_growth_max_bytes": 128,
+    "requested_retained_scratch_max": "R = 128 + 64*sizeof(std::string) + 8192",
+    "requested_transient_scratch_peak_max": "2*R"
+  },
+  "control_input_manifest": "artifacts/v3/control_inputs_manifest.json",
+  "model": "deferred collection after first eligible complete negative search; states unseen/complete/unavailable; no collection on unseen positives; no second continuation on first negative"
+}

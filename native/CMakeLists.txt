@@ -1030,6 +1030,16 @@ if(AETHERUI_BUILD_TESTS)
     target_include_directories(aether_selector_dom_boundary_test PRIVATE include src/style_runtime)
     add_test(NAME aether.selector-dom-boundary COMMAND aether_selector_dom_boundary_test)
 
+    # Bounded ordinary-DOM fixtures for the preparation-local ancestor-ID filter.
+    add_executable(aether_selector_ancestor_ids_test tests/test_selector_ancestor_ids.cpp
+        src/style_runtime/selector_parser.cpp src/style_runtime/selector_matcher.cpp)
+    target_include_directories(aether_selector_ancestor_ids_test PRIVATE include src/style_runtime)
+    add_test(NAME aether.selector-ancestor-ids COMMAND aether_selector_ancestor_ids_test)
+
+    add_executable(aether_selector_ancestor_ids_runtime_test tests/test_selector_ancestor_ids_runtime.cpp)
+    target_link_libraries(aether_selector_ancestor_ids_runtime_test PRIVATE AetherUI::Core)
+    add_test(NAME aether.selector-ancestor-ids-runtime COMMAND aether_selector_ancestor_ids_runtime_test)
+
     add_executable(aether_selector_nth_cache_test tests/test_selector_nth_cache.cpp
         src/style_runtime/selector_parser.cpp src/style_runtime/selector_matcher.cpp)
     target_include_directories(aether_selector_nth_cache_test PRIVATE include src/style_runtime)
