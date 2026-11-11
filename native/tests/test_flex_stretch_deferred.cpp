@@ -159,13 +159,16 @@ void scenario(const char* label, const char* css, std::initializer_list<Expected
                 check(!aether_layout_result_find_primary_box(frame, f.node(id)), name,
                       "standalone table-row descendants remain unmaterialized");
             for (const auto& e : expected) {
+                // Controls may have additional text boxes for the same element.
+                // The primary box itself must appear exactly once.
                 int occurrences = 0;
                 const auto primary = f.box(frame, e.id);
                 for (int i = 0; i < aether_layout_result_get_paint_order_count(frame); ++i) {
                     const auto b = aether_layout_result_get_paint_order_box(frame, i);
                     if (b == primary) {
                         ++occurrences;
-                        check(b == primary, name, "paint entry is primary box");
+                        check(aether_layout_box_get_element(b) == f.node(e.id), name,
+                              "primary paint entry belongs to expected element");
                     }
                 }
                 number(static_cast<float>(occurrences), 1, name + "/" + e.id, "one primary paint entry");
