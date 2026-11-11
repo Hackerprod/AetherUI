@@ -125,7 +125,7 @@ float layout_table_children(
             cell.flow_end = result->paint_order.size();
             row_height = std::max(row_height, cell_box->margin_box.height);
             row_box->add_child(cell_box);
-            cells.push_back(cell);
+            cells.push_back(std::move(cell));
             cursor_x += column_width;
         }
 

@@ -3,7 +3,7 @@ import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 
-for (const scenario of ["binary-layout", "runtime-copies", "measurement", "callback-throw", "callback-shim", "initialization-guards"]) {
+for (const scenario of ["binary-layout", "runtime-copies", "flex-reverse-values", "measurement", "callback-throw", "callback-shim", "initialization-guards"]) {
   test(`real native ComputedStyle: ${scenario}`, {
     skip: process.env.AETHERUI_TEST_NATIVE !== "1" && "set AETHERUI_TEST_NATIVE=1 to test the real ABI",
   }, () => {

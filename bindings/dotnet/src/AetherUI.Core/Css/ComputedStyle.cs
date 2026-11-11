@@ -25,16 +25,23 @@ public enum PositionKind : byte
 
 public enum FlexDirection : byte
 {
-    Row,
-    Column,
+    Row = 0,
+    Column = 1,
+    RowReverse = 2,
+    ColumnReverse = 3,
 }
 
 public enum JustifyContent : byte
 {
-    Start,
-    Center,
-    End,
-    SpaceBetween,
+    // Historical Start/End values follow flex main-start/main-end.
+    Start = 0,
+    Center = 1,
+    End = 2,
+    SpaceBetween = 3,
+    FlexStart = Start,
+    FlexEnd = End,
+    LogicalStart = 4,
+    LogicalEnd = 5,
 }
 
 public enum AlignItems : byte

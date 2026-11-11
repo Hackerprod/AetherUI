@@ -26,6 +26,7 @@ internal static class Program
         ("Has arguments keep their implicit descendant anchor local", HasRelativeAnchorTests.Run),
         ("Positioned auto margins use final sizes and preserve prepared layout", PositionedAutoMarginTests.Run),
         ("Flex alignment preserves signed residual space", FlexNegativeSpaceTests.Run),
+        ("Flex reverse values cross native and managed boundaries", FlexReverseTests.Run),
         ("Nth-child parses finite An+B expressions and matches safely", NthExpressionTests.Run),
         ("CSS variables respect string tokens and bounded expansion", CssVariableStringTests.Run),
         ("Calc retains dimensional types in length and line-height contexts", CalcDimensionalTests.Run),

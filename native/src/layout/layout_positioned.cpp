@@ -51,7 +51,8 @@ void layout_positioned_children(
                                     const aether_rectf& containing,
                                     const aether_rectf& child_margin_box) {
         const auto& flex = parent_box->style;
-        const bool horizontal = flex.flex_direction == AETHER_FLEX_DIRECTION_ROW;
+        const auto axis = flex_axis(flex.flex_direction);
+        const bool horizontal = axis.horizontal;
         const float main_extent = horizontal ? containing.width : containing.height;
         const float cross_extent = horizontal ? containing.height : containing.width;
         const float child_main = horizontal ? child_margin_box.width : child_margin_box.height;
@@ -61,9 +62,8 @@ void layout_positioned_children(
         // another's anchor. CSS Flexbox §4.1 aligns each child independently inside the flex
         // container's content box as though it were the sole item.
         const float main_free = main_extent - child_main;
-        float main_offset = 0.f;
-        if (flex.justify_content == AETHER_JUSTIFY_CENTER) main_offset = main_free / 2.f;
-        else if (flex.justify_content == AETHER_JUSTIFY_END) main_offset = main_free;
+        const float distance = flex_main_alignment_offset(flex.justify_content, main_free, axis.reverse);
+        const float main_offset = flex_main_position(0.f, main_extent, distance, child_main, axis.reverse);
         // space-between has no distributable gap for a sole hypothetical item, so it is start.
 
         const int32_t cross_alignment = child_style.align_self == AETHER_ALIGN_SELF_AUTO

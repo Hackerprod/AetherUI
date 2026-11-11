@@ -547,6 +547,7 @@ aether_layout_box_s* layout_element(
     }
     if (child_percentage_height) child_containing_height = *child_percentage_height;
 
+    flex_placement_plan_s flex_placement;
     float content_height;
     if (intrinsic_control) {
         content_height = layout_atomic_control(engine, element, style,
@@ -559,7 +560,7 @@ aether_layout_box_s* layout_element(
                                               child_percentage_height,
                                               style,
                                               std::isfinite(definite_content_height),
-                                              containing_height, height_decorations,
+                                              containing_height, height_decorations, flex_placement,
                                               result, intrinsic_measurement);
     } else if (style.display == AETHER_DISPLAY_TABLE) {
         content_height = layout_table_children(engine, styles, box, element,
@@ -654,8 +655,8 @@ aether_layout_box_s* layout_element(
     box->scroll_completion_flags = LAYOUT_SCROLL_VALID |
         (aether_overflow_is_scroll_container(overflow_x) ? LAYOUT_SCROLL_X : 0) |
         (aether_overflow_is_scroll_container(overflow_y) ? LAYOUT_SCROLL_Y : 0);
-    const element_completion_s completion{box, margin, padding, border,
-                                         containing_block, containing_height};
+    element_completion_s completion{box, margin, padding, border,
+                                    containing_block, containing_height, std::move(flex_placement)};
     const aether_rectf natural_border{border_x, border_y, border_width, border_height};
     if (deferred_completion) {
         // Internal ancestor lookup can see meaningful natural geometry, but no
@@ -666,7 +667,7 @@ aether_layout_box_s* layout_element(
         box->margin_box = {containing_block.x, border_y - box->collapsed_margin_before,
             border_width + aether_thicknessf_horizontal(margin),
             border_height + box->collapsed_margin_before + box->collapsed_margin_after};
-        *deferred_completion = completion;
+        *deferred_completion = std::move(completion);
     } else {
         layout_complete_element(engine, styles, completion, natural_border, result);
     }
@@ -710,6 +711,7 @@ void layout_complete_element(const aether_layout_engine_s* engine,
     const auto containing_height = completion.containing_height;
     const auto final_padding = aether_rectf_deflate(final_border, completion.border);
     const auto final_content = aether_rectf_deflate(final_padding, completion.padding);
+    place_flex_children(styles, box, completion.flex_placement, final_content);
     layout_positioned_children(engine, styles, box, box->element,
                                final_padding, final_content, result);
     box->border_box = final_border;
@@ -1758,7 +1760,7 @@ float measure_intrinsic_height(
     }
 
     const bool flex = style.display == AETHER_DISPLAY_FLEX;
-    const bool row = flex && style.flex_direction == AETHER_FLEX_DIRECTION_ROW;
+    const bool row = flex && flex_axis(style.flex_direction).horizontal;
     float content_height = 0.f;
     const auto add_height = [&](float height) {
         if (row) content_height = std::max(content_height, height);
@@ -2116,7 +2118,7 @@ static intrinsic_widths_s measure_intrinsic_flex_widths(
     aether_thicknessf padding, aether_thicknessf border, float maximum,
     aether_layout_result_s* result, intrinsic_width_request_s request)
 {
-    const bool column = style.flex_direction == AETHER_FLEX_DIRECTION_COLUMN;
+    const bool column = !flex_axis(style.flex_direction).horizontal;
     const bool wrap_row = !column && style.flex_wrap;
     // A wrapping maximum has an independent, natural min-content floor. Never
     // derive that floor from H, or run a second recursive walk at each level.

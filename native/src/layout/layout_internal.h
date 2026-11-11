@@ -15,6 +15,7 @@
 #include "form_controls.h"
 #include "inline_text.h"
 #include "flex_resolver.h"
+#include "flex_axis.h"
 #include "intrinsic_sizing.h"
 #include "margin_adjacency.h"
 #include "text_justify.h"
@@ -65,6 +66,17 @@ struct intrinsic_measurement_s {
     }
 };
 
+// Construction-only plan: boxes are owned by the result/parent, source items
+// by this result's collector. Move existing vectors; never copy or reverse the
+// tree. Placement waits for the same final content box used by completion.
+struct flex_placement_plan_s {
+    const std::vector<aether_node_s*>* children = nullptr;
+    std::vector<aether_layout_box_s*> boxes;
+    std::vector<aether_flex_line_s> lines;
+    std::vector<float> cross_extents;
+    float gap = 0.f, cross_gap = 0.f;
+};
+
 // A row-owned continuation, never an owner or a cross-layout cache. Natural
 // in-flow children remain attached; only the completion tail is deferred.
 struct element_completion_s {
@@ -72,6 +84,7 @@ struct element_completion_s {
     aether_thicknessf margin{}, padding{}, border{};
     aether_rectf containing_block{};
     percentage_height_s containing_height;
+    flex_placement_plan_s flex_placement;
 };
 void layout_complete_element(const aether_layout_engine_s* engine,
     const StyleLookup* styles, const element_completion_s& completion,
@@ -140,6 +153,10 @@ inline float border_height_from_explicit(const BoxStyleSnapshot& style,
         ? height + padding + border : height;
 }
 
+void place_flex_children(const StyleLookup* styles,
+    aether_layout_box_s* parent_box, const flex_placement_plan_s& plan,
+    aether_rectf final_content);
+
 float layout_flex_children(
     const aether_layout_engine_s* engine,
     const StyleLookup* styles,
@@ -151,6 +168,7 @@ float layout_flex_children(
     bool has_definite_height,
     percentage_height_s container_height_reference,
     float height_decorations,
+    flex_placement_plan_s& placement,
     aether_layout_result_s* result,
     const intrinsic_measurement_s* intrinsic_measurement = nullptr);
 

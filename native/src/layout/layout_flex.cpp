@@ -607,6 +607,7 @@ float layout_flex_children(
     bool has_definite_height,
     percentage_height_s container_height_reference,
     float height_decorations,
+    flex_placement_plan_s& placement,
     aether_layout_result_s* result,
     const intrinsic_measurement_s* intrinsic_measurement)
 {
@@ -616,7 +617,7 @@ float layout_flex_children(
     // sequences. Never reconstruct discarded text through an inline fallback.
     if (children.empty()) return 0.f;
 
-    const bool horizontal = style.flex_direction != AETHER_FLEX_DIRECTION_COLUMN;
+    const bool horizontal = flex_axis(style.flex_direction).horizontal;
     const bool main_size_is_definite = horizontal || has_definite_height;
     const bool cross_size_is_definite = !horizontal || containing_height.has_value();
     const bool intrinsic_height = intrinsic_measurement &&
@@ -662,35 +663,57 @@ float layout_flex_children(
         ? std::max(0.f, used_cross_size - natural_cross_size) / static_cast<float>(lines.empty() ? 1 : lines.size())
         : 0.f;
 
-    float cross_cursor = horizontal ? content.y : content.x;
     float total_main_size = 0.f;
+    placement.cross_extents.reserve(lines.size());
     for (const auto& line : lines) {
         const float cross_extent = style.flex_wrap
             ? flex_line_cross_size(resolved.boxes, line, horizontal) + line_stretch
             : used_cross_size;
         stretch_flex_line_items(engine, styles, children, resolved, line,
             content, containing_height, style, horizontal, cross_extent, result);
+        placement.cross_extents.push_back(cross_extent);
+        total_main_size = std::max(total_main_size,
+            flex_line_used_main_size(resolved.boxes, line, horizontal, gap));
+        for (const size_t index : line.item_indices) parent_box->add_child(resolved.boxes[index]);
+    }
+    placement.children = &children;
+    placement.boxes = std::move(resolved.boxes);
+    placement.lines = std::move(resolved.resolution.lines);
+    placement.gap = gap;
+    placement.cross_gap = cross_gap;
+    // Row sizing returns the already-clamped used size, not overflow extent.
+    // Descendant overflow is still collected separately by layout_element.
+    if (horizontal) return used_cross_size;
+    return has_definite_height ? std::max(total_main_size, content.height) : total_main_size;
+}
 
-        // Stretch can replace a box. Consume main auto margins only on the
-        // surviving boxes, otherwise reconstruction discards their used space.
-        float used_main_size = flex_line_used_main_size(resolved.boxes, line, horizontal, gap);
-        const float available_main_size = horizontal ? content.width : content.height;
-        if (main_size_is_definite) {
-            consume_flex_main_auto_margins(resolved.boxes, children, styles, line, horizontal,
-                available_main_size, used_main_size);
-        }
-        // Positioning preserves overflow; only distributed spacing is nonnegative.
-        const float free = main_size_is_definite ? available_main_size - used_main_size : 0.f;
-        float spacing = gap;
-        float main_cursor = horizontal ? content.x : content.y;
-        if (style.justify_content == AETHER_JUSTIFY_CENTER) main_cursor += free / 2.f;
-        else if (style.justify_content == AETHER_JUSTIFY_END) main_cursor += free;
+void place_flex_children(const StyleLookup* styles,
+    aether_layout_box_s* parent_box, const flex_placement_plan_s& plan,
+    aether_rectf final_content) {
+    if (!plan.children) return;
+    const auto& children = *plan.children;
+    const auto& style = parent_box->style;
+    const auto axis = flex_axis(style.flex_direction);
+    const bool horizontal = axis.horizontal;
+    // A numeric final size is enough for placement/auto margins. It is never
+    // fed back into percentage or basis definiteness during item sizing.
+    const float main_extent = horizontal ? final_content.width : final_content.height;
+    const float main_origin = horizontal ? final_content.x : final_content.y;
+    float cross_cursor = horizontal ? final_content.y : final_content.x;
+    for (size_t line_index = 0; line_index < plan.lines.size(); ++line_index) {
+        const auto& line = plan.lines[line_index];
+        const float cross_extent = plan.cross_extents[line_index];
+        float used_main_size = flex_line_used_main_size(plan.boxes, line, horizontal, plan.gap);
+        consume_flex_main_auto_margins(plan.boxes, children, styles, line, horizontal,
+            main_extent, used_main_size);
+        const float free = main_extent - used_main_size;
+        float spacing = plan.gap;
+        float distance = flex_main_alignment_offset(style.justify_content, free, axis.reverse);
         if (style.justify_content == AETHER_JUSTIFY_SPACE_BETWEEN && line.item_indices.size() > 1) {
             spacing += std::max(0.f, free) / static_cast<float>(line.item_indices.size() - 1);
         }
-
         for (const size_t index : line.item_indices) {
-            auto* child_box = resolved.boxes[index];
+            auto* child_box = plan.boxes[index];
             const auto child_style = get_style(styles, children[index]);
             const bool has_cross_auto_margins = consume_flex_cross_auto_margins(
                 child_box, child_style, !horizontal, cross_extent);
@@ -701,18 +724,17 @@ float layout_flex_children(
                 if (alignment == AETHER_ALIGN_CENTER) cross_position += cross_free / 2.f;
                 else if (alignment == AETHER_ALIGN_END) cross_position += cross_free;
             }
+            // Reflect the margin box, retaining physical margins and the
+            // item's own relative translation. Descendants translate, not mirror.
+            const float outer_main = flex_box_outer_main_size(child_box, horizontal);
+            const float main_position = flex_main_position(main_origin, main_extent,
+                distance, outer_main, axis.reverse);
             const auto flow_margin = normal_flow_margin_box(child_box);
             offset_box(child_box,
-                (horizontal ? main_cursor : cross_position) - flow_margin.x,
-                (horizontal ? cross_position : main_cursor) - flow_margin.y);
-            parent_box->add_child(child_box);
-            main_cursor += flex_box_outer_main_size(child_box, horizontal) + spacing;
+                (horizontal ? main_position : cross_position) - flow_margin.x,
+                (horizontal ? cross_position : main_position) - flow_margin.y);
+            distance += outer_main + spacing;
         }
-        total_main_size = std::max(total_main_size, used_main_size);
-        cross_cursor += cross_extent + cross_gap;
+        cross_cursor += cross_extent + plan.cross_gap;
     }
-    // Row sizing returns the already-clamped used size, not overflow extent.
-    // Descendant overflow is still collected separately by layout_element.
-    if (horizontal) return used_cross_size;
-    return has_definite_height ? std::max(total_main_size, content.height) : total_main_size;
 }

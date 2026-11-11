@@ -938,7 +938,8 @@ void builtin_properties_register(style_property_registry_s* reg) {
     // flex-direction
     {
         static const char* kw[] = { "row", "row-reverse", "column", "column-reverse" };
-        static const int32_t vals[] = { 0, 0, 1, 1 };
+        static const int32_t vals[] = { AETHER_FLEX_DIRECTION_ROW, AETHER_FLEX_DIRECTION_ROW_REVERSE,
+            AETHER_FLEX_DIRECTION_COLUMN, AETHER_FLEX_DIRECTION_COLUMN_REVERSE };
         reg->register_property("flex-direction", false, STYLE_IMPACT_LAYOUT, "row",
             [](const char* s, std::string& o) -> bool {
                 std::string v;
@@ -948,6 +949,10 @@ void builtin_properties_register(style_property_registry_s* reg) {
                 return false;
             },
             [](aether_computed_style_t* st, const std::string& v) { st->flex_direction = std::atoi(v.c_str()); });
+        reg->definitions.back().css_wide = bi_origin_css_wide;
+        reg->definitions.back().inherit_explicit = [](aether_computed_style_t* st, ComputedStyleReadView parent) {
+            st->flex_direction = parent.scalars().flex_direction;
+        };
     }
 
     // flex-wrap
@@ -996,10 +1001,11 @@ void builtin_properties_register(style_property_registry_s* reg) {
             "start","flex-start","end","flex-end","center","space-between","space-around","space-evenly"
         };
         static const int32_t vals[] = {
-            AETHER_JUSTIFY_START,AETHER_JUSTIFY_START,AETHER_JUSTIFY_END,AETHER_JUSTIFY_END,
+            AETHER_JUSTIFY_LOGICAL_START,AETHER_JUSTIFY_FLEX_START,
+            AETHER_JUSTIFY_LOGICAL_END,AETHER_JUSTIFY_FLEX_END,
             AETHER_JUSTIFY_CENTER,AETHER_JUSTIFY_SPACE_BETWEEN,AETHER_JUSTIFY_CENTER,AETHER_JUSTIFY_CENTER
         };
-        reg->register_property("justify-content", false, STYLE_IMPACT_LAYOUT, "start",
+        reg->register_property("justify-content", false, STYLE_IMPACT_LAYOUT, "flex-start",
             [](const char* s, std::string& o) -> bool {
                 std::string v;
                 if (!bi_try_keyword(s, kw, 8, v)) return false;
@@ -1008,6 +1014,10 @@ void builtin_properties_register(style_property_registry_s* reg) {
                 return false;
             },
             [](aether_computed_style_t* st, const std::string& v) { st->justify_content = std::atoi(v.c_str()); });
+        reg->definitions.back().css_wide = bi_origin_css_wide;
+        reg->definitions.back().inherit_explicit = [](aether_computed_style_t* st, ComputedStyleReadView parent) {
+            st->justify_content = parent.scalars().justify_content;
+        };
     }
 
     // align-items

@@ -106,6 +106,38 @@ function runtimeCopies() {
   runtime.dispose();
   for (const { style, snapshot } of saved) assert.deepEqual(style, snapshot, "JS deep copies survive native owners and repeated frees");
 }
+function flexReverseValues() {
+  const document = own(binding.document.parse('<html><body><div id="sample">probe</div></body></html>'));
+  const node = document.getElementById("sample");
+  const runtime = own(binding.styleRuntime.create({ environment: { viewportWidth: 400, viewportHeight: 400 } }));
+  const pair = (style) => [style.flexDirection, style.justifyContent];
+  const saved = [];
+  assert.deepEqual(pair(styleFor(runtime, node)), [0, 0], "initial values retain historical row/flex-start");
+  for (const [direction, directionValue] of [["row", 0], ["column", 1], ["row-reverse", 2], ["column-reverse", 3]]) {
+    for (const [justify, justifyValue] of [["flex-start", 0], ["center", 1], ["flex-end", 2], ["space-between", 3], ["start", 4], ["end", 5]]) {
+      const sheet = runtime.addStylesheet(`#sample { flex-direction: ${direction}; justify-content: ${justify}; }`);
+      const copy = styleFor(runtime, node);
+      const expected = [directionValue, justifyValue];
+      assert.deepEqual(pair(copy), expected, `${direction}/${justify} runtime export`);
+      const map = own(runtime.createResolvedStyleMap(document));
+      assert.deepEqual(pair(map.get(node)), expected, "snapshot map export");
+      saved.push({ copy, map, expected });
+      assert.equal(runtime.removeStylesheet(sheet.handle), true);
+      runtime.clearCache();
+      assert.deepEqual(pair(styleFor(runtime, node)), [0, 0], "default restored after mutation");
+      assert.deepEqual(pair(map.get(node)), expected, "retained map is immutable across cache invalidation");
+    }
+  }
+  for (const { copy, map, expected } of saved) {
+    assert.deepEqual(pair(copy), expected, "runtime copy retained across subsequent resolves");
+    assert.deepEqual(pair(map.get(node)), expected, "old map retained across subsequent resolves");
+  }
+  runtime.dispose();
+  document.dispose();
+  for (const { copy, expected } of saved) assert.deepEqual(pair(copy), expected, "JS value survives native owners");
+  console.log("Verified 24 flex-direction/justify-content combinations and retained native maps/JS copies");
+}
+
 function fragments(root) {
   const result = [], seen = new Set(), pending = [root];
   while (pending.length) {
@@ -261,6 +293,7 @@ function initializationGuardCase(name) {
 try {
   if (scenario === "binary-layout") binaryLayout();
   else if (scenario === "runtime-copies") runtimeCopies();
+  else if (scenario === "flex-reverse-values") flexReverseValues();
   else if (scenario === "measurement") measurement(false);
   else if (scenario === "callback-throw") measurement(true);
   else if (scenario === "callback-shim") callbackShim();
