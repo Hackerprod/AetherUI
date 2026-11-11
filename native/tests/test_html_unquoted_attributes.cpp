@@ -266,10 +266,10 @@ void whitespace_and_eof() {
             std::string("<input id=\"t\" data-route=") + space.bytes + "/a/b title=after>",
             {{"id", "t"}, {"data-route", "/a/b"}, {"title", "after"}});
     }
-    // Safety and compatibility checks for this parser, NOT Blink equivalence:
-    // std::isspace also recognizes VT.
-    run("existing_vt_divergence", "<input id=\"t\" data-route=x\vdisabled>",
-        {{"id", "t"}, {"data-route", "x"}, {"disabled", ""}});
+    // Retire only the VT divergence deliberately retained by the slash fix.
+    // Preserve these source bytes; see docs/html-attribute-value-whitespace.md.
+    run("vt_value_preserved", "<input id=\"t\" data-route=x\vdisabled>",
+        {{"id", "t"}, {"data-route", "x\vdisabled"}});
     // Preserve the historical EOF bytes; the entire unfinished opening is discarded.
     run_absent("existing_eof_recovery", "<input id=\"t\" data-route=/a/b");
     run_absent("quoted_eof_control", "<input id=\"t\" data-route='/a/b'");

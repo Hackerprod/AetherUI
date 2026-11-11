@@ -69,6 +69,9 @@ class HtmlParser {
     }
 
     std::string read_attribute_value() {
+        // Only HTML whitespace precedes a value; VT starts unquoted data.
+        while (!end() && aether::is_html_space(static_cast<unsigned char>(current())))
+            pos++;
         if (end()) return {};
 
         if (current() == '\'' || current() == '"') {
@@ -85,7 +88,7 @@ class HtmlParser {
         // In an unquoted value, '/' is data, including immediately before '>'.
         // The outer tag parser recognizes '/>' only outside an attribute value.
         size_t start = pos;
-        while (!end() && !std::isspace(static_cast<unsigned char>(current()))
+        while (!end() && !aether::is_html_space(static_cast<unsigned char>(current()))
                && current() != '>')
             pos++;
         return std::string(src + start, pos - start);
@@ -424,7 +427,6 @@ class HtmlParser {
             std::string attr_value;
             if (!end() && current() == '=') {
                 pos++;
-                skip_whitespace();
                 attr_value = read_attribute_value();
             }
 

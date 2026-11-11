@@ -292,6 +292,10 @@ if(AETHERUI_BUILD_TESTS)
     target_link_libraries(aether_html_unquoted_attributes_test PRIVATE AetherUI::Core)
     add_test(NAME aether.html-unquoted-attributes COMMAND aether_html_unquoted_attributes_test)
 
+    add_executable(aether_html_attribute_value_whitespace_test tests/test_html_attribute_value_whitespace.cpp)
+    target_link_libraries(aether_html_attribute_value_whitespace_test PRIVATE AetherUI::Core)
+    add_test(NAME aether.html-attribute-value-whitespace COMMAND aether_html_attribute_value_whitespace_test)
+
     add_executable(aether_html_duplicate_attributes_test tests/test_html_duplicate_attributes.cpp)
     target_link_libraries(aether_html_duplicate_attributes_test PRIVATE AetherUI::Core)
     add_test(NAME aether.html-duplicate-attributes COMMAND aether_html_duplicate_attributes_test)
