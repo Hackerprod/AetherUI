@@ -974,6 +974,12 @@ if(AETHERUI_BUILD_TESTS)
     target_compile_definitions(aether_nth_cache_runtime_test PRIVATE AETHER_EXPORTS)
     add_test(NAME aether.nth-cache-runtime COMMAND aether_nth_cache_runtime_test)
 
+    add_executable(aether_adjacent_cache_runtime_test tests/test_adjacent_cache_runtime.cpp
+        $<TARGET_OBJECTS:aether_rule_index_test_core>)
+    target_include_directories(aether_adjacent_cache_runtime_test PRIVATE include)
+    target_compile_definitions(aether_adjacent_cache_runtime_test PRIVATE AETHER_EXPORTS)
+    add_test(NAME aether.adjacent-cache-runtime COMMAND aether_adjacent_cache_runtime_test)
+
     # Opt-in public-ABI benchmark, compilable unchanged against base/candidate.
     add_executable(aether_rule_index_runtime_benchmark EXCLUDE_FROM_ALL
         tests/benchmark_rule_index_runtime.cpp)
@@ -981,6 +987,9 @@ if(AETHERUI_BUILD_TESTS)
     add_executable(aether_nth_cache_runtime_benchmark EXCLUDE_FROM_ALL
         tests/benchmark_nth_cache_runtime.cpp)
     target_link_libraries(aether_nth_cache_runtime_benchmark PRIVATE AetherUI::Core)
+    add_executable(aether_adjacent_cache_runtime_benchmark EXCLUDE_FROM_ALL
+        tests/benchmark_adjacent_cache_runtime.cpp)
+    target_link_libraries(aether_adjacent_cache_runtime_benchmark PRIVATE AetherUI::Core)
 
 
 
@@ -1021,6 +1030,11 @@ if(AETHERUI_BUILD_TESTS)
         src/style_runtime/selector_parser.cpp src/style_runtime/selector_matcher.cpp)
     target_include_directories(aether_selector_nth_cache_test PRIVATE include src/style_runtime)
     add_test(NAME aether.selector-nth-cache COMMAND aether_selector_nth_cache_test)
+
+    add_executable(aether_selector_adjacent_cache_test tests/test_selector_adjacent_cache.cpp
+        src/style_runtime/selector_parser.cpp src/style_runtime/selector_matcher.cpp)
+    target_include_directories(aether_selector_adjacent_cache_test PRIVATE include src/style_runtime)
+    add_test(NAME aether.selector-adjacent-cache COMMAND aether_selector_adjacent_cache_test)
 
     add_executable(aether_selector_edge_children_test tests/test_selector_edge_children.cpp
         src/style_runtime/selector_parser.cpp src/style_runtime/selector_matcher.cpp)

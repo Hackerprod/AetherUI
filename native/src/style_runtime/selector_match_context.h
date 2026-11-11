@@ -36,6 +36,7 @@ public:
     selector_match_context_s(selector_match_context_s&&) = delete;
     selector_match_context_s& operator=(selector_match_context_s&&) = delete;
     size_t position(aether_node_s* node);
+    aether_node_s* previous_sibling(aether_node_s* node);
 
 private:
     void remember_position(aether_node_s* parent, aether_node_s* node,
@@ -52,6 +53,20 @@ private:
     // Some standard libraries allocate even for an empty unordered_map. Delay
     // its construction too, guaranteeing no cache allocation for cheap/no-nth.
     std::optional<parents_s> parents_;
+    void remember_previous(aether_node_s* parent, aether_node_s* node,
+                           aether_node_s* previous, size_t position, size_t visited);
+    using previous_s = std::unordered_map<aether_node_s*, aether_node_s*>;
+    struct previous_parent_s {
+        previous_s previous;
+        size_t remaining;
+        size_t observed = 0;
+        bool complete = false;
+        explicit previous_parent_s(size_t budget) : remaining(budget) {}
+    };
+    using previous_parents_s = std::unordered_map<aether_node_s*, previous_parent_s>;
+    // Navigation identity is independent of nth positions and selector results.
+    // No adjacent lookup means no extra heap allocation or wider nth entries.
+    std::optional<previous_parents_s> previous_parents_;
     friend struct selector_match_context_test_access;
 };
 

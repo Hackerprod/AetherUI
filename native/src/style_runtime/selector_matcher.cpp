@@ -169,6 +169,69 @@ static aether_node_s* dom_previous_element_sibling(aether_node_s* node) {
     return nullptr;
 }
 
+aether_node_s* selector_match_context_s::previous_sibling(aether_node_s* node) {
+    if (!is_selector_dom_element(node)) return nullptr;
+    auto* parent = dom_parent(node);
+    if (!parent) return nullptr;
+    constexpr size_t cheap_limit = 128;
+    if (parent->children.size() <= cheap_limit)
+        return dom_previous_element_sibling(node);
+
+    if (previous_parents_) {
+        const auto cached = previous_parents_->find(parent);
+        if (cached != previous_parents_->end()) {
+            const auto found = cached->second.previous.find(node);
+            // A null predecessor is a valid hit for the first DOM element.
+            if (found != cached->second.previous.end()) return found->second;
+            if (cached->second.complete) return nullptr;
+        }
+    }
+    aether_node_s* previous = nullptr;
+    size_t position = 0, visited = 0;
+    for (auto* sibling : parent->children) {
+        ++visited; // At most children.size(), representable in size_t.
+        if (!is_selector_dom_element(sibling)) continue;
+        position = aether::selector_position::next_ordinal(position);
+        if (sibling == node) {
+            // Keep fallible map construction off cheap and nonmember paths.
+            if (visited > cheap_limit)
+                remember_previous(parent, node, previous, position, visited);
+            return previous;
+        }
+        previous = sibling;
+    }
+    return nullptr;
+}
+
+void selector_match_context_s::remember_previous(aether_node_s* parent,
+    aether_node_s* node, aether_node_s* previous, size_t position, size_t visited) {
+    size_t budget = 0;
+    if (!aether::selector_position::work_budget(parent->children.size(), budget)) return;
+    if (!previous_parents_) previous_parents_.emplace();
+    auto& entry = previous_parents_->try_emplace(parent, budget).first->second;
+    entry.previous.try_emplace(node, previous);
+    entry.remaining = visited >= entry.remaining ? 0 : entry.remaining - visited;
+    entry.observed = std::max(entry.observed, position);
+    constexpr size_t coverage_divisor = 8;
+    const size_t required = entry.observed / coverage_divisor +
+        (entry.observed % coverage_divisor != 0);
+    if (entry.remaining || entry.previous.size() < required) return;
+
+    previous_s complete;
+    previous = nullptr;
+    // No raw-child reserve: text/generated nodes require no index entries.
+    // Preserve the first occurrence of duplicate pointers, but advance previous
+    // for every occurrence exactly as the generic navigation loop does.
+    for (auto* sibling : parent->children) {
+        if (!is_selector_dom_element(sibling)) continue;
+        complete.try_emplace(sibling, previous);
+        previous = sibling;
+    }
+    // Any allocation failure propagates to prepare; never publish partial as full.
+    entry.previous = std::move(complete);
+    entry.complete = true;
+}
+
 /* ── Forward declarations ─────────────────────────────────────────── */
 
 static bool match_step(const compiled_selector_s& sel, int step_index, aether_node_s* node,
@@ -324,7 +387,8 @@ static bool match_step(const compiled_selector_s& sel, int step_index, aether_no
     case COMB_DESCENDANT:
         return match_ancestor(sel, next, dom_parent(node), relative_anchor, context);
     case COMB_ADJACENT_SIBLING: {
-        auto* prev = dom_previous_element_sibling(node);
+        auto* prev = context ? context->previous_sibling(node) :
+                              dom_previous_element_sibling(node);
         return prev && match_step(sel, next, prev, relative_anchor, context);
     }
     case COMB_GENERAL_SIBLING:
