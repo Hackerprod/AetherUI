@@ -178,3 +178,89 @@ is not changed or chosen by this increment. Invisible capture, fresh raster
 pixels, rendering support, SVG text, comparison and full fixture coverage remain
 future work. The public flexbox fixture's declared 403 cases are provenance, not
 a result. No claim of visual validation follows from compiling these contracts.
+
+## Experimental command preparation (internal version 1)
+
+`AETHER_VISUAL_COMPARE_BUILD_PREPARATION_TESTS` defaults to OFF. When enabled it
+builds a separate preparation library and three synthetic test executables, with
+no automatic execution. The public ABI header from this checkout is an explicit
+compile dependency for the library and tests; no Aether core library is linked.
+The CLI does not depend on this library. This is source for preparation, not a
+raster backend, ABI runtime validation, image capture or measured engine work.
+
+`AetherApi` is an injected table of six function pointers typed from the real
+header, with no defaults or symbol-loader implementation. Version must exactly
+match `AETHER_ABI_VERSION_CURRENT`, DISPLAY_LIST capability must be present, and
+the command size must match `sizeof(aether_paint_command_t)` before count/get.
+The provider and list must be trusted, alive, stable and synchronized throughout
+copying. ABI callbacks must not throw, including free. A successful get arms a
+same-provider RAII release; a failed get is not freed. No list ownership is taken.
+Bounded scans require legitimately readable memory through NUL or the entire
+scan bound; they do not make arbitrary pointers safe. A null text pointer is
+rejected before scanning.
+
+The supported snapshot/preparation tags are fill rounded rectangle, stroke
+rounded rectangle, text, push/pop clip, push/pop transform and begin/end paint
+chunk. All ten other known tags return UNSUPPORTED_TAG without adapter reads of
+their payload; unrecognized tags return UNKNOWN_TAG. Provider-side free remains
+the provider's responsibility even for rejected acquired commands. Neither error
+diagnoses core corruption. Chunks are metadata and text is not measured or drawn.
+
+Snapshots own values and UTF-8 strings. Preparation revalidates even manually
+constructed or modified snapshots: at most 65,536 commands, 256 total active
+transform/clip/chunk scopes, 65,536 text bytes per command excluding NUL, and
+8 MiB aggregate text plus family bytes excluding NUL. ABI text scans inspect at
+most 65,537 bytes; family must terminate within 64 bytes. Owned strings must not
+contain NUL; family has at most 63 bytes. Empty text is allowed. Every used float
+must be finite, dimensions/radii/stroke nonnegative, RGBA in [0,1], weight 1..1000,
+alignment one of the six header values and wrap exactly false/true. Positive
+font size and nonempty family are adapter policies, not core guarantees; zero
+size may be legitimate invisible text from the core but is rejected here with
+INVALID_PAYLOAD. These choices do not promise support for all core text commands.
+
+Transform composition is row-vector local * ancestor, computed in double and
+checked for finite float range before narrowing. It does not promise bitwise
+agreement with float-only renderers. Singular and reflected transforms are legal;
+there is no inversion. Clip push events retain local geometry, all eight radii,
+the entry matrix and entry transform depth. Geometry is not replaced by an AABB.
+The three stacks are independent. Transform pop rejects active clips entered at
+or within that transform; clip pop may close an outer clip while an inner
+transform remains. Chunk IDs must be positive and paired, not globally unique.
+Unclosed scopes are errors; no automatic repair is performed.
+
+`PreparedFrame` can only be created by successful full preflight, owns its event
+values, and exposes const access only. A prepared event records the command,
+current matrix and transform depth after the stack operation (at clip push these
+are the entry matrix/depth). There are zero sink calls during preflight, including
+late failure. Replay emits events in source order and never reads the ABI again.
+A sink receives a reference valid for that callback only and must copy if it
+retains the event. A false result or non-allocation exception becomes SINK_FAILED;
+`std::bad_alloc` becomes OUT_OF_MEMORY. Replay may leave partial sink effects on
+failure or cancellation: preflight transactionality does not promise rollback.
+Errors contain only code and optional index/numeric tag, requiring no allocation.
+Allocation failures in copying/preflight also return OUT_OF_MEMORY, without
+exposing a partial snapshot/frame.
+
+Cancellation callbacks are `noexcept` and sampled at entry, before each
+command/event, and before successful return, including empty operations. Copying
+also checks after each successful acquisition under its release guard. There is
+no interruption inside a synchronous ABI call. Inputs must not be mutated from
+callbacks or concurrently; no locking/threading is supplied. A callback violating
+its no-throw ABI/cancellation/clock contract is outside the supported contract.
+
+`PreparationMetrics` is independent bookkeeping, not automatic instrumentation or
+serialization. A caller explicitly begins/finishes snapshot_copy then preflight,
+with preflight allowed only after successful copy. Its injected `Clock` is
+`noexcept`, returns optional nonnegative monotonic int64 nanoseconds, and has no
+real default implementation. Valid begin/finish each sample exactly once;
+invalid transitions neither consume clock samples nor replace previous results.
+No destructor finalization occurs. Missing or invalid endpoints leave duration
+absent without changing functional success/failure/cancellation; missing endpoints
+take precedence over invalid endpoints. Equal valid times yield measured zero;
+not_run slots never invent zero. Only adapter copy/preflight may use these slots,
+not replay, layout, drawing, image encoding, GPU or process metrics. Synthetic
+clock samples in tests demonstrate arithmetic only.
+
+Capture remains NOT_IMPLEMENTED, report-v1 and its engine null/not_run values are
+unchanged. No snapshot or sink trace is an image; this subset does not establish
+fixture, SVG/text, raster or visual-comparison coverage.
