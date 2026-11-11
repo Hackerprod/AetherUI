@@ -1,0 +1,18 @@
+cmake_minimum_required(VERSION 3.20)
+project(AetherVisualCompareContracts VERSION 0.1.0 LANGUAGES CXX)
+add_library(aether_visual_compare_contract STATIC
+ src/cli.cpp src/resource_manifest.cpp src/resource_validation.cpp
+ src/report.cpp src/artifact_store.cpp src/sha256.cpp)
+target_compile_features(aether_visual_compare_contract PUBLIC cxx_std_20)
+set_target_properties(aether_visual_compare_contract PROPERTIES CXX_EXTENSIONS OFF)
+target_include_directories(aether_visual_compare_contract PUBLIC include PRIVATE src)
+add_executable(aether_visual_compare src/main.cpp)
+target_link_libraries(aether_visual_compare PRIVATE aether_visual_compare_contract)
+option(AETHER_VISUAL_COMPARE_BUILD_CONTRACT_TESTS "Build pure contract test executables (no automatic execution)" OFF)
+if(AETHER_VISUAL_COMPARE_BUILD_CONTRACT_TESTS)
+ foreach(name cli resource_manifest resource_validation report artifact_store sha256)
+  add_executable(aether_visual_compare_test_${name} tests/test_${name}.cpp)
+  target_link_libraries(aether_visual_compare_test_${name} PRIVATE aether_visual_compare_contract)
+  target_include_directories(aether_visual_compare_test_${name} PRIVATE src)
+ endforeach()
+endif()

@@ -1,0 +1,1291 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Aether visual comparison contract report v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "tool",
+    "run_id",
+    "requested_scope",
+    "mode",
+    "input",
+    "viewport",
+    "stages",
+    "engines",
+    "analysis_limits",
+    "comparison",
+    "coverage",
+    "timings",
+    "errors",
+    "overall",
+    "artifacts",
+    "commit"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "aether.visual-compare.report/1"
+    },
+    "tool": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "implementation",
+        "version"
+      ],
+      "properties": {
+        "name": {
+          "const": "aether_visual_compare"
+        },
+        "implementation": {
+          "const": "contract-only"
+        },
+        "version": {
+          "const": "0.1.0-contract"
+        }
+      }
+    },
+    "run_id": {
+      "$ref": "#/$defs/runId"
+    },
+    "requested_scope": {
+      "$ref": "#/$defs/scope"
+    },
+    "mode": {
+      "const": "strict"
+    },
+    "input": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "label",
+        "sha256",
+        "size_bytes",
+        "manifest_sha256"
+      ],
+      "properties": {
+        "label": {
+          "const": "input.html"
+        },
+        "sha256": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/hash"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "size_bytes": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 2097152
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "manifest_sha256": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/hash"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "viewport": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "css_width",
+        "css_height",
+        "scale",
+        "requested_pixel_width",
+        "requested_pixel_height",
+        "effective"
+      ],
+      "properties": {
+        "css_width": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 16384
+        },
+        "css_height": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 16384
+        },
+        "scale": {
+          "enum": [
+            1,
+            1.25,
+            1.5,
+            2
+          ]
+        },
+        "requested_pixel_width": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 32768
+        },
+        "requested_pixel_height": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 32768
+        },
+        "effective": {
+          "const": null
+        }
+      }
+    },
+    "stages": {
+      "type": "array",
+      "minItems": 10,
+      "maxItems": 10,
+      "prefixItems": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "name",
+            "status",
+            "reason_code"
+          ],
+          "properties": {
+            "name": {
+              "const": "arguments"
+            },
+            "status": {
+              "enum": [
+                "not_run",
+                "passed",
+                "failed",
+                "blocked",
+                "not_implemented",
+                "cancelled"
+              ]
+            },
+            "reason_code": {
+              "$ref": "#/$defs/reason"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "name",
+            "status",
+            "reason_code"
+          ],
+          "properties": {
+            "name": {
+              "const": "output_prepare"
+            },
+            "status": {
+              "enum": [
+                "not_run",
+                "passed",
+                "failed",
+                "blocked",
+                "not_implemented",
+                "cancelled"
+              ]
+            },
+            "reason_code": {
+              "$ref": "#/$defs/reason"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "name",
+            "status",
+            "reason_code"
+          ],
+          "properties": {
+            "name": {
+              "const": "input_read"
+            },
+            "status": {
+              "enum": [
+                "not_run",
+                "passed",
+                "failed",
+                "blocked",
+                "not_implemented",
+                "cancelled"
+              ]
+            },
+            "reason_code": {
+              "$ref": "#/$defs/reason"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "name",
+            "status",
+            "reason_code"
+          ],
+          "properties": {
+            "name": {
+              "const": "manifest_parse"
+            },
+            "status": {
+              "enum": [
+                "not_run",
+                "passed",
+                "failed",
+                "blocked",
+                "not_implemented",
+                "cancelled"
+              ]
+            },
+            "reason_code": {
+              "$ref": "#/$defs/reason"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "name",
+            "status",
+            "reason_code"
+          ],
+          "properties": {
+            "name": {
+              "const": "resource_validation"
+            },
+            "status": {
+              "enum": [
+                "not_run",
+                "passed",
+                "failed",
+                "blocked",
+                "not_implemented",
+                "cancelled"
+              ]
+            },
+            "reason_code": {
+              "$ref": "#/$defs/reason"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "name",
+            "status",
+            "reason_code"
+          ],
+          "properties": {
+            "name": {
+              "const": "aether_capture"
+            },
+            "status": {
+              "enum": [
+                "not_run",
+                "passed",
+                "failed",
+                "blocked",
+                "not_implemented",
+                "cancelled"
+              ]
+            },
+            "reason_code": {
+              "$ref": "#/$defs/reason"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "name",
+            "status",
+            "reason_code"
+          ],
+          "properties": {
+            "name": {
+              "const": "webview2_capture"
+            },
+            "status": {
+              "enum": [
+                "not_run",
+                "passed",
+                "failed",
+                "blocked",
+                "not_implemented",
+                "cancelled"
+              ]
+            },
+            "reason_code": {
+              "$ref": "#/$defs/reason"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "name",
+            "status",
+            "reason_code"
+          ],
+          "properties": {
+            "name": {
+              "const": "comparison"
+            },
+            "status": {
+              "enum": [
+                "not_run",
+                "passed",
+                "failed",
+                "blocked",
+                "not_implemented",
+                "cancelled"
+              ]
+            },
+            "reason_code": {
+              "$ref": "#/$defs/reason"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "name",
+            "status",
+            "reason_code"
+          ],
+          "properties": {
+            "name": {
+              "const": "coverage"
+            },
+            "status": {
+              "enum": [
+                "not_run",
+                "passed",
+                "failed",
+                "blocked",
+                "not_implemented",
+                "cancelled"
+              ]
+            },
+            "reason_code": {
+              "$ref": "#/$defs/reason"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "name",
+            "status",
+            "reason_code"
+          ],
+          "properties": {
+            "name": {
+              "const": "output_commit"
+            },
+            "status": {
+              "enum": [
+                "not_run",
+                "passed",
+                "failed",
+                "blocked",
+                "not_implemented",
+                "cancelled"
+              ]
+            },
+            "reason_code": {
+              "$ref": "#/$defs/reason"
+            }
+          }
+        }
+      ],
+      "items": false
+    },
+    "engines": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "aether",
+        "webview2"
+      ],
+      "properties": {
+        "aether": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "implementation_status",
+            "runtime_version",
+            "capture_status",
+            "content_status",
+            "metrics"
+          ],
+          "properties": {
+            "implementation_status": {
+              "const": "not_implemented"
+            },
+            "runtime_version": {
+              "const": null
+            },
+            "capture_status": {
+              "const": "not_run"
+            },
+            "content_status": {
+              "const": "not_evaluated"
+            },
+            "metrics": {
+              "const": null
+            }
+          }
+        },
+        "webview2": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "implementation_status",
+            "runtime_version",
+            "capture_status",
+            "content_status",
+            "metrics"
+          ],
+          "properties": {
+            "implementation_status": {
+              "const": "not_implemented"
+            },
+            "runtime_version": {
+              "const": null
+            },
+            "capture_status": {
+              "const": "not_run"
+            },
+            "content_status": {
+              "const": "not_evaluated"
+            },
+            "metrics": {
+              "const": null
+            }
+          }
+        }
+      }
+    },
+    "analysis_limits": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "references_complete",
+        "resource_decode",
+        "font_availability",
+        "filesystem_race_hardening"
+      ],
+      "properties": {
+        "references_complete": {
+          "const": "not_evaluated"
+        },
+        "resource_decode": {
+          "const": "not_implemented"
+        },
+        "font_availability": {
+          "const": "not_evaluated"
+        },
+        "filesystem_race_hardening": {
+          "const": "not_implemented"
+        }
+      }
+    },
+    "comparison": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "status",
+        "metrics"
+      ],
+      "properties": {
+        "status": {
+          "const": "not_run"
+        },
+        "metrics": {
+          "const": null
+        }
+      }
+    },
+    "coverage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "status",
+        "expected_cases",
+        "evaluated_cases"
+      ],
+      "properties": {
+        "status": {
+          "const": "not_evaluated"
+        },
+        "expected_cases": {
+          "const": null
+        },
+        "evaluated_cases": {
+          "const": null
+        }
+      }
+    },
+    "timings": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "host_inspection_wall_ms",
+        "clock"
+      ],
+      "properties": {
+        "host_inspection_wall_ms": {
+          "anyOf": [
+            {
+              "type": "number",
+              "minimum": 0
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "clock": {
+          "const": "steady_clock"
+        }
+      }
+    },
+    "errors": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "code",
+          "stage",
+          "resource_label",
+          "detail_code"
+        ],
+        "properties": {
+          "code": {
+            "enum": [
+              2,
+              3,
+              4,
+              5,
+              6,
+              7,
+              8,
+              9,
+              10,
+              11,
+              12,
+              13,
+              14
+            ]
+          },
+          "stage": {
+            "enum": [
+              "arguments",
+              "output_prepare",
+              "input_read",
+              "manifest_parse",
+              "resource_validation",
+              "aether_capture",
+              "webview2_capture",
+              "comparison",
+              "coverage",
+              "output_commit"
+            ]
+          },
+          "resource_label": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^r(000[1-9]|00[1-9][0-9]|0[1-9][0-9]{2}|10[01][0-9]|102[0-4])$"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "detail_code": {
+            "$ref": "#/$defs/reason"
+          }
+        }
+      }
+    },
+    "overall": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "status",
+        "primary_error",
+        "exit_code"
+      ],
+      "properties": {
+        "status": {
+          "$ref": "#/$defs/overallStatus"
+        },
+        "primary_error": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/reason"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "exit_code": {
+          "$ref": "#/$defs/exitCode"
+        }
+      }
+    },
+    "artifacts": {
+      "type": "array",
+      "maxItems": 0
+    },
+    "commit": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "state",
+        "marker"
+      ],
+      "properties": {
+        "state": {
+          "const": "requires_marker"
+        },
+        "marker": {
+          "const": "manifest.json"
+        }
+      }
+    }
+  },
+  "$comment": "Candidate only. Marker verification is mandatory. Cross-field scale arithmetic, error priority, finite numbers, duplicate JSON keys, and lifecycle checks are enforced by the implementation, not inferred from schema validation.",
+  "$defs": {
+    "hash": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "runId": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{32}$"
+    },
+    "reason": {
+      "enum": [
+        "NOT_REQUESTED",
+        "OK",
+        "OUTSIDE_SCOPE",
+        "NOT_IMPLEMENTED",
+        "INVALID_ARGUMENTS",
+        "INPUT_UNREADABLE",
+        "INPUT_INVALID",
+        "INPUT_TOO_LARGE",
+        "INVALID_UTF8",
+        "INVALID_MANIFEST",
+        "RESOURCE_INVALID",
+        "RESOURCE_UNREADABLE",
+        "RESOURCE_MISMATCH",
+        "RESOURCE_LIMIT",
+        "INVALID_PATH",
+        "POLICY_BLOCKED",
+        "CANCELLED",
+        "OUTPUT_IO",
+        "INTERNAL_FAILURE"
+      ]
+    },
+    "scope": {
+      "enum": [
+        "contract_inspection",
+        "visual_capture"
+      ]
+    },
+    "exitCode": {
+      "enum": [
+        0,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13,
+        14
+      ]
+    },
+    "overallStatus": {
+      "enum": [
+        "passed",
+        "failed",
+        "blocked",
+        "not_implemented",
+        "cancelled"
+      ]
+    },
+    "artifactMarker": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "commit_state",
+        "run_id",
+        "requested_scope",
+        "overall_status",
+        "exit_code",
+        "artifacts"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": "aether.visual-compare.artifacts/1"
+        },
+        "commit_state": {
+          "const": "complete"
+        },
+        "run_id": {
+          "$ref": "#/$defs/runId"
+        },
+        "requested_scope": {
+          "$ref": "#/$defs/scope"
+        },
+        "overall_status": {
+          "$ref": "#/$defs/overallStatus"
+        },
+        "exit_code": {
+          "$ref": "#/$defs/exitCode"
+        },
+        "artifacts": {
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 2,
+          "prefixItems": [
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "name",
+                "size_bytes",
+                "sha256"
+              ],
+              "properties": {
+                "name": {
+                  "const": "report.log"
+                },
+                "size_bytes": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 18446744073709551615
+                },
+                "sha256": {
+                  "$ref": "#/$defs/hash"
+                }
+              }
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "name",
+                "size_bytes",
+                "sha256"
+              ],
+              "properties": {
+                "name": {
+                  "const": "report.json"
+                },
+                "size_bytes": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 18446744073709551615
+                },
+                "sha256": {
+                  "$ref": "#/$defs/hash"
+                }
+              }
+            }
+          ],
+          "items": false
+        }
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "requested_scope": {
+            "const": "visual_capture"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "input": {
+            "properties": {
+              "sha256": {
+                "const": null
+              },
+              "size_bytes": {
+                "const": null
+              },
+              "manifest_sha256": {
+                "const": null
+              }
+            }
+          },
+          "stages": {
+            "prefixItems": [
+              {},
+              {},
+              {
+                "properties": {
+                  "status": {
+                    "const": "not_run"
+                  }
+                }
+              },
+              {
+                "properties": {
+                  "status": {
+                    "const": "not_run"
+                  }
+                }
+              },
+              {
+                "properties": {
+                  "status": {
+                    "const": "not_run"
+                  }
+                }
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "overall": {
+            "properties": {
+              "status": {
+                "const": "passed"
+              }
+            }
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "requested_scope": {
+            "const": "contract_inspection"
+          },
+          "overall": {
+            "properties": {
+              "exit_code": {
+                "const": 0
+              },
+              "primary_error": {
+                "const": null
+              }
+            }
+          },
+          "errors": {
+            "maxItems": 0
+          },
+          "stages": {
+            "prefixItems": [
+              {
+                "properties": {
+                  "status": {
+                    "const": "passed"
+                  }
+                }
+              },
+              {
+                "properties": {
+                  "status": {
+                    "const": "passed"
+                  }
+                }
+              },
+              {
+                "properties": {
+                  "status": {
+                    "const": "passed"
+                  }
+                }
+              },
+              {
+                "properties": {
+                  "status": {
+                    "const": "passed"
+                  }
+                }
+              },
+              {
+                "properties": {
+                  "status": {
+                    "const": "passed"
+                  }
+                }
+              },
+              {},
+              {},
+              {},
+              {},
+              {
+                "properties": {
+                  "status": {
+                    "const": "passed"
+                  }
+                }
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "overall": {
+            "properties": {
+              "status": {
+                "const": "passed"
+              }
+            }
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "overall": {
+            "properties": {
+              "exit_code": {
+                "enum": [
+                  0
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "overall": {
+            "properties": {
+              "status": {
+                "const": "blocked"
+              }
+            }
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "overall": {
+            "properties": {
+              "exit_code": {
+                "enum": [
+                  10
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "overall": {
+            "properties": {
+              "status": {
+                "const": "not_implemented"
+              }
+            }
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "overall": {
+            "properties": {
+              "exit_code": {
+                "enum": [
+                  11
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "overall": {
+            "properties": {
+              "status": {
+                "const": "cancelled"
+              }
+            }
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "overall": {
+            "properties": {
+              "exit_code": {
+                "enum": [
+                  12
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "overall": {
+            "properties": {
+              "status": {
+                "const": "failed"
+              }
+            }
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "overall": {
+            "properties": {
+              "exit_code": {
+                "enum": [
+                  2,
+                  3,
+                  4,
+                  5,
+                  6,
+                  7,
+                  8,
+                  9,
+                  13,
+                  14
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "requested_scope": {
+            "const": "contract_inspection"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "stages": {
+            "prefixItems": [
+              {},
+              {},
+              {},
+              {},
+              {},
+              {
+                "properties": {
+                  "status": {
+                    "const": "not_run"
+                  }
+                }
+              },
+              {
+                "properties": {
+                  "status": {
+                    "const": "not_run"
+                  }
+                }
+              },
+              {
+                "properties": {
+                  "status": {
+                    "const": "not_run"
+                  }
+                }
+              },
+              {
+                "properties": {
+                  "status": {
+                    "const": "not_run"
+                  }
+                }
+              },
+              {}
+            ]
+          }
+        }
+      }
+    },
+    {
+      "properties": {
+        "stages": {
+          "prefixItems": [
+            {
+              "properties": {
+                "status": {
+                  "const": "passed"
+                }
+              }
+            },
+            {
+              "properties": {
+                "status": {
+                  "const": "passed"
+                }
+              }
+            },
+            {},
+            {},
+            {},
+            {},
+            {
+              "properties": {
+                "status": {
+                  "const": "not_run"
+                }
+              }
+            },
+            {
+              "properties": {
+                "status": {
+                  "const": "not_run"
+                }
+              }
+            },
+            {
+              "properties": {
+                "status": {
+                  "const": "not_run"
+                }
+              }
+            },
+            {
+              "properties": {
+                "status": {
+                  "enum": [
+                    "passed",
+                    "cancelled"
+                  ]
+                }
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "overall": {
+            "properties": {
+              "exit_code": {
+                "const": 0
+              }
+            }
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "input": {
+            "properties": {
+              "sha256": {
+                "$ref": "#/$defs/hash"
+              },
+              "manifest_sha256": {
+                "$ref": "#/$defs/hash"
+              },
+              "size_bytes": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 2097152
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "input": {
+            "properties": {
+              "sha256": {
+                "type": "null"
+              }
+            }
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "input": {
+            "properties": {
+              "size_bytes": {
+                "type": "null"
+              }
+            }
+          }
+        }
+      },
+      "else": {
+        "properties": {
+          "input": {
+            "properties": {
+              "size_bytes": {
+                "type": "integer"
+              }
+            }
+          }
+        }
+      }
+    }
+  ]
+}

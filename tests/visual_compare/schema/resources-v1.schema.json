@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Aether resource manifest v1",
+  "description": "Inventory only, not a promise of decoding or rendering. The byte parser additionally requires UTF-8, at most 1 MiB, depth at most 8, decoded strings at most 4096 UTF-8 bytes, no duplicate object keys or resource paths, and unsigned decimal integer lexemes for size_bytes (no sign, exponent or fraction). JSON Schema alone cannot enforce those byte and lexical rules.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "entries"],
+  "properties": {
+    "schema_version": {"const": "aether.resources/1"},
+    "entries": {
+      "type": "array",
+      "maxItems": 1024,
+      "items": {"$ref": "#/$defs/resource"}
+    }
+  },
+  "$defs": {
+    "resource": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "mime", "size_bytes", "sha256", "role"],
+      "properties": {
+        "path": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096,
+          "pattern": "^(?!.*(?:^|/)(?:[Cc][Oo][Nn]|[Pp][Rr][Nn]|[Aa][Uu][Xx]|[Nn][Uu][Ll]|[Cc][Oo][Mm][0-9]|[Ll][Pp][Tt][0-9])(?:\\.|/|$))(?!.*(?:^|/)\\.{1,2}(?:/|$))(?!.*\\.(?:/|$))[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)*$",
+          "description": "Portable relative path, no empty, dot or dot-dot segments, trailing dots, drive, UNC, URI, percent escapes, backslashes or Windows device names (case-insensitive, including extensions). Path uniqueness is checked by the parser."
+        },
+        "mime": {
+          "enum": ["text/css", "image/png", "image/jpeg", "image/gif", "image/svg+xml", "font/ttf", "font/otf", "font/woff", "font/woff2", "application/octet-stream"]
+        },
+        "size_bytes": {"type": "integer", "minimum": 0, "maximum": 16777216},
+        "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "role": {"enum": ["stylesheet", "image", "font", "other"]}
+      }
+    }
+  }
+}
