@@ -14,8 +14,11 @@ namespace AetherUI.Metrics.Preflight;
 internal static class Program
 {
     // Public, fixed ASCII input. No resources, interaction, animation or pseudo rules.
-    private const string Markup = "<div id=\"first\" style=\"width:120px;height:40px;background:#123456\">Alpha</div>"
-        + "<div id=\"second\" style=\"width:160px;height:50px;background:#654321\">Beta</div>";
+    // The layout root is body (or the first document element), so both boxes need a common root.
+    private const string Markup = "<body>"
+        + "<div id=\"first\" style=\"width:120px;height:40px;background:#123456\">Alpha</div>"
+        + "<div id=\"second\" style=\"width:160px;height:50px;background:#654321\">Beta</div>"
+        + "</body>";
     private static readonly JsonSerializerOptions JsonOptions = new() { WriteIndented = true };
 
     private static int Main(string[] args)
