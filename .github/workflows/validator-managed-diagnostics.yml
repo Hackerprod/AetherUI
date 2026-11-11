@@ -1,0 +1,65 @@
+name: Validator managed diagnostics
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/validator-managed-diagnostics.yml'
+      - 'native/**'
+      - 'global.json'
+      - 'bindings/dotnet/Directory.*.props'
+      - 'bindings/dotnet/src/**'
+      - 'bindings/dotnet/tools/AetherUI.Validator/**'
+      - 'bindings/dotnet/tests/AetherUI.Metrics.*/**'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: validator-managed-diagnostics-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  baseline-preparation:
+    name: Baseline build and headless preflight
+    runs-on: windows-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.302'
+      # Preparation only. This does not execute the Validator, a drawing backend,
+      # a browser, native tests or the general managed test runner.
+      - name: Build the unchanged product and run one public smoke fixture
+        run: ./bindings/dotnet/tests/AetherUI.Metrics.Preflight/Prepare.ps1
+      - name: Retain public preparation evidence only
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: validator-managed-preparation-${{ github.sha }}-${{ github.run_attempt }}
+          retention-days: 7
+          if-no-files-found: error
+          path: |
+            artifacts/validator-metrics/evidence/manifest.json
+            artifacts/validator-metrics/evidence/dependencies.json
+            artifacts/validator-metrics/evidence/preflight.json
+            artifacts/validator-metrics/evidence/stage-source.json
+            artifacts/validator-metrics/evidence/stage-toolchain.json
+            artifacts/validator-metrics/evidence/stage-native-configure.json
+            artifacts/validator-metrics/evidence/stage-native-build.json
+            artifacts/validator-metrics/evidence/stage-native-install.json
+            artifacts/validator-metrics/evidence/stage-native-verify.json
+            artifacts/validator-metrics/evidence/stage-core-restore.json
+            artifacts/validator-metrics/evidence/stage-core-build.json
+            artifacts/validator-metrics/evidence/stage-validator-restore.json
+            artifacts/validator-metrics/evidence/stage-validator-build.json
+            artifacts/validator-metrics/evidence/stage-preflight-restore.json
+            artifacts/validator-metrics/evidence/stage-preflight-build.json
+            artifacts/validator-metrics/evidence/stage-preflight-run.json
