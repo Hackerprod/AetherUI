@@ -15,12 +15,26 @@ a=p.parse_args();src=a.source.resolve();lib=a.library_dir.resolve();out=a.output
 flags=['-std=gnu++20','-O3','-DNDEBUG','-fPIC','-fvisibility=hidden','-fvisibility-inlines-hidden','-ffp-contract=off','-Wall','-Wextra','-pedantic','-fno-lto']
 include=['-I'+str(src/'native/include'),'-I'+str(src/'native/src/style_runtime')]
 link=['-L'+str(lib),'-Wl,-rpath,'+str(lib),'-laether_core']
-commands=[]
+def digest(path):return hashlib.sha256(path.read_bytes()).hexdigest()
+commands=[];objects={}
 for kind,files in [('public',[HERE/'public_control.cpp']),('private',[HERE/'private_control.cpp',src/'native/src/style_runtime/selector_matcher.cpp',src/'native/src/style_runtime/selector_parser.cpp'])]:
- command=[a.compiler,*flags,*include,*(['-DAETHER_ANCESTOR_FILTER_CANDIDATE'] if a.candidate and kind=='private' else []),*map(str,files),*link,'-o',str(out/kind)]
+ object_dir=out/(kind+'-objects');object_dir.mkdir();kind_objects=[]
+ for source in files:
+  obj=object_dir/(source.stem+'.o')
+  command=[a.compiler,*flags,*include,*(['-DAETHER_ANCESTOR_FILTER_CANDIDATE'] if a.candidate and kind=='private' else []),'-c',str(source),'-o',str(obj)]
+  commands.append(command)
+  result=subprocess.run(command,stdout=subprocess.PIPE,stderr=subprocess.STDOUT)
+  (object_dir/(source.stem+'-build.log')).write_bytes(result.stdout)
+  (out/'commands.json').write_text(json.dumps(commands,indent=2))
+  if result.returncode:raise SystemExit(result.returncode)
+  kind_objects.append(obj)
+  objects[str(obj.relative_to(out))]={'sha256':digest(obj),'source':str(source),'source_sha256':digest(source),'command':command}
+ command=[a.compiler,*flags,*map(str,kind_objects),*link,'-o',str(out/kind)]
  commands.append(command)
  result=subprocess.run(command,stdout=subprocess.PIPE,stderr=subprocess.STDOUT)
- (out/(kind+'-build.log')).write_bytes(result.stdout)
+ (out/(kind+'-link.log')).write_bytes(result.stdout)
+ (out/'commands.json').write_text(json.dumps(commands,indent=2))
  if result.returncode:raise SystemExit(result.returncode)
-manifest={'commands':commands,'candidate':a.candidate,'compiler':subprocess.check_output([a.compiler,'--version'],text=True),'flags':flags,'binaries':{k:hashlib.sha256((out/k).read_bytes()).hexdigest() for k in ('public','private')},'sources':{str(f):hashlib.sha256(f.read_bytes()).hexdigest() for f in (HERE/'public_control.cpp',HERE/'private_control.cpp',src/'native/src/style_runtime/selector_match_context.h',src/'native/src/style_runtime/selector_matcher.cpp',src/'native/src/style_runtime/selector_parser.cpp')}}
+library=(lib/'libaether_core.so').resolve(strict=True)
+manifest={'tooling_revision':2,'commands':commands,'candidate':a.candidate,'compiler':subprocess.check_output([a.compiler,'--version'],text=True),'flags':flags,'objects':objects,'library_path':str(library),'library_sha256':digest(library),'binaries':{k:digest(out/k) for k in ('public','private')},'sources':{str(f):digest(f) for f in (HERE/'public_control.cpp',HERE/'private_control.cpp',src/'native/src/style_runtime/selector_match_context.h',src/'native/src/style_runtime/selector_matcher.cpp',src/'native/src/style_runtime/selector_parser.cpp')}}
 (out/'manifest.json').write_text(json.dumps(manifest,indent=2))

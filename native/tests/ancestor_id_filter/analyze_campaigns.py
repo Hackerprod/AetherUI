@@ -30,6 +30,16 @@ def estimate(blocks,metric,campaign,cell_index,gate):
         statistic=gate,point=statistic(a,b),CI95=[draws[249],draws[9749]],seed=20261111+1000*campaign+10*cell_index+METRICS[metric])
 
 def analyze(directory):
+    # A complete-looking row set cannot override a run/identity failure.
+    for name in ('STOPPED.json','execution-failure.json','identity-failure.json'):
+        if (directory/name).exists():raise ValueError('campaign failure marker: '+name)
+    completion=json.loads((directory/'COMPLETE.json').read_text())
+    if completion.get('measured')!=1080 or completion.get('warmup')!=192:
+        raise ValueError('invalid completion marker')
+    for phase in ('begin','end'):
+        linkage=json.loads((directory/('linkage-'+phase+'.json')).read_text())
+        if linkage.get('phase')!=phase or linkage.get('PASS') is not True or linkage.get('errors'):
+            raise ValueError('shared linkage not verified: '+phase)
     protocol=json.loads((HERE/'frozen_protocol.json').read_text());schedule=list(plan(protocol))
     rows=[json.loads(l) for l in (directory/'samples.jsonl').read_text().splitlines()]
     if len(rows)!=len(schedule):raise ValueError('missing samples: NO PASS, no replacement permitted')

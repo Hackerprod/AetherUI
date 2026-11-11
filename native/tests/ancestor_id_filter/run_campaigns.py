@@ -42,7 +42,47 @@ def parse_report(path):
     result['destruction']=None # Original P harness does not time destruction separately.
     return result
 
+def arm_environment(spec):
+    env=os.environ.copy();env.update(spec.get('env',{}))
+    # Do not silently inherit profiling, preload, audit or loader debug behavior.
+    unexpected={k:v for k,v in env.items() if k.startswith('LD_') and k!='LD_LIBRARY_PATH' and v}
+    if unexpected:raise RuntimeError('Unexpected loader environment: '+', '.join(sorted(unexpected)))
+    return env
+
+def verify_linkage(cfg,out,phase):
+    evidence={'phase':phase,'utc':datetime.datetime.now(datetime.timezone.utc).isoformat(),'arms':{},'errors':[]}
+    for arm in ('A','B'):
+        spec=cfg['arms'][arm];entry={};evidence['arms'][arm]=entry
+        try:
+            expected=pathlib.Path(spec['library_path']).resolve(strict=True)
+            expected_hash=spec['library_sha256']
+            entry.update(library_path=str(expected),expected_sha256=expected_hash,actual_sha256=sha(expected))
+            if entry['actual_sha256']!=expected_hash:raise RuntimeError('shared library hash mismatch')
+            env=arm_environment(spec)
+            entry['loader_environment']={k:v for k,v in env.items() if k.startswith('LD_')}
+            entry['configured_environment']=spec.get('env',{})
+            entry['binaries']={}
+            for kind in ('P','public','private'):
+                executable=pathlib.Path(spec[kind]).resolve(strict=True)
+                item={'executable':str(executable),'sha256':sha(executable)};entry['binaries'][kind]=item
+                if item['sha256']!=spec['sha256'][kind]:raise RuntimeError(kind+' executable hash mismatch')
+                command=['/usr/bin/ldd',str(executable)]
+                proc=subprocess.run(command,env=env,stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True,timeout=30)
+                item.update(command=command,exit_status=proc.returncode,stdout=proc.stdout,stderr=proc.stderr)
+                found=re.findall(r'^\s*libaether_core\.so[^\s]*\s+=>\s+(\S+)',proc.stdout,re.MULTILINE)
+                if proc.returncode or len(found)!=1:raise RuntimeError(kind+' cannot resolve exactly one AetherUI shared dependency')
+                actual=pathlib.Path(found[0]).resolve(strict=True)
+                item.update(resolved_library=str(actual),resolved_library_sha256=sha(actual))
+                if actual!=expected or item['resolved_library_sha256']!=expected_hash:raise RuntimeError(kind+' resolved shared library path/hash mismatch')
+        except Exception as exc:
+            entry['error']=repr(exc);evidence['errors'].append(arm+': '+repr(exc))
+    evidence['PASS']=not evidence['errors']
+    (out/('linkage-'+phase+'.json')).write_text(json.dumps(evidence,indent=2))
+    if evidence['errors']:raise RuntimeError('Shared linkage verification failed ('+phase+'): '+'; '.join(evidence['errors']))
+    return evidence
+
 def main():
+    if sys.flags.optimize:raise RuntimeError('Run without Python optimization: assertions are mandatory checks')
     p=argparse.ArgumentParser(description=__doc__)
     p.add_argument('--config',type=pathlib.Path,required=True,help='arm executable/environment identities and readiness checks')
     p.add_argument('--output',type=pathlib.Path,required=True)
@@ -66,61 +106,73 @@ def main():
     args.output.mkdir(parents=True,exist_ok=False)
     out=args.output.resolve();(out/'identity.json').write_text(json.dumps(cfg,indent=2))
     (out/'schedule.json').write_text(json.dumps(schedule,indent=2))
-    identities={'protocol':sha(HERE/'frozen_protocol.json'),'fixture':sha(fixture),'harness_files':{p.name:sha(p) for p in HERE.iterdir() if p.is_file()},'binaries':{},'started_utc':datetime.datetime.now(datetime.timezone.utc).isoformat(),'uname':list(os.uname())}
-    for arm in ('A','B'):
-        for kind in ('P','public','private'):
-            executable=pathlib.Path(cfg['arms'][arm][kind]).resolve()
-            expected=cfg['arms'][arm]['sha256'][kind]
-            assert sha(executable)==expected
-            identities['binaries'][arm+':'+kind]=expected
-    (out/'manifest.json').write_text(json.dumps(identities,indent=2))
-    material=out/'inputs';material.mkdir()
-    for entry in manifest:
-        name=entry['name'];data=json.loads((HERE/'control-inputs'/f'{name}.json').read_text())
-        (material/f'{name}.html').write_text(data['html'])
-        (material/f'{name}.css').write_text(data.get('author_css',data.get('selector_source','')))
-    with (out/'samples.jsonl').open('x',buffering=1) as samples:
-        for index,row in enumerate(schedule):
-            name=row['cell'];arm=row['arm'];spec=cfg['arms'][arm];target=out/f'{index:04d}-C{row["campaign"]}-{name}-{arm}';target.mkdir()
-            if name.startswith('P'):
-                command=[spec['P'],str(fixture),str(target),name[1:],'900']
-            elif name=='W1440':
-                command=[spec['public'],name,str(fixture),'-',str(target),'0']
-            else:
-                data=json.loads((HERE/'control-inputs'/f'{name}.json').read_text())
-                if name.startswith('S'):command=[spec['public'],name,str(material/f'{name}.html'),str(material/f'{name}.css'),str(target),str(data['subject_count'])]
-                else:command=[spec['private'],str(material/f'{name}.html'),str(material/f'{name}.css'),str(target),str(data['ancestor_links'])]
-            command[0]=str(pathlib.Path(command[0]).resolve())
-            env=os.environ.copy();env.update(spec.get('env',{}))
-            started=datetime.datetime.now(datetime.timezone.utc).isoformat();begin=time.perf_counter_ns()
-            record={**row,'index':index,'command':command,'started_utc':started}
-            try:
-                result=subprocess.run(command,stdout=subprocess.PIPE,stderr=subprocess.PIPE,timeout=30,env=env)
-                elapsed=(time.perf_counter_ns()-begin)/1e6
-                (target/'stdout.log').write_bytes(result.stdout);(target/'stderr.log').write_bytes(result.stderr)
-                record.update(exit_status=result.returncode,process_elapsed_ms=elapsed,finished_utc=datetime.datetime.now(datetime.timezone.utc).isoformat())
-                metrics=parse_report(target/'report.log');metrics['process']=elapsed;record['metrics']=metrics
-                record['report_sha256']=sha(target/'report.log')
-                if (target/'geometry.csv').exists():record['geometry_sha256']=sha(target/'geometry.csv')
-                if result.returncode or metrics.get('failures')!=0:raise RuntimeError('nonzero status or semantic failure')
-                if name.startswith(('S','Q')):assert metrics.get('measured_count')==16
-                if name=='W1440':assert metrics.get('measured_count')==8
-                if name.startswith('Q'):assert metrics.get('false_count')==16
-                if not name.startswith('P'):
-                    record['semantic_sha256']=semantic_signature(target/'report.log')
-                    assert record['semantic_sha256']==cfg['expected_controls'][name]
+    execution_error=None
+    try:
+        verify_linkage(cfg,out,'begin')
+        identities={'protocol':sha(HERE/'frozen_protocol.json'),'fixture':sha(fixture),'harness_files':{p.name:sha(p) for p in HERE.iterdir() if p.is_file()},'binaries':{},'started_utc':datetime.datetime.now(datetime.timezone.utc).isoformat(),'uname':list(os.uname())}
+        for arm in ('A','B'):
+            for kind in ('P','public','private'):
+                executable=pathlib.Path(cfg['arms'][arm][kind]).resolve()
+                expected=cfg['arms'][arm]['sha256'][kind]
+                assert sha(executable)==expected
+                identities['binaries'][arm+':'+kind]=expected
+        (out/'manifest.json').write_text(json.dumps(identities,indent=2))
+        material=out/'inputs';material.mkdir()
+        for entry in manifest:
+            name=entry['name'];data=json.loads((HERE/'control-inputs'/f'{name}.json').read_text())
+            (material/f'{name}.html').write_text(data['html'])
+            (material/f'{name}.css').write_text(data.get('author_css',data.get('selector_source','')))
+        with (out/'samples.jsonl').open('x',buffering=1) as samples:
+            for index,row in enumerate(schedule):
+                name=row['cell'];arm=row['arm'];spec=cfg['arms'][arm];target=out/f'{index:04d}-C{row["campaign"]}-{name}-{arm}';target.mkdir()
                 if name.startswith('P'):
-                    assert all(metrics.get(k) is not None and math.isfinite(metrics[k]) and metrics[k]>0 for k in ('pipeline','style','RSS'))
-                    expected=cfg['expected_P'][name]
-                    assert record.get('geometry_sha256')==expected['geometry_sha256']
-                    for key,value in expected['counters'].items():assert metrics.get(key)==value,(key,metrics.get(key),value)
-                record['status']='PASS'
-            except Exception as e:
-                record['status']='NO PASS';record['error']=repr(e)
-                if isinstance(e,subprocess.TimeoutExpired):
-                    (target/'stdout.log').write_bytes(e.stdout or b'');(target/'stderr.log').write_bytes(e.stderr or b'')
-                    record['exit_status']='TIMEOUT';record['process_elapsed_ms']=(time.perf_counter_ns()-begin)/1e6
-                samples.write(json.dumps(record)+'\n');(out/'STOPPED.json').write_text(json.dumps(record,indent=2));raise
-            samples.write(json.dumps(record)+'\n')
+                    command=[spec['P'],str(fixture),str(target),name[1:],'900']
+                elif name=='W1440':
+                    command=[spec['public'],name,str(fixture),'-',str(target),'0']
+                else:
+                    data=json.loads((HERE/'control-inputs'/f'{name}.json').read_text())
+                    if name.startswith('S'):command=[spec['public'],name,str(material/f'{name}.html'),str(material/f'{name}.css'),str(target),str(data['subject_count'])]
+                    else:command=[spec['private'],str(material/f'{name}.html'),str(material/f'{name}.css'),str(target),str(data['ancestor_links'])]
+                command[0]=str(pathlib.Path(command[0]).resolve())
+                env=arm_environment(spec)
+                started=datetime.datetime.now(datetime.timezone.utc).isoformat();begin=time.perf_counter_ns()
+                record={**row,'index':index,'command':command,'started_utc':started}
+                try:
+                    result=subprocess.run(command,stdout=subprocess.PIPE,stderr=subprocess.PIPE,timeout=30,env=env)
+                    elapsed=(time.perf_counter_ns()-begin)/1e6
+                    (target/'stdout.log').write_bytes(result.stdout);(target/'stderr.log').write_bytes(result.stderr)
+                    record.update(exit_status=result.returncode,process_elapsed_ms=elapsed,finished_utc=datetime.datetime.now(datetime.timezone.utc).isoformat())
+                    metrics=parse_report(target/'report.log');metrics['process']=elapsed;record['metrics']=metrics
+                    record['report_sha256']=sha(target/'report.log')
+                    if (target/'geometry.csv').exists():record['geometry_sha256']=sha(target/'geometry.csv')
+                    if result.returncode or metrics.get('failures')!=0:raise RuntimeError('nonzero status or semantic failure')
+                    if name.startswith(('S','Q')):assert metrics.get('measured_count')==16
+                    if name=='W1440':assert metrics.get('measured_count')==8
+                    if name.startswith('Q'):assert metrics.get('false_count')==16
+                    if not name.startswith('P'):
+                        record['semantic_sha256']=semantic_signature(target/'report.log')
+                        assert record['semantic_sha256']==cfg['expected_controls'][name]
+                    if name.startswith('P'):
+                        assert all(metrics.get(k) is not None and math.isfinite(metrics[k]) and metrics[k]>0 for k in ('pipeline','style','RSS'))
+                        expected=cfg['expected_P'][name]
+                        assert record.get('geometry_sha256')==expected['geometry_sha256']
+                        for key,value in expected['counters'].items():assert metrics.get(key)==value,(key,metrics.get(key),value)
+                    record['status']='PASS'
+                except Exception as e:
+                    record['status']='NO PASS';record['error']=repr(e)
+                    if isinstance(e,subprocess.TimeoutExpired):
+                        (target/'stdout.log').write_bytes(e.stdout or b'');(target/'stderr.log').write_bytes(e.stderr or b'')
+                        record['exit_status']='TIMEOUT';record['process_elapsed_ms']=(time.perf_counter_ns()-begin)/1e6
+                    samples.write(json.dumps(record)+'\n');(out/'STOPPED.json').write_text(json.dumps(record,indent=2));raise
+                samples.write(json.dumps(record)+'\n')
+    except BaseException as exc:
+        execution_error=repr(exc)
+        (out/'execution-failure.json').write_text(json.dumps({'status':'NO PASS','error':execution_error},indent=2))
+        raise
+    finally:
+        try:verify_linkage(cfg,out,'end')
+        except Exception as exc:
+            (out/'identity-failure.json').write_text(json.dumps({'status':'NO PASS','error':repr(exc),'prior_execution_error':execution_error},indent=2))
+            if execution_error is None:raise
     (out/'COMPLETE.json').write_text(json.dumps({'measured':1080,'warmup':192,'status':'EXECUTION COMPLETE, statistical gates pending'},indent=2))
 if __name__=='__main__':main()
