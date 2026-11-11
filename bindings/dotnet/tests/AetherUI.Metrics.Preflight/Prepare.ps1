@@ -266,8 +266,10 @@ try {
     }
     Invoke-Stage 'core-build' {
         $null = Invoke-Native 'dotnet' (@('build', $core, '-c', 'Release', '--no-restore') + $common)
+        # The referenced Interop library is RID-agnostic; its own output has no RID suffix.
+        # Keep the exact observed build path, not a wildcard or a missing-file fallback.
         $script:manifest.build.core = @(Get-Identity 'bindings/dotnet/src/AetherUI.Core/bin/Release/net10.0/win-x64/AetherUI.Core.dll'
-            Get-Identity 'bindings/dotnet/src/AetherUI.Core.Native.Interop/bin/Release/net10.0/win-x64/AetherUI.Core.Native.Interop.dll')
+            Get-Identity 'bindings/dotnet/src/AetherUI.Core.Native.Interop/bin/Release/net10.0/AetherUI.Core.Native.Interop.dll')
     }
     Invoke-Stage 'validator-restore' {
         $null = Invoke-Native 'dotnet' (@('restore', $validator) + $validatorOptions)
