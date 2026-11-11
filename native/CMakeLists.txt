@@ -125,8 +125,38 @@ if(AETHERUI_BUILD_TESTS)
         set_tests_properties(aether.flexbox-page-${viewport} PROPERTIES TIMEOUT 180 LABELS "integration;flexbox-page")
     endforeach()
 
+    if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        find_package(Threads REQUIRED)
+        # Public-only, small deterministic layout smoke; A/B and minimal OOM
+        # campaigns use the separate runner in tests/flex_scratch_public.
+        add_executable(aether_flex_scratch_public_test tests/flex_scratch_public/runtime.cpp)
+        target_link_libraries(aether_flex_scratch_public_test PRIVATE AetherUI::Core Threads::Threads)
+        target_compile_options(aether_flex_scratch_public_test PRIVATE -ffp-contract=off)
+        foreach(axis IN ITEMS row column)
+            add_test(NAME aether.flex-scratch-public-${axis}
+                COMMAND aether_flex_scratch_public_test manifest mixed 32 ${axis})
+            set_tests_properties(aether.flex-scratch-public-${axis} PROPERTIES TIMEOUT 30 LABELS "flex;integration")
+        endforeach()
+        add_executable(aether_flex_scratch_public_oom_test tests/flex_scratch_public/oom.cpp)
+        target_link_libraries(aether_flex_scratch_public_oom_test PRIVATE AetherUI::Core Threads::Threads)
+        target_compile_options(aether_flex_scratch_public_oom_test PRIVATE -ffp-contract=off)
+        add_test(NAME aether.flex-scratch-public-oom COMMAND aether_flex_scratch_public_oom_test)
+        set_tests_properties(aether.flex-scratch-public-oom PROPERTIES TIMEOUT 120 LABELS "flex;oom")
+    endif()
+
     find_package(Python3 QUIET COMPONENTS Interpreter)
     if(Python3_Interpreter_FOUND)
+        if(UNIX AND CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+            # Standalone private resolver differential, poison, minimal OOM and
+            # scratch ledger. Timing is deliberately not a CTest pass/fail test.
+            add_test(NAME aether.flex-scratch-pure
+                COMMAND "${Python3_EXECUTABLE}"
+                    "${CMAKE_CURRENT_SOURCE_DIR}/tests/flex_scratch/run.py"
+                    --cxx "${CMAKE_CXX_COMPILER}"
+                    --output "${CMAKE_CURRENT_BINARY_DIR}/flex-scratch-pure")
+            set_tests_properties(aether.flex-scratch-pure PROPERTIES
+                TIMEOUT 180 LABELS "flex;private;differential")
+        endif()
         add_test(NAME aether.validator-artifact-metrics
             COMMAND "${Python3_EXECUTABLE}" -m unittest discover -s
                 "${CMAKE_CURRENT_SOURCE_DIR}/../bindings/dotnet/tools/AetherUI.Validator/portable" -v)
