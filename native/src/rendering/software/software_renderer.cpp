@@ -7,7 +7,7 @@ namespace aether::rendering::software {
 namespace {
 constexpr std::uint64_t max_work = 50000000;
 struct Rect { double l, t, r, b; };
-struct Draw { Rect rect; Rect inner; prep::Color color; std::size_t index; };
+struct Draw { Rect rect; Rect inner; prep::Color color; std::size_t index; Rect original{}; double radius{}; };
 Rect intersect(Rect a, Rect b) noexcept {
  return {std::max(a.l,b.l),std::max(a.t,b.t),std::min(a.r,b.r),std::min(a.b,b.b)};
 }
@@ -16,6 +16,26 @@ bool empty(Rect r) noexcept {return r.r<=r.l || r.b<=r.t;}
 bool zero(prep::Radii r) noexcept {
  return r.top_left_x==0 && r.top_left_y==0 && r.top_right_x==0 && r.top_right_y==0 &&
  r.bottom_left_x==0 && r.bottom_left_y==0 && r.bottom_right_x==0 && r.bottom_right_y==0;
+}
+bool uniform(prep::Radii r) noexcept {
+ return r.top_left_x==r.top_left_y && r.top_left_x==r.top_right_x &&
+ r.top_left_x==r.top_right_y && r.top_left_x==r.bottom_left_x &&
+ r.top_left_x==r.bottom_left_y && r.top_left_x==r.bottom_right_x && r.top_left_x==r.bottom_right_y;
+}
+// Shape centers always use original geometry, never its clipped bounding box.
+double rounded_area(const Draw& d,int x,int y) noexcept {
+ const auto b=intersect(d.rect,{double(x),double(y),double(x)+1,double(y)+1});
+ if(empty(b)) return 0;
+ const auto o=d.original;const double r=d.radius;
+ unsigned inside=0;
+ for(int sy=0;sy<16;++sy) for(int sx=0;sx<16;++sx) {
+  const double px=b.l+(sx+.5)*(b.r-b.l)/16;
+  const double py=b.t+(sy+.5)*(b.b-b.t)/16;
+  const double cx=std::clamp(px,o.l+r,o.r-r),cy=std::clamp(py,o.t+r,o.b-r);
+  const double dx=px-cx,dy=py-cy;
+  if(dx*dx+dy*dy<=r*r) ++inside;
+ }
+ return (b.r-b.l)*(b.b-b.t)*inside/256;
 }
 bool identity(prep::Matrix m) noexcept {return m.m11==1 && m.m12==0 && m.m21==0 && m.m22==1 && m.dx==0 && m.dy==0;}
 bool cancelled(prep::Cancellation* c) noexcept {return c && c->cancelled();}
@@ -52,15 +72,19 @@ Result render(FrameStore& store,const prep::PreparedFrame& frame,prep::Cancellat
    const auto& command=event.command;
    if(!identity(event.matrix)) return {Status::unsupported,FrameStatus::ok,index,work};
    if(const auto* fill=std::get_if<prep::Fill>(&command)) {
-    if(!zero(fill->radii)) return {Status::unsupported,FrameStatus::ok,index,work};
+    const double radius=fill->radii.top_left_x;
+    if(!uniform(fill->radii) || (radius>0 &&
+       (fill->rect.width<=0 || fill->rect.height<=0 || 2*radius>std::min(fill->rect.width,fill->rect.height))))
+     return {Status::unsupported,FrameStatus::ok,index,work};
     auto r=intersect(current,rect(fill->rect));
     if(!empty(r)) {
      // All endpoints are bounded by viewport before integer conversion.
      const auto width=std::uint64_t(std::ceil(r.r)-std::floor(r.l));
      const auto height=std::uint64_t(std::ceil(r.b)-std::floor(r.t));
-     if(height && width>(max_work-work)/height) return {Status::limit_exceeded,FrameStatus::ok,index,work};
-     work+=width*height;
-     draws.push_back({r,{},fill->color,index});
+     const std::uint64_t cost=radius>0?256:1;
+     if(height && width>(max_work-work)/cost/height) return {Status::limit_exceeded,FrameStatus::ok,index,work};
+     work+=cost*width*height;
+     draws.push_back({r,{},fill->color,index,rect(fill->rect),radius});
     }
    } else if(const auto* stroke=std::get_if<prep::Stroke>(&command)) {
     if(!zero(stroke->radii)) return {Status::unsupported,FrameStatus::ok,index,work};
@@ -121,7 +145,7 @@ Result render(FrameStore& store,const prep::PreparedFrame& frame,prep::Cancellat
     for(int y=y0;y<y1;++y) {
      if(cancelled(cancel)) return {Status::cancelled,FrameStatus::ok,index,work};
      for(int x=x0;x<x1;++x) {
-      const unsigned coverage=byte(std::clamp(area(r,x,y)-area(draw.inner,x,y),0.0,1.0));
+      const unsigned coverage=byte(std::clamp(draw.radius>0?rounded_area(draw,x,y):area(r,x,y)-area(draw.inner,x,y),0.0,1.0));
       const unsigned sa=mul(alpha,coverage),inv=255-sa;
       auto* p=pixels.data()+std::size_t(y)*stride+std::size_t(x)*4;
       for(int c=0;c<3;++c) p[c]=std::uint8_t(mul(channels[c],sa)+mul(p[c],inv));

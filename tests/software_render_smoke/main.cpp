@@ -1,4 +1,4 @@
-// Headless R7 fixture, not HTML/Chromium validation. Original PNG encoder uses
+// Headless R8 fixture, not HTML/Chromium validation. Original PNG encoder uses
 // only uncompressed DEFLATE blocks; decode verification uses existing stb_image.
 #include "../../native/src/rendering/software/software_renderer.h"
 #define STB_IMAGE_IMPLEMENTATION
@@ -48,11 +48,11 @@ int main(int argc,char** argv) {
  try {
   if(argc!=2) throw std::runtime_error("usage: software_smoke EXISTING_OUTPUT_DIRECTORY");
   const std::filesystem::path dir(argv[1]);if(!std::filesystem::is_directory(dir)) throw std::runtime_error("output directory missing");
-  const auto image=dir/"aether-r7.png",report=dir/"report.log";
+  const auto image=dir/"aether-r8.png",report=dir/"report.log";
   if(std::filesystem::exists(image)||std::filesystem::exists(report)) throw std::runtime_error("refusing to overwrite evidence");
   p::Snapshot snapshot{{p::Fill{{0,0,320,200},{},{.08f,.10f,.16f,1}},
-   p::Fill{{20.25f,20.5f,130,100},{},{.15f,.65f,.95f,1}},
-   p::Fill{{90.5f,55.25f,130,110},{},{1,.25f,.1f,.65f}},
+   p::Fill{{20.25f,20.5f,130,100},{12,12,12,12,12,12,12,12},{.15f,.65f,.95f,1}},
+   p::Fill{{90.5f,55.25f,130,110},{3,3,3,3,3,3,3,3},{1,.25f,.1f,.65f}},
    p::PushClip{{235.25f,25.5f,65,150},{}},
    p::PushClip{{220,50.25f,70,100},{}},
    p::Fill{{210,0,100,200},{},{.2f,1,.4f,1}},p::PopClip{},p::PopClip{},
@@ -77,8 +77,8 @@ int main(int argc,char** argv) {
   bool match=decoded && w==320 && h==200 && std::equal(pixels.begin(),pixels.end(),decoded);stbi_image_free(decoded);
   if(!match) throw std::runtime_error("PNG roundtrip mismatch");
   const double first=times.front();times.erase(times.begin());std::sort(times.begin(),times.end());
-  std::ofstream log(report);log<<"status=PASS\nscope=direct rectangle and stroke fixture, NOT HTML\nbackend=Aether own CPU R7.1\nbuild_revision="<<AETHER_BUILD_REV
-   <<"\nviewport=320x200\ndpi=1\nformat=BGRA8 premultiplied encoded sRGB\ncommands="<<snapshot.commands.size()
+  std::ofstream log(report);log<<"status=PASS\nscope=direct rounded-fill and rectangle-stroke fixture, NOT HTML\nbackend=Aether own CPU R8\nbuild_revision="<<AETHER_BUILD_REV
+   <<"\ncoverage_method=grid16x16 for rounded fills; analytic otherwise\nviewport=320x200\ndpi=1\nformat=BGRA8 premultiplied encoded sRGB\ncommands="<<snapshot.commands.size()
    <<"\npixel_budget="<<work<<"\nPNG_roundtrip=PASS\nrender_calls=12\nfirst_render_ms="<<first<<"\nwarm_median_ms="<<times[times.size()/2]
    <<"\nwarm_p95_nearest_rank_ms="<<times.back()<<"\nencode_ms="<<std::chrono::duration<double,std::milli>(encode_end-encode_start).count();
   if(cpu!=std::clock_t(-1)&&end_cpu!=std::clock_t(-1)) log<<"\nrender_loop_process_cpu_ms="<<1000.0*double(end_cpu-cpu)/CLOCKS_PER_SEC;
