@@ -1,5 +1,6 @@
 #include "software_renderer.h"
 #include "shadow_math.h"
+#include "border_math.h"
 #include <algorithm>
 #include <cmath>
 #include <new>
@@ -10,7 +11,7 @@ constexpr std::uint64_t max_work = 50000000;
 struct Rect { double l, t, r, b; };
 struct CurvedClip { Rect original{}; double radius{}; };
 struct ClipState { Rect bounds; CurvedClip curve; };
-struct Draw { Rect rect; Rect inner; prep::Color color; std::size_t index; Rect original{}; double radius{}; Rect inner_original{}; double inner_radius{}; CurvedClip clip{}; bool shadow{}; Rect source{}; Rect excluded{}; double sigma{}; };
+struct Draw { Rect rect; Rect inner; prep::Color color; std::size_t index; Rect original{}; double radius{}; Rect inner_original{}; double inner_radius{}; CurvedClip clip{}; bool shadow{}; Rect source{}; Rect excluded{}; double sigma{}; const prep::BorderGroup* border{}; };
 Rect intersect(Rect a, Rect b) noexcept {
  return {std::max(a.l,b.l),std::max(a.t,b.t),std::min(a.r,b.r),std::min(a.b,b.b)};
 }
@@ -168,6 +169,31 @@ Result render(FrameStore& store,const prep::PreparedFrame& frame,prep::Cancellat
       }
      }
     }
+   } else if(const auto* group=std::get_if<prep::BorderGroup>(&command)) {
+    const auto o=rect(group->outer),in=rect(group->inner);
+    const auto range=[](Rect r){return std::abs(r.l)<=65536 && std::abs(r.r)<=65536 && std::abs(r.t)<=65536 && std::abs(r.b)<=65536;};
+    if(curve.radius>0 || !uniform(group->outer_radii) || group->outer_radii.top_left_x!=0 ||
+       !uniform(group->inner_radii) || group->inner_radii.top_left_x!=0 ||
+       empty(o) || empty(in) || !range(o) || !range(in) ||
+       in.l<o.l || in.r>o.r || in.t<o.t || in.b>o.b)
+     return {Status::unsupported,FrameStatus::ok,index,work};
+    for(int side=0;side<4;++side) if(group->sides[side].present) {
+     const auto style=group->sides[side].style;
+     const double t=border_math::thickness(*group,side),length=side%2==0?group->outer.width:group->outer.height;
+     if(style!=AETHER_BORDER_STYLE_SOLID && style!=AETHER_BORDER_STYLE_DASHED)
+      return {Status::unsupported,FrameStatus::ok,index,work};
+     if(style==AETHER_BORDER_STYLE_DASHED && t>0 &&
+        (t<1.0/64 || t>8192 || length/(6*t)>4096))return {Status::unsupported,FrameStatus::ok,index,work};
+    }
+    const auto r=intersect(current,o);
+    if(!empty(r)) {
+     const auto clipped_inner=intersect(r,in);
+     const auto whole_width=std::max(0.0,std::floor(clipped_inner.r)-std::ceil(clipped_inner.l));
+     const auto whole_height=std::max(0.0,std::floor(clipped_inner.b)-std::ceil(clipped_inner.t));
+     const auto n=pixel_count(r),inside=std::uint64_t(whole_width)*std::uint64_t(whole_height);
+     if(!charge(work,n,1) || !charge(work,n-inside,1024))return {Status::limit_exceeded,FrameStatus::ok,index,work};
+     Draw d{r,intersect(current,in),{},index};d.original=o;d.inner_original=in;d.border=group;draws.push_back(d);
+    }
    } else if(const auto* shadow=std::get_if<prep::BoxShadow>(&command)) {
     const auto& s=shadow->shadow;
     const auto box=rect(shadow->rect);
@@ -262,6 +288,24 @@ Result render(FrameStore& store,const prep::PreparedFrame& frame,prep::Cancellat
      if(cancelled(cancel)) return {Status::cancelled,FrameStatus::ok,index,work};
      for(int x=x0;x<x1;++x) {
       const auto b=intersect(r,{double(x),double(y),double(x)+1,double(y)+1});
+      if(draw.border) {
+       if(b.l>=draw.inner_original.l && b.r<=draw.inner_original.r && b.t>=draw.inner_original.t && b.b<=draw.inner_original.b)continue;
+       double sums[4]{};
+       for(int sy=0;sy<16;++sy)for(int sx=0;sx<16;++sx){
+        const double px=b.l+(sx+.5)*(b.r-b.l)/16,py=b.t+(sy+.5)*(b.b-b.t)/16;
+        if(contains(draw.inner_original,0,px,py))continue;
+        const auto side=border_math::owner(*draw.border,px,py);
+        if(side<0 || !draw.border->sides[side].present)continue;
+        const auto& s=draw.border->sides[side];
+        if(s.style==AETHER_BORDER_STYLE_DASHED && !border_math::dash(*draw.border,side,px,py))continue;
+        const double a=s.color.a;sums[0]+=s.color.b*a;sums[1]+=s.color.g*a;sums[2]+=s.color.r*a;sums[3]+=a;
+       }
+       const double scale=(b.r-b.l)*(b.b-b.t)/256;
+       const unsigned sa=byte(std::clamp(sums[3]*scale,0.0,1.0)),inv=255-sa;
+       auto* p=pixels.data()+std::size_t(y)*stride+std::size_t(x)*4;
+       for(int c=0;c<3;++c)p[c]=std::uint8_t(std::min(sa,byte(std::clamp(sums[c]*scale,0.0,1.0)))+mul(p[c],inv));
+       p[3]=std::uint8_t(sa+mul(p[3],inv));continue;
+      }
       double covered;
       if(draw.shadow) {
        covered=scratch[x-x0]*scratch[2*nx+y-y0]-scratch[nx+x-x0]*scratch[2*nx+ny+y-y0];

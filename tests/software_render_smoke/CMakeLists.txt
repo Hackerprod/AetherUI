@@ -45,3 +45,6 @@ endif()
 
 add_executable(aether_software_shadow_test ../../native/tests/test_software_shadow.cpp)
 target_link_libraries(aether_software_shadow_test PRIVATE aether_software_raster)
+
+add_executable(aether_software_border_group_test ../../native/tests/test_software_border_group.cpp)
+target_link_libraries(aether_software_border_group_test PRIVATE aether_software_raster)

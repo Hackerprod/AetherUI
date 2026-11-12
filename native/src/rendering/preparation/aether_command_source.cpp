@@ -1,6 +1,8 @@
 #include "aether/rendering/preparation/aether_command_source.hpp"
 #include <new>
 #include <utility>
+#include <span>
+#include "../border_groups.h"
 
 namespace aether::rendering::preparation {
 namespace {
@@ -75,8 +77,8 @@ CopyResult copy_command(const aether_paint_command_t& source, std::size_t string
 }
 } // namespace
 
-SnapshotResult snapshot_commands(const AetherApi& api, aether_display_list_t list,
-                                 Cancellation* cancellation) noexcept {
+SnapshotResult snapshot_with_border_groups(const AetherApi& api, aether_display_list_t list,
+                                 std::span<const aether_border_group_range> groups, Cancellation* cancellation) noexcept {
  std::optional<std::size_t> index;
  std::optional<int> tag;
  try {
@@ -92,6 +94,13 @@ SnapshotResult snapshot_commands(const AetherApi& api, aether_display_list_t lis
   const auto count = api.get_count(list);
   if (count < 0 || static_cast<std::size_t>(count) > max_commands)
    return Error{ErrorCode::COMMAND_COUNT};
+  std::size_t previous_end=0;
+  for(const auto& g:groups) {
+   if(!g.count || g.count>4 || g.first<previous_end || g.first>std::size_t(count) || g.count>std::size_t(count)-g.first)
+    return Error{ErrorCode::INVALID_PAYLOAD};
+   previous_end=g.first+g.count;
+  }
+  std::size_t group_index=0;
   Snapshot snapshot;
   snapshot.commands.reserve(static_cast<std::size_t>(count));
   std::size_t string_bytes = 0;
@@ -99,6 +108,25 @@ SnapshotResult snapshot_commands(const AetherApi& api, aether_display_list_t lis
    index = static_cast<std::size_t>(i);
    tag.reset();
    if (cancelled(cancellation)) return Error{ErrorCode::CANCELLED, index};
+   if(group_index<groups.size() && groups[group_index].first==std::size_t(i)) {
+    const auto g=groups[group_index++]; BorderGroup border;
+    const auto same_rect=[](Rect a,Rect b){return a.x==b.x && a.y==b.y && a.width==b.width && a.height==b.height;};
+    const auto same_radii=[](Radii a,Radii b){return a.top_left_x==b.top_left_x && a.top_left_y==b.top_left_y && a.top_right_x==b.top_right_x && a.top_right_y==b.top_right_y && a.bottom_left_x==b.bottom_left_x && a.bottom_left_y==b.bottom_left_y && a.bottom_right_x==b.bottom_right_x && a.bottom_right_y==b.bottom_right_y;};
+    for(std::size_t j=0;j<g.count;++j) {
+     if(cancelled(cancellation))return Error{ErrorCode::CANCELLED,index};
+     aether_paint_command_t item{};
+     if(api.get_command(list,i+std::int32_t(j),&item)!=AETHER_OK)return Error{ErrorCode::GET_COMMAND_FAILED,index};
+     const CommandGuard item_guard{api,item};
+     if(item.tag!=AETHER_PAINT_FILL_BORDER_SIDE)return Error{ErrorCode::INVALID_PAYLOAD,index};
+     const auto& s=item.data.fill_border_side;
+     if(s.side<0 || s.side>3 || border.sides[s.side].present)return Error{ErrorCode::INVALID_PAYLOAD,index};
+     if(j==0){border.outer=s.outer_rect;border.inner=s.inner_rect;border.outer_radii=s.outer_radii;border.inner_radii=s.inner_radii;}
+     else if(!same_rect(border.outer,s.outer_rect) || !same_rect(border.inner,s.inner_rect) || !same_radii(border.outer_radii,s.outer_radii) || !same_radii(border.inner_radii,s.inner_radii))return Error{ErrorCode::INVALID_PAYLOAD,index};
+     border.sides[s.side]={true,s.style,s.color};
+    }
+    Command cmd{border}; if(auto e=validate_command(cmd,string_bytes))return Error{*e,index};
+    snapshot.commands.push_back(std::move(cmd));i+=std::int32_t(g.count)-1;continue;
+   }
    aether_paint_command_t source{};
    if (api.get_command(list, i, &source) != AETHER_OK)
     return Error{ErrorCode::GET_COMMAND_FAILED, index};
@@ -116,5 +144,8 @@ SnapshotResult snapshot_commands(const AetherApi& api, aether_display_list_t lis
  } catch (const std::bad_alloc&) {
   return Error{ErrorCode::OUT_OF_MEMORY, index, tag};
  }
+}
+SnapshotResult snapshot_commands(const AetherApi& api,aether_display_list_t list,Cancellation* c) noexcept {
+ return snapshot_with_border_groups(api,list,{},c);
 }
 } // namespace aether::rendering::preparation

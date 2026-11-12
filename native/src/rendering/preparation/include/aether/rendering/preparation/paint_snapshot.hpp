@@ -1,6 +1,7 @@
 #pragma once
 #include <aether/aether.h>
 #include <cstddef>
+#include <array>
 #include <cstdint>
 #include <optional>
 #include <string>
@@ -30,6 +31,8 @@ struct Fill { Rect rect{}; Radii radii{}; Color color{}; };
 struct Stroke { Rect rect{}; Radii radii{}; float stroke_width{}; Color color{}; };
 struct Text { std::string text; Rect rect{}; std::string font_family; float font_size{};
  std::int32_t font_weight{}; std::int32_t text_align{}; Color color{}; aether_bool_t wrap{}; };
+struct BorderSide { bool present{}; int style{}; Color color{}; };
+struct BorderGroup { Rect outer{}, inner{}; Radii outer_radii{}, inner_radii{}; std::array<BorderSide,4> sides{}; };
 struct BoxShadow { Rect rect{}; Radii radii{}; aether_shadow shadow{}; };
 struct PushClip { Rect rect{}; Radii radii{}; };
 struct PopClip {};
@@ -38,7 +41,7 @@ struct PopTransform {};
 struct BeginChunk { std::int64_t id{}; };
 struct EndChunk { std::int64_t id{}; };
 using Command = std::variant<Fill, Stroke, Text, PushClip, PopClip, PushTransform,
- PopTransform, BeginChunk, EndChunk, BoxShadow>;
+ PopTransform, BeginChunk, EndChunk, BoxShadow, BorderGroup>;
 struct Snapshot { std::vector<Command> commands; };
 int command_tag(const Command&) noexcept;
 // Shared field validation; updates string budget only on success. Does not check scopes.

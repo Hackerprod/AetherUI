@@ -3,6 +3,7 @@
 #include "../animations/transition_runtime.h"
 #include "../layout/layout_types.h"
 #include <vector>
+#include "border_groups.h"
 
 namespace aether::layout { class StyleOperationPin; }
 
@@ -18,6 +19,7 @@ struct paint_context_s {
 };
 
 struct aether_display_list_builder_s {
+    std::vector<aether_border_group_range>* border_groups = nullptr;
     aether_text_measurer_contextual_fn contextual_text_measurer = nullptr;
     void* contextual_text_measurer_data = nullptr;
     aether_text_measurer_fn text_measurer = nullptr;
@@ -40,6 +42,7 @@ struct aether_display_list_builder_s {
 
 struct aether_display_list_s {
     std::vector<aether_paint_command_t> commands;
+    std::vector<aether_border_group_range> border_groups;
 
     ~aether_display_list_s() {
         for (auto& cmd : commands) {

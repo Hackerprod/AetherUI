@@ -640,7 +640,11 @@ static void paint_background_and_border(aether_display_list_builder_s* builder, 
         paint_background_layers(builder, view, box->border_box, radii, ctx, cmds);
     }
 
+    const auto border_begin = cmds.size();
     aether_paint_border(style, box->border_box, radii, box->used_border, cmds);
+    if (builder->border_groups && cmds.size() > border_begin &&
+        cmds[border_begin].tag == AETHER_PAINT_FILL_BORDER_SIDE)
+        builder->border_groups->push_back({border_begin, cmds.size()-border_begin});
 }
 
 static bool has_canvas_eligible_background(ComputedStyleReadView style) {
@@ -820,7 +824,7 @@ AETHER_API aether_status_t aether_display_list_build_with_styles(
     const aether::layout::CallbackEpochGuard document_epoch(style_pin.document_lifetime());
     struct build_scope_s {
         aether_display_list_builder_s* builder;
-        ~build_scope_s() { builder->canvas_background_source = nullptr; builder->style_pin = nullptr; builder->layout = nullptr; }
+        ~build_scope_s() { builder->border_groups = nullptr; builder->canvas_background_source = nullptr; builder->style_pin = nullptr; builder->layout = nullptr; }
     } scope{builder};
     builder->viewport = layout->viewport;
     builder->root_font_size = layout->root_font_size;
@@ -832,6 +836,7 @@ AETHER_API aether_status_t aether_display_list_build_with_styles(
     if (!list) return AETHER_ERROR_OUT_OF_MEMORY;
 
     try {
+    builder->border_groups = &list->border_groups;
     builder->canvas_background_source = nullptr;
     paint_canvas_background(builder, layout, list->commands);
     paint_box(builder, layout->root, focused_element, paint_context_s{}, list->commands);
@@ -866,7 +871,7 @@ AETHER_API aether_status_t aether_display_list_build_node_with_styles(
     const aether::layout::CallbackEpochGuard document_epoch(style_pin.document_lifetime());
     struct build_scope_s {
         aether_display_list_builder_s* builder;
-        ~build_scope_s() { builder->canvas_background_source = nullptr; builder->style_pin = nullptr; builder->layout = nullptr; }
+        ~build_scope_s() { builder->border_groups = nullptr; builder->canvas_background_source = nullptr; builder->style_pin = nullptr; builder->layout = nullptr; }
     } scope{builder};
     builder->viewport = layout->viewport;
     builder->root_font_size = layout->root_font_size;
@@ -883,6 +888,7 @@ AETHER_API aether_status_t aether_display_list_build_node_with_styles(
     }
 
     try {
+    builder->border_groups = &list->border_groups;
     if (auto* box = layout->find_primary_box(element)) {
         paint_box(builder, box, focused_element, paint_context_s{}, list->commands);
     }

@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.20)
 project(AetherNativePreparation LANGUAGES CXX)
 add_library(aether_native_preparation STATIC
- aether_command_source.cpp paint_snapshot.cpp preparation_metrics.cpp)
+ aether_command_source.cpp native_command_source.cpp paint_snapshot.cpp preparation_metrics.cpp)
 target_compile_features(aether_native_preparation PUBLIC cxx_std_20)
 set_target_properties(aether_native_preparation PROPERTIES CXX_EXTENSIONS OFF)
 target_include_directories(aether_native_preparation PUBLIC
