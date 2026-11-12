@@ -34,6 +34,7 @@ struct Objects {
  ~Objects(){if(builder)aether_display_list_builder_destroy(builder);if(layout)aether_layout_result_destroy(layout);if(engine)aether_layout_destroy(engine);if(styles)aether_style_map_destroy(styles);if(runtime)aether_style_runtime_destroy(runtime);if(doc)aether_doc_destroy(doc);}
 };
 aether_text_metrics_t no_text(const char*,const aether_computed_style_t*,float,void* state){*static_cast<bool*>(state)=true;return {};}
+#include "inventory.h"
 void check_css(const std::string& s){
  css_variable_budget budget{max_bytes*4,false};css_variable_lexer lexer(s.data(),s.size(),0,&budget);
  for(;;){auto t=lexer.next();if(t.kind==css_variable_token_kind::end)break;
@@ -55,7 +56,7 @@ std::string read_input(const char* path){
 }
 int capture(const char* input,const std::string& out,int width,int height,bool geometry){
  logstream.open(out+"/worker.log",std::ios::out);if(!logstream)return 8;
- logstream<<"format=H1.1-first-cut\noutput_domain=AetherResolvedOutput\ncss_eligibility=Unknown\ncss_reason=PARSER_COVERAGE_UNPROVEN\nauthored_css_validation=NOT_RUN\nflexbox_semantic_acceptance=false\nchromium=NOT_RUN\nnetwork_resolver=NONE\nhost_font_lookup=NONE\ninternal_parse_layout_work_limits=NOT_IMPLEMENTED\nprocess_limits=AS_1GiB_CPU_5s_STACK_8MiB_WALL_10s\ninput_limit_bytes="<<max_bytes<<"\nviewport="<<width<<"x"<<height<<"\ndpr=1\n"<<std::flush;
+ logstream<<"format=H2-diagnostic-only\ninventory_scope=DOM_EXTRACTED_CSS_AND_ELEMENTS\ninventory_locations=CSS_SOURCE_LOCAL_BYTE_OFFSETS_NOT_HTML\ninventory_semantic_context=NOT_PROVEN\noutput_domain=AetherResolvedOutput\ncss_eligibility=Unknown\ncss_reason=PARSER_COVERAGE_UNPROVEN\nauthored_css_validation=NOT_RUN\nflexbox_semantic_acceptance=false\nchromium=NOT_RUN\nnetwork_resolver=NONE\nhost_font_lookup=NONE\ninternal_parse_layout_work_limits=NOT_IMPLEMENTED\nprocess_limits=AS_1GiB_CPU_5s_STACK_8MiB_WALL_10s\ninput_limit_bytes="<<max_bytes<<"\nviewport="<<width<<"x"<<height<<"\ndpr=1\n"<<std::flush;
  try{
   std::string html;{Stage s("read");html=read_input(input);}
   logstream<<"input_sha256="<<avc::sha256(html)<<"\ninput_bytes="<<html.size()<<std::endl;
@@ -69,13 +70,13 @@ int capture(const char* input,const std::string& out,int width,int height,bool g
     auto [n,depth,metadata]=todo.back();todo.pop_back();require(++count<=50000&&depth<=128,"POST_PARSE_DOM_LIMIT");
     const auto& tag=n->tag_name;bool meta=metadata||tag=="head"||tag=="style"||tag=="title";
     if(tag=="style") {std::string css;for(auto* c:n->children){if(c->type!=AETHER_NODE_TEXT)blockers.insert("STYLE_CONTENT_UNSUPPORTED");else css+=c->text;}sheets.push_back(std::move(css));}
-    if(tag=="script"||tag=="link"||tag=="img"||tag=="svg"||tag=="canvas"||tag=="video"||tag=="audio"||tag=="object"||tag=="iframe"||tag=="embed"||tag=="base")blockers.insert("RESOURCE_OR_SCRIPT_ELEMENT_UNSUPPORTED");
+    if(tag=="script"||tag=="link"||tag=="img"||tag=="svg"||tag=="canvas"||tag=="video"||tag=="audio"||tag=="object"||tag=="iframe"||tag=="embed"||tag=="base"){blockers.insert("RESOURCE_OR_SCRIPT_ELEMENT_UNSUPPORTED");diagnostic::element(n,count);}
     if(n->type==AETHER_NODE_TEXT&&!meta&&n->text.find_first_not_of(" \t\r\n\f")!=std::string::npos)blockers.insert("TEXT_RENDERER_UNAVAILABLE");
-    for(const auto& [key,value]:n->attributes){if(key=="style"){try{check_css(value);}catch(Failure f){blockers.insert(f.reason);}}if(key=="dir")blockers.insert("HTML_DIR_UNSUPPORTED");}
+    for(const auto& [key,value]:n->attributes){if(key=="style"){diagnostic::css(value,"inline-dom-"+std::to_string(count),blockers);try{check_css(value);}catch(Failure f){blockers.insert(f.reason);}}if(key=="dir")blockers.insert("HTML_DIR_UNSUPPORTED");}
     for(auto it=n->children.rbegin();it!=n->children.rend();++it)todo.push_back({*it,depth+1,meta});
    }
    logstream<<"dom_nodes="<<count<<"\nstyle_blocks="<<sheets.size()<<std::endl;
-   for(const auto& css:sheets){try{check_css(css);}catch(Failure f){blockers.insert(f.reason);}}
+   size_t sheet_index=0;for(const auto& css:sheets){diagnostic::css(css,"style-block-"+std::to_string(sheet_index++),blockers);try{check_css(css);}catch(Failure f){blockers.insert(f.reason);}}
    for(const auto& b:blockers)logstream<<"blocker="<<b<<std::endl;
    require(blockers.empty(),"PREFLIGHT_UNSUPPORTED");
   }

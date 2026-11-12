@@ -79,3 +79,27 @@ OS CPU accounting/enforcement has granularity: a configured five-second CPU
 limit is not an exact five-second deadline. See measured probe evidence. This
 first increment does not claim full H1 parser provenance or fine-grained work
 budgets. It is a diagnostic/geometry CLI with explicit failure reports.
+
+## H2: diagnostic inventory only
+
+The report now enumerates lexer-observed functions, at-keywords and URLs in every
+DOM-extracted stylesheet and inline style, plus resource/script elements. It
+retains all preflight vetoes and adds later observed reasons instead of hiding
+these behind the first function. No whitelist or new rendering support exists.
+Names use the engine's CSS lexer/identifier decoder, not a regex over the HTML.
+Comments and string contents are not inventoried as functions or at-rules.
+
+Each CSS source has a byte length and SHA256. Offsets (zero-based) and line/column
+(one-based, byte columns) refer ONLY to that extracted CSS string, NOT the HTML
+file: entities and parser recovery may change correspondence. Element references
+are traversal ordinals and selected escaped attributes; HTML source locations are
+unavailable. Resource src values are hashed rather than printed. Semantic context,
+property validity, parser coverage, and engine support remain unverified. Counts
+are case-preserving lexical observations, not proof of unsupported engine features
+or of faithful CSS interpretation. At-keywords are observations, not validated
+at-rule syntax. A lexical/work-limit failure explicitly marks incomplete inventory.
+
+Run `python3 tests/isolated_capture/test_inventory.py /path/to/aether_capture`
+for the manual fixture and synthetic diagnostic regression. Python is test tooling,
+not a runtime dependency of the C++ capture executable. The original fixture is
+unchanged and still rejected without an image before style/layout/raster.
