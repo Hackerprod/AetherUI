@@ -15,7 +15,7 @@ inline std::string name(const std::string& s,size_t begin,size_t end) {
  if(!l.decode_identifier([](void* p,const char* bytes,size_t n){static_cast<std::string*>(p)->append(bytes,n);return true;},&result))return "<undecoded>";
  return result;
 }
-inline void css(const std::string& s,const std::string& source,std::set<std::string>& blockers) {
+inline void css(const std::string& s,const std::string& source,std::set<std::string>& blockers,const h5::Analysis& analysis) {
  logstream<<"inventory_source id="<<quoted(source)<<" bytes="<<s.size()<<" sha256="<<avc::sha256(s)<<"\n";
  css_variable_budget budget{max_bytes*4,false};css_variable_lexer lexer(s.data(),s.size(),0,&budget);
  size_t cursor=0,line=1,column=1;std::map<std::string,size_t> totals;
@@ -28,8 +28,11 @@ inline void css(const std::string& s,const std::string& source,std::set<std::str
   if(!kind)continue;
   while(cursor<t.begin){if(s[cursor++]=='\n'){++line;column=1;}else ++column;}
   const std::string label=std::string(kind)=="url"?"url":name(s,a,z);
-  ++totals[std::string(kind)+":"+label];if(t.kind!=css_variable_token_kind::function)blockers.insert(reason);
-  logstream<<"inventory_css source="<<quoted(source)<<" offset="<<t.begin<<" length="<<t.end-t.begin<<" line="<<line<<" column="<<column<<" kind="<<kind<<" name="<<quoted(label)<<" reason="<<reason<<" context=LEXICAL_ONLY engine_support=UNVERIFIED\n";
+  ++totals[std::string(kind)+":"+label];
+  const bool admitted=analysis.valid&&(t.kind==css_variable_token_kind::function?analysis.functions.count(t.begin):analysis.at_rules.count(t.begin));
+  if(admitted)reason="H5_CONTEXT_PROFILE_ADMITTED";
+  else if(t.kind!=css_variable_token_kind::function)blockers.insert(reason);
+  logstream<<"inventory_css source="<<quoted(source)<<" offset="<<t.begin<<" length="<<t.end-t.begin<<" line="<<line<<" column="<<column<<" kind="<<kind<<" name="<<quoted(label)<<" reason="<<reason<<" context=SHARED_PROFILE_ANALYSIS full_css_support=UNVERIFIED\n";
  }
  for(const auto& [key,count]:totals)logstream<<"inventory_css_count source="<<quoted(source)<<" token="<<quoted(key)<<" count="<<count<<"\n";
 }

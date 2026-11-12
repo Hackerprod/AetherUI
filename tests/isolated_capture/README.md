@@ -159,3 +159,10 @@ python3 tests/isolated_capture/test_inventory.py /tmp/h1-build/aether_capture
 The original Flexbox HTML remains unchanged and rejected by independent CSS,
 SVG/image and text blockers. H3 does not make the original page renderable.
 See H3_EVIDENCE.md for exact executed checks and outstanding independent review.
+
+## H5 contextual profile
+
+See [H5_EVIDENCE.md](H5_EVIDENCE.md) for the bounded nth-child, legacy rgba and
+screen/media admission profile, tests and limitations. The analysis is shared
+with inventory and checks inactive branches too. This does not certify the
+original Flexbox page or change CSS eligibility from Unknown.

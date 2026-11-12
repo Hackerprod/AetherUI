@@ -30,6 +30,6 @@ with tempfile.TemporaryDirectory() as d:
  assert 'name="calc"' in log and 'name="ghost"' not in log and 'name="fake"' not in log
  assert 'line=2 column=4 kind=function name="nth-child"' in log
  assert 'name="var"' in log and 'source="inline-dom-' in log
- assert 'blocker=CSS_AT_RULE_UNSUPPORTED' in log
+ assert 'H5_CONTEXT_PROFILE_ADMITTED' in log
  assert 'blocker=CSS_FUNCTION_UNSUPPORTED' in log
  print('PASS complete fixture counts; escapes; strings/comments excluded; inline CSS; local coordinates; unchanged rejection')

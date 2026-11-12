@@ -1,0 +1,11 @@
+<!doctype html><html><head><style>
+body{margin:0;background-color:#ffffff}
+.row{display:flex;width:300px;height:40px}
+.tile{width:40px;height:40px;background-color:#ff0000;flex-shrink:0}
+.tile:nth-child(2n){background-color:#00aa00}
+.tile:nth-child(3n){background-color:rgba(0,0,255,.5)}
+@media screen and (min-width:700px){.row{padding-left:max(12px,2%)} }
+@media print{.tile{background-color:#000000}}
+.shadow{width:30px;height:20px;box-shadow:50px 0px 4px rgba(0,0,0,.08);background-color:#ff0000}
+</style></head><body><div class="row"><div class="tile"></div> <!--not counted-->
+<div class="tile"></div><div class="tile"></div><div class="tile"></div></div><div class="shadow"></div></body></html>

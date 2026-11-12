@@ -1,4 +1,5 @@
 #include "style_runtime_types.h"
+#include "h5_parser_profile.h"
 #include "../dom/html_attribute_name.h"
 #include <cstdlib>
 #include <cctype>
@@ -253,6 +254,8 @@ static std::vector<std::string_view> split_top_level(std::string_view source, ch
 
 struct selector_parse_context_s {
     bool disallow_pseudo_elements = false;
+    bool strict_profile = false;
+    size_t depth = 0;
 };
 
 struct parser_s {
@@ -537,13 +540,14 @@ static bool try_parse_pseudo(parser_s& p, pseudo_selector_s& pseudo,
         std::vector<compiled_selector_s> nested;
         // not/has require a nonempty, entirely valid list. is/where recover
         // locally and retain a present-empty argument when no branch survives.
-        const auto policy = (name == "not" || name == "has")
+        const auto policy = (p.context.strict_profile || name == "not" || name == "has")
             ? selector_list_policy_t::StrictNonEmpty
             : selector_list_policy_t::ForgivingAllowEmpty;
         // HAS forbids pseudo-elements throughout its argument, including logical
         // functions within it. Copy context so neither success nor recovery can
         // change the grammar of the containing selector or its sibling branches.
         auto argument_context = p.context;
+        if (argument_context.strict_profile && ++argument_context.depth > 32) return false;
         if (name == "has") argument_context.disallow_pseudo_elements = true;
         if (!selector_parse_list_view(body, nested, policy, argument_context)) return false;
         pseudo_selector_kind_t kind;
@@ -755,4 +759,21 @@ bool selector_parse_list(const char* source, std::vector<compiled_selector_s>& o
     std::string_view sv(source);
     if (sv.empty()) return false;
     return selector_parse_list_view(sv, out, selector_list_policy_t::ForgivingNonEmpty, {});
+}
+
+// This opt-in harness wrapper does not alter the forgiving runtime API.
+bool selector_parse_list_strict_profile(std::string_view source,
+    std::vector<compiled_selector_s>& out) {
+    if (source.empty() || source.size() > 65536 || source.find('\0') != std::string_view::npos) return false;
+    std::vector<compiled_selector_s> candidate;
+    selector_parse_context_s context;
+    context.strict_profile = true;
+    if (!selector_parse_list_view(source, candidate, selector_list_policy_t::StrictNonEmpty, context)) return false;
+    out.swap(candidate);
+    return true;
+}
+
+bool selector_profile_supported(std::string_view source) {
+    std::vector<compiled_selector_s> candidate;
+    return selector_parse_list_strict_profile(source, candidate);
 }

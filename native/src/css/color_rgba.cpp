@@ -1,5 +1,6 @@
 #include "../style_runtime/css_component_values.h"
 #include "css_numeric_conversion_internal.h"
+#include "color_rgba_internal.h"
 #include <aether/aether.h>
 #include <cstring>
 #include <cstdlib>
@@ -56,7 +57,7 @@ static aether_bool_t try_parse_hex(const char* s, aether_color_rgba* out) {
 
 namespace {
 bool try_rgb_component(const std::string& source, aether::css::c_numeric_locale& locale,
-                       bool alpha, bool& percentage, float& value) {
+                       bool alpha, bool& percentage, float& value, bool finite_only = false) {
     css_component_cursor cursor(source);
     css_component_value component, extra;
     if (!cursor.next(component) || cursor.next(extra) || !cursor.valid()) return false;
@@ -71,7 +72,7 @@ bool try_rgb_component(const std::string& source, aether::css::c_numeric_locale&
     }
     const auto converted = locale.parse_float(number);
     // Preserve finite subnormals and underflow-to-zero, including ERANGE.
-    if (!converted.valid) return false;
+    if (!converted.valid || (finite_only && !std::isfinite(converted.value))) return false;
     const float parsed = converted.value;
     const float scale = percentage ? 100.0f : alpha ? 1.0f : 255.0f;
     value = fminf(fmaxf(parsed / scale, 0.0f), 1.0f);
@@ -79,7 +80,7 @@ bool try_rgb_component(const std::string& source, aether::css::c_numeric_locale&
 }
 }
 
-static aether_bool_t try_parse_rgb(const char* s, aether_bool_t has_alpha, aether_color_rgba* out) {
+static aether_bool_t try_parse_rgb(const char* s, aether_bool_t has_alpha, aether_color_rgba* out, bool finite_only = false) {
     const std::string body(s, std::strlen(s) - 1); // caller verified final ')'
     const auto parts = css_split_component_delimited(body, ',');
     if (parts.size() != static_cast<size_t>(has_alpha ? 4 : 3)) return AETHER_FALSE;
@@ -88,7 +89,7 @@ static aether_bool_t try_parse_rgb(const char* s, aether_bool_t has_alpha, aethe
     bool rgb_percentage = false;
     for (size_t index = 0; index < parts.size(); ++index) {
         bool percentage = false;
-        if (!try_rgb_component(parts[index], locale, index == 3, percentage, channels[index]))
+        if (!try_rgb_component(parts[index], locale, index == 3, percentage, channels[index], finite_only))
             return AETHER_FALSE;
         if (index == 0) rgb_percentage = percentage;
         else if (index < 3 && percentage != rgb_percentage) return AETHER_FALSE;
@@ -306,4 +307,24 @@ AETHER_API aether_bool_t aether_color_rgba_try_parse(const char* input, aether_c
     }
 
     return AETHER_FALSE;
+}
+
+// Narrow internal admission wrapper. It shares the actual legacy component
+// parser; errors (including allocation failure) never publish a partial color.
+bool aether::css::parse_legacy_rgba_strict(const std::string& source, aether_color_rgba& output) {
+    if (source.find('\0') != std::string::npos) return false;
+    css_component_cursor cursor(source);
+    css_component_value component, extra;
+    if (!cursor.next(component) || cursor.next(extra) || !cursor.valid() ||
+        component.token.kind != css_variable_token_kind::function) return false;
+    std::string spelling = source.substr(component.begin, component.end - component.begin);
+    // The engine's public parser accepts literal, case-insensitive names only.
+    // Do not admit escaped names it would subsequently ignore.
+    if (spelling.size() < 6 || spelling.size() >= 128) return false;
+    to_lower_inplace(spelling.data());
+    if (spelling.compare(0, 5, "rgba(") != 0 || spelling.back() != ')') return false;
+    aether_color_rgba temporary{};
+    if (!try_parse_rgb(spelling.c_str() + 5, AETHER_TRUE, &temporary, true)) return false;
+    output = temporary;
+    return true;
 }

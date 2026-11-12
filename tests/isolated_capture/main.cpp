@@ -34,20 +34,20 @@ struct Objects {
  ~Objects(){if(builder)aether_display_list_builder_destroy(builder);if(layout)aether_layout_result_destroy(layout);if(engine)aether_layout_destroy(engine);if(styles)aether_style_map_destroy(styles);if(runtime)aether_style_runtime_destroy(runtime);if(doc)aether_doc_destroy(doc);}
 };
 aether_text_metrics_t no_text(const char*,const aether_computed_style_t*,float,void* state){*static_cast<bool*>(state)=true;return {};}
+#include "h5_profile.h"
 #include "inventory.h"
 #include "h3_profile.h"
 #include "h4_profile.h"
-void check_css(const std::string& s,bool sheet){
- const auto admitted=h4::admitted_functions(s,sheet);
+void check_css(const std::string& s,const h5::Analysis& analysis){
  css_variable_budget budget{max_bytes*4,false};css_variable_lexer lexer(s.data(),s.size(),0,&budget);
  for(;;){auto t=lexer.next();if(t.kind==css_variable_token_kind::end)break;
   require(!budget.exhausted&&t.kind!=css_variable_token_kind::error,"CSS_LEXICAL_OR_WORK_LIMIT");
-  require(t.serialization!=css_variable_serialization::at_keyword,"CSS_AT_RULE_UNSUPPORTED");
+  require(t.serialization!=css_variable_serialization::at_keyword||analysis.at_rules.count(t.begin),"CSS_AT_RULE_UNSUPPORTED");
   require(t.serialization!=css_variable_serialization::url&&t.serialization!=css_variable_serialization::bad_url,"CSS_RESOURCE_UNSUPPORTED");
-  // Admission is property/value/context-specific, never a function-name whitelist.
-  require(t.kind!=css_variable_token_kind::function||admitted.count(t.begin),"CSS_FUNCTION_UNSUPPORTED");
+  require(t.kind!=css_variable_token_kind::function||analysis.functions.count(t.begin),"CSS_FUNCTION_UNSUPPORTED");
  }
  require(!budget.exhausted,"CSS_WORK_LIMIT");
+ require(analysis.valid,"CSS_CONTEXT_PROFILE_UNSUPPORTED");
 }
 std::string read_input(const char* path){
  int fd=open(path,O_RDONLY|O_NOFOLLOW|O_NONBLOCK);require(fd>=0,"INPUT_OPEN_FAILED");
@@ -79,11 +79,11 @@ int capture(const char* input,const std::string& out,int width,int height,bool g
     if(tag=="style") {std::string css;for(auto* c:n->children){if(c->type!=AETHER_NODE_TEXT)blockers.insert("STYLE_CONTENT_UNSUPPORTED");else css+=c->text;}sheets.push_back(std::move(css));}
     if((tag=="script"&&!h3::json(n))||tag=="link"||tag=="img"||tag=="svg"||tag=="video"||tag=="audio"||tag=="object"||tag=="iframe"||tag=="embed"||tag=="base"){blockers.insert("RESOURCE_OR_SCRIPT_ELEMENT_UNSUPPORTED");diagnostic::element(n,count);}
     if(n->type==AETHER_NODE_TEXT&&!meta&&n->text.find_first_not_of(" \t\r\n\f")!=std::string::npos)blockers.insert("TEXT_RENDERER_UNAVAILABLE");
-    for(const auto& [key,value]:n->attributes){if(h3::lower(key).starts_with("on"))blockers.insert("EVENT_HANDLER_UNSUPPORTED");if(key=="style"){inline_sheets.push_back(value);diagnostic::css(value,"inline-dom-"+std::to_string(count),blockers);try{check_css(value,false);}catch(Failure f){blockers.insert(f.reason);}}if(key=="dir")blockers.insert("HTML_DIR_UNSUPPORTED");}
+    for(const auto& [key,value]:n->attributes){if(h3::lower(key).starts_with("on"))blockers.insert("EVENT_HANDLER_UNSUPPORTED");if(key=="style"){inline_sheets.push_back(value);auto analysis=h5::analyze(value,false);diagnostic::css(value,"inline-dom-"+std::to_string(count),blockers,analysis);try{check_css(value,analysis);}catch(Failure f){blockers.insert(f.reason);}}if(key=="dir")blockers.insert("HTML_DIR_UNSUPPORTED");}
     for(auto it=n->children.rbegin();it!=n->children.rend();++it)todo.push_back({*it,depth+1,meta});
    }
    logstream<<"dom_nodes="<<count<<"\nstyle_blocks="<<sheets.size()<<std::endl;
-   size_t sheet_index=0;for(const auto& css:sheets){diagnostic::css(css,"style-block-"+std::to_string(sheet_index++),blockers);try{check_css(css,true);}catch(Failure f){blockers.insert(f.reason);}}
+   size_t sheet_index=0;for(const auto& css:sheets){auto analysis=h5::analyze(css,true);diagnostic::css(css,"style-block-"+std::to_string(sheet_index++),blockers,analysis);try{check_css(css,analysis);}catch(Failure f){blockers.insert(f.reason);}}
    if(canvases.size()>256)blockers.insert("CANVAS_COUNT_LIMIT");
    if(!canvases.empty()){
     for(const auto& css:sheets)try{h3::authored(css,true);}catch(Failure f){blockers.insert(f.reason);}

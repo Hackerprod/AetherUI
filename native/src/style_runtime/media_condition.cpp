@@ -1,4 +1,5 @@
 #include "style_runtime_types.h"
+#include "h5_parser_profile.h"
 #include "media_condition_allocation_scope.h"
 #include "css_component_tokens.h"
 #include "../css/css_length_internal.h"
@@ -279,6 +280,7 @@ struct media_alternative {
 struct media_components {
     std::string source;
     std::vector<media_alternative> alternatives{1};
+    bool recovered = false;
 };
 char media_closer(char opening) {
     return opening == '(' ? ')' : opening == '[' ? ']' : '}';
@@ -300,6 +302,7 @@ media_components media_scan(const char* input) {
         const std::string_view raw(input + token.begin, token.end - token.begin);
         const bool comment = raw.size() >= 2 && raw.substr(0, 2) == "/*";
         if (comment) {
+            if (raw.size() < 4 || raw.substr(raw.size() - 2) != "*/") result.recovered = true;
             std::fill(result.source.begin() + token.begin, result.source.begin() + token.end, ' ');
             continue; // An unclosed comment consumes EOF, not a bad-string.
         }
@@ -309,11 +312,14 @@ media_components media_scan(const char* input) {
         if ((token.kind == component_kind::other || token.kind == component_kind::error) &&
             url != std::string_view::npos) {
             if (!media_valid_url(raw, url)) alternative.valid = false;
-            if (token.kind == component_kind::error && token.end == original_size)
+            if (token.kind == component_kind::error && token.end == original_size) {
+                result.recovered = true;
                 result.source += ')';
+            }
             token.kind = component_kind::other;
         } else if (token.kind == component_kind::error) {
             if (string && token.end == original_size && !media_string_has_bad_newline(raw)) {
+                result.recovered = true;
                 // EOF terminates a CSS string; newline produces a bad-string.
                 result.source += raw.front();
             } else alternative.valid = false;
@@ -339,6 +345,7 @@ media_components media_scan(const char* input) {
         if (token.kind == component_kind::open || token.kind == component_kind::function)
             blocks.push_back(token.delimiter);
     }
+    if (!blocks.empty()) result.recovered = true;
     while (!blocks.empty()) {
         result.source += media_closer(blocks.back());
         blocks.pop_back();
@@ -368,7 +375,8 @@ static media_condition_s* parse_term(
     aether_style_diagnostic_fn diag,
     void* diag_data,
     int32_t /*offset*/,
-    media_condition_allocation_scope_s* scope)
+    media_condition_allocation_scope_s* scope,
+    media_profile_evidence* evidence = nullptr)
 {
     std::string trimmed = media_trim(source);
 
@@ -382,6 +390,7 @@ static media_condition_s* parse_term(
     if (trimmed.empty() || trimmed[0] != '(' || trimmed.back() != ')') {
         emit_diag(diag, diag_data, "AUIMED001", trimmed.c_str(), "",
                   ("Unsupported media term '" + trimmed + "'.").c_str());
+        if (evidence) { evidence->profile_supported = false; evidence->saw_unknown_or_discarded = true; }
         return media_condition_unknown();
     }
 
@@ -390,6 +399,7 @@ static media_condition_s* parse_term(
     if (colon < 0) {
         emit_diag(diag, diag_data, "AUIMED002", body.c_str(), "",
                   ("Media feature '" + body + "' requires a value.").c_str());
+        if (evidence) { evidence->profile_supported = false; evidence->saw_unknown_or_discarded = true; }
         return media_condition_unknown();
     }
 
@@ -404,7 +414,18 @@ static media_condition_s* parse_term(
         if (!media_length(value, length_val)) {
             emit_diag(diag, diag_data, "AUIMED003", name.c_str(), value.c_str(),
                       ("Invalid media length '" + value + "'.").c_str());
+            if (evidence) { evidence->profile_supported = false; evidence->saw_unknown_or_discarded = true; }
             return media_condition_unknown();
+        }
+        if (evidence) {
+            aether::css::calc_value_s literal;
+            double original = 0;
+            if (!aether::css::try_parse_numeric_literal(value, literal, &original) ||
+                literal.kind != aether::css::calc_value_kind_e::length ||
+                literal.length.unit != AETHER_CSS_UNIT_PX || !std::isfinite(original) || original < 0) {
+                evidence->profile_supported = false;
+                evidence->saw_unknown_or_discarded = true;
+            }
         }
         auto* node = allocate_media_node(scope);
         node->kind = media_condition_s::kind_t::length_feature;
@@ -418,6 +439,8 @@ static media_condition_s* parse_term(
         return node;
     }
 
+    if (evidence) { evidence->profile_supported = false; evidence->saw_unknown_or_discarded = true; }
+
     // prefers-color-scheme
     if (name == "prefers-color-scheme") {
         auto* node = allocate_media_node(scope);
@@ -430,6 +453,7 @@ static media_condition_s* parse_term(
             emit_diag(diag, diag_data, "AUIMED005", name.c_str(), value.c_str(),
                       ("Invalid value '" + value + "' for media feature '" + name + "'.").c_str());
             discard_unreturned_node(node, scope);
+            if (evidence) { evidence->profile_supported = false; evidence->saw_unknown_or_discarded = true; }
             return media_condition_unknown();
         }
         return node;
@@ -448,6 +472,7 @@ static media_condition_s* parse_term(
             emit_diag(diag, diag_data, "AUIMED005", name.c_str(), value.c_str(),
                       ("Invalid value '" + value + "' for media feature '" + name + "'.").c_str());
             discard_unreturned_node(node, scope);
+            if (evidence) { evidence->profile_supported = false; evidence->saw_unknown_or_discarded = true; }
             return media_condition_unknown();
         }
         return node;
@@ -465,6 +490,7 @@ static media_condition_s* parse_term(
             emit_diag(diag, diag_data, "AUIMED005", name.c_str(), value.c_str(),
                       ("Invalid value '" + value + "' for media feature '" + name + "'.").c_str());
             discard_unreturned_node(node, scope);
+            if (evidence) { evidence->profile_supported = false; evidence->saw_unknown_or_discarded = true; }
             return media_condition_unknown();
         }
         return node;
@@ -472,6 +498,7 @@ static media_condition_s* parse_term(
 
     emit_diag(diag, diag_data, "AUIMED004", name.c_str(), "",
               ("Unsupported media feature '" + name + "'.").c_str());
+    if (evidence) { evidence->profile_supported = false; evidence->saw_unknown_or_discarded = true; }
     return media_condition_unknown();
 }
 
@@ -481,7 +508,8 @@ static media_condition_s* parse_alternative(
     aether_style_diagnostic_fn diag,
     void* diag_data,
     int32_t offset,
-    media_condition_allocation_scope_s* scope)
+    media_condition_allocation_scope_s* scope,
+    media_profile_evidence* evidence = nullptr)
 {
     auto text = [&](size_t i) {
         const auto& term = alternative.terms[i];
@@ -495,6 +523,7 @@ static media_condition_s* parse_alternative(
         return alternative.terms[i].kind == component_kind::open && alternative.terms[i].delimiter == '(';
     };
     auto invalid = [&]() {
+        if (evidence) { evidence->profile_supported = false; evidence->saw_unknown_or_discarded = true; }
         emit_diag(diag, diag_data, "AUIMED006", "", "", "Invalid media query syntax.");
         return media_condition_never();
     };
@@ -510,16 +539,25 @@ static media_condition_s* parse_alternative(
     for (size_t i = first + 1; i < alternative.terms.size(); i += 2)
         if (!keyword(i, "and") || i + 1 == alternative.terms.size() || !enclosed(i + 1)) return invalid();
 
+    if (evidence && (negate || only || alternative.terms.size() > 3 ||
+        (!type && alternative.terms.size() != 1))) {
+        evidence->profile_supported = false;
+        evidence->saw_unknown_or_discarded = true;
+    }
     // Only after the whole alternative is known to be syntactically valid may
     // false/true siblings fold an unknown value, followed by the restrictor.
     media_condition_s* result;
     if (type) {
         const auto media_type = text(first);
+        if (evidence && !str_iequals(media_type,"all") && !str_iequals(media_type,"screen") && !str_iequals(media_type,"print")) {
+            evidence->profile_supported = false;
+            evidence->saw_unknown_or_discarded = true;
+        }
         result = str_iequals(media_type, "all") || str_iequals(media_type, "screen")
             ? media_condition_always() : media_condition_never();
-    } else result = parse_term(text(first), diag, diag_data, offset, scope);
+    } else result = parse_term(text(first), diag, diag_data, offset, scope, evidence);
     for (size_t i = first + 2; i < alternative.terms.size(); i += 2)
-        result = media_condition_and(result, parse_term(text(i), diag, diag_data, offset, scope), scope);
+        result = media_condition_and(result, parse_term(text(i), diag, diag_data, offset, scope, evidence), scope);
     return negate ? media_condition_not(result, scope) : result;
 }
 
@@ -536,4 +574,20 @@ media_condition_s* media_condition_parse(
     for (const auto& alternative : components.alternatives)
         result = media_condition_or(result, parse_alternative(components, alternative, diag, diag_data, offset, scope), scope);
     return result;
+}
+
+media_profile_evidence media_condition_profile(std::string_view source) {
+    media_profile_evidence evidence;
+    if (source.empty() || source.size() > 65536 || source.find('\0') != std::string_view::npos) return evidence;
+    const std::string owned(source);
+    const auto components = media_scan(owned.c_str());
+    evidence.full_consumption = !components.recovered;
+    evidence.consumed_bytes = source.size();
+    evidence.profile_supported = evidence.full_consumption && components.alternatives.size() == 1;
+    evidence.saw_unknown_or_discarded = !evidence.profile_supported;
+    media_condition_allocation_scope_s scope;
+    // Inspect every alternative and term before the ordinary constructors fold.
+    for (const auto& alternative : components.alternatives)
+        (void)parse_alternative(components, alternative, nullptr, nullptr, 0, &scope, &evidence);
+    return evidence;
 }
