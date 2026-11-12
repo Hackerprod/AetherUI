@@ -101,7 +101,23 @@ static bool bi_try_contextual_nonnegative(const char* source, std::string& outpu
     output = value; return true;
 }
 
+static aether::css::intrinsic_size_keyword bi_intrinsic_keyword(const std::string& source) {
+    std::string value;
+    if (!css_single_identifier(source, value)) return aether::css::intrinsic_size_keyword::none;
+    if (value == "min-content") return aether::css::intrinsic_size_keyword::min_content;
+    if (value == "max-content") return aether::css::intrinsic_size_keyword::max_content;
+    if (value == "fit-content") return aether::css::intrinsic_size_keyword::fit_content;
+    return aether::css::intrinsic_size_keyword::none;
+}
+static bool bi_try_intrinsic_keyword(const char* source, std::string& output) {
+    const auto keyword = bi_intrinsic_keyword(source ? source : "");
+    if (keyword == aether::css::intrinsic_size_keyword::none) return false;
+    output = keyword == aether::css::intrinsic_size_keyword::min_content ? "min-content" :
+        keyword == aether::css::intrinsic_size_keyword::max_content ? "max-content" : "fit-content";
+    return true;
+}
 static bool bi_try_flex_basis(const char* source, std::string& output) {
+    if (bi_try_intrinsic_keyword(source, output)) return true;
     const std::string value = str_trim(source ? source : "");
     if (str_iequals(value, "content")) { output = "content"; return true; }
     if (bi_try_size(source, output)) return true;
@@ -1825,6 +1841,11 @@ void builtin_properties_register(style_property_registry_s* reg) {
                 writer.set("flex-grow", "0"); writer.set("flex-shrink", "1"); writer.set("flex-basis", "auto");
                 return true;
             }
+            std::string sole_basis;
+            if (bi_try_intrinsic_keyword(t.c_str(), sole_basis)) {
+                writer.set("flex-grow", "1"); writer.set("flex-shrink", "1");
+                writer.set("flex-basis", sole_basis.c_str()); return true;
+            }
             auto parts = bi_split_ws(t);
             if (parts.size() < 1 || parts.size() > 3) return false;
             std::string grow_test;
@@ -2126,6 +2147,69 @@ void builtin_properties_register(style_property_registry_s* reg) {
         definition.inherit_context = [name, inherit](property_apply_context_s& c, ComputedStyleReadView p, const MeasuresReadView* pm) {
             if (inherit) inherit(c, p, pm);
             c.measures->set_tree(name, pm ? pm->contextual_tree(name) : aether::css::math_tree{});
+        };
+    }
+
+    // H8: intrinsic sizes remain owned private tags. A NaN sentinel prevents a
+    // context-losing internal route from silently interpreting the tag as zero.
+    for (auto& definition : reg->definitions) {
+        const auto name = definition.name;
+        if (name != "width" && name != "min-width" && name != "max-width" && name != "flex-basis") continue;
+        const auto parse = definition.parse;
+        definition.parse = [parse](const char* source, std::string& out) {
+            return bi_try_intrinsic_keyword(source, out) || (parse && parse(source, out));
+        };
+        const auto intrinsic_parse = definition.parse;
+        const auto flat = definition.apply;
+        const auto checked = definition.apply_checked;
+        const auto contextual = definition.apply_with_context;
+        const auto contextual_checked = definition.apply_with_context_checked;
+        const auto inherit = definition.inherit_context;
+        definition.apply_checked = [flat, checked, intrinsic_parse](aether_computed_style_t* st, const std::string& value) {
+            std::string canonical;
+            if (!intrinsic_parse(value.c_str(), canonical)) return property_apply_result_s::failure("AETHER-CSS-INTRINSIC-SYNTAX", "Invalid size syntax.");
+            if (bi_intrinsic_keyword(value) != aether::css::intrinsic_size_keyword::none)
+                return property_apply_result_s::failure("AETHER-CSS-CONTEXT-REQUIRED", "Intrinsic size requires an owning contextual style.");
+            if (checked) return checked(st, value);
+            if (flat) flat(st, value);
+            return property_apply_result_s{};
+        };
+        definition.apply = [flat, intrinsic_parse](aether_computed_style_t* st, const std::string& value) {
+            std::string canonical;
+            if (!intrinsic_parse(value.c_str(), canonical)) throw std::invalid_argument("Invalid size syntax");
+            if (bi_intrinsic_keyword(value) != aether::css::intrinsic_size_keyword::none)
+                throw std::invalid_argument("Intrinsic size requires contextual style");
+            if (flat) flat(st, value);
+        };
+        definition.apply_with_context_checked = [name, contextual, contextual_checked, intrinsic_parse, checked = definition.apply_checked]
+            (property_apply_context_s& c, const std::string& value) -> property_apply_result_s {
+            if (!c.measures) return checked(c.style, value);
+            std::string canonical;
+            if (!intrinsic_parse(value.c_str(), canonical)) return property_apply_result_s::failure("AETHER-CSS-INTRINSIC-SYNTAX", "Invalid size syntax.");
+            const auto keyword = bi_intrinsic_keyword(value);
+            if (keyword == aether::css::intrinsic_size_keyword::none) {
+                auto result = contextual_checked ? contextual_checked(c, value) : property_apply_result_s{};
+                if (!contextual_checked && contextual) contextual(c, value);
+                if (result.success) c.measures->set_intrinsic_keyword(name, keyword);
+                return result;
+            }
+            c.measures->set_intrinsic_keyword(name, keyword);
+            c.measures->set_tree(name, {});
+            c.measures->set_property_dependencies(0);
+            auto marker = aether_css_length_zero(); marker.value = std::numeric_limits<float>::quiet_NaN();
+            if (name == "width") c.style->width = marker;
+            else if (name == "min-width") c.style->min_width = marker;
+            else if (name == "max-width") c.style->max_width = marker;
+            else c.style->flex_basis = {AETHER_FLEX_BASIS_LENGTH, marker};
+            return {};
+        };
+        // All internal callers must receive the same sidecar-safe behavior.
+        definition.apply_with_context = [checked = definition.apply_with_context_checked](property_apply_context_s& c, const std::string& value) {
+            if (!checked(c, value).success) throw std::invalid_argument("Invalid intrinsic size context");
+        };
+        definition.inherit_context = [name, inherit](property_apply_context_s& c, ComputedStyleReadView p, const MeasuresReadView* pm) {
+            if (inherit) inherit(c, p, pm);
+            if (c.measures) c.measures->set_intrinsic_keyword(name, pm ? pm->intrinsic_keyword(name) : aether::css::intrinsic_size_keyword::none);
         };
     }
 

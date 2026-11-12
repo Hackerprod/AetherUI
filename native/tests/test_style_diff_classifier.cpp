@@ -177,13 +177,15 @@ void payloads() {
 }
 // Independent policy checks plus member mutations below cover the complete
 // sidecar inventory. A new inventory entry requires an explicit test decision.
-static_assert(static_cast<size_t>(StyleSidecar::count) == 16);
+static_assert(static_cast<size_t>(StyleSidecar::count) == 17);
 static_assert(static_cast<size_t>(StylePayload::count) == 6);
 #define CHECK_SIDECAR(name, expected_kind, mask, inherit) \
     static_assert(StyleSidecarPolicy<StyleSidecar::name>::kind == SidecarPolicyKind::expected_kind); \
     static_assert(StyleSidecarPolicy<StyleSidecar::name>::impact == mask); \
     static_assert(StyleSidecarPolicy<StyleSidecar::name>::inherited == inherit);
 CHECK_SIDECAR(property_dependencies, percentage_consumers, 0, false)
+CHECK_SIDECAR(contextual_lengths, value, 7, false)
+CHECK_SIDECAR(intrinsic_keywords, value, 7, false)
 CHECK_SIDECAR(combined_dependencies, metadata, 0, false)
 CHECK_SIDECAR(parent_font_size, metadata, 0, false)
 CHECK_SIDECAR(self_font_size, metadata, 0, false)
@@ -222,6 +224,17 @@ void sidecars() {
         f.expect(mask,0,true,true);f.measures.property_dependencies.clear();measure_recompute_dependencies(f.measures);f.expect(0,0,true);
     }
     need(percentages==9,"only nine visual percentage keys");
+    // H8 tag changes are visual even when the public scalar projection is identical.
+    for (auto property : {"width", "min-width", "max-width", "flex-basis"}) {
+        for (auto keyword : {aether::css::intrinsic_size_keyword::min_content,
+                             aether::css::intrinsic_size_keyword::max_content,
+                             aether::css::intrinsic_size_keyword::fit_content}) {
+            f.measures.intrinsic_keywords[property] = keyword; f.expect(7,0,true,true);
+            f.freeze(); f.expect(0,0,true,false);
+            f.measures.intrinsic_keywords.clear(); f.expect(7,0,true,true);
+            f.freeze(); f.expect(0,0,true,false);
+        }
+    }
     f.measures.flex_order = -2; f.expect(7,0,true,true); f.measures.flex_order = 0;
     mutations(f,f.measures.row_gap,17,false,true,true);mutations(f,f.measures.column_gap,17,false,true,true);
     f.measures.line_height.kind=measure_line_height_kind_e::number;f.expect(81,81,true,true);

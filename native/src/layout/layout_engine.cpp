@@ -450,7 +450,8 @@ aether_layout_box_s* layout_element(
     aether_layout_result_s* result,
     const int32_t* viewport_overflow_override,
     element_completion_s* deferred_completion,
-    const intrinsic_measurement_s* intrinsic_measurement)
+    const intrinsic_measurement_s* intrinsic_measurement,
+    float intrinsic_available_width)
 {
     auto style = get_style(styles, element);
     const bool intrinsic_width = intrinsic_measurement &&
@@ -478,12 +479,21 @@ aether_layout_box_s* layout_element(
     box->collapsed_margin_before = margin.top;
     box->collapsed_margin_after = margin.bottom;
 
+    const auto width_measures = layout_measures(styles, element);
+    const auto is_keyword = [&](const char* property) {
+        return width_measures && width_measures->intrinsic_keyword(property) != aether::css::intrinsic_size_keyword::none;
+    };
+    const auto used_width = [&](const char* property, aether_css_length value) {
+        return is_keyword(property) ? measure_keyword_border_width(engine, styles, element, style, property,
+            containing_block.width, std::isfinite(containing_block.width), result,
+            intrinsic_keyword_phase_e::used, intrinsic_available_width) : resolve(engine, value, containing_block.width, style);
+    };
     float available_border_width = std::max(0.f, containing_block.width - aether_thicknessf_horizontal(margin));
     float specified_width = intrinsic_width ? NAN
-        : resolve(engine, style.width, containing_block.width, style);
+        : used_width("width", style.width);
     float border_width = specified_width;
 
-    if (box->is_initial_canvas) {
+    if (box->is_initial_canvas && !is_keyword("width")) {
         border_width = canvas.width + aether_thicknessf_horizontal(padding) + aether_thicknessf_horizontal(border);
     } else if (has_forced_border_width) {
         border_width = forced_border_width;
@@ -492,23 +502,23 @@ aether_layout_box_s* layout_element(
             ? available_border_width
             : measure_intrinsic_width(engine, styles, element, style, padding, border,
                                       containing_block.width, result);
-    } else if (style.box_sizing == AETHER_BOX_SIZING_CONTENT_BOX) {
+    } else if (style.box_sizing == AETHER_BOX_SIZING_CONTENT_BOX && !is_keyword("width")) {
         border_width += aether_thicknessf_horizontal(padding) + aether_thicknessf_horizontal(border);
     }
 
     float max_width = intrinsic_width ? NAN
-        : resolve(engine, style.max_width, containing_block.width, style);
+        : used_width("max-width", style.max_width);
     if (std::isfinite(max_width)) {
-        float max_border = (style.box_sizing == AETHER_BOX_SIZING_CONTENT_BOX)
+        float max_border = (style.box_sizing == AETHER_BOX_SIZING_CONTENT_BOX && !is_keyword("max-width"))
             ? max_width + aether_thicknessf_horizontal(padding) + aether_thicknessf_horizontal(border)
             : max_width;
         border_width = std::min(border_width, max_border);
     }
 
     float min_width = intrinsic_width ? NAN
-        : resolve(engine, style.min_width, containing_block.width, style);
+        : used_width("min-width", style.min_width);
     if (std::isfinite(min_width)) {
-        float min_border = (style.box_sizing == AETHER_BOX_SIZING_CONTENT_BOX)
+        float min_border = (style.box_sizing == AETHER_BOX_SIZING_CONTENT_BOX && !is_keyword("min-width"))
             ? min_width + aether_thicknessf_horizontal(padding) + aether_thicknessf_horizontal(border)
             : min_width;
         border_width = std::max(border_width, min_border);
@@ -1777,6 +1787,48 @@ intrinsic_widths_s measure_intrinsic_widths(
     return content;
 }
 
+float resolve_intrinsic_keyword(aether::css::intrinsic_size_keyword keyword,
+    const char* property, intrinsic_widths_s raw, float available, float margins,
+    bool definite, intrinsic_keyword_phase_e phase) {
+    using K = aether::css::intrinsic_size_keyword;
+    if (keyword == K::none) return NAN;
+    if (!std::isfinite(raw.min_content) || !std::isfinite(raw.max_content))
+        throw std::overflow_error("Invalid intrinsic keyword inputs");
+    if (keyword == K::min_content) return raw.min_content;
+    if (keyword == K::max_content) return raw.max_content;
+    if (phase == intrinsic_keyword_phase_e::min_contribution) return raw.min_content;
+    if (phase == intrinsic_keyword_phase_e::max_contribution) return raw.max_content;
+    if (!definite) {
+        if (std::string_view(property) == "min-width") return raw.min_content;
+        if (std::string_view(property) == "max-width") return raw.max_content;
+        return NAN;
+    }
+    if (!std::isfinite(available) || !std::isfinite(margins))
+        throw std::overflow_error("Invalid intrinsic keyword available width");
+    return std::max(raw.min_content, std::min(raw.max_content, std::max(0.f, available - margins)));
+}
+
+float measure_keyword_border_width(const aether_layout_engine_s* engine,
+    const StyleLookup* styles, aether_node_s* element, const BoxStyleSnapshot& style,
+    const char* property, float available, bool definite, aether_layout_result_s* result,
+    intrinsic_keyword_phase_e phase, float intrinsic_available_width) {
+    const auto measures = layout_measures(styles, element);
+    const auto keyword = measures ? measures->intrinsic_keyword(property) : aether::css::intrinsic_size_keyword::none;
+    if (keyword == aether::css::intrinsic_size_keyword::none) return NAN;
+    const bool cyclic = phase != intrinsic_keyword_phase_e::used;
+    const auto padding = resolve_padding_edges(engine, style.padding, cyclic ? 0.f : available, style,
+        cyclic ? padding_resolution_phase_e::intrinsic_cyclic : padding_resolution_phase_e::used);
+    const auto border = resolve_border_edges(engine, style, available);
+    const auto margin = resolve_margin_edges(engine, style.margin, cyclic ? 0.f : available, style);
+    // measure_intrinsic_widths observes descendants, not this node's own sizing
+    // keyword/constraints, so raw M/X never recursively resolve the same tag.
+    const auto raw = measure_intrinsic_widths(engine, styles, element, style, padding, border, available, result, {true,true});
+    // OOF fit-content uses the inset-modified available width, while percentages
+    // in padding/margins and intrinsic measurements retain the containing block.
+    const float fit_available = std::isfinite(intrinsic_available_width) ? intrinsic_available_width : available;
+    return resolve_intrinsic_keyword(keyword, property, raw, fit_available, aether_thicknessf_horizontal(margin), definite, phase);
+}
+
 float measure_intrinsic_width(
     const aether_layout_engine_s* engine, const StyleLookup* styles,
     aether_node_s* element, const BoxStyleSnapshot& style,
@@ -2007,7 +2059,9 @@ static intrinsic_child_width_s measure_child_intrinsic_width_parts(
     // calculated. CSS Sizing therefore treats it as auto at this stage.
     const bool percentage_dependent_width =
         layout_measure_has_percentage(measures, "width", child_style.width);
-    const float specified = percentage_dependent_width
+    const auto keyword = [&](const char* name) { return measures ? measures->intrinsic_keyword(name) : aether::css::intrinsic_size_keyword::none; };
+    const bool intrinsic_keyword = keyword("width") != aether::css::intrinsic_size_keyword::none || keyword("min-width") != aether::css::intrinsic_size_keyword::none || keyword("max-width") != aether::css::intrinsic_size_keyword::none;
+    const float specified = percentage_dependent_width || keyword("width") != aether::css::intrinsic_size_keyword::none
         ? NAN
         : resolve(engine, child_style.width, maximum, child_style);
     auto child_padding = resolve_padding_edges(engine, child_style.padding, edge_reference, child_style,
@@ -2019,6 +2073,13 @@ static intrinsic_child_width_s measure_child_intrinsic_width_parts(
     const auto checked = checked_intrinsic_width;
     checked(decorations);
 
+    // A constraint keyword needs independent raw sizes even with a definite
+    // width. Never derive M/X from the already constrained contribution.
+    intrinsic_widths_s raw;
+    if (intrinsic_keyword) raw = measure_intrinsic_widths(engine, styles, child, child_style,
+        child_padding, child_border, maximum, result, {true,true});
+    const bool used_phase = context == child_width_context_e::inline_height;
+    const auto phase_for = [&](bool minimum) { return used_phase ? intrinsic_keyword_phase_e::used : minimum ? intrinsic_keyword_phase_e::min_contribution : intrinsic_keyword_phase_e::max_contribution; };
     intrinsic_widths_s widths;
     float raw_min_content = NAN;
     if (std::isfinite(specified)) {
@@ -2027,8 +2088,12 @@ static intrinsic_child_width_s measure_child_intrinsic_width_parts(
             : specified;
         widths = {width, width};
     } else {
-        widths = measure_intrinsic_widths(engine, styles, child, child_style,
+        widths = intrinsic_keyword ? raw : measure_intrinsic_widths(engine, styles, child, child_style,
                                          child_padding, child_border, maximum, result, request);
+        if (keyword("width") != aether::css::intrinsic_size_keyword::none) {
+            if (request.minimum) widths.min_content = resolve_intrinsic_keyword(keyword("width"), "width", raw, maximum, aether_thicknessf_horizontal(child_margin), used_phase, phase_for(true));
+            if (request.maximum) widths.max_content = resolve_intrinsic_keyword(keyword("width"), "width", raw, maximum, aether_thicknessf_horizontal(child_margin), used_phase, phase_for(false));
+        }
         if (request.minimum) raw_min_content = widths.min_content;
     }
     // Validate before clamping: a finite max must not disguise overflow in the
@@ -2048,18 +2113,24 @@ static intrinsic_child_width_s measure_child_intrinsic_width_parts(
         // Intrinsic percentage bases are indefinite. A percentage maximum
         // remains unbounded, including calc(0% + Xpx) recorded in the metadata.
         // A percentage minimum uses zero, retaining calc's absolute component.
-        const float max_width = layout_measure_has_percentage(measures, "max-width", child_style.max_width)
+        const float max_width = keyword("max-width") != aether::css::intrinsic_size_keyword::none ||
+            layout_measure_has_percentage(measures, "max-width", child_style.max_width)
             ? NAN : resolve(engine, child_style.max_width, 0.f, child_style);
-        const float min_width = resolve(engine, child_style.min_width, 0.f, child_style);
+        const float min_width = keyword("min-width") != aether::css::intrinsic_size_keyword::none
+            ? NAN : resolve(engine, child_style.min_width, 0.f, child_style);
         const float max_border = std::isfinite(max_width) ? border_limit(max_width) : NAN;
         const float min_border = std::isfinite(min_width) ? border_limit(min_width) : NAN;
-        const auto clamp = [&](float width) {
-            if (std::isfinite(max_border)) width = std::min(width, max_border);
-            if (std::isfinite(min_border)) width = std::max(width, min_border);
+        const auto clamp = [&](float width, intrinsic_keyword_phase_e phase) {
+            const float upper = keyword("max-width") != aether::css::intrinsic_size_keyword::none
+                ? resolve_intrinsic_keyword(keyword("max-width"), "max-width", raw, maximum, aether_thicknessf_horizontal(child_margin), used_phase, phase) : max_border;
+            const float lower = keyword("min-width") != aether::css::intrinsic_size_keyword::none
+                ? resolve_intrinsic_keyword(keyword("min-width"), "min-width", raw, maximum, aether_thicknessf_horizontal(child_margin), used_phase, phase) : min_border;
+            if (std::isfinite(upper)) width = std::min(width, upper);
+            if (std::isfinite(lower)) width = std::max(width, lower);
             return std::max(decorations, width);
         };
-        if (request.minimum) widths.min_content = clamp(widths.min_content);
-        if (request.maximum) widths.max_content = clamp(widths.max_content);
+        if (request.minimum) widths.min_content = clamp(widths.min_content, phase_for(true));
+        if (request.maximum) widths.max_content = clamp(widths.max_content, phase_for(false));
     }
     return {widths, checked(aether_thicknessf_horizontal(child_margin)), raw_min_content,
             child_padding, child_border};
@@ -2091,7 +2162,7 @@ float measure_child_natural_width(
 static float select_intrinsic_flex_item_width(
     const aether_layout_engine_s* engine, const StyleLookup* styles,
     aether_node_s* child, float maximum, aether_layout_result_s* result,
-    float contribution, intrinsic_child_width_s& natural) {
+    float contribution, intrinsic_child_width_s& natural, intrinsic_keyword_phase_e phase) {
     const auto child_style = get_style(styles, child);
     const bool table_box = child_style.display == AETHER_DISPLAY_TABLE ||
         child_style.display == AETHER_DISPLAY_TABLE_ROW || child_style.display == AETHER_DISPLAY_TABLE_CELL;
@@ -2111,9 +2182,11 @@ static float select_intrinsic_flex_item_width(
     } else {
         return contribution;
     }
+    const auto keyword = [&](const char* property) { return measures ? measures->intrinsic_keyword(property) : aether::css::intrinsic_size_keyword::none; };
+    const bool keyword_basis = keyword(basis_property) != aether::css::intrinsic_size_keyword::none;
     // A probing maximum never makes a percentage basis definite, even when
     // calc simplification removed a zero-percent term from the scalar value.
-    if (basis_length.unit == AETHER_CSS_UNIT_AUTO ||
+    if ((!keyword_basis && basis_length.unit == AETHER_CSS_UNIT_AUTO) ||
         layout_measure_has_percentage(measures, basis_property, basis_length))
         return contribution;
 
@@ -2124,6 +2197,8 @@ static float select_intrinsic_flex_item_width(
     const float decoration = checked_intrinsic_width(
         aether_thicknessf_horizontal(padding) + aether_thicknessf_horizontal(border));
     const auto border_size = [&](aether_css_length length, const char* property = nullptr) {
+        if (property && keyword(property) != aether::css::intrinsic_size_keyword::none)
+            return measure_keyword_border_width(engine, styles, child, child_style, property, maximum, false, result, phase);
         float used;
         const auto tree = measures && property ? measures->contextual_tree(property) : aether::css::math_tree{};
         if (tree) {
@@ -2147,10 +2222,10 @@ static float select_intrinsic_flex_item_width(
     // automatic minimum's content-size suggestion.
     aether_flex_item_input_s item{};
     item.main_decoration_size = decoration;
-    item.min_main_size = border_size(child_style.min_width);
+    item.min_main_size = border_size(child_style.min_width, "min-width");
     item.max_main_size = layout_measure_has_percentage(measures, "max-width", child_style.max_width)
-        ? NAN : border_size(child_style.max_width);
-    if (child_style.min_width.unit == AETHER_CSS_UNIT_AUTO) {
+        ? NAN : border_size(child_style.max_width, "max-width");
+    if (child_style.min_width.unit == AETHER_CSS_UNIT_AUTO && keyword("min-width") == aether::css::intrinsic_size_keyword::none) {
         item.automatic_minimum.is_scroll_container =
             flex_automatic_minimum_is_zero_for_overflow(child_style.overflow_x);
         if (!item.automatic_minimum.is_scroll_container) {
@@ -2162,7 +2237,7 @@ static float select_intrinsic_flex_item_width(
             item.automatic_minimum.content_size_suggestion = natural.raw_min_content;
             item.automatic_minimum.specified_size_suggestion =
                 layout_measure_has_percentage(measures, "width", child_style.width)
-                    ? NAN : border_size(child_style.width);
+                    ? NAN : border_size(child_style.width, "width");
             item.automatic_minimum.max_main_size = item.max_main_size;
         }
     }
@@ -2190,14 +2265,14 @@ static intrinsic_widths_s measure_intrinsic_flex_widths(
         if (request.minimum) {
             const float width = !column && !wrap_row
                 ? select_intrinsic_flex_item_width(engine, styles, child, maximum, result,
-                    natural.border_box.min_content, natural)
+                    natural.border_box.min_content, natural, intrinsic_keyword_phase_e::min_contribution)
                 : natural.border_box.min_content;
             minimums.push_back(checked_intrinsic_width(width + natural.margins));
         }
         if (request.maximum) {
             const float width = !column
                 ? select_intrinsic_flex_item_width(engine, styles, child, maximum, result,
-                    natural.border_box.max_content, natural)
+                    natural.border_box.max_content, natural, intrinsic_keyword_phase_e::max_contribution)
                 : natural.border_box.max_content;
             maximums.push_back(checked_intrinsic_width(width + natural.margins));
         }

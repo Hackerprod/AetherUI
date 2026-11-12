@@ -3,6 +3,7 @@
 // geometry profile, never a claim of complete CSS coverage.
 #include "h4_profile.h"
 #include "h7_profile.h"
+#include "h8_profile.h"
 #include "../../native/src/style_runtime/h5_parser_profile.h"
 #include "../../native/src/style_runtime/h5_color_profile.h"
 #include "../../native/src/style_runtime/supports_condition.h"
@@ -34,7 +35,7 @@ struct Scanner {
    size_t end=i;if(end>=start+2&&d(end-2,'!')&&ts[end-1].kind==css_variable_token_kind::ident&&ident(end-1)=="important")end-=2;
    if(start==end){out.valid=false;return;}
    auto value=s.substr(ts[start].begin,ts[end-1].end-ts[start].begin);
-   if(!h7::declaration(property,value))out.valid=false;
+   if(!h7::declaration(property,value)||!h8::declaration(property,value))out.valid=false;
    if(h5_rgba_declaration_supported(property,value))for(size_t j=start;j<end;++j)if(ts[j].kind==css_variable_token_kind::function)out.functions.insert(ts[j].begin);
   }
  }

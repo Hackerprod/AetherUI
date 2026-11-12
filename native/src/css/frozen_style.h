@@ -1,4 +1,5 @@
 #pragma once
+#include "intrinsic_size_keyword.h"
 #include "style_read_view.h"
 #include <memory>
 #include <unordered_map>
@@ -107,13 +108,15 @@ class FrozenMeasures {
     const ImmutableArray<MeasureBackgroundSize> sizes_;
     const ImmutableArray<FrozenPropertyDependency> dependencies_;
     const std::unordered_map<std::string, aether::css::math_tree> contextual_lengths_;
+    const std::unordered_map<std::string, aether::css::intrinsic_size_keyword> intrinsic_keywords_;
 public:
     FrozenMeasures(MeasureScalarValues scalars, std::shared_ptr<const FrozenDocumentMeasureContext> document,
         ImmutableArray<MeasureBackgroundPosition> positions, ImmutableArray<MeasureBackgroundSize> sizes,
         ImmutableArray<FrozenPropertyDependency> dependencies,
-        std::unordered_map<std::string, aether::css::math_tree> contextual_lengths = {})
+        std::unordered_map<std::string, aether::css::math_tree> contextual_lengths = {},
+        std::unordered_map<std::string, aether::css::intrinsic_size_keyword> intrinsic_keywords = {})
         : scalars_(scalars), document_(std::move(document)), positions_(std::move(positions)),
-          sizes_(std::move(sizes)), dependencies_(std::move(dependencies)), contextual_lengths_(std::move(contextual_lengths)) {
+          sizes_(std::move(sizes)), dependencies_(std::move(dependencies)), contextual_lengths_(std::move(contextual_lengths)), intrinsic_keywords_(std::move(intrinsic_keywords)) {
         if (!document_) throw std::invalid_argument("missing frozen document context");
     }
     const MeasureScalarValues& scalars() const noexcept { return scalars_; }
@@ -122,6 +125,11 @@ public:
     auto background_positions() const noexcept { return positions_.view(); }
     auto background_sizes() const noexcept { return sizes_.view(); }
     auto property_dependencies() const noexcept { return dependencies_.view(); }
+    const auto& intrinsic_keywords() const noexcept { return intrinsic_keywords_; }
+    aether::css::intrinsic_size_keyword intrinsic_keyword(const std::string& name) const {
+        const auto i = intrinsic_keywords_.find(name);
+        return i == intrinsic_keywords_.end() ? aether::css::intrinsic_size_keyword::none : i->second;
+    }
     const auto& contextual_lengths() const noexcept { return contextual_lengths_; }
     aether::css::math_tree contextual_tree(const std::string& name) const {
         const auto found = contextual_lengths_.find(name);

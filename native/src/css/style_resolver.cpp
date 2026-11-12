@@ -55,7 +55,7 @@ AETHER_API aether_computed_style_handle_t aether_style_map_get(aether_style_map_
 
 AETHER_API aether_status_t aether_computed_style_copy(aether_computed_style_handle_t handle, aether_computed_style_t* out) {
     if (!handle || !out) return AETHER_ERROR_NULL_ARG;
-    if (handle->measures && (!handle->measures->contextual_lengths().empty() || handle->measures->scalars().flex_order != 0)) return AETHER_ERROR_INVALID_STATE;
+    if (handle->measures && (!handle->measures->contextual_lengths().empty() || !handle->measures->intrinsic_keywords().empty() || handle->measures->scalars().flex_order != 0)) return AETHER_ERROR_INVALID_STATE;
     return computed_style_deep_copy(handle->style, out);
 }
 

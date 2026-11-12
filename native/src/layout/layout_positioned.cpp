@@ -152,9 +152,13 @@ void layout_positioned_children(
         positioned_margin_axis vertical(containing.height, top, bottom, margin.top, margin.bottom,
                                         style.margin.top, style.margin.bottom);
 
-        const float specified_width = resolve(engine, style.width, containing.width, style);
+        const auto measures = layout_measures(styles, node);
+        const bool keyword_width = measures &&
+            measures->intrinsic_keyword("width") != aether::css::intrinsic_size_keyword::none;
+        // An owned intrinsic keyword is neither a public CSS length nor auto.
+        const float specified_width = keyword_width ? NAN : resolve(engine, style.width, containing.width, style);
         const float specified_height = resolve(engine, style.height, containing.height, style);
-        const bool constrain_width = !std::isfinite(specified_width) &&
+        const bool constrain_width = !keyword_width && !std::isfinite(specified_width) &&
             std::isfinite(left) && std::isfinite(right);
         const bool constrain_height = !std::isfinite(specified_height) &&
             std::isfinite(top) && std::isfinite(bottom);
@@ -165,9 +169,50 @@ void layout_positioned_children(
         const float forced_height = std::max(0.f, (vertical.eligible ? vertical.span : containing.height - top - bottom) -
                                               aether_thicknessf_vertical(margin));
 
+        float intrinsic_available_width = NAN;
+        const auto is_fit_content = [&](const char* property) {
+            return measures && measures->intrinsic_keyword(property) == aether::css::intrinsic_size_keyword::fit_content;
+        };
+        if (is_fit_content("width") || is_fit_content("min-width") || is_fit_content("max-width")) {
+            // Keep percentage resolution on the original containing block. Only the
+            // fit-content available span is reduced by the insets (Blink absolute_utils).
+            intrinsic_available_width = std::max(0.f, containing.width -
+                (std::isfinite(left) ? left : 0.f) - (std::isfinite(right) ? right : 0.f));
+
+            if (!std::isfinite(left) && !std::isfinite(right)) {
+                // With two auto insets the static-position edge defines the span.
+                // Measure the anchor with zero size, then retain its start/end/center bias.
+                auto anchor = static_position(node);
+                bool end_bias = false, center_bias = false;
+                if (!only_node && block_anchor_index < parent_box->block_static_anchors.size() &&
+                    parent_box->block_static_anchors[block_anchor_index].node == node) {
+                    anchor.x = parent_content_box.x + parent_box->block_static_anchors[block_anchor_index].inline_offset;
+                } else if (parent_box->style.display == AETHER_DISPLAY_FLEX) {
+                    anchor = flex_static_position(style, parent_content_box, {0.f,0.f,0.f,0.f});
+                    const auto axis = flex_axis(parent_box->style.flex_direction);
+                    if (axis.horizontal) {
+                        const auto justify = parent_box->style.justify_content;
+                        center_bias = justify == AETHER_JUSTIFY_CENTER;
+                        end_bias = justify == AETHER_JUSTIFY_LOGICAL_END ||
+                            (justify != AETHER_JUSTIFY_LOGICAL_START &&
+                             ((justify == AETHER_JUSTIFY_END) != axis.reverse));
+                    } else {
+                        const auto align = style.align_self == AETHER_ALIGN_SELF_AUTO
+                            ? parent_box->style.align_items : style.align_self;
+                        center_bias = align == AETHER_ALIGN_CENTER;
+                        end_bias = align == AETHER_ALIGN_END;
+                    }
+                }
+                const float offset = anchor.x - containing.x;
+                intrinsic_available_width = std::max(0.f, center_bias
+                    ? 2.f * std::min(offset, containing.width - offset)
+                    : end_bias ? offset : containing.width - offset);
+            }
+        }
+
         auto* child_box = layout_element(engine, styles, node, containing, containing.height, containing.y,
                                          false, forced_width, constrain_width,
-                                         forced_height, constrain_height ? forced_height_kind_e::definite : forced_height_kind_e::none, true, result);
+                                         forced_height, constrain_height ? forced_height_kind_e::definite : forced_height_kind_e::none, true, result, nullptr, nullptr, nullptr, intrinsic_available_width);
 
         // Sizing owns min/max and the decoration floor. Resolve positioned auto
         // margins only after that single layout call has produced the final border box.

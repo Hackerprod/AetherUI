@@ -33,6 +33,9 @@ measure_inputs_s MeasuresReadView::inputs_with_self_font(float font) const {
     const auto& d=frozen_->document().values();
     return {font,d.viewport_width,d.viewport_height,d.initial_font_size,d.root_font_size};
 }
+aether::css::intrinsic_size_keyword MeasuresReadView::intrinsic_keyword(const std::string& name) const {
+    return frozen_ ? frozen_->intrinsic_keyword(name) : builder_ ? builder_->intrinsic_keyword(name) : aether::css::intrinsic_size_keyword::none;
+}
 aether::css::math_tree MeasuresReadView::contextual_tree(const std::string& name) const {
     return frozen_ ? frozen_->contextual_tree(name) : builder_ ? builder_->tree(name) : nullptr;
 }
@@ -67,7 +70,7 @@ aether_status_t freeze_runtime_measures(const measure_state_s& source, FrozenDoc
         std::vector<PropertyDependencyInput> dependencies;
         dependencies.reserve(source.property_dependencies.size());
         for(const auto& [name, flags]:source.property_dependencies) if(flags) dependencies.push_back({name,flags});
-        return freeze_measures(scalars,std::move(document),positions,sizes,dependencies,output,source.contextual_lengths);
+        return freeze_measures(scalars,std::move(document),positions,sizes,dependencies,output,source.contextual_lengths,source.intrinsic_keywords);
     } catch(const std::bad_alloc&) { return AETHER_ERROR_OUT_OF_MEMORY; }
       catch(...) { return AETHER_ERROR_INVALID_STATE; }
 }

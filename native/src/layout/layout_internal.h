@@ -17,6 +17,7 @@
 #include "flex_resolver.h"
 #include "flex_axis.h"
 #include "intrinsic_sizing.h"
+#include "../css/intrinsic_size_keyword.h"
 #include "margin_adjacency.h"
 #include "text_justify.h"
 #include "table_layout.h"
@@ -111,7 +112,9 @@ aether_layout_box_s* layout_element(
        computed overflow stays untouched (paint keeps the used value). */
     const int32_t* viewport_overflow_override = nullptr,
     element_completion_s* deferred_completion = nullptr,
-    const intrinsic_measurement_s* intrinsic_measurement = nullptr);
+    const intrinsic_measurement_s* intrinsic_measurement = nullptr,
+    // OOF inset span for intrinsic keywords only; percentages use containing_block.
+    float intrinsic_available_width = NAN);
 
 float layout_flow_children(
     const aether_layout_engine_s* engine,
@@ -209,6 +212,18 @@ intrinsic_widths_s measure_intrinsic_widths(
     aether_node_s* element, const BoxStyleSnapshot& style,
     aether_thicknessf padding, aether_thicknessf border, float maximum,
     aether_layout_result_s* result, intrinsic_width_request_s request);
+
+// All keyword inputs/outputs are border-box. Indefinite is represented by NaN
+// only at this private geometry boundary, never encoded in a public CSS length.
+enum class intrinsic_keyword_phase_e { used, min_contribution, max_contribution };
+float resolve_intrinsic_keyword(aether::css::intrinsic_size_keyword keyword,
+    const char* property, intrinsic_widths_s raw, float available, float margins,
+    bool definite, intrinsic_keyword_phase_e phase);
+float measure_keyword_border_width(const aether_layout_engine_s* engine,
+    const StyleLookup* styles, aether_node_s* element, const BoxStyleSnapshot& style,
+    const char* property, float available, bool definite, aether_layout_result_s* result,
+    intrinsic_keyword_phase_e phase = intrinsic_keyword_phase_e::used,
+    float intrinsic_available_width = NAN);
 
 float measure_intrinsic_width(
     const aether_layout_engine_s* engine,

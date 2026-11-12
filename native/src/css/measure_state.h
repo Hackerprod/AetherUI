@@ -1,6 +1,7 @@
 #pragma once
 #include <aether/aether.h>
 #include "contextual_math.h"
+#include "intrinsic_size_keyword.h"
 #include <memory>
 #include <unordered_map>
 #include <string>
@@ -49,6 +50,7 @@ struct measure_state_s {
     uint32_t dependencies = 0;
     std::unordered_map<std::string, uint32_t> property_dependencies;
     std::unordered_map<std::string, aether::css::math_tree> contextual_lengths;
+    std::unordered_map<std::string, aether::css::intrinsic_size_keyword> intrinsic_keywords;
 };
 // A unit conversion observes only these numeric inputs. It never owns or
 // copies a node's lists/dependency table, and cannot mutate the document.
@@ -88,6 +90,7 @@ struct measure_property_delta_s {
     std::optional<uint32_t> property_dependencies;
     // Absent key = unchanged; null tree = erase; non-null = replacement.
     std::unordered_map<std::string, aether::css::math_tree> contextual_lengths;
+    std::unordered_map<std::string, aether::css::intrinsic_size_keyword> intrinsic_keywords;
 };
 
 // Ephemeral, deeply const reads. A view never escapes the operation retaining
@@ -109,6 +112,12 @@ public:
         }
         const auto found = base_->contextual_lengths.find(property);
         return found == base_->contextual_lengths.end() ? nullptr : found->second;
+    }
+    aether::css::intrinsic_size_keyword intrinsic_keyword(const std::string& name) const {
+        if (delta_) { const auto i = delta_->intrinsic_keywords.find(name);
+            if (i != delta_->intrinsic_keywords.end()) return i->second; }
+        const auto i = base_->intrinsic_keywords.find(name);
+        return i == base_->intrinsic_keywords.end() ? aether::css::intrinsic_size_keyword::none : i->second;
     }
     int32_t flex_order() const noexcept {
         return delta_ && delta_->flex_order ? *delta_->flex_order : base_->flex_order;
@@ -165,6 +174,12 @@ public:
             if (tree) target_->contextual_lengths.insert_or_assign(property, std::move(tree));
             else target_->contextual_lengths.erase(property);
         } else delta_->contextual_lengths.insert_or_assign(property, std::move(tree));
+    }
+    void set_intrinsic_keyword(const std::string& name, aether::css::intrinsic_size_keyword value) {
+        if (target_) {
+            if (value == aether::css::intrinsic_size_keyword::none) target_->intrinsic_keywords.erase(name);
+            else target_->intrinsic_keywords.insert_or_assign(name, value);
+        } else delta_->intrinsic_keywords.insert_or_assign(name, value);
     }
     uint32_t property_dependencies() const { return read().property_dependencies(*property_); }
     void set_property_dependencies(uint32_t flags) {

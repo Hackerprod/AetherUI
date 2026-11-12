@@ -224,6 +224,9 @@ AETHER_SIDECAR_COMPARATOR(property_dependencies) {
     percentage_delta(result, before, after, "row-gap", a.scalars().row_gap, b.row_gap);
     percentage_delta(result, before, after, "column-gap", a.scalars().column_gap, b.column_gap);
 } AETHER_SIDECAR_END
+AETHER_SIDECAR_COMPARATOR(intrinsic_keywords) {
+    sidecar_changed<StyleSidecar::intrinsic_keywords>(result, input.previous.intrinsic_keywords() != input.candidate.intrinsic_keywords);
+} AETHER_SIDECAR_END
 AETHER_SIDECAR_COMPARATOR(contextual_lengths) {
     const auto& before = input.previous.contextual_lengths();
     const auto& after = input.candidate.contextual_lengths;

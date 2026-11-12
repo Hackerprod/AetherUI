@@ -260,7 +260,8 @@ static void payloads_and_sidecars(bool contextual) {
         {"line-height:2;font-size:16px", "line-height:32px;font-size:16px", 81},
         {"row-gap:1px;column-gap:2px", "row-gap:1px;column-gap:3px", 17},
         {"transition-duration:1s", "transition-duration:2s", 2},
-        {"width:100px", "width:garbage;width:100px;font-style:italic;order:2;letter-spacing:3px", 0},
+        {"width:100px", "width:garbage;width:100px;font-style:italic;letter-spacing:3px", 0},
+        {"order:0", "order:2", 7}, // H7 made order a real geometric sidecar.
         {"color:red;background-color:blue", "background-color:blue;color:red", 0},
         {"--w:100px;width:var(--w)", "width:100px", 0},
         {"opacity:.5", "opacity:initial", 12},

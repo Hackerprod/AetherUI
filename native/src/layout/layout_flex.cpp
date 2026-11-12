@@ -203,6 +203,7 @@ struct resolved_flex_children_s {
 
 static bool flex_length_is_definite(aether_css_length length, bool main_size_is_definite,
     const std::optional<aether::style::MeasuresReadView>& measures, const char* property) {
+    if (measures && measures->intrinsic_keyword(property) != aether::css::intrinsic_size_keyword::none) return false;
     if (layout_measure_has_percentage(measures, property, length)) return main_size_is_definite;
     return length.unit != AETHER_CSS_UNIT_AUTO;
 }
@@ -211,7 +212,12 @@ static float resolve_flex_main_border_size(const aether_layout_engine_s* engine,
                                            const BoxStyleSnapshot& style,
                                            const aether_rectf& content,
                                            bool horizontal, bool main_size_is_definite,
-                                           aether_css_length length, const std::optional<aether::style::MeasuresReadView>& measures, const char* property) {
+                                           aether_css_length length, const std::optional<aether::style::MeasuresReadView>& measures, const char* property,
+                                           const StyleLookup* styles, aether_node_s* element, aether_layout_result_s* result) {
+    if (measures && measures->intrinsic_keyword(property) != aether::css::intrinsic_size_keyword::none) {
+        if (!horizontal) throw std::invalid_argument("Intrinsic flex basis requires a horizontal main axis");
+        return measure_keyword_border_width(engine, styles, element, style, property, content.width, main_size_is_definite, result);
+    }
     if (!flex_length_is_definite(length, main_size_is_definite, measures, property)) return NAN;
     const float reference = horizontal ? content.width : content.height;
     float value;
@@ -343,12 +349,16 @@ static resolved_flex_children_s resolve_flex_children(
             item.basis.kind = child_style.flex_basis.kind;
             item.basis.specified_main_size = resolve_flex_main_border_size(
                 engine, child_style, content, horizontal, main_size_is_definite,
-                horizontal ? child_style.width : child_style.height, measures, horizontal ? "width" : "height");
+                horizontal ? child_style.width : child_style.height, measures, horizontal ? "width" : "height", styles, child, result);
             item.basis.resolved_length = resolve_flex_main_border_size(
                 engine, child_style, content, horizontal, main_size_is_definite,
-                child_style.flex_basis.length, measures, "flex-basis");
+                child_style.flex_basis.length, measures, "flex-basis", styles, child, result);
             item.basis.length_is_definite = child_style.flex_basis.kind == AETHER_FLEX_BASIS_LENGTH &&
                 flex_length_is_definite(child_style.flex_basis.length, main_size_is_definite, measures, "flex-basis");
+            // A resolved intrinsic basis is usable geometry, not a definite CSS
+            // length for descendant percentage resolution.
+            if (measures && measures->intrinsic_keyword("flex-basis") != aether::css::intrinsic_size_keyword::none)
+                item.basis.length_is_definite = std::isfinite(item.basis.resolved_length);
             const bool uses_content_basis = item.basis.kind == AETHER_FLEX_BASIS_CONTENT ||
                 (item.basis.kind == AETHER_FLEX_BASIS_LENGTH
                     ? !(item.basis.length_is_definite && std::isfinite(item.basis.resolved_length))
@@ -356,7 +366,7 @@ static resolved_flex_children_s resolve_flex_children(
             item.min_main_size = resolve_flex_main_border_size(
                 engine, child_style, content, horizontal, main_size_is_definite,
                 horizontal ? child_style.min_width : child_style.min_height, measures,
-                horizontal ? "min-width" : "min-height");
+                horizontal ? "min-width" : "min-height", styles, child, result);
             const int32_t main_axis_overflow = horizontal ? child_style.overflow_x : child_style.overflow_y;
             item.automatic_minimum.is_scroll_container =
                 flex_automatic_minimum_is_zero_for_overflow(main_axis_overflow);
@@ -416,6 +426,7 @@ static resolved_flex_children_s resolve_flex_children(
         // content and unresolved percentage bases remain content-dependent.
         const auto semantic_main_is_definite = [&](aether_css_length length, float resolved, const char* property) {
             return std::isfinite(resolved) &&
+                !(measures && measures->intrinsic_keyword(property) != aether::css::intrinsic_size_keyword::none) &&
                 (!layout_measure_has_percentage(measures, property, length) || horizontal || containing_height.has_value());
         };
         const bool used_basis_is_definite =
@@ -428,7 +439,7 @@ static resolved_flex_children_s resolve_flex_children(
             (containing_height.has_value() || used_basis_is_definite));
         item.max_main_size = resolve_flex_main_border_size(
             engine, child_style, content, horizontal, main_size_is_definite,
-            horizontal ? child_style.max_width : child_style.max_height, measures, horizontal ? "max-width" : "max-height");
+            horizontal ? child_style.max_width : child_style.max_height, measures, horizontal ? "max-width" : "max-height", styles, children[index], result);
         const auto child_padding = resolve_padding_edges(engine, child_style.padding, content.width, child_style);
         const auto child_border = resolve_border_edges(engine, child_style, content.width);
         // Keep the raw border-box flex base, decoration and margins distinct.
