@@ -195,7 +195,7 @@ for index, declaration in enumerate([
     # absence proof. Writing-mode/direction remain GLOBAL H8 restrictions.
     run('authored_' + str(index), document(css='.unmatched{' + declaration + '}'), index >= 6)
     run('matched_authored_' + str(index), document(css='canvas{' + declaration + '}'), False)
-    run('inline_authored_' + str(index), document(tail='<div style="' + declaration + '"></div>'), False)
+    run('inline_authored_' + str(index), document(tail='<div style="' + declaration + '"></div>'), index >= 14)
 run('comment_not_declaration', document(css='/* direction:rtl; writing-mode:vertical-rl */ canvas{min-width:0px;max-width:none}'))
 run('dir_html', document(attrs='width="100" height="50" dir="ltr"'), False)
 for index, css in enumerate([

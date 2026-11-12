@@ -295,3 +295,12 @@ sh tests/isolated_capture/run_h12_core.sh /tmp/h12-build
 
 See `H12_EVIDENCE.md`. This test is neither a leak detector nor a performance
 benchmark; the original full flexbox page is still unsupported.
+
+### H13 finite pixel min/max for explicit canvas dimensions
+
+The canvas profile supports finite px min/max constraints when both CSS axes
+are explicitly px, with box-sizing, decoration floors and min-over-max
+precedence checked against independent expected sizes. Ancestor and sibling
+limits still require the existing geometric/no-shrink checks. Auto/intrinsic
+canvas combinations, percentage limits and expressions are not newly admitted.
+See `H13_EVIDENCE.md` and manual `run_h13_core.sh` / `test_h13.py`.

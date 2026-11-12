@@ -19,31 +19,32 @@ def run(css='',ok=True,tail='',extrahead='',inline='',content=body):
  return (out/'aether.png').read_bytes(),fields['canvas_0_content']
 control=run()
 for selector in ['#unrelated','.missing','missing','#none canvas','#none > canvas','canvas + .missing','canvas ~ .missing','canvas:nth-child(4)','#none, .missing',r'#\75 nrelated','[missing]','[id="none"]','#none/*x*/ > /*y*/canvas']:
- assert run(selector+'{min-height:72px}')==control
+ assert run(selector+'{min-height:72%}')==control
 for prop in ['min-width:72px','max-width:72px','max-height:72px','aspect-ratio:2','align-self:baseline','position:sticky']:
  assert run('#unrelated{'+prop+'}')==control
 for prop in ['direction:rtl','writing-mode:vertical-rl']:
  run('#unrelated{'+prop+'}',False)
+# H13 uses percentage limits here: finite px limits are now supported.
 # Matching anywhere, including hidden and metadata, retains old H3 check.
 for selector in ['canvas','.row','.peer','body','head','style','html','#unrelated, canvas','canvas:nth-child(1)',r'c\61 nvas']:
- run(selector+'{min-height:72px}',False)
-run('#unrelated{min-height:72px}',False,tail='<div id="unrelated" style="display:none"></div>')
-run('#unrelated{min-height:72px}',False,extrahead='<meta id="unrelated">')
-run('#unrelated{min-height:72px}',False,content='<div id="unrelated"></div>'+body)
-run('#unrelated{min-height:72px}',False,content='<div><div id="unrelated"></div>'+body+'</div>')
-run('',False,tail='<div style="min-height:72px"></div>')
-run('',False,inline='style="min-height:72px"')
+ run(selector+'{min-height:72%}',False)
+run('#unrelated{min-height:72%}',False,tail='<div id="unrelated" style="display:none"></div>')
+run('#unrelated{min-height:72%}',False,extrahead='<meta id="unrelated">')
+run('#unrelated{min-height:72%}',False,content='<div id="unrelated"></div>'+body)
+run('#unrelated{min-height:72%}',False,content='<div><div id="unrelated"></div>'+body+'</div>')
+run('',False,tail='<div style="min-height:72%"></div>')
+run('',False,inline='style="min-height:72%"')
 # Global controls retained even if selector has no matches; includes inactive CSS.
-for css in ['#unrelated{width:unknown(1)}','#unrelated{background:url(x.png)}','#unrelated{width:var(--x)}','@media print{#unrelated{min-height:72px}}','@supports(display:flex){#unrelated{min-height:72px}}','#unrelated:hover{min-height:72px}','#unrelated::before{min-height:72px}','#unrelated:not(:hover){min-height:72px}','#unrelated, {min-height:72px}','#unrelated{min-height:72px','a a a a a{min-height:72px}']:
+for css in ['#unrelated{width:unknown(1)}','#unrelated{background:url(x.png)}','#unrelated{width:var(--x)}','@media print{#unrelated{min-height:72%}}','@supports(display:flex){#unrelated{min-height:72%}}','#unrelated:hover{min-height:72%}','#unrelated::before{min-height:72%}','#unrelated:not(:hover){min-height:72%}','#unrelated, {min-height:72%}','#unrelated{min-height:72%','a a a a a{min-height:72%}']:
  run(css,False)
 # DOM and rule budgets fail conservatively, never converting unknown to no match.
-run('#unrelated{min-height:72px}',False,tail='<div></div>'*1030)
-run('#unrelated{min-height:72px}'*513,False)
+run('#unrelated{min-height:72%}',False,tail='<div></div>'*1030)
+run('#unrelated{min-height:72%}'*513,False)
 # An actual variable/inheritance declaration remains checked on its matching rule.
 run('body{--h:72px}canvas{min-height:var(--h)}',False)
-run('body{min-height:72px}canvas{min-height:inherit}',False)
+run('body{min-height:72%}canvas{min-height:inherit}',False)
 # No omission changes a second independent canvas either.
-assert run('.row{height:80px}#unrelated{min-height:72px}',content=body+body)==run('.row{height:80px}',content=body+body)
+assert run('.row{height:80px}#unrelated{min-height:72%}',content=body+body)==run('.row{height:80px}',content=body+body)
 original=pathlib.Path('tests/visual_compare/fixtures/flexbox_runtime_validation.html');assert hashlib.sha256(original.read_bytes()).hexdigest()=='eab17055687df3296d8b911b0217dfb0429c306a6aa57ab49895937a6a34b837'
 p=subprocess.run([binary,'--geometry',str(original),str(root/'original'),'300','180','1'],capture_output=True);assert p.returncode==3
 (root/'metrics.json').write_text(json.dumps(results,indent=2))
