@@ -1,4 +1,4 @@
-# H1.1 isolated geometry CLI: first implementation
+# Isolated geometry CLI: H1/H2 with H3 initial-empty canvas
 
 Linux-only, C++20, manual build/run. No Actions, windows, .NET, Chromium or
 system font fallback. This is not a general HTML/CSS conformance validator.
@@ -41,7 +41,8 @@ engine lexer with a work budget. Preparation/raster retain their existing limits
 
 For this first cut all CSS at-rules and function tokens are rejected,
 including otherwise harmless media/calc/color syntax, conservatively. All
-script/link/image/SVG/media/embed elements are rejected. No resources are
+link/image/SVG/media/embed elements and executable scripts are rejected.
+H3 exceptions for initial-empty canvas and hidden inert JSON are described below. No resources are
 silently downloaded. Non-whitespace body text is rejected before layout;
 metadata text is exempt from that preflight, but any text measurement request
 invalidates the operation before image publication. The internal sentinel
@@ -103,3 +104,58 @@ Run `python3 tests/isolated_capture/test_inventory.py /path/to/aether_capture`
 for the manual fixture and synthetic diagnostic regression. Python is test tooling,
 not a runtime dependency of the C++ capture executable. The original fixture is
 unchanged and still rejected without an image before style/layout/raster.
+
+
+## H3: initial-empty canvas, not a canvas drawing API
+
+The isolated CLI explicitly activates the private per-engine initial canvas mode.
+Public bindings remain unchanged and mode defaults off. A canvas retains its DOM
+fallback but does not lay out, measure or paint it in this mode. Its initial
+bitmap is transparent: no content command and no bitmap storage. Ordinary box
+background/border/clip/grouped opacity are still painted.
+
+This is **scripting-enabled initial canvas semantics without executing scripts**,
+not Chromium's globally scripting-disabled fallback mode. Reports say
+`canvas_mode=ENABLED_INITIAL_EMPTY`, `javascript_execution=NONE`, and
+`chromium=NOT_RUN`. No browser comparison has been executed.
+
+The admitted profile is direct children of a definite-width row flex container,
+no wrap, effective start/center alignment, zero growth, auto basis and proven
+absence of main-axis shrink. Sizes are auto/px; CSS box-sizing and intrinsic
+ratio are used. Zero intrinsic dimensions are valid; a single auto CSS axis with
+zero intrinsic ratio rejects. Content never becomes negative beneath decoration.
+Other profiles reject before PNG. Every canvas and ancestor must remain visible
+in display-tree terms (not display:none/contents); transforms are excluded.
+
+Attribute dimensions follow non-negative HTML integer parsing, defaults 300x150,
+and Chromium's signed-int upper-bound fallback. Product limits reject valid
+intrinsics above 8192 or more than 256 canvas, without allocating bitmaps.
+The registry payload metric is entry count times entry size, explicitly excluding
+allocator/bucket overhead. RSS and CPU/wall remain measured by wait4.
+
+A conservative declaration lexer decodes escaped property names across inline
+styles and sheets and rejects direction/writing-mode/aspect-ratio/logical sizing,
+explicit unsupported minima/maxima and unclassifiable nested syntax. It is not a
+coverage certificate. Absent minima are accepted: current flat style defaults
+can retain AUTO despite the builtin property registration's `0`. Explicit
+`min-width:auto`/`min-height:auto` is rejected by the authored gate. Only absent
+or authored zero minima, and absent/none maxima, belong to this no-shrink profile.
+All existing function/at-rule/resource/text barriers remain.
+
+Only `application/json` (ASCII case-insensitive) scripts without src are inert
+candidates. Raw content is preserved. Post-style admission requires computed
+`display:none` on script or an ancestor; visible data rejects rather than being
+forcibly hidden. Executable scripts/handlers and resources inside canvas fallback
+still reject. JSON content is data and is never executed or interpreted.
+
+Manual additional tests after build:
+
+```
+sh tests/isolated_capture/run_h3_core.sh /tmp/h1-build
+python3 tests/isolated_capture/test_h3.py /tmp/h1-build/aether_capture /tmp/h3-results
+python3 tests/isolated_capture/test_inventory.py /tmp/h1-build/aether_capture
+```
+
+The original Flexbox HTML remains unchanged and rejected by independent CSS,
+SVG/image and text blockers. H3 does not make the original page renderable.
+See H3_EVIDENCE.md for exact executed checks and outstanding independent review.

@@ -33,8 +33,8 @@ inline void css(const std::string& s,const std::string& source,std::set<std::str
  }
  for(const auto& [key,count]:totals)logstream<<"inventory_css_count source="<<quoted(source)<<" token="<<quoted(key)<<" count="<<count<<"\n";
 }
-inline void element(aether_node_s* n,size_t ordinal) {
- logstream<<"inventory_element dom_ordinal="<<ordinal<<" tag="<<quoted(n->tag_name)<<" reason=RESOURCE_OR_SCRIPT_ELEMENT_UNSUPPORTED source_location=UNAVAILABLE";
+inline void element(aether_node_s* n,size_t ordinal,const char* reason="RESOURCE_OR_SCRIPT_ELEMENT_UNSUPPORTED") {
+ logstream<<"inventory_element dom_ordinal="<<ordinal<<" tag="<<quoted(n->tag_name)<<" reason="<<reason<<" source_location=UNAVAILABLE";
  for(const char* key:{"id","class","type","width","height"}){auto i=n->attributes.find(key);if(i!=n->attributes.end())logstream<<" "<<key<<"="<<quoted(i->second);}
  // Do not emit resource URLs or embedded data; preserve their identity via hash.
  auto src=n->attributes.find("src");if(src!=n->attributes.end())logstream<<" src_sha256="<<avc::sha256(src->second)<<" src_bytes="<<src->second.size();

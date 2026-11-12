@@ -105,6 +105,7 @@ struct aether_layout_box_s {
     std::vector<block_static_anchor_s> block_static_anchors;
     std::string text;
     bool  is_atomic_control = false;
+    bool is_initial_canvas = false;
     std::string control_display_text;
     bool control_shows_placeholder = false;
     aether_scroll_metrics_t scroll{};
@@ -389,7 +390,10 @@ private:
 
 /* ── Layout engine (stateless; mutable per-layout scratch) ──────── */
 
+struct initial_canvas_dimensions { float width, height; };
 struct aether_layout_engine_s {
+    bool initial_canvas_mode = false;
+    std::unordered_map<aether_node_s*, initial_canvas_dimensions> initial_canvas_entries;
     bool layout_in_progress = false;
     const StyleLookup* measure_styles = nullptr;
     std::shared_ptr<node_identity_s> measure_document;

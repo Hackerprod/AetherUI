@@ -496,7 +496,9 @@ static void paint_box(aether_display_list_builder_s* builder,
     const bool scrollbar_chrome = visible && box->element && !empty_border_box && box_has_scrollbar_chrome(builder, box);
     if (dynamic_scroll) { emit_push_scroll_offset(cmds, box->element->style_node_id); if(builder->opacity_events)++builder->native_scroll_depth; }
     // Children (or atomic control paint)
-    if (box->is_atomic_control) {
+    if (box->is_initial_canvas) {
+        // Initial bitmap is transparent; decorations already painted.
+    } else if (box->is_atomic_control) {
         if (visible) paint_control(builder, box, focused_element, ctx, cmds);
     } else {
         paint_children(builder, box, focused_element, ctx, cmds);
@@ -658,7 +660,11 @@ static void paint_background_and_border(aether_display_list_builder_s* builder, 
     }
 
     const auto border_begin = cmds.size();
-    aether_paint_border(style, box->border_box, radii, box->used_border, cmds);
+    // Native groups own opacity; applying it in the border painter again
+    // would square opacity for the very same element. Legacy output is unchanged.
+    auto border_style = style;
+    if (builder->opacity_events) border_style.opacity = 1.f;
+    aether_paint_border(border_style, box->border_box, radii, box->used_border, cmds);
     if (builder->border_groups && cmds.size() > border_begin &&
         cmds[border_begin].tag == AETHER_PAINT_FILL_BORDER_SIDE)
         builder->border_groups->push_back({border_begin, cmds.size()-border_begin});

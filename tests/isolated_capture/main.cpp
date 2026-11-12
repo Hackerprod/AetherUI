@@ -35,6 +35,7 @@ struct Objects {
 };
 aether_text_metrics_t no_text(const char*,const aether_computed_style_t*,float,void* state){*static_cast<bool*>(state)=true;return {};}
 #include "inventory.h"
+#include "h3_profile.h"
 void check_css(const std::string& s){
  css_variable_budget budget{max_bytes*4,false};css_variable_lexer lexer(s.data(),s.size(),0,&budget);
  for(;;){auto t=lexer.next();if(t.kind==css_variable_token_kind::end)break;
@@ -56,27 +57,36 @@ std::string read_input(const char* path){
 }
 int capture(const char* input,const std::string& out,int width,int height,bool geometry){
  logstream.open(out+"/worker.log",std::ios::out);if(!logstream)return 8;
- logstream<<"format=H2-diagnostic-only\ninventory_scope=DOM_EXTRACTED_CSS_AND_ELEMENTS\ninventory_locations=CSS_SOURCE_LOCAL_BYTE_OFFSETS_NOT_HTML\ninventory_semantic_context=NOT_PROVEN\noutput_domain=AetherResolvedOutput\ncss_eligibility=Unknown\ncss_reason=PARSER_COVERAGE_UNPROVEN\nauthored_css_validation=NOT_RUN\nflexbox_semantic_acceptance=false\nchromium=NOT_RUN\nnetwork_resolver=NONE\nhost_font_lookup=NONE\ninternal_parse_layout_work_limits=NOT_IMPLEMENTED\nprocess_limits=AS_1GiB_CPU_5s_STACK_8MiB_WALL_10s\ninput_limit_bytes="<<max_bytes<<"\nviewport="<<width<<"x"<<height<<"\ndpr=1\n"<<std::flush;
+ logstream<<"format=H3-initial-canvas\ncanvas_mode=ENABLED_INITIAL_EMPTY\njavascript_execution=NONE\ninventory_scope=DOM_EXTRACTED_CSS_AND_ELEMENTS\ninventory_locations=CSS_SOURCE_LOCAL_BYTE_OFFSETS_NOT_HTML\ninventory_semantic_context=NOT_PROVEN\noutput_domain=AetherResolvedOutput\ncss_eligibility=Unknown\ncss_reason=PARSER_COVERAGE_UNPROVEN\nauthored_css_validation=NOT_RUN\nflexbox_semantic_acceptance=false\nchromium=NOT_RUN\nnetwork_resolver=NONE\nhost_font_lookup=NONE\ninternal_parse_layout_work_limits=NOT_IMPLEMENTED\nprocess_limits=AS_1GiB_CPU_5s_STACK_8MiB_WALL_10s\ninput_limit_bytes="<<max_bytes<<"\nviewport="<<width<<"x"<<height<<"\ndpr=1\n"<<std::flush;
  try{
   std::string html;{Stage s("read");html=read_input(input);}
   logstream<<"input_sha256="<<avc::sha256(html)<<"\ninput_bytes="<<html.size()<<std::endl;
   require(geometry,"REQUESTED_CSS_DOMAIN_UNAVAILABLE");
   Objects o;require(aether_doc_create(&o.doc)==AETHER_OK,"DOC_CREATE_FAILED");
   {Stage s("parse");require(aether_doc_parse_html(o.doc,html.c_str())==AETHER_OK,"PARSE_FAILED");}
-  std::vector<std::string> sheets;std::set<std::string> blockers;
+  std::vector<std::string> sheets, inline_sheets;std::set<std::string> blockers;
+  std::vector<aether_node_s*> canvases, inert_scripts;
   {Stage s("dom_preflight");
    struct Item{aether_node_s* n;size_t depth;bool metadata;};std::vector<Item> todo{{o.doc,0,false}};size_t count=0;
    while(!todo.empty()){
     auto [n,depth,metadata]=todo.back();todo.pop_back();require(++count<=50000&&depth<=128,"POST_PARSE_DOM_LIMIT");
-    const auto& tag=n->tag_name;bool meta=metadata||tag=="head"||tag=="style"||tag=="title";
+    const auto& tag=n->tag_name;bool meta=metadata||tag=="head"||tag=="style"||tag=="title"||tag=="canvas"||h3::json(n);
+    if(tag=="canvas")canvases.push_back(n);
+    if(h3::json(n))inert_scripts.push_back(n);
+    if(tag=="canvas"||h3::json(n))diagnostic::element(n,count,"H3_CANDIDATE_REQUIRES_PROFILE_VALIDATION");
     if(tag=="style") {std::string css;for(auto* c:n->children){if(c->type!=AETHER_NODE_TEXT)blockers.insert("STYLE_CONTENT_UNSUPPORTED");else css+=c->text;}sheets.push_back(std::move(css));}
-    if(tag=="script"||tag=="link"||tag=="img"||tag=="svg"||tag=="canvas"||tag=="video"||tag=="audio"||tag=="object"||tag=="iframe"||tag=="embed"||tag=="base"){blockers.insert("RESOURCE_OR_SCRIPT_ELEMENT_UNSUPPORTED");diagnostic::element(n,count);}
+    if((tag=="script"&&!h3::json(n))||tag=="link"||tag=="img"||tag=="svg"||tag=="video"||tag=="audio"||tag=="object"||tag=="iframe"||tag=="embed"||tag=="base"){blockers.insert("RESOURCE_OR_SCRIPT_ELEMENT_UNSUPPORTED");diagnostic::element(n,count);}
     if(n->type==AETHER_NODE_TEXT&&!meta&&n->text.find_first_not_of(" \t\r\n\f")!=std::string::npos)blockers.insert("TEXT_RENDERER_UNAVAILABLE");
-    for(const auto& [key,value]:n->attributes){if(key=="style"){diagnostic::css(value,"inline-dom-"+std::to_string(count),blockers);try{check_css(value);}catch(Failure f){blockers.insert(f.reason);}}if(key=="dir")blockers.insert("HTML_DIR_UNSUPPORTED");}
+    for(const auto& [key,value]:n->attributes){if(h3::lower(key).starts_with("on"))blockers.insert("EVENT_HANDLER_UNSUPPORTED");if(key=="style"){inline_sheets.push_back(value);diagnostic::css(value,"inline-dom-"+std::to_string(count),blockers);try{check_css(value);}catch(Failure f){blockers.insert(f.reason);}}if(key=="dir")blockers.insert("HTML_DIR_UNSUPPORTED");}
     for(auto it=n->children.rbegin();it!=n->children.rend();++it)todo.push_back({*it,depth+1,meta});
    }
    logstream<<"dom_nodes="<<count<<"\nstyle_blocks="<<sheets.size()<<std::endl;
    size_t sheet_index=0;for(const auto& css:sheets){diagnostic::css(css,"style-block-"+std::to_string(sheet_index++),blockers);try{check_css(css);}catch(Failure f){blockers.insert(f.reason);}}
+   if(canvases.size()>256)blockers.insert("CANVAS_COUNT_LIMIT");
+   if(!canvases.empty()){
+    for(const auto& css:sheets)try{h3::authored(css,true);}catch(Failure f){blockers.insert(f.reason);}
+    for(const auto& css:inline_sheets)try{h3::authored(css,false);}catch(Failure f){blockers.insert(f.reason);}
+   }
    for(const auto& b:blockers)logstream<<"blocker="<<b<<std::endl;
    require(blockers.empty(),"PREFLIGHT_UNSUPPORTED");
   }
@@ -89,7 +99,10 @@ int capture(const char* input,const std::string& out,int width,int height,bool g
    aether_style_update_t* updates=nullptr;int count=aether_style_runtime_resolve_subtree(o.runtime,aether_doc_get_body(o.doc),&updates);require(count>=0,"STYLE_RESOLVE_FAILED");aether_style_updates_free(updates,count);
    require(aether_style_runtime_create_resolved_style_map(o.runtime,o.doc,&o.styles)==AETHER_OK,"STYLE_MAP_FAILED");
   }
-  {Stage s("layout");require(aether_layout_create(no_text,&text_requested,&o.engine)==AETHER_OK,"LAYOUT_CREATE_FAILED");require(aether_layout_layout(o.engine,o.doc,o.styles,width,height,nullptr,nullptr,&o.layout)==AETHER_OK,"LAYOUT_FAILED");require(!text_requested,"TEXT_MEASURE_REQUESTED_UNSUPPORTED");}
+  h3::scripts(o.styles,inert_scripts);auto expected=h3::before(o.styles,canvases);
+  {Stage s("layout");require(aether_layout_create(no_text,&text_requested,&o.engine)==AETHER_OK,"LAYOUT_CREATE_FAILED");set_initial_canvas_mode(o.engine,true);require(aether_layout_layout(o.engine,o.doc,o.styles,width,height,nullptr,nullptr,&o.layout)==AETHER_OK,"LAYOUT_FAILED");require(!text_requested,"TEXT_MEASURE_REQUESTED_UNSUPPORTED");}
+  h3::after(o.layout,o.styles,expected);
+  logstream<<"canvas_entries="<<o.engine->initial_canvas_entries.size()<<"\ncanvas_registry_bytes="<<o.engine->initial_canvas_entries.size()*sizeof(decltype(o.engine->initial_canvas_entries)::value_type)<<"\ncanvas_registry_bytes_scope=ENTRY_PAYLOAD_EXCLUDES_ALLOCATOR_OVERHEAD\n";
   std::unique_ptr<aether::rendering::NativePaintList> list;
   {Stage s("display");require(aether_display_list_builder_create(no_text,&text_requested,&o.builder)==AETHER_OK,"BUILDER_FAILED");require(aether::rendering::build_native_opacity(o.builder,o.layout,o.styles,nullptr,list)==AETHER_OK,"NATIVE_PAINT_UNSUPPORTED");require(!text_requested,"TEXT_MEASURE_REQUESTED_UNSUPPORTED");}
   auto snap=p::snapshot_native_geometry(*list,p::ValidationDomain::ResolvedGeometryOnly);require(std::holds_alternative<p::Snapshot>(snap),"SNAPSHOT_UNSUPPORTED");

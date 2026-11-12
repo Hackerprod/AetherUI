@@ -1,3 +1,4 @@
+#include "initial_canvas.h"
 /* ── Layout Engine — core box layout, flow, inline, and intrinsic sizing ─ */
 #include "layout_internal.h"
 #include "layout_scroll_bounds.h"
@@ -320,6 +321,16 @@ static inline_node_role_e append_inline_node(
     aether_node_s* node,
     std::vector<inline_item_s>& output, inline_capitalization_context_s& context);
 
+static initial_canvas_dimensions canvas_size(const aether_layout_engine_s* engine,
+    const aether_node_s* node,const BoxStyleSnapshot& style,aether_thicknessf padding,
+    aether_thicknessf border,float reference) {
+    return initial_canvas_content_size(*initial_canvas_for(engine,node),
+        resolve(engine,style.width,reference,style), resolve(engine,style.height,reference,style),
+        style.box_sizing==AETHER_BOX_SIZING_BORDER_BOX,
+        aether_thicknessf_horizontal(padding)+aether_thicknessf_horizontal(border),
+        aether_thicknessf_vertical(padding)+aether_thicknessf_vertical(border));
+}
+
 static intrinsic_widths_s measure_intrinsic_flex_widths(
     const aether_layout_engine_s* engine,
     const StyleLookup* styles,
@@ -434,6 +445,9 @@ aether_layout_box_s* layout_element(
     auto padding    = resolve_padding_edges(engine, style.padding, containing_block.width, style);
     auto border     = resolve_border_edges(engine, style, containing_block.width);
     box->used_border = border;
+    box->is_initial_canvas = initial_canvas_for(engine,element)!=nullptr;
+    initial_canvas_dimensions canvas{};
+    if(box->is_initial_canvas) canvas=canvas_size(engine,element,style,padding,border,containing_block.width);
     box->collapsed_margin_before = margin.top;
     box->collapsed_margin_after = margin.bottom;
 
@@ -442,7 +456,9 @@ aether_layout_box_s* layout_element(
         : resolve(engine, style.width, containing_block.width, style);
     float border_width = specified_width;
 
-    if (has_forced_border_width) {
+    if (box->is_initial_canvas) {
+        border_width = canvas.width + aether_thicknessf_horizontal(padding) + aether_thicknessf_horizontal(border);
+    } else if (has_forced_border_width) {
         border_width = forced_border_width;
     } else if (!std::isfinite(border_width)) {
         border_width = force_available_width
@@ -549,7 +565,9 @@ aether_layout_box_s* layout_element(
 
     flex_placement_plan_s flex_placement;
     float content_height;
-    if (intrinsic_control) {
+    if (box->is_initial_canvas) {
+        content_height = canvas.height;
+    } else if (intrinsic_control) {
         content_height = layout_atomic_control(engine, element, style,
                                                content_width,
                                                explicit_height, has_explicit_height,
@@ -589,7 +607,7 @@ aether_layout_box_s* layout_element(
     // Parent/child collapsing is represented as an outward margin on this box and a
     // consumed margin inside its content extent. The child is moved to the content edge;
     // the enclosing block will subsequently position this box using the collapsed value.
-    if (!intrinsic_control && style.display == AETHER_DISPLAY_BLOCK) {
+    if (!intrinsic_control && !box->is_initial_canvas && style.display == AETHER_DISPLAY_BLOCK) {
         // Flex items, positioned boxes and inline-block/atomic layout items
         // establish a BFC just as overflow containers do. This prevents child
         // margins from collapsing through an independently laid-out item.
@@ -712,7 +730,7 @@ void layout_complete_element(const aether_layout_engine_s* engine,
     const auto final_padding = aether_rectf_deflate(final_border, completion.border);
     const auto final_content = aether_rectf_deflate(final_padding, completion.padding);
     place_flex_children(styles, box, completion.flex_placement, final_content);
-    layout_positioned_children(engine, styles, box, box->element,
+    if (!box->is_initial_canvas) layout_positioned_children(engine, styles, box, box->element,
                                final_padding, final_content, result);
     box->border_box = final_border;
     box->padding_box = final_padding;
@@ -1534,7 +1552,7 @@ static void collect_inline_element(
             if (child_style.display == AETHER_DISPLAY_LINE_BREAK) {
                 output.push_back(inline_item_s::line_break(node, child_style));
                 child_context.starts_word = true;
-            } else if (is_opaque_single_line_control(node) || child_style.display == AETHER_DISPLAY_INLINE_BLOCK) {
+            } else if (initial_canvas_for(engine,node) || is_opaque_single_line_control(node) || child_style.display == AETHER_DISPLAY_INLINE_BLOCK) {
                 output.push_back(inline_item_s::atomic(node, child_style));
                 child_context.starts_word = true;
             } else {
@@ -1620,7 +1638,7 @@ static inline_node_role_e append_inline_node(
         retain_unit_admission(output, node, child_style, !transparent_unit_inline(child_style));
         output.push_back(inline_item_s::line_break(node, child_style));
         context.starts_word = true;
-    } else if (is_opaque_single_line_control(node) || child_style.display == AETHER_DISPLAY_INLINE_BLOCK) {
+    } else if (initial_canvas_for(engine,node) || is_opaque_single_line_control(node) || child_style.display == AETHER_DISPLAY_INLINE_BLOCK) {
         output.push_back(inline_item_s::atomic(node, child_style));
         context.starts_word = true;
     } else {
@@ -1689,6 +1707,7 @@ intrinsic_widths_s measure_intrinsic_widths(
     intrinsic_width_request_s request)
 {
     const float decoration = aether_thicknessf_horizontal(padding) + aether_thicknessf_horizontal(border);
+    if(initial_canvas_for(engine,element)) { const auto size=canvas_size(engine,element,style,padding,border,maximum); return {size.width+decoration,size.width+decoration}; }
     if (is_opaque_single_line_control(element)) {
         const float preferred = std::min(maximum, 180.f + decoration);
         return {preferred, preferred};
@@ -1752,6 +1771,7 @@ float measure_intrinsic_height(
     aether_thicknessf padding, aether_thicknessf border,
     float available_width)
 {
+    if(initial_canvas_for(engine,element)) return canvas_size(engine,element,style,padding,border,available_width).height+aether_thicknessf_vertical(padding)+aether_thicknessf_vertical(border);
     const float content_width = std::max(0.f, available_width -
         aether_thicknessf_horizontal(padding) - aether_thicknessf_horizontal(border));
     if (is_opaque_single_line_control(element)) {
@@ -2284,6 +2304,7 @@ AETHER_API aether_status_t aether_layout_layout(
     const auto* styles = &build_lookup;
     engine->measure_styles = styles;
     engine->measure_document = document_identity;
+    prepare_initial_canvas(engine,doc);
     if (version && version->contextual()) {
         for (const auto& entry : version->backing()->entries()) {
             if (!entry.second->measures()) continue;
