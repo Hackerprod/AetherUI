@@ -304,3 +304,25 @@ precedence checked against independent expected sizes. Ancestor and sibling
 limits still require the existing geometric/no-shrink checks. Auto/intrinsic
 canvas combinations, percentage limits and expressions are not newly admitted.
 See `H13_EVIDENCE.md` and manual `run_h13_core.sh` / `test_h13.py`.
+
+### H15 shared structural CSS traversal for canvas
+
+The general admission scanner now exposes bounded, original declaration ranges
+for ordinary rules, nested `@media`/`@supports` and H7-supported keyframes. The
+canvas restriction validator consumes those ranges instead of parsing a sheet
+as flat declarations. The native runtime still receives the unchanged source;
+conditions, priorities, scopes and animation selection are not flattened.
+
+All branches are inspected, including inactive conditions, unused keyframes and
+ignored declarations. H11's absence exception remains restricted to top-level
+ordinary rules. Nested rules never gain an absence exception. The capture
+shares byte/token/rule/work limits across global stylesheet and inline scans;
+canvas scans have a separate bounded pass. Limits or OOM cannot publish a PNG.
+
+```sh
+sh tests/isolated_capture/run_h15_core.sh /tmp/h15-build
+python3 tests/isolated_capture/test_h15.py /tmp/h15-build/aether_capture /tmp/h15-results
+```
+
+See `H15_EVIDENCE.md`. This is not general CSS support or a complete rendering
+of the original flexbox fixture. Chromium was not executed.

@@ -3,6 +3,7 @@
 // Not a CSS implementation or a source-coverage proof.
 #include "../../native/src/layout/layout_internal.h"
 #include "../../native/src/layout/initial_canvas.h"
+#include "h5_profile.h"
 #include <cmath>
 #include <cstdlib>
 #include <cerrno>
@@ -23,15 +24,15 @@ inline bool literal_limit(const std::string& value,size_t tokens){
  return errno!=ERANGE&&end!=value.c_str()&&std::isfinite(n)&&n>=0&&
    (std::string(end)=="px"||(*end=='\0'&&n==0));
 }
-inline void authored(const std::string& s,bool sheet){
+// Restrictions on an original declaration list, not a stylesheet parser.
+inline void authored_declarations(const std::string& s){
  css_variable_budget b{max_bytes*4,false};css_variable_lexer lex(s.data(),s.size(),0,&b);
  std::vector<css_variable_token> ts;
  for(;;){auto t=lex.next();require(!b.exhausted&&t.kind!=css_variable_token_kind::error,"CANVAS_AUTHORED_CSS_UNKNOWN");if(t.kind==css_variable_token_kind::end)break;if(t.kind!=css_variable_token_kind::whitespace&&t.kind!=css_variable_token_kind::comment)ts.push_back(t);}
- bool decl=!sheet;size_t i=0;
+ size_t i=0;
  auto delim=[&](size_t p,char c){return p<ts.size()&&ts[p].delimiter==c&&ts[p].serialization!=css_variable_serialization::string;};
  while(i<ts.size()){
-  if(!decl){while(i<ts.size()&&!delim(i,'{')){require(!delim(i,'}')&&!delim(i,';'),"CANVAS_AUTHORED_CSS_UNKNOWN");++i;}require(i<ts.size(),"CANVAS_AUTHORED_CSS_UNKNOWN");++i;decl=true;continue;}
-  if(delim(i,';')){++i;continue;}if(delim(i,'}')){require(sheet,"CANVAS_AUTHORED_CSS_UNKNOWN");++i;decl=false;continue;}
+  if(delim(i,';')){++i;continue;}
   require(ts[i].kind==css_variable_token_kind::ident,"CANVAS_AUTHORED_CSS_UNKNOWN");std::string key=lower(diagnostic::name(s,ts[i].begin,ts[i].end));++i;
   require(delim(i,':'),"CANVAS_AUTHORED_CSS_UNKNOWN");++i;std::string value;size_t nt=0;
   while(i<ts.size()&&!delim(i,';')&&!delim(i,'}')){require(!delim(i,'{'),"CANVAS_AUTHORED_CSS_UNKNOWN");auto t=ts[i++];
@@ -45,7 +46,15 @@ inline void authored(const std::string& s,bool sheet){
   if(key=="position")require(value!="sticky","CANVAS_LAYOUT_PROFILE_UNSUPPORTED");
   if(key=="align-items"||key=="align-self")require(value!="baseline"&&value!="firstbaseline"&&value!="lastbaseline","CANVAS_LAYOUT_PROFILE_UNSUPPORTED");
  }
- require(!sheet||!decl,"CANVAS_AUTHORED_CSS_UNKNOWN");
+}
+inline void authored(const std::string& s,bool sheet,h5::WorkBudget* shared=nullptr){
+ if(!sheet){authored_declarations(s);return;}
+ // H5 owns rule structure and H7 owns keyframe semantics. Only original
+ // declaration ranges flow into the canvas restrictions; execution sees s.
+ const auto analysis=h5::analyze(s,true,shared);
+ require(analysis.valid,"CANVAS_AUTHORED_CSS_UNKNOWN");
+ for(const auto& span:analysis.declarations)
+  authored_declarations(s.substr(span.begin,span.end-span.begin));
 }
 struct Style {
  aether_computed_style_t value{};

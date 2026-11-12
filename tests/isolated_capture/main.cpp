@@ -71,7 +71,7 @@ int capture(const char* input,const std::string& out,int width,int height,bool g
   style_property_registry_init();
   Objects o;require(aether_doc_create(&o.doc)==AETHER_OK,"DOC_CREATE_FAILED");
   {Stage s("parse");require(aether_doc_parse_html(o.doc,html.c_str())==AETHER_OK,"PARSE_FAILED");}
-  bool variable_profile=false;
+  bool variable_profile=false; h5::WorkBudget css_work;
   std::vector<std::string> sheets, inline_sheets;std::set<std::string> blockers;
   std::vector<aether_node_s*> canvases, inert_scripts;
   {Stage s("dom_preflight");
@@ -85,17 +85,17 @@ int capture(const char* input,const std::string& out,int width,int height,bool g
     if(tag=="style") {std::string css;for(auto* c:n->children){if(c->type!=AETHER_NODE_TEXT)blockers.insert("STYLE_CONTENT_UNSUPPORTED");else css+=c->text;}sheets.push_back(std::move(css));}
     if((tag=="script"&&!h3::json(n))||tag=="link"||tag=="img"||tag=="svg"||tag=="video"||tag=="audio"||tag=="object"||tag=="iframe"||tag=="embed"||tag=="base"){blockers.insert("RESOURCE_OR_SCRIPT_ELEMENT_UNSUPPORTED");diagnostic::element(n,count);}
     if(n->type==AETHER_NODE_TEXT&&!meta&&n->text.find_first_not_of(" \t\r\n\f")!=std::string::npos)blockers.insert("TEXT_RENDERER_UNAVAILABLE");
-    for(const auto& [key,value]:n->attributes){if(h3::lower(key).starts_with("on"))blockers.insert("EVENT_HANDLER_UNSUPPORTED");if(key=="style"){inline_sheets.push_back(value);auto analysis=h5::analyze(value,false);variable_profile|=analysis.variables;diagnostic::css(value,"inline-dom-"+std::to_string(count),blockers,analysis);try{check_css(value,analysis);}catch(Failure f){blockers.insert(f.reason);}}if(key=="dir")blockers.insert("HTML_DIR_UNSUPPORTED");}
+    for(const auto& [key,value]:n->attributes){if(h3::lower(key).starts_with("on"))blockers.insert("EVENT_HANDLER_UNSUPPORTED");if(key=="style"){inline_sheets.push_back(value);auto analysis=h5::analyze(value,false,&css_work);variable_profile|=analysis.variables;diagnostic::css(value,"inline-dom-"+std::to_string(count),blockers,analysis);try{check_css(value,analysis);}catch(Failure f){blockers.insert(f.reason);}}if(key=="dir")blockers.insert("HTML_DIR_UNSUPPORTED");}
     for(auto it=n->children.rbegin();it!=n->children.rend();++it)todo.push_back({*it,depth+1,meta});
    }
    logstream<<"dom_nodes="<<count<<"\nstyle_blocks="<<sheets.size()<<std::endl;
-   size_t sheet_index=0;for(const auto& css:sheets){auto analysis=h5::analyze(css,true);variable_profile|=analysis.variables;diagnostic::css(css,"style-block-"+std::to_string(sheet_index++),blockers,analysis);try{check_css(css,analysis);}catch(Failure f){blockers.insert(f.reason);}}
+   size_t sheet_index=0;for(const auto& css:sheets){auto analysis=h5::analyze(css,true,&css_work);variable_profile|=analysis.variables;diagnostic::css(css,"style-block-"+std::to_string(sheet_index++),blockers,analysis);try{check_css(css,analysis);}catch(Failure f){blockers.insert(f.reason);}}
    if(canvases.size()>256)blockers.insert("CANVAS_COUNT_LIMIT");
    if(!canvases.empty()){
     // Only the H3 admission view is filtered; global diagnostics above and
     // the original stylesheet passed to the runtime below remain unchanged.
-    h11::Proof proof(o.doc);
-    for(const auto& css:sheets)try{h3::authored(proof.retained(css),true);}catch(Failure f){blockers.insert(f.reason);}
+    h11::Proof proof(o.doc); h5::WorkBudget canvas_css_work;
+    for(const auto& css:sheets)try{h3::authored(proof.retained(css),true,&canvas_css_work);}catch(Failure f){blockers.insert(f.reason);}
     logstream<<"canvas_unmatched_rules_omitted="<<proof.omitted<<"\ncanvas_absence_match_queries="<<proof.queries<<"\ncanvas_absence_work_remaining="<<proof.remaining<<std::endl;
     for(const auto& css:inline_sheets)try{h3::authored(css,false);}catch(Failure f){blockers.insert(f.reason);}
    }
