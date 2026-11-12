@@ -7,16 +7,14 @@ namespace aether::rendering::software {
 namespace {
 constexpr std::uint64_t max_work = 50000000;
 struct Rect { double l, t, r, b; };
-struct Draw { Rect rect; Rect inner; prep::Color color; std::size_t index; Rect original{}; double radius{}; Rect inner_original{}; double inner_radius{}; };
+struct CurvedClip { Rect original{}; double radius{}; };
+struct ClipState { Rect bounds; CurvedClip curve; };
+struct Draw { Rect rect; Rect inner; prep::Color color; std::size_t index; Rect original{}; double radius{}; Rect inner_original{}; double inner_radius{}; CurvedClip clip{}; };
 Rect intersect(Rect a, Rect b) noexcept {
  return {std::max(a.l,b.l),std::max(a.t,b.t),std::min(a.r,b.r),std::min(a.b,b.b)};
 }
 Rect rect(prep::Rect r) noexcept {return {r.x,r.y,double(r.x)+r.width,double(r.y)+r.height};}
 bool empty(Rect r) noexcept {return r.r<=r.l || r.b<=r.t;}
-bool zero(prep::Radii r) noexcept {
- return r.top_left_x==0 && r.top_left_y==0 && r.top_right_x==0 && r.top_right_y==0 &&
- r.bottom_left_x==0 && r.bottom_left_y==0 && r.bottom_right_x==0 && r.bottom_right_y==0;
-}
 bool uniform(prep::Radii r) noexcept {
  return r.top_left_x==r.top_left_y && r.top_left_x==r.top_right_x &&
  r.top_left_x==r.top_right_y && r.top_left_x==r.bottom_left_x &&
@@ -40,6 +38,25 @@ double rounded_area(Rect clipped,Rect original,double radius,int x,int y,std::ui
   if(dx*dx+dy*dy<=r*r) ++inside;
  }
  return (b.r-b.l)*(b.b-b.t)*inside/256;
+}
+bool contains(Rect o,double r,double x,double y) noexcept {
+ if(empty(o) || x<o.l || x>o.r || y<o.t || y>o.b) return false;
+ if(r==0) return true;
+ const double dx=x-std::clamp(x,o.l+r,o.r-r),dy=y-std::clamp(y,o.t+r,o.b-r);
+ return dx*dx+dy*dy<=r*r;
+}
+bool central(Rect b,CurvedClip c) noexcept {
+ return (b.l>=c.original.l+c.radius && b.r<=c.original.r-c.radius) ||
+        (b.t>=c.original.t+c.radius && b.b<=c.original.b-c.radius);
+}
+double joint_area(const Draw& d,Rect b,std::uint64_t& sampled) noexcept {
+ ++sampled;unsigned count=0;
+ for(int sy=0;sy<16;++sy)for(int sx=0;sx<16;++sx){
+  const double x=b.l+(sx+.5)*(b.r-b.l)/16,y=b.t+(sy+.5)*(b.b-b.t)/16;
+  if(contains(d.original,d.radius,x,y) && !contains(d.inner_original,d.inner_radius,x,y) &&
+     contains(d.clip.original,d.clip.radius,x,y)) ++count;
+ }
+ return (b.r-b.l)*(b.b-b.t)*count/256;
 }
 // Inputs already clipped to the viewport, so integer products are <=8192^2.
 std::uint64_t pixel_count(Rect r) noexcept {
@@ -84,11 +101,12 @@ Result render(FrameStore& store,const prep::PreparedFrame& frame,prep::Cancellat
  // FrameStore owns validation of viewport and its 64 MiB per-surface limit.
  std::uint64_t work=std::uint64_t(v.width)*std::uint64_t(v.height);
  std::size_t index=0;
- std::uint64_t corner_pixels=0,sampled_pixels=0,inner_corner_pixels=0,inner_sampled_pixels=0;
+ std::uint64_t corner_pixels=0,sampled_pixels=0,inner_corner_pixels=0,inner_sampled_pixels=0,clip_corner_pixels=0,joint_sampled_pixels=0;
  try {
   if(cancelled(cancel)) return {Status::cancelled};
   std::vector<Draw> draws;
-  std::vector<Rect> clips;
+  std::vector<ClipState> clips;
+  CurvedClip curve;
   Rect current{0,0,double(v.width),double(v.height)};
   for(const auto& event:frame.events()) {
    if(cancelled(cancel)) return {Status::cancelled,FrameStatus::ok,index,work};
@@ -110,7 +128,7 @@ Result render(FrameStore& store,const prep::PreparedFrame& frame,prep::Cancellat
       // Bounded by total charged work, so this addition cannot overflow.
       corner_pixels+=corners;
      } else if(!charge(work,count,1)) return {Status::limit_exceeded,FrameStatus::ok,index,work};
-     draws.push_back({r,{},fill->color,index,rect(fill->rect),radius});
+     draws.push_back({r,{},fill->color,index,rect(fill->rect),radius,{},0,curve});
     }
    } else if(const auto* stroke=std::get_if<prep::Stroke>(&command)) {
     const double radius=stroke->radii.top_left_x;
@@ -141,20 +159,25 @@ Result render(FrameStore& store,const prep::PreparedFrame& frame,prep::Cancellat
         return {Status::limit_exceeded,FrameStatus::ok,index,work};
        corner_pixels+=outer_corners;
        inner_corner_pixels+=inner_corners;
-       draws.push_back({outer,inner,stroke->color,index,original,outer_radius,inner_original,inner_radius});
+       draws.push_back({outer,inner,stroke->color,index,original,outer_radius,inner_original,inner_radius,curve});
       } else {
        if(!charge(work,count,2))
         return {Status::limit_exceeded,FrameStatus::ok,index,work};
-       draws.push_back({outer,inner,stroke->color,index});
+       draws.push_back({outer,inner,stroke->color,index,original,0,inner_original,0,curve});
       }
      }
     }
    } else if(const auto* clip=std::get_if<prep::PushClip>(&command)) {
-    if(!zero(clip->radii)) return {Status::unsupported,FrameStatus::ok,index,work};
-    clips.push_back(current); current=intersect(current,rect(clip->rect));
+    const double radius=clip->radii.top_left_x;
+    if(!uniform(clip->radii) || (radius>0 && (curve.radius>0 ||
+       clip->rect.width<=0 || clip->rect.height<=0 ||
+       2*radius>std::min(clip->rect.width,clip->rect.height))))
+     return {Status::unsupported,FrameStatus::ok,index,work};
+    clips.push_back({current,curve}); current=intersect(current,rect(clip->rect));
+    if(radius>0) curve={rect(clip->rect),radius};
    } else if(std::holds_alternative<prep::PopClip>(command)) {
     // PreparedFrame guarantees balanced scopes and validated finite payloads.
-    current=clips.back();clips.pop_back();
+    current=clips.back().bounds;curve=clips.back().curve;clips.pop_back();
    } else if(const auto* push=std::get_if<prep::PushTransform>(&command)) {
     if(!identity(push->matrix)) return {Status::unsupported,FrameStatus::ok,index,work};
    } else if(!std::holds_alternative<prep::PopTransform>(command) &&
@@ -163,6 +186,13 @@ Result render(FrameStore& store,const prep::PreparedFrame& frame,prep::Cancellat
     return {Status::unsupported,FrameStatus::ok,index,work};
    }
    ++index;
+  }
+  // Charge clip work for each retained draw before any candidate is allocated.
+  for(const auto& d:draws) if(d.clip.radius>0) {
+   const auto bound=corner_bound(d.clip.original,d.rect,d.clip.radius);
+   if(!charge(work,pixel_count(d.rect),2) || !charge(work,bound,768))
+    return {Status::limit_exceeded,FrameStatus::ok,d.index,work};
+   clip_corner_pixels+=bound;
   }
   if(cancelled(cancel)) return {Status::cancelled,FrameStatus::ok,index,work};
   FrameStore::Token token;
@@ -187,12 +217,19 @@ Result render(FrameStore& store,const prep::PreparedFrame& frame,prep::Cancellat
     for(int y=y0;y<y1;++y) {
      if(cancelled(cancel)) return {Status::cancelled,FrameStatus::ok,index,work};
      for(int x=x0;x<x1;++x) {
+      const auto b=intersect(r,{double(x),double(y),double(x)+1,double(y)+1});
+      double covered;
+      if(draw.clip.radius>0 && !central(b,draw.clip)) {
+       covered=joint_area(draw,b,joint_sampled_pixels);
+      } else {
       const double outer_area=draw.radius>0?
        rounded_area(r,draw.original,draw.radius,x,y,sampled_pixels):area(r,x,y);
       const double inner_area=draw.inner_radius>0?
        rounded_area(draw.inner,draw.inner_original,draw.inner_radius,x,y,inner_sampled_pixels):area(draw.inner,x,y);
       // Subtract unquantized coverage; only one source-over for the ring.
-      const unsigned coverage=byte(std::clamp(outer_area-inner_area,0.0,1.0));
+      covered=outer_area-inner_area;
+      }
+      const unsigned coverage=byte(std::clamp(covered,0.0,1.0));
       const unsigned sa=mul(alpha,coverage),inv=255-sa;
       auto* p=pixels.data()+std::size_t(y)*stride+std::size_t(x)*4;
       for(int c=0;c<3;++c) p[c]=std::uint8_t(mul(channels[c],sa)+mul(p[c],inv));
@@ -204,7 +241,7 @@ Result render(FrameStore& store,const prep::PreparedFrame& frame,prep::Cancellat
   if(cancelled(cancel)) return {Status::cancelled,FrameStatus::ok,index,work};
   if(auto s=store.commit(token);s!=FrameStatus::ok) return failed(s);
   guard.active=false;
-  return {Status::ok,FrameStatus::ok,0,work,corner_pixels,sampled_pixels,inner_corner_pixels,inner_sampled_pixels};
+  return {Status::ok,FrameStatus::ok,0,work,corner_pixels,sampled_pixels,inner_corner_pixels,inner_sampled_pixels,clip_corner_pixels,joint_sampled_pixels};
  } catch(const std::bad_alloc&) {return {Status::allocation_failed,FrameStatus::ok,index,work};}
 }
 }

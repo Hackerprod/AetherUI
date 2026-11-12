@@ -13,8 +13,10 @@ struct Result {
  std::uint64_t sampled_pixels{}; // Each incurs 256 membership tests, on success.
  std::uint64_t inner_corner_pixel_bound{}; // Rounded stroke inner shapes, separate.
  std::uint64_t inner_sampled_pixels{};
+ std::uint64_t clip_corner_pixel_bound{};
+ std::uint64_t joint_sampled_pixels{};
 };
-// R10: uniform circular rounded fills (central bands + grid16x16), uniform rounded strokes, rectangle clips; DPI=1.
+// R11: uniform circular rounded fills (central bands + grid16x16), uniform rounded strokes, one active uniform rounded clip plus rectangle clips; DPI=1.
 // Owner-thread synchronous call. No reentry or store mutation by callbacks.
 // Unsupported commands reject the whole frame before candidate allocation.
 // Allocation and all failures preserve the confirmed frame.
