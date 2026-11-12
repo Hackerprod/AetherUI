@@ -7,7 +7,7 @@ namespace aether::rendering::software {
 namespace {
 constexpr std::uint64_t max_work = 50000000;
 struct Rect { double l, t, r, b; };
-struct Draw { Rect rect; Rect inner; prep::Color color; std::size_t index; Rect original{}; double radius{}; };
+struct Draw { Rect rect; Rect inner; prep::Color color; std::size_t index; Rect original{}; double radius{}; Rect inner_original{}; double inner_radius{}; };
 Rect intersect(Rect a, Rect b) noexcept {
  return {std::max(a.l,b.l),std::max(a.t,b.t),std::min(a.r,b.r),std::min(a.b,b.b)};
 }
@@ -23,10 +23,10 @@ bool uniform(prep::Radii r) noexcept {
  r.top_left_x==r.bottom_left_y && r.top_left_x==r.bottom_right_x && r.top_left_x==r.bottom_right_y;
 }
 // Shape centers always use original geometry, never its clipped bounding box.
-double rounded_area(const Draw& d,int x,int y,std::uint64_t& sampled) noexcept {
- const auto b=intersect(d.rect,{double(x),double(y),double(x)+1,double(y)+1});
+double rounded_area(Rect clipped,Rect original,double radius,int x,int y,std::uint64_t& sampled) noexcept {
+ const auto b=intersect(clipped,{double(x),double(y),double(x)+1,double(y)+1});
  if(empty(b)) return 0;
- const auto o=d.original;const double r=d.radius;
+ const auto o=original;const double r=radius;
  // Entire clipped pixel inside either central band is exactly covered.
  if((b.l>=o.l+r && b.r<=o.r-r) || (b.t>=o.t+r && b.b<=o.b-r))
   return (b.r-b.l)*(b.b-b.t);
@@ -84,7 +84,7 @@ Result render(FrameStore& store,const prep::PreparedFrame& frame,prep::Cancellat
  // FrameStore owns validation of viewport and its 64 MiB per-surface limit.
  std::uint64_t work=std::uint64_t(v.width)*std::uint64_t(v.height);
  std::size_t index=0;
- std::uint64_t corner_pixels=0,sampled_pixels=0;
+ std::uint64_t corner_pixels=0,sampled_pixels=0,inner_corner_pixels=0,inner_sampled_pixels=0;
  try {
   if(cancelled(cancel)) return {Status::cancelled};
   std::vector<Draw> draws;
@@ -113,7 +113,11 @@ Result render(FrameStore& store,const prep::PreparedFrame& frame,prep::Cancellat
      draws.push_back({r,{},fill->color,index,rect(fill->rect),radius});
     }
    } else if(const auto* stroke=std::get_if<prep::Stroke>(&command)) {
-    if(!zero(stroke->radii)) return {Status::unsupported,FrameStatus::ok,index,work};
+    const double radius=stroke->radii.top_left_x;
+    if(!uniform(stroke->radii) || (radius>0 &&
+       (stroke->rect.width<=0 || stroke->rect.height<=0 ||
+        2*radius>std::min(stroke->rect.width,stroke->rect.height))))
+     return {Status::unsupported,FrameStatus::ok,index,work};
     if(stroke->stroke_width>0) {
      // A degenerate centerline may represent a visible thick CSS border.
      // Its original border-box cannot be reconstructed: reject, never omit.
@@ -121,16 +125,28 @@ Result render(FrameStore& store,const prep::PreparedFrame& frame,prep::Cancellat
       return {Status::unsupported,FrameStatus::ok,index,work};
      const auto center=rect(stroke->rect);
      const double half=double(stroke->stroke_width)/2;
-     auto outer=intersect(current,{center.l-half,center.t-half,center.r+half,center.b+half});
-     auto inner=intersect(current,{center.l+half,center.t+half,center.r-half,center.b-half});
+     const Rect original{center.l-half,center.t-half,center.r+half,center.b+half};
+     const Rect inner_original{center.l+half,center.t+half,center.r-half,center.b-half};
+     auto outer=intersect(current,original);
+     auto inner=intersect(current,inner_original);
      if(!empty(outer)) {
-      const auto width=std::uint64_t(std::ceil(outer.r)-std::floor(outer.l));
-      const auto height=std::uint64_t(std::ceil(outer.b)-std::floor(outer.t));
-      // Two area evaluations per pixel; all endpoints bounded by viewport.
-      if(height && width>(max_work-work)/2/height)
-       return {Status::limit_exceeded,FrameStatus::ok,index,work};
-      work+=2*width*height;
-      draws.push_back({outer,inner,stroke->color,index});
+      const auto count=pixel_count(outer);
+      if(radius>0) {
+       const double outer_radius=radius+half,inner_radius=std::max(radius-half,0.0);
+       const auto outer_corners=corner_bound(original,outer,outer_radius);
+       const auto inner_corners=inner_radius>0 && !empty(inner)?
+        corner_bound(inner_original,inner,inner_radius):0;
+       if(!charge(work,count,4) || !charge(work,outer_corners,256) ||
+          !charge(work,inner_corners,256))
+        return {Status::limit_exceeded,FrameStatus::ok,index,work};
+       corner_pixels+=outer_corners;
+       inner_corner_pixels+=inner_corners;
+       draws.push_back({outer,inner,stroke->color,index,original,outer_radius,inner_original,inner_radius});
+      } else {
+       if(!charge(work,count,2))
+        return {Status::limit_exceeded,FrameStatus::ok,index,work};
+       draws.push_back({outer,inner,stroke->color,index});
+      }
      }
     }
    } else if(const auto* clip=std::get_if<prep::PushClip>(&command)) {
@@ -171,7 +187,12 @@ Result render(FrameStore& store,const prep::PreparedFrame& frame,prep::Cancellat
     for(int y=y0;y<y1;++y) {
      if(cancelled(cancel)) return {Status::cancelled,FrameStatus::ok,index,work};
      for(int x=x0;x<x1;++x) {
-      const unsigned coverage=byte(std::clamp(draw.radius>0?rounded_area(draw,x,y,sampled_pixels):area(r,x,y)-area(draw.inner,x,y),0.0,1.0));
+      const double outer_area=draw.radius>0?
+       rounded_area(r,draw.original,draw.radius,x,y,sampled_pixels):area(r,x,y);
+      const double inner_area=draw.inner_radius>0?
+       rounded_area(draw.inner,draw.inner_original,draw.inner_radius,x,y,inner_sampled_pixels):area(draw.inner,x,y);
+      // Subtract unquantized coverage; only one source-over for the ring.
+      const unsigned coverage=byte(std::clamp(outer_area-inner_area,0.0,1.0));
       const unsigned sa=mul(alpha,coverage),inv=255-sa;
       auto* p=pixels.data()+std::size_t(y)*stride+std::size_t(x)*4;
       for(int c=0;c<3;++c) p[c]=std::uint8_t(mul(channels[c],sa)+mul(p[c],inv));
@@ -183,7 +204,7 @@ Result render(FrameStore& store,const prep::PreparedFrame& frame,prep::Cancellat
   if(cancelled(cancel)) return {Status::cancelled,FrameStatus::ok,index,work};
   if(auto s=store.commit(token);s!=FrameStatus::ok) return failed(s);
   guard.active=false;
-  return {Status::ok,FrameStatus::ok,0,work,corner_pixels,sampled_pixels};
+  return {Status::ok,FrameStatus::ok,0,work,corner_pixels,sampled_pixels,inner_corner_pixels,inner_sampled_pixels};
  } catch(const std::bad_alloc&) {return {Status::allocation_failed,FrameStatus::ok,index,work};}
 }
 }

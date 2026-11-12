@@ -31,3 +31,14 @@ endif()
 # Frozen R8 reference links into this test only, never the production renderer.
 add_executable(aether_software_bands_test ../../native/tests/test_software_bands.cpp ../../native/tests/r8_reference.cpp)
 target_link_libraries(aether_software_bands_test PRIVATE aether_software_raster)
+
+
+if(UNIX AND NOT APPLE AND CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+ add_executable(aether_software_rounded_stroke_test
+  ../../native/tests/test_software_rounded_stroke.cpp
+  ../../native/src/rendering/border_painter.cpp
+  ../../native/src/css/border_radii.cpp)
+ target_link_libraries(aether_software_rounded_stroke_test PRIVATE aether_software_raster)
+ target_compile_options(aether_software_rounded_stroke_test PRIVATE -ffunction-sections -fdata-sections)
+ target_link_options(aether_software_rounded_stroke_test PRIVATE -Wl,--gc-sections)
+endif()
