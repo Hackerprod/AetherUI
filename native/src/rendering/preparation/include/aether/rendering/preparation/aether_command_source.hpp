@@ -20,7 +20,7 @@ inline constexpr std::array snapshot_supported_tags{
  AETHER_PAINT_FILL_ROUNDED_RECT, AETHER_PAINT_STROKE_ROUNDED_RECT,
  AETHER_PAINT_DRAW_TEXT, AETHER_PAINT_PUSH_CLIP, AETHER_PAINT_POP_CLIP,
  AETHER_PAINT_PUSH_TRANSFORM, AETHER_PAINT_POP_TRANSFORM,
- AETHER_PAINT_BEGIN_PAINT_CHUNK, AETHER_PAINT_END_PAINT_CHUNK};
+ AETHER_PAINT_BEGIN_PAINT_CHUNK, AETHER_PAINT_END_PAINT_CHUNK, AETHER_PAINT_DRAW_BOX_SHADOW};
 using SnapshotResult = std::variant<Snapshot, Error>;
 // A successful snapshot owns all strings; it is not an image or a prepared
 // frame. prepare() separately validates scopes and revalidates all fields.

@@ -27,7 +27,7 @@ struct Sink : CommandSink {
 };
 }
 int main() {
- static_assert(snapshot_supported_tags.size()==9);
+ static_assert(snapshot_supported_tags.size()==10);
  aether_display_list_s list;
  AetherApi api{version,capabilities,size,count,get,release};
  auto snapshot=snapshot_commands(api,&list);

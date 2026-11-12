@@ -56,7 +56,10 @@ CopyResult copy_command(const aether_paint_command_t& source, std::size_t string
   return Command{BeginChunk{source.data.paint_chunk.style_node_id}};
  case AETHER_PAINT_END_PAINT_CHUNK:
   return Command{EndChunk{source.data.paint_chunk.style_node_id}};
- case AETHER_PAINT_DRAW_BOX_SHADOW:
+ case AETHER_PAINT_DRAW_BOX_SHADOW: {
+  const auto& p = source.data.draw_box_shadow;
+  return Command{BoxShadow{p.rect,p.radii,p.shadow}};
+ }
  case AETHER_PAINT_FILL_ROUNDED_RECT_GRADIENT:
  case AETHER_PAINT_DRAW_TEXT_GRADIENT:
  case AETHER_PAINT_FILL_BORDER_SIDE:

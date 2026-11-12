@@ -42,3 +42,6 @@ if(UNIX AND NOT APPLE AND CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
  target_compile_options(aether_software_rounded_stroke_test PRIVATE -ffunction-sections -fdata-sections)
  target_link_options(aether_software_rounded_stroke_test PRIVATE -Wl,--gc-sections)
 endif()
+
+add_executable(aether_software_shadow_test ../../native/tests/test_software_shadow.cpp)
+target_link_libraries(aether_software_shadow_test PRIVATE aether_software_raster)

@@ -11,5 +11,5 @@ static_assert(std::is_same_v<avc::preparation::PreparedFrame,native::PreparedFra
 static_assert(std::is_same_v<avc::preparation::AetherApi,native::AetherApi>);
 static_assert(std::is_same_v<avc::preparation::PreparationMetrics,native::PreparationMetrics>);
 static_assert(std::is_same_v<avc::preparation::Error,native::Error>);
-static_assert(avc::preparation::snapshot_supported_tags.size()==9);
+static_assert(avc::preparation::snapshot_supported_tags.size()==10);
 int main() {}

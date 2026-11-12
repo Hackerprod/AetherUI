@@ -3,7 +3,7 @@
 #include <aether/rendering/preparation/paint_snapshot.hpp>
 namespace aether::rendering::software {
 namespace prep = aether::rendering::preparation;
-enum class Status { ok, unsupported, limit_exceeded, cancelled, allocation_failed, frame_failed };
+enum class Status { ok, unsupported, limit_exceeded, cancelled, allocation_failed, frame_failed, numeric_error };
 struct Result {
  Status status{Status::ok};
  FrameStatus frame_status{FrameStatus::ok};

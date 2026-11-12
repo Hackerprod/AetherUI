@@ -122,7 +122,7 @@ void tags_and_ownership() {
   assert(command_tag(std::get<Snapshot>(result).commands.front()) == static_cast<int>(tag));
   assert(state.gets == 1 && state.frees == 1);
  }
- const aether_paint_command_tag_t unsupported[]{AETHER_PAINT_DRAW_BOX_SHADOW,
+ const aether_paint_command_tag_t unsupported[]{
   AETHER_PAINT_FILL_ROUNDED_RECT_GRADIENT, AETHER_PAINT_DRAW_TEXT_GRADIENT,
   AETHER_PAINT_FILL_BORDER_SIDE, AETHER_PAINT_DRAW_TEXT_SHADOW,
   AETHER_PAINT_DRAW_BACKGROUND_IMAGE, AETHER_PAINT_APPLY_BACKDROP_FILTER,

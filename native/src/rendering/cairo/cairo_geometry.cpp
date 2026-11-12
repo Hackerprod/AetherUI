@@ -53,7 +53,7 @@ PlanResult preflight(const prep::PreparedFrame& frame,float dpi,prep::Color clea
   Plan plan; plan.reserve(frame.events().size());
   for(const auto& e:frame.events()) {
    const int tag=prep::command_tag(e.command);
-   if(std::holds_alternative<prep::Text>(e.command)) return Error{ErrorCode::unsupported_command,index,tag};
+   if((std::holds_alternative<prep::Text>(e.command) || std::holds_alternative<prep::BoxShadow>(e.command))) return Error{ErrorCode::unsupported_command,index,tag};
    const auto m=classify(e.matrix,dpi);
    if(m.kind==MatrixKind::invalid) return Error{ErrorCode::invalid_matrix,index,tag};
    Operation op;op.matrix=m.value;

@@ -1,4 +1,5 @@
 #include "software_renderer.h"
+#include "shadow_math.h"
 #include <algorithm>
 #include <cmath>
 #include <new>
@@ -9,7 +10,7 @@ constexpr std::uint64_t max_work = 50000000;
 struct Rect { double l, t, r, b; };
 struct CurvedClip { Rect original{}; double radius{}; };
 struct ClipState { Rect bounds; CurvedClip curve; };
-struct Draw { Rect rect; Rect inner; prep::Color color; std::size_t index; Rect original{}; double radius{}; Rect inner_original{}; double inner_radius{}; CurvedClip clip{}; };
+struct Draw { Rect rect; Rect inner; prep::Color color; std::size_t index; Rect original{}; double radius{}; Rect inner_original{}; double inner_radius{}; CurvedClip clip{}; bool shadow{}; Rect source{}; Rect excluded{}; double sigma{}; };
 Rect intersect(Rect a, Rect b) noexcept {
  return {std::max(a.l,b.l),std::max(a.t,b.t),std::min(a.r,b.r),std::min(a.b,b.b)};
 }
@@ -167,6 +168,29 @@ Result render(FrameStore& store,const prep::PreparedFrame& frame,prep::Cancellat
       }
      }
     }
+   } else if(const auto* shadow=std::get_if<prep::BoxShadow>(&command)) {
+    const auto& s=shadow->shadow;
+    const auto box=rect(shadow->rect);
+    const auto in_range=[](Rect r){return std::abs(r.l)<=65536 && std::abs(r.r)<=65536 && std::abs(r.t)<=65536 && std::abs(r.b)<=65536;};
+    if(!uniform(shadow->radii) || shadow->radii.top_left_x!=0 || curve.radius>0 || s.inset ||
+       shadow->rect.width>8192 || shadow->rect.height>8192 || !in_range(box) ||
+       std::abs(s.offset_x)>8192 || std::abs(s.offset_y)>8192 || std::abs(s.spread_radius)>8192 ||
+       s.blur_radius>64 || (s.blur_radius>0 && s.blur_radius<1))
+     return {Status::unsupported,FrameStatus::ok,index,work};
+    const double spread=s.spread_radius,sigma=double(s.blur_radius)/2;
+    const Rect source{box.l-spread+s.offset_x,box.t-spread+s.offset_y,box.r+spread+s.offset_x,box.b+spread+s.offset_y};
+    const Rect support{source.l-4*sigma,source.t-4*sigma,source.r+4*sigma,source.b+4*sigma};
+    if(!in_range(source) || !in_range(support)) return {Status::unsupported,FrameStatus::ok,index,work};
+    if(!empty(source)) {
+     const auto r=intersect(current,support);
+     if(!empty(r)) {
+      const auto columns=std::uint64_t(std::ceil(r.r)-std::floor(r.l));
+      const auto rows=std::uint64_t(std::ceil(r.b)-std::floor(r.t));
+      if(!charge(work,columns+rows,256) || !charge(work,pixel_count(r),2))
+       return {Status::limit_exceeded,FrameStatus::ok,index,work};
+      Draw d{r,{},s.color,index};d.shadow=true;d.source=source;d.excluded=box;d.sigma=sigma;draws.push_back(d);
+     }
+    }
    } else if(const auto* clip=std::get_if<prep::PushClip>(&command)) {
     const double radius=clip->radii.top_left_x;
     if(!uniform(clip->radii) || (radius>0 && (curve.radius>0 ||
@@ -212,6 +236,26 @@ Result render(FrameStore& store,const prep::PreparedFrame& frame,prep::Cancellat
     const auto r=draw.rect;
     const int x0=int(std::floor(r.l)),x1=int(std::ceil(r.r));
     const int y0=int(std::floor(r.t)),y1=int(std::ceil(r.b));
+    // One reusable-per-draw scratch allocation: <=2*(8192+8192)*8 =256KiB.
+    std::vector<double> scratch;
+    const auto nx=std::size_t(x1-x0),ny=std::size_t(y1-y0);
+    if(draw.shadow) {
+     scratch.resize(2*(nx+ny));
+     const auto axis=[&](int first,int last,double low,double high,double a,double b,double el,double eh,double* values,double* excluded){
+      for(int i=first;i<last;++i) {
+       if(cancelled(cancel)) return Status::cancelled;
+       const double lo=std::max(double(i),low),hi=std::min(double(i)+1,high);
+       const double all=shadow_math::integral(lo,hi,a,b,draw.sigma);
+       const double part=shadow_math::integral(std::max(lo,el),std::min(hi,eh),a,b,draw.sigma);
+       if(!shadow_math::bounded(all,hi-lo) || !shadow_math::bounded(part,all)) return Status::numeric_error;
+       values[i-first]=std::clamp(all,0.0,hi-lo);excluded[i-first]=std::clamp(part,0.0,values[i-first]);
+      }
+      return Status::ok;
+     };
+     auto status=axis(x0,x1,r.l,r.r,draw.source.l,draw.source.r,draw.excluded.l,draw.excluded.r,scratch.data(),scratch.data()+nx);
+     if(status==Status::ok)status=axis(y0,y1,r.t,r.b,draw.source.t,draw.source.b,draw.excluded.t,draw.excluded.b,scratch.data()+2*nx,scratch.data()+2*nx+ny);
+     if(status!=Status::ok)return {status,FrameStatus::ok,index,work};
+    }
     const unsigned alpha=byte(draw.color.a);
     const unsigned channels[]{byte(draw.color.b),byte(draw.color.g),byte(draw.color.r)};
     for(int y=y0;y<y1;++y) {
@@ -219,7 +263,10 @@ Result render(FrameStore& store,const prep::PreparedFrame& frame,prep::Cancellat
      for(int x=x0;x<x1;++x) {
       const auto b=intersect(r,{double(x),double(y),double(x)+1,double(y)+1});
       double covered;
-      if(draw.clip.radius>0 && !central(b,draw.clip)) {
+      if(draw.shadow) {
+       covered=scratch[x-x0]*scratch[2*nx+y-y0]-scratch[nx+x-x0]*scratch[2*nx+ny+y-y0];
+       if(!shadow_math::bounded(covered,1))return {Status::numeric_error,FrameStatus::ok,index,work};
+      } else if(draw.clip.radius>0 && !central(b,draw.clip)) {
        covered=joint_area(draw,b,joint_sampled_pixels);
       } else {
       const double outer_area=draw.radius>0?

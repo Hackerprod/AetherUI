@@ -50,9 +50,9 @@ std::optional<Matrix> compose(Matrix m, Matrix c) noexcept {
 }
 }
 int command_tag(const Command& command) noexcept {
- constexpr std::array<int,9> tags{AETHER_PAINT_FILL_ROUNDED_RECT,AETHER_PAINT_STROKE_ROUNDED_RECT,
+ constexpr std::array<int,10> tags{AETHER_PAINT_FILL_ROUNDED_RECT,AETHER_PAINT_STROKE_ROUNDED_RECT,
  AETHER_PAINT_DRAW_TEXT,AETHER_PAINT_PUSH_CLIP,AETHER_PAINT_POP_CLIP,AETHER_PAINT_PUSH_TRANSFORM,
- AETHER_PAINT_POP_TRANSFORM,AETHER_PAINT_BEGIN_PAINT_CHUNK,AETHER_PAINT_END_PAINT_CHUNK};
+ AETHER_PAINT_POP_TRANSFORM,AETHER_PAINT_BEGIN_PAINT_CHUNK,AETHER_PAINT_END_PAINT_CHUNK,AETHER_PAINT_DRAW_BOX_SHADOW};
  return command.valueless_by_exception() ? -1 : tags[command.index()];
 }
 std::optional<ErrorCode> validate_text(const Text& value, std::size_t& bytes) noexcept {
@@ -77,6 +77,11 @@ std::optional<ErrorCode> validate_command(const Command& command, std::size_t& b
    if (!valid(value.rect) || !valid(value.radii) || !valid(value.color)) return ErrorCode::INVALID_PAYLOAD;
   } else if constexpr (std::is_same_v<T,Stroke>) {
    if (!valid(value.rect) || !valid(value.radii) || !nonnegative(value.stroke_width) || !valid(value.color)) return ErrorCode::INVALID_PAYLOAD;
+  } else if constexpr (std::is_same_v<T,BoxShadow>) {
+   if (!valid(value.rect) || !valid(value.radii) || !valid(value.shadow.color) ||
+       !std::isfinite(value.shadow.offset_x) || !std::isfinite(value.shadow.offset_y) ||
+       !std::isfinite(value.shadow.spread_radius) || !nonnegative(value.shadow.blur_radius) ||
+       (value.shadow.inset != AETHER_FALSE && value.shadow.inset != AETHER_TRUE)) return ErrorCode::INVALID_PAYLOAD;
   } else if constexpr (std::is_same_v<T,Text>) {
    return validate_text(value, bytes);
   } else if constexpr (std::is_same_v<T,PushClip>) {

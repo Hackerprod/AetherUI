@@ -1,4 +1,4 @@
-// Headless R11 fixture, not HTML/Chromium validation. Original PNG encoder uses
+// Headless R12 fixture, not HTML/Chromium validation. Original PNG encoder uses
 // only uncompressed DEFLATE blocks; decode verification uses existing stb_image.
 #include "../../native/src/rendering/software/software_renderer.h"
 #define STB_IMAGE_IMPLEMENTATION
@@ -48,17 +48,16 @@ int main(int argc,char** argv) {
  try {
   if(argc!=2) throw std::runtime_error("usage: software_smoke EXISTING_OUTPUT_DIRECTORY");
   const std::filesystem::path dir(argv[1]);if(!std::filesystem::is_directory(dir)) throw std::runtime_error("output directory missing");
-  const auto image=dir/"aether-r11.png",report=dir/"report.log";
+  const auto image=dir/"aether-r12.png",report=dir/"report.log";
   if(std::filesystem::exists(image)||std::filesystem::exists(report)) throw std::runtime_error("refusing to overwrite evidence");
-  p::Snapshot snapshot{{p::Fill{{0,0,500,500},{3,3,3,3,3,3,3,3},{.08f,.10f,.16f,1}},
-   p::Fill{{20.25f,20.5f,130,100},{12,12,12,12,12,12,12,12},{.15f,.65f,.95f,1}},
-   p::Fill{{90.5f,55.25f,130,110},{3,3,3,3,3,3,3,3},{1,.25f,.1f,.65f}},
-   p::PushClip{{235.25f,25.5f,65,150},{15,15,15,15,15,15,15,15}},
-   p::PushClip{{230,20.25f,80,170},{}},
-   p::Fill{{210,0,100,200},{},{.2f,1,.4f,1}},p::PopClip{},p::PopClip{},
-   p::Stroke{{20.5f,20.5f,130,100},{10.5f,10.5f,10.5f,10.5f,10.5f,10.5f,10.5f,10.5f},3,{1,1,1,.65f}},
-   p::Stroke{{90.5f,55.25f,130,110},{2.625f,2.625f,2.625f,2.625f,2.625f,2.625f,2.625f,2.625f},.75f,{1,1,0,1}},
-   p::Stroke{{24,145,55,35},{12,12,12,12,12,12,12,12},8,{.2f,.9f,.6f,.5f}}}};
+  p::Snapshot snapshot{{p::Fill{{0,0,500,500},{},{.92f,.94f,.98f,1}},
+   p::BoxShadow{{40,40,160,100},{},{0,2,8,0,{0,0,0,.65f},AETHER_FALSE}},
+   p::Fill{{40,40,160,100},{},{1,1,1,1}},
+   p::BoxShadow{{250,80,160,160},{},{10,10,32,4,{.1f,.2f,.7f,.75f},AETHER_FALSE}},
+   p::Fill{{250,80,160,160},{},{1,.8f,.4f,1}},
+   p::BoxShadow{{50,280,160,100},{},{-8,5,7,-3,{.2f,.7f,.3f,.8f},AETHER_FALSE}},
+   p::BoxShadow{{50,280,160,100},{},{0,2,8,0,{.8f,.1f,.1f,.5f},AETHER_FALSE}},
+   p::Fill{{50,280,160,100},{},{1,1,1,.65f}}}};
   auto prepared=p::prepare(snapshot);if(!std::holds_alternative<p::PreparedFrame>(prepared)) throw std::runtime_error("prepare failed");
   aether::rendering::FrameStore store;if(store.resize({500,500,1})!=aether::rendering::FrameStatus::ok) throw std::runtime_error("resize failed");
   std::vector<double> times;std::uint64_t work=0,sampled=0,bound=0,inner_sampled=0,inner_bound=0,joint=0,clip_bound=0;const auto cpu=std::clock();
@@ -77,8 +76,8 @@ int main(int argc,char** argv) {
   bool match=decoded && w==500 && h==500 && std::equal(pixels.begin(),pixels.end(),decoded);stbi_image_free(decoded);
   if(!match) throw std::runtime_error("PNG roundtrip mismatch");
   const double first=times.front();times.erase(times.begin());std::sort(times.begin(),times.end());
-  std::ofstream log(report);log<<"status=PASS\nscope=direct curved-clip, rounded-fill and rounded-stroke fixture, NOT HTML\nbackend=Aether own CPU R11\nbuild_revision="<<AETHER_BUILD_REV
-   <<"\ncoverage_method=central_bands_grid16x16 for rounded shapes; ring subtracts coverage before quantization; curved clip uses joint samples\nviewport=500x500\ndpi=1\nformat=BGRA8 premultiplied encoded sRGB\ncommands="<<snapshot.commands.size()
+  std::ofstream log(report);log<<"status=PASS\nscope=direct rectangular exterior shadows fixture, NOT HTML\nbackend=Aether own CPU R12\nbuild_revision="<<AETHER_BUILD_REV
+   <<"\ncoverage_method=GL16 separable Gaussian pixel integration; same-field interior exclusion; support 4sigma\nviewport=500x500\ndpi=1\nformat=BGRA8 premultiplied encoded sRGB\ncommands="<<snapshot.commands.size()
    <<"\nsampled_pixels="<<sampled<<"\ncorner_pixel_bound="<<bound<<"\njoint_sampled_pixels="<<joint<<"\nclip_corner_pixel_bound="<<clip_bound<<"\ninner_sampled_pixels="<<inner_sampled<<"\ninner_corner_pixel_bound="<<inner_bound<<"\npixel_budget="<<work<<"\nPNG_roundtrip=PASS\nrender_calls=12\nfirst_render_ms="<<first<<"\nwarm_median_ms="<<times[times.size()/2]
    <<"\nwarm_p95_nearest_rank_ms="<<times.back()<<"\nencode_ms="<<std::chrono::duration<double,std::milli>(encode_end-encode_start).count();
   if(cpu!=std::clock_t(-1)&&end_cpu!=std::clock_t(-1)) log<<"\nrender_loop_process_cpu_ms="<<1000.0*double(end_cpu-cpu)/CLOCKS_PER_SEC;
