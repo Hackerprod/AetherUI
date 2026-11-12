@@ -55,6 +55,7 @@ AETHER_API aether_computed_style_handle_t aether_style_map_get(aether_style_map_
 
 AETHER_API aether_status_t aether_computed_style_copy(aether_computed_style_handle_t handle, aether_computed_style_t* out) {
     if (!handle || !out) return AETHER_ERROR_NULL_ARG;
+    if (handle->measures && !handle->measures->contextual_lengths().empty()) return AETHER_ERROR_INVALID_STATE;
     return computed_style_deep_copy(handle->style, out);
 }
 
@@ -70,12 +71,14 @@ AETHER_API aether_status_t aether_computed_style_handle_clone(
     if (!source || !out) return AETHER_ERROR_NULL_ARG;
     try {
         auto result = std::make_unique<aether_computed_style_handle_s>();
-        if (computed_style_deep_copy(source->style, &result->style) != AETHER_OK) return AETHER_ERROR_OUT_OF_MEMORY;
+        const auto status = computed_style_deep_copy(source->style, &result->style);
+        if (status != AETHER_OK) return status;
         result->measures = source->measures; result->record = source->record; result->revision = source->revision;
         result->document_identity = source->document_identity; result->node_identity = source->node_identity;
         result->node_lifetime = source->node_lifetime; result->document_lifetime = source->document_lifetime;
         *out = result.release(); return AETHER_OK;
-    } catch (...) { return AETHER_ERROR_OUT_OF_MEMORY; }
+    } catch (const std::bad_alloc&) { return AETHER_ERROR_OUT_OF_MEMORY; }
+      catch (...) { return AETHER_ERROR_INVALID_STATE; }
 }
 AETHER_API aether_status_t aether_computed_style_contextual_metrics(
     aether_computed_style_handle_t style, float* out_line_height,

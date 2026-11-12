@@ -29,6 +29,7 @@ inline measure_state_s snapshot(const aether::style::FrozenMeasures& source) {
         if (!result.property_dependencies.emplace(std::string(name.c_str(), name.size()), p.flags()).second)
             throw std::runtime_error("duplicate frozen dependency in test snapshot");
     }
+    result.contextual_lengths = source.contextual_lengths();
     return result;
 }
 inline float used_line_height(aether_computed_style_handle_t handle) {

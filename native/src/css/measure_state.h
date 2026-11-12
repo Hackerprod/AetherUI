@@ -1,5 +1,6 @@
 #pragma once
 #include <aether/aether.h>
+#include "contextual_math.h"
 #include <memory>
 #include <unordered_map>
 #include <string>
@@ -46,6 +47,7 @@ struct measure_state_s {
     std::vector<measure_background_size_s> background_sizes{measure_background_size_s{}};
     uint32_t dependencies = 0;
     std::unordered_map<std::string, uint32_t> property_dependencies;
+    std::unordered_map<std::string, aether::css::math_tree> contextual_lengths;
 };
 // A unit conversion observes only these numeric inputs. It never owns or
 // copies a node's lists/dependency table, and cannot mutate the document.
@@ -82,6 +84,8 @@ struct measure_property_delta_s {
     std::optional<std::vector<measure_background_position_s>> background_positions;
     std::optional<std::vector<measure_background_size_s>> background_sizes;
     std::optional<uint32_t> property_dependencies;
+    // Absent key = unchanged; null tree = erase; non-null = replacement.
+    std::unordered_map<std::string, aether::css::math_tree> contextual_lengths;
 };
 
 // Ephemeral, deeply const reads. A view never escapes the operation retaining
@@ -96,6 +100,14 @@ public:
     measure_read_view_s(const measure_state_s& base, const measure_property_delta_s& delta,
                        const std::string& property) noexcept
         : base_(&base), delta_(&delta), property_(&property) {}
+    aether::css::math_tree tree(const std::string& property) const {
+        if (delta_) {
+            const auto changed = delta_->contextual_lengths.find(property);
+            if (changed != delta_->contextual_lengths.end()) return changed->second;
+        }
+        const auto found = base_->contextual_lengths.find(property);
+        return found == base_->contextual_lengths.end() ? nullptr : found->second;
+    }
     float parent_font_size() const noexcept { return base_->parent_font_size; }
     float self_font_size() const noexcept {
         return delta_ && delta_->self_font_size ? *delta_->self_font_size : base_->self_font_size;
@@ -142,6 +154,12 @@ public:
     measure_apply_state_s& operator=(const measure_apply_state_s&) = delete;
     measure_read_view_s read() const noexcept {
         return delta_ ? measure_read_view_s(*base_, *delta_, *property_) : measure_read_view_s(*base_);
+    }
+    void set_tree(const std::string& property, aether::css::math_tree tree) {
+        if (target_) {
+            if (tree) target_->contextual_lengths.insert_or_assign(property, std::move(tree));
+            else target_->contextual_lengths.erase(property);
+        } else delta_->contextual_lengths.insert_or_assign(property, std::move(tree));
     }
     uint32_t property_dependencies() const { return read().property_dependencies(*property_); }
     void set_property_dependencies(uint32_t flags) {
@@ -212,6 +230,8 @@ inline bool measure_has_percentage(const measure_state_s* state, const char* pro
     if (value.unit == AETHER_CSS_UNIT_PERCENT ||
         (value.unit == AETHER_CSS_UNIT_LINEAR && value.linear_percent != 0)) return true;
     if (!state || !property) return false;
+    const auto tree = state->contextual_lengths.find(property);
+    if (tree != state->contextual_lengths.end() && aether::css::math_has_percentage(tree->second)) return true;
     const auto found = state->property_dependencies.find(property);
     return found != state->property_dependencies.end() && (found->second & MEASURE_PERCENTAGE);
 }

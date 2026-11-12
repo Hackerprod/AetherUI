@@ -25,6 +25,7 @@ public:
     // Stage1 builder only accepts string keys; this signature avoids allocating
     // a temporary string for a string_view. Caller supplies its existing stable
     // string key; Frozen lookup uses its bytes directly.
+    aether::css::math_tree contextual_tree(const std::string& name) const;
     uint32_t dependency(const std::string& name) const;
     size_t position_count() const noexcept;
     MeasureBackgroundPosition position_at(size_t i) const;

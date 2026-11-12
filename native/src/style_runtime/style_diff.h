@@ -105,6 +105,7 @@ AETHER_STYLE_PAYLOAD_POLICIES(AETHER_PAYLOAD_POLICY)
 // comparator specialization in style_diff.cpp. There is no fallback to metadata.
 #define AETHER_STYLE_SIDECAR_FIELDS(X) \
     X(property_dependencies) \
+    X(contextual_lengths) \
     X(combined_dependencies) \
     X(parent_font_size) \
     X(self_font_size) \
@@ -131,6 +132,7 @@ template<StyleSidecar> struct StyleSidecarPolicy;
         static constexpr auto kind = SidecarPolicyKind::classification; \
         static constexpr uint32_t impact = mask; static constexpr bool inherited = inherit; };
 AETHER_SIDECAR_POLICY(property_dependencies, percentage_consumers, 0, false)
+AETHER_SIDECAR_POLICY(contextual_lengths, value, 7, false)
 AETHER_SIDECAR_POLICY(combined_dependencies, metadata, 0, false)
 AETHER_SIDECAR_POLICY(parent_font_size, metadata, 0, false)
 AETHER_SIDECAR_POLICY(self_font_size, metadata, 0, false)

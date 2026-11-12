@@ -81,8 +81,34 @@ static aether_thicknessf normalize_checked_edges(aether_thicknessf edges, bool a
 
 aether_thicknessf resolve_padding_edges(const aether_layout_engine_s* e,
                                         aether_css_edges edges, float reference,
-                                        const BoxStyleSnapshot& style) {
-    return normalize_checked_edges(resolve_checked_edges(e, edges, reference, style), false);
+                                        const BoxStyleSnapshot& style,
+                                        padding_resolution_phase_e phase) {
+    const auto& owner = style.measures_owner();
+    const auto side = [&](const char* property, aether_css_length scalar) {
+        if (owner) {
+            const aether::style::MeasuresReadView measures(*owner);
+            if (const auto tree = measures.contextual_tree(property)) {
+                const bool percent = aether::css::math_has_percentage(tree);
+                if (phase == padding_resolution_phase_e::indefinite && percent)
+                    throw std::invalid_argument("Indefinite contextual padding requires a layout phase");
+                const double basis = phase == padding_resolution_phase_e::intrinsic_cyclic ? 0. : reference;
+                double value = 0.;
+                if (!aether::css::resolve_contextual_math(tree, basis, value) ||
+                    !std::isfinite(value) || std::abs(value) > std::numeric_limits<float>::max())
+                    throw std::overflow_error("Invalid contextual used padding");
+                return std::max(0.f, static_cast<float>(value));
+            }
+        }
+        if (phase == padding_resolution_phase_e::indefinite &&
+            (scalar.unit == AETHER_CSS_UNIT_PERCENT ||
+             (scalar.unit == AETHER_CSS_UNIT_LINEAR && scalar.linear_percent != 0)))
+            throw std::invalid_argument("Indefinite padding requires a layout phase");
+        return std::max(0.f, resolve(e, scalar,
+            phase == padding_resolution_phase_e::intrinsic_cyclic ? 0.f : reference, style));
+    };
+    // Resolve all four before returning: failure cannot publish partial edges.
+    return {side("padding-left", edges.left), side("padding-top", edges.top),
+            side("padding-right", edges.right), side("padding-bottom", edges.bottom)};
 }
 
 aether_thicknessf resolve_margin_edges(const aether_layout_engine_s* e,
@@ -104,7 +130,8 @@ aether_thicknessf resolve_border_edges(const aether_layout_engine_s* e,
 
 BoxStyleSnapshot get_style(const StyleLookup* styles, aether_node_s* el) {
     auto owner = el ? styles->lookup_node_owner(el) : aether::style::FrozenStyleRef{};
-    return BoxStyleSnapshot(owner ? std::move(owner) : styles->default_owner());
+    return BoxStyleSnapshot(owner ? std::move(owner) : styles->default_owner(),
+        styles->lookup_measures_owner(el));
 }
 
 bool is_out_of_flow(const BoxStyleSnapshot& style) {
@@ -1983,7 +2010,9 @@ static intrinsic_child_width_s measure_child_intrinsic_width_parts(
     const float specified = percentage_dependent_width
         ? NAN
         : resolve(engine, child_style.width, maximum, child_style);
-    auto child_padding = resolve_padding_edges(engine, child_style.padding, edge_reference, child_style);
+    auto child_padding = resolve_padding_edges(engine, child_style.padding, edge_reference, child_style,
+        context == child_width_context_e::intrinsic_contribution && !table_box
+            ? padding_resolution_phase_e::intrinsic_cyclic : padding_resolution_phase_e::used);
     auto child_border  = resolve_border_edges(engine, child_style, maximum);
     const float decorations = aether_thicknessf_horizontal(child_padding) +
                               aether_thicknessf_horizontal(child_border);
@@ -2094,13 +2123,21 @@ static float select_intrinsic_flex_item_width(
     const auto border = natural.border;
     const float decoration = checked_intrinsic_width(
         aether_thicknessf_horizontal(padding) + aether_thicknessf_horizontal(border));
-    const auto border_size = [&](aether_css_length length) {
-        const float used = resolve(engine, length, 0.f, child_style);
+    const auto border_size = [&](aether_css_length length, const char* property = nullptr) {
+        float used;
+        const auto tree = measures && property ? measures->contextual_tree(property) : aether::css::math_tree{};
+        if (tree) {
+            double value = 0.;
+            if (!aether::css::resolve_contextual_math(tree, 0., value) ||
+                !std::isfinite(value) || std::abs(value) > std::numeric_limits<float>::max())
+                throw std::overflow_error("Invalid intrinsic contextual flex basis");
+            used = static_cast<float>(value);
+        } else used = resolve(engine, length, 0.f, child_style);
         if (length.unit == AETHER_CSS_UNIT_AUTO) return NAN;
         return checked_intrinsic_width(std::max(0.f, used) +
             (child_style.box_sizing == AETHER_BOX_SIZING_CONTENT_BOX ? decoration : 0.f));
     };
-    const float base = border_size(basis_length);
+    const float base = border_size(basis_length, basis_property);
     if (!aether_intrinsic_flex_needs_hypothetical(contribution, base, true,
             child_style.flex_grow, child_style.flex_shrink))
         return contribution;

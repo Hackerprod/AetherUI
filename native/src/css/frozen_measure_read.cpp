@@ -32,6 +32,9 @@ measure_inputs_s MeasuresReadView::inputs_with_self_font(float font) const {
     const auto& d=frozen_->document().values();
     return {font,d.viewport_width,d.viewport_height,d.initial_font_size,d.root_font_size};
 }
+aether::css::math_tree MeasuresReadView::contextual_tree(const std::string& name) const {
+    return frozen_ ? frozen_->contextual_tree(name) : builder_ ? builder_->tree(name) : nullptr;
+}
 uint32_t MeasuresReadView::dependency(const std::string& name) const {
     return frozen_ ? frozen_->dependency(name) : builder_ ? builder_->property_dependencies(name) : 0;
 }
@@ -63,7 +66,7 @@ aether_status_t freeze_runtime_measures(const measure_state_s& source, FrozenDoc
         std::vector<PropertyDependencyInput> dependencies;
         dependencies.reserve(source.property_dependencies.size());
         for(const auto& [name, flags]:source.property_dependencies) if(flags) dependencies.push_back({name,flags});
-        return freeze_measures(scalars,std::move(document),positions,sizes,dependencies,output);
+        return freeze_measures(scalars,std::move(document),positions,sizes,dependencies,output,source.contextual_lengths);
     } catch(const std::bad_alloc&) { return AETHER_ERROR_OUT_OF_MEMORY; }
       catch(...) { return AETHER_ERROR_INVALID_STATE; }
 }
@@ -75,6 +78,7 @@ float measure_used_line_height(const MeasuresReadView* view, const StyleScalars&
 }
 bool measure_has_percentage(const MeasuresReadView* view, const std::string& property, aether_css_length value) {
     if(value.unit==AETHER_CSS_UNIT_PERCENT || (value.unit==AETHER_CSS_UNIT_LINEAR && value.linear_percent!=0)) return true;
-    return view && *view && (view->dependency(property)&MEASURE_PERCENTAGE);
+    return view && *view && ((view->dependency(property)&MEASURE_PERCENTAGE) ||
+        aether::css::math_has_percentage(view->contextual_tree(property)));
 }
 }

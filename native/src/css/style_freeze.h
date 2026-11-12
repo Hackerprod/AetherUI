@@ -10,5 +10,6 @@ aether_status_t freeze_document(DocumentMeasureValues source,
 aether_status_t freeze_measures(MeasureScalarValues scalars,
     std::shared_ptr<const FrozenDocumentMeasureContext> document,
     std::span<const MeasureBackgroundPosition> positions, std::span<const MeasureBackgroundSize> sizes,
-    std::span<const PropertyDependencyInput> dependencies, std::shared_ptr<const FrozenMeasures>& output) noexcept;
+    std::span<const PropertyDependencyInput> dependencies, std::shared_ptr<const FrozenMeasures>& output,
+    const std::unordered_map<std::string, aether::css::math_tree>& contextual_lengths = {}) noexcept;
 } // namespace aether::style

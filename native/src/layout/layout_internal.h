@@ -261,9 +261,12 @@ float resolve(const aether_layout_engine_s* e,
               aether_css_length value, float reference,
               const BoxStyleSnapshot& style);
 
+enum class padding_resolution_phase_e { used, intrinsic_cyclic, indefinite };
+
 aether_thicknessf resolve_padding_edges(const aether_layout_engine_s* e,
                                         aether_css_edges edges, float reference,
-                                        const BoxStyleSnapshot& style);
+                                        const BoxStyleSnapshot& style,
+                                        padding_resolution_phase_e phase = padding_resolution_phase_e::used);
 
 aether_thicknessf resolve_margin_edges(const aether_layout_engine_s* e,
                                        aether_css_edges edges, float reference,

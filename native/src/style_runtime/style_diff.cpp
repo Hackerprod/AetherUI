@@ -224,6 +224,18 @@ AETHER_SIDECAR_COMPARATOR(property_dependencies) {
     percentage_delta(result, before, after, "row-gap", a.scalars().row_gap, b.row_gap);
     percentage_delta(result, before, after, "column-gap", a.scalars().column_gap, b.column_gap);
 } AETHER_SIDECAR_END
+AETHER_SIDECAR_COMPARATOR(contextual_lengths) {
+    const auto& before = input.previous.contextual_lengths();
+    const auto& after = input.candidate.contextual_lengths;
+    bool different = before.size() != after.size();
+    for (const auto& [name, tree] : before) {
+        const auto found = after.find(name);
+        if (found == after.end() || !aether::css::contextual_math_equal(tree, found->second)) {
+            different = true; break;
+        }
+    }
+    sidecar_changed<StyleSidecar::contextual_lengths>(result, different);
+} AETHER_SIDECAR_END
 AETHER_SIDECAR_COMPARATOR(combined_dependencies) {
     sidecar_changed<StyleSidecar::combined_dependencies>(result, input.previous.scalars().dependencies != input.candidate.dependencies);
 } AETHER_SIDECAR_END

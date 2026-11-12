@@ -13,6 +13,7 @@ using namespace aether::style;
 #include <algorithm>
 #include "../css/border_utils.h"
 #include "../css/css_length_internal.h"
+#include "../css/contextual_math.h"
 #include "../css/border_radii.h"
 #include "../css/background_layers.h"
 #include "../css/backdrop_filters.h"
@@ -83,10 +84,26 @@ static bool bi_try_size(const char* src, std::string& out) {
     return false;
 }
 
+// H4 admits deferred comparison math only in padding and flex-basis.
+static bool bi_contextual_length(const std::string& value, aether::css::math_tree& tree) {
+    css_component_cursor cursor(value);
+    css_component_value component;
+    if (!cursor.next(component) || component.token.kind != css_variable_token_kind::function) return false;
+    return aether::css::parse_contextual_math(value, tree);
+}
+static bool bi_try_contextual_nonnegative(const char* source, std::string& output) {
+    if (bi_try_non_negative_length(source, output)) return true;
+    const std::string value = str_trim(source ? source : "");
+    aether::css::math_tree tree;
+    if (!bi_contextual_length(value, tree)) return false;
+    output = value; return true;
+}
+
 static bool bi_try_flex_basis(const char* source, std::string& output) {
     const std::string value = str_trim(source ? source : "");
     if (str_iequals(value, "content")) { output = "content"; return true; }
-    return bi_try_size(source, output);
+    if (bi_try_size(source, output)) return true;
+    return bi_try_contextual_nonnegative(source, output);
 }
 
 static bool bi_try_max_size(const char* src, std::string& out) {
@@ -875,7 +892,7 @@ void builtin_properties_register(style_property_registry_s* reg) {
 
     // padding-top/right/bottom/left
     {
-        auto pp = [](const char* s, std::string& o) -> bool { return bi_try_non_negative_length(s, o); };
+        auto pp = [](const char* s, std::string& o) -> bool { return bi_try_contextual_nonnegative(s, o); };
         auto pa = [](int side) -> property_apply_fn {
             return [side](aether_computed_style_t* st, const std::string& v) {
                 aether_css_length l;
@@ -2009,6 +2026,78 @@ void builtin_properties_register(style_property_registry_s* reg) {
                 inherited_dependencies |= pm->dependency(name) & MEASURE_PERCENTAGE;
             }
             c.measures->set_property_dependencies(inherited_dependencies);
+        };
+    }
+
+    // Comparison math cannot cross the legacy flat representation. Checked
+    // applicators reject before touching it; contextual candidates own the tree.
+    for (auto& definition : reg->definitions) {
+        const auto name = definition.name;
+        if (name != "flex-basis" && name != "padding-top" && name != "padding-right" &&
+            name != "padding-bottom" && name != "padding-left") continue;
+        const auto legacy = definition.apply;
+        const auto contextual = definition.apply_with_context;
+        const auto inherit = definition.inherit_context;
+        auto needs_tree = [](const std::string& value, aether::css::math_tree& tree) {
+            aether_css_length flat;
+            if (bi_css_length(value, flat, true)) return false;
+            return bi_contextual_length(value, tree);
+        };
+        const auto parse = definition.parse;
+        definition.apply_checked = [legacy, needs_tree, parse](aether_computed_style_t* st, const std::string& value) {
+            std::string canonical;
+            if (!parse || !parse(value.c_str(), canonical))
+                return property_apply_result_s::failure("AETHER-CSS-MATH-SYNTAX", "Invalid contextual length syntax.");
+            aether::css::math_tree tree;
+            if (needs_tree(value, tree))
+                return property_apply_result_s::failure("AETHER-CSS-CONTEXT-REQUIRED", "CSS comparison math requires an owning contextual style.");
+            if (legacy) legacy(st, value);
+            return property_apply_result_s{};
+        };
+        // Legacy void callers cannot report a status; fail explicitly rather
+        // than silently accepting a parsed expression and leaving stale data.
+        definition.apply = [legacy, needs_tree, parse](aether_computed_style_t* st, const std::string& value) {
+            std::string canonical;
+            if (!parse || !parse(value.c_str(), canonical)) throw std::invalid_argument("Invalid contextual length syntax");
+            aether::css::math_tree tree;
+            if (needs_tree(value, tree)) throw std::invalid_argument("CSS comparison math requires contextual style");
+            if (legacy) legacy(st, value);
+        };
+        definition.apply_with_context_checked = [name, contextual, needs_tree, parse, checked = definition.apply_checked]
+            (property_apply_context_s& c, const std::string& value) -> property_apply_result_s {
+            if (!c.measures) return checked(c.style, value);
+            std::string canonical;
+            if (!parse || !parse(value.c_str(), canonical))
+                return property_apply_result_s::failure("AETHER-CSS-MATH-SYNTAX", "Invalid contextual length syntax.");
+            aether::css::math_tree tree;
+            if (!needs_tree(value, tree)) {
+                if (contextual) contextual(c, value);
+                c.measures->set_tree(name, {});
+                return {};
+            }
+            const auto inputs = c.measures->read().inputs();
+            auto computed = aether::css::compute_contextual_math(tree, inputs.self_font_size,
+                inputs.root_font_size, inputs.viewport_width, inputs.viewport_height);
+            const auto deps = aether::css::math_dependencies(tree);
+            uint32_t dependencies = ((deps & 1) ? MEASURE_PERCENTAGE : 0) |
+                ((deps & 2) ? MEASURE_SELF_FONT : 0) | ((deps & 4) ? MEASURE_ROOT_FONT : 0) |
+                ((deps & 8) ? MEASURE_VIEWPORT : 0);
+            // All parsing/computation precedes writes. Candidate/probe owns any
+            // allocation failure; no frozen published record is mutated.
+            c.measures->set_tree(name, std::move(computed));
+            c.measures->set_property_dependencies(dependencies);
+            auto placeholder = aether_css_length_zero();
+            placeholder.value = std::numeric_limits<float>::quiet_NaN();
+            if (name == "flex-basis") c.style->flex_basis = {AETHER_FLEX_BASIS_LENGTH, placeholder};
+            else if (name == "padding-top") c.style->padding.top = placeholder;
+            else if (name == "padding-right") c.style->padding.right = placeholder;
+            else if (name == "padding-bottom") c.style->padding.bottom = placeholder;
+            else c.style->padding.left = placeholder;
+            return {};
+        };
+        definition.inherit_context = [name, inherit](property_apply_context_s& c, ComputedStyleReadView p, const MeasuresReadView* pm) {
+            if (inherit) inherit(c, p, pm);
+            c.measures->set_tree(name, pm ? pm->contextual_tree(name) : aether::css::math_tree{});
         };
     }
 

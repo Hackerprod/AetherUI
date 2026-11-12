@@ -66,9 +66,12 @@ aether_status_t freeze_document(DocumentMeasureValues source,
 aether_status_t freeze_measures(MeasureScalarValues scalars,
     std::shared_ptr<const FrozenDocumentMeasureContext> document,
     std::span<const MeasureBackgroundPosition> positions, std::span<const MeasureBackgroundSize> sizes,
-    std::span<const PropertyDependencyInput> dependencies, std::shared_ptr<const FrozenMeasures>& output) noexcept {
+    std::span<const PropertyDependencyInput> dependencies, std::shared_ptr<const FrozenMeasures>& output,
+    const std::unordered_map<std::string, aether::css::math_tree>& contextual_lengths) noexcept {
     try {
         if (!document || positions.empty() || sizes.empty()) return AETHER_ERROR_INVALID_STATE;
+        for (const auto& [name, tree] : contextual_lengths)
+            if (name.empty() || !tree) return AETHER_ERROR_INVALID_STATE;
         uint32_t combined = 0;
         for (size_t i = 0; i < dependencies.size(); ++i) {
             if (dependencies[i].name.empty()) return AETHER_ERROR_INVALID_STATE;
@@ -86,7 +89,7 @@ aether_status_t freeze_measures(MeasureScalarValues scalars,
             return FrozenPropertyDependency(dependencies[cursor++]);
         });
         auto prepared = std::make_shared<const FrozenMeasures>(scalars, std::move(document),
-            std::move(frozen_positions), std::move(frozen_sizes), std::move(frozen_dependencies));
+            std::move(frozen_positions), std::move(frozen_sizes), std::move(frozen_dependencies), contextual_lengths);
         output = std::move(prepared); return AETHER_OK;
     } catch (const std::bad_alloc&) { return AETHER_ERROR_OUT_OF_MEMORY; }
       catch (...) { return AETHER_ERROR_INVALID_STATE; }

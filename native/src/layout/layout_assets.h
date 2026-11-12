@@ -12,9 +12,12 @@ using namespace aether::style;
 // Only value scalars are mutable. Every dynamic style value remains deeply const.
 class BoxStyleSnapshot : public StyleScalars {
     FrozenStyleRef style_;
+    FrozenMeasuresRef measures_;
 public:
     BoxStyleSnapshot() = default;
-    explicit BoxStyleSnapshot(FrozenStyleRef style) : StyleScalars(style->view().scalars()), style_(std::move(style)) {}
+    explicit BoxStyleSnapshot(FrozenStyleRef style, FrozenMeasuresRef measures = {})
+        : StyleScalars(style->view().scalars()), style_(std::move(style)), measures_(std::move(measures)) {}
+    const FrozenMeasuresRef& measures_owner() const noexcept { return measures_; }
     ComputedStyleReadView view() const noexcept { return style_->view().with_scalars(*this); }
     const StyleScalars& scalars() const noexcept { return *this; }
     StyleScalars& mutable_scalars() noexcept { return *this; }

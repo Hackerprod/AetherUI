@@ -23,12 +23,12 @@ inline void css(const std::string& s,const std::string& source,std::set<std::str
   if(budget.exhausted||t.kind==css_variable_token_kind::error){blockers.insert("CSS_LEXICAL_OR_WORK_LIMIT");logstream<<"inventory_incomplete="<<quoted(source)<<"\n";break;}
   const char* kind=nullptr;const char* reason=nullptr;size_t a=t.begin,z=t.end;
   if(t.serialization==css_variable_serialization::at_keyword){kind="at_rule";reason="CSS_AT_RULE_UNSUPPORTED";++a;}
-  else if(t.kind==css_variable_token_kind::function){kind="function";reason="CSS_FUNCTION_UNSUPPORTED";if(z>a)--z;}
+  else if(t.kind==css_variable_token_kind::function){kind="function";reason="CSS_FUNCTION_REQUIRES_CONTEXT_GATE";if(z>a)--z;}
   else if(t.serialization==css_variable_serialization::url||t.serialization==css_variable_serialization::bad_url){kind="url";reason="CSS_RESOURCE_UNSUPPORTED";}
   if(!kind)continue;
   while(cursor<t.begin){if(s[cursor++]=='\n'){++line;column=1;}else ++column;}
   const std::string label=std::string(kind)=="url"?"url":name(s,a,z);
-  ++totals[std::string(kind)+":"+label];blockers.insert(reason);
+  ++totals[std::string(kind)+":"+label];if(t.kind!=css_variable_token_kind::function)blockers.insert(reason);
   logstream<<"inventory_css source="<<quoted(source)<<" offset="<<t.begin<<" length="<<t.end-t.begin<<" line="<<line<<" column="<<column<<" kind="<<kind<<" name="<<quoted(label)<<" reason="<<reason<<" context=LEXICAL_ONLY engine_support=UNVERIFIED\n";
  }
  for(const auto& [key,count]:totals)logstream<<"inventory_css_count source="<<quoted(source)<<" token="<<quoted(key)<<" count="<<count<<"\n";

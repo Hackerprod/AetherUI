@@ -207,7 +207,14 @@ static float resolve_flex_main_border_size(const aether_layout_engine_s* engine,
                                            aether_css_length length, const std::optional<aether::style::MeasuresReadView>& measures, const char* property) {
     if (!flex_length_is_definite(length, main_size_is_definite, measures, property)) return NAN;
     const float reference = horizontal ? content.width : content.height;
-    const float value = resolve(engine, length, reference, style);
+    float value;
+    if (const auto tree = measures ? measures->contextual_tree(property) : aether::css::math_tree{}) {
+        double used = 0.;
+        if (!aether::css::resolve_contextual_math(tree, reference, used) ||
+            !std::isfinite(used) || std::abs(used) > std::numeric_limits<float>::max())
+            throw std::overflow_error("Invalid contextual flex basis");
+        value = static_cast<float>(used);
+    } else value = resolve(engine, length, reference, style);
     if (!std::isfinite(value)) return NAN;
     const auto padding = resolve_padding_edges(engine, style.padding, content.width, style);
     const auto border = resolve_border_edges(engine, style, content.width);

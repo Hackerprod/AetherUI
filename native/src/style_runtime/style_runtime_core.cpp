@@ -866,17 +866,9 @@ AETHER_API aether_status_t aether_style_runtime_get_update(
     if (out_impact) *out_impact = 0;
     if (!update) return AETHER_ERROR_NULL_ARG;
     if (out_current) {
-        auto* copy = new (std::nothrow) aether_computed_style_handle_s();
-        if (!copy) return AETHER_ERROR_OUT_OF_MEMORY;
-        if (aether_computed_style_copy(&update->current, &copy->style) != AETHER_OK) {
-            delete copy;
-            return AETHER_ERROR_OUT_OF_MEMORY;
-        }
-        copy->record=update->current.record;
-        copy->measures = update->current.measures; copy->revision = update->current.revision;
-        copy->document_identity = update->current.document_identity; copy->node_identity = update->current.node_identity;
-        copy->node_lifetime = update->current.node_lifetime; copy->document_lifetime = update->current.document_lifetime;
-        *out_current = copy;
+        // This is an owning internal clone, not a flat ABI projection.
+        const auto status = aether_computed_style_handle_clone(&update->current, out_current);
+        if (status != AETHER_OK) return status;
     }
     if (out_node) *out_node = update->node;
     if (out_impact) *out_impact = update->impact;
