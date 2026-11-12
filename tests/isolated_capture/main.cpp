@@ -1,5 +1,6 @@
 // Linux-only manual one-shot harness. No public engine handles escape this process.
 #include <aether/aether.h>
+#include <aether/aether_contextual_style.h>
 #include "../../native/src/dom/dom_types.h"
 #include "../../native/src/style_runtime/css_variable_tokens.h"
 #include "../../native/src/rendering/software/software_renderer.h"
@@ -70,6 +71,7 @@ int capture(const char* input,const std::string& out,int width,int height,bool g
   style_property_registry_init();
   Objects o;require(aether_doc_create(&o.doc)==AETHER_OK,"DOC_CREATE_FAILED");
   {Stage s("parse");require(aether_doc_parse_html(o.doc,html.c_str())==AETHER_OK,"PARSE_FAILED");}
+  bool variable_profile=false;
   std::vector<std::string> sheets, inline_sheets;std::set<std::string> blockers;
   std::vector<aether_node_s*> canvases, inert_scripts;
   {Stage s("dom_preflight");
@@ -83,11 +85,11 @@ int capture(const char* input,const std::string& out,int width,int height,bool g
     if(tag=="style") {std::string css;for(auto* c:n->children){if(c->type!=AETHER_NODE_TEXT)blockers.insert("STYLE_CONTENT_UNSUPPORTED");else css+=c->text;}sheets.push_back(std::move(css));}
     if((tag=="script"&&!h3::json(n))||tag=="link"||tag=="img"||tag=="svg"||tag=="video"||tag=="audio"||tag=="object"||tag=="iframe"||tag=="embed"||tag=="base"){blockers.insert("RESOURCE_OR_SCRIPT_ELEMENT_UNSUPPORTED");diagnostic::element(n,count);}
     if(n->type==AETHER_NODE_TEXT&&!meta&&n->text.find_first_not_of(" \t\r\n\f")!=std::string::npos)blockers.insert("TEXT_RENDERER_UNAVAILABLE");
-    for(const auto& [key,value]:n->attributes){if(h3::lower(key).starts_with("on"))blockers.insert("EVENT_HANDLER_UNSUPPORTED");if(key=="style"){inline_sheets.push_back(value);auto analysis=h5::analyze(value,false);diagnostic::css(value,"inline-dom-"+std::to_string(count),blockers,analysis);try{check_css(value,analysis);}catch(Failure f){blockers.insert(f.reason);}}if(key=="dir")blockers.insert("HTML_DIR_UNSUPPORTED");}
+    for(const auto& [key,value]:n->attributes){if(h3::lower(key).starts_with("on"))blockers.insert("EVENT_HANDLER_UNSUPPORTED");if(key=="style"){inline_sheets.push_back(value);auto analysis=h5::analyze(value,false);variable_profile|=analysis.variables;diagnostic::css(value,"inline-dom-"+std::to_string(count),blockers,analysis);try{check_css(value,analysis);}catch(Failure f){blockers.insert(f.reason);}}if(key=="dir")blockers.insert("HTML_DIR_UNSUPPORTED");}
     for(auto it=n->children.rbegin();it!=n->children.rend();++it)todo.push_back({*it,depth+1,meta});
    }
    logstream<<"dom_nodes="<<count<<"\nstyle_blocks="<<sheets.size()<<std::endl;
-   size_t sheet_index=0;for(const auto& css:sheets){auto analysis=h5::analyze(css,true);diagnostic::css(css,"style-block-"+std::to_string(sheet_index++),blockers,analysis);try{check_css(css,analysis);}catch(Failure f){blockers.insert(f.reason);}}
+   size_t sheet_index=0;for(const auto& css:sheets){auto analysis=h5::analyze(css,true);variable_profile|=analysis.variables;diagnostic::css(css,"style-block-"+std::to_string(sheet_index++),blockers,analysis);try{check_css(css,analysis);}catch(Failure f){blockers.insert(f.reason);}}
    if(canvases.size()>256)blockers.insert("CANVAS_COUNT_LIMIT");
    if(!canvases.empty()){
     // Only the H3 admission view is filtered; global diagnostics above and
@@ -101,16 +103,31 @@ int capture(const char* input,const std::string& out,int width,int height,bool g
    require(blockers.empty(),"PREFLIGHT_UNSUPPORTED");
   }
   aether_style_environment_t env{static_cast<float>(width),static_cast<float>(height),1,16,0,0,0};aether_style_runtime_options_t options{};
+  h14::Audit variable_audit;auto variable_hook=variable_audit.hook();
+  if(variable_profile){options.max_variable_depth=32;options.max_variable_expansion_length=4096;}
   bool text_requested=false;
   bool animation_unsupported=false;
   auto animation_diagnostic=[](const char* code,const char*,const char*,const char*,void* state){
    if(code&&std::string_view(code)=="AETHER-CSS-ANIMATION-PROFILE")*static_cast<bool*>(state)=true;
   };
   {Stage s("style");require(aether_style_runtime_create(&options,&env,animation_diagnostic,&animation_unsupported,&o.runtime)==AETHER_OK,"STYLE_CREATE_FAILED");
+   if(variable_profile)style_runtime_set_value_audit(o.runtime,&variable_hook);
    const char* ua=aether_style_runtime_defaults_css();logstream<<"ua_sha256="<<avc::sha256(ua)<<std::endl;
    int64_t handle{};int32_t nr{};require(aether_style_runtime_add_stylesheet(o.runtime,ua,0,"builtin-UA",&handle,&nr)==AETHER_OK,"UA_FAILED");
    size_t index=0;for(const auto& css:sheets){logstream<<"style_"<<index++<<"_compiled_bytes_sha256="<<avc::sha256(css)<<std::endl;require(aether_style_runtime_add_stylesheet(o.runtime,css.c_str(),1,"DOM-style",&handle,&nr)==AETHER_OK,"SHEET_FAILED");}
-   aether_style_update_t* updates=nullptr;int count=aether_style_runtime_resolve_subtree(o.runtime,aether_doc_get_body(o.doc),&updates);require(count>=0,"STYLE_RESOLVE_FAILED");aether_style_updates_free(updates,count);
+   if(variable_profile){
+    aether_style_transaction_t tx{};
+    const auto prepared=aether_style_runtime_prepare_revision(o.runtime,aether_doc_get_body(o.doc),&env,&tx);
+    std::unique_ptr<aether_style_transaction_s,decltype(&aether_style_transaction_destroy)> owner(tx,aether_style_transaction_destroy);
+    require(prepared==AETHER_OK,"CSS_VARIABLE_PREPARATION_FAILED");
+    aether_style_revision_t revision{};const auto committed=aether_style_runtime_commit_revision(o.runtime,tx,&revision);
+    if(revision)aether_style_revision_destroy(revision);
+    require(committed==AETHER_OK,"CSS_VARIABLE_COMMIT_FAILED");
+   }else{
+    aether_style_update_t* updates=nullptr;int count=aether_style_runtime_resolve_subtree(o.runtime,aether_doc_get_body(o.doc),&updates);require(count>=0,"STYLE_RESOLVE_FAILED");aether_style_updates_free(updates,count);
+   }
+   require(!variable_audit.rejected&&!variable_audit.work.exhausted,"CSS_VARIABLE_PROFILE_UNSUPPORTED");
+   logstream<<"variable_substitution_work_remaining="<<variable_audit.work.remaining<<"\nvariable_values_audited="<<variable_audit.observed<<"\n";
    require(!animation_unsupported,"CSS_ANIMATION_PROFILE_UNSUPPORTED");
    require(aether_style_runtime_create_resolved_style_map(o.runtime,o.doc,&o.styles)==AETHER_OK,"STYLE_MAP_FAILED");
   }

@@ -4,11 +4,12 @@
 #include "h4_profile.h"
 #include "h7_profile.h"
 #include "h8_profile.h"
+#include "h14_profile.h"
 #include "../../native/src/style_runtime/h5_parser_profile.h"
 #include "../../native/src/style_runtime/h5_color_profile.h"
 #include "../../native/src/style_runtime/supports_condition.h"
 namespace h5 {
-struct Analysis { std::set<size_t> functions, at_rules; bool valid=true; };
+struct Analysis { std::set<size_t> functions, at_rules; bool valid=true; bool variables=false; };
 struct Scanner {
  const std::string& s; std::vector<css_variable_token> ts; Analysis out;
  size_t supports_budget=65536;
@@ -33,8 +34,9 @@ struct Scanner {
     if(ts[i].kind==css_variable_token_kind::function||ts[i].kind==css_variable_token_kind::open){size_t close;if(!pair(i,z,close)){out.valid=false;return;}i=close+1;}
     else if(ts[i].kind==css_variable_token_kind::close){out.valid=false;return;}else ++i;}
    size_t end=i;if(end>=start+2&&d(end-2,'!')&&ts[end-1].kind==css_variable_token_kind::ident&&ident(end-1)=="important")end-=2;
-   if(start==end){out.valid=false;return;}
+   if(start==end){if(property.starts_with("--"))continue;out.valid=false;return;}
    auto value=s.substr(ts[start].begin,ts[end-1].end-ts[start].begin);
+   if(h14::variable_source(property,value)){out.variables=true;for(size_t j=start;j<end;++j)if(ts[j].kind==css_variable_token_kind::function)out.functions.insert(ts[j].begin);}
    // display:contents is not represented by this geometry profile. Do not
    // silently turn a non-transformable authored box into a fallback block.
    if(property=="display" && ts[start].kind==css_variable_token_kind::ident && ident(start)=="contents")out.valid=false;

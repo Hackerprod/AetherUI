@@ -74,7 +74,7 @@ public:
 }
 
 namespace aether::style {
-FrozenScopeRef compute_frozen_custom_property_scope(const custom_property_sources_s&, FrozenScopeRef, int32_t, int32_t);
-bool resolve_frozen_computed_value(const char*, const FrozenCustomPropertyScope*, int32_t, int32_t, std::string&);
+FrozenScopeRef compute_frozen_custom_property_scope(const custom_property_sources_s&, FrozenScopeRef, int32_t, int32_t, css_variable_budget* = nullptr);
+bool resolve_frozen_computed_value(const char*, const FrozenCustomPropertyScope*, int32_t, int32_t, std::string&, css_variable_budget* = nullptr);
 computed_custom_property_s resolve_frozen_custom_property_root_with_budget(const std::string&, const custom_property_sources_s&, const FrozenCustomPropertyScope*, int32_t, int32_t, css_variable_budget&);
 }

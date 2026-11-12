@@ -19,6 +19,7 @@
 #include "css_variable_tokens.h"
 #include "custom_property_scope_internal.h"
 #include "frozen_runtime_metadata.h"
+#include "value_audit_internal.h"
 #include "paused_keyframes.h"
 #include "../css/style_revision.h"
 #include "../css/frozen_measure_read.h"
@@ -81,6 +82,7 @@ struct aether_style_runtime_s {
     aether_style_environment_t environment{};
     aether_style_diagnostic_fn diag_cb = nullptr;
     void* diag_user_data = nullptr;
+    const style_value_audit_s* value_audit = nullptr; // borrowed synchronous observer
     int64_t next_sheet_handle = 1;
     int32_t next_rule_id = 1;
     std::unordered_map<int64_t, std::unique_ptr<compiled_style_sheet_s>> sheets;
@@ -102,7 +104,8 @@ struct aether_style_runtime_s {
         for(const auto& sheet:source.sheets)for(const auto& rule:sheet.second->rules)
             if(rule.keyframes)paused_rules.push_back(&rule);
         // Unlike a generic copy, synchronous preparation borrows only stable,
-        // runtime-owned sheets. No callbacks run while preparing, mutations are
+        // runtime-owned sheets. Public diagnostics are deferred while preparing;
+        // the optional internal audit is read-only. Mutations are
         // guarded, and sheet_epoch rejects stale commits before rule use.
         index.before_possible_ = source.index.before_possible_;
         index.after_possible_ = source.index.after_possible_;
@@ -427,7 +430,10 @@ static PreparedNodeResult* compute_node(aether_style_runtime_s* runtime, aether_
     }
 
     auto scope = compute_frozen_custom_property_scope(sources, parent ? parent->custom_properties : nullptr,
-        runtime->options.max_variable_depth, runtime->options.max_variable_expansion_length);
+        runtime->options.max_variable_depth, runtime->options.max_variable_expansion_length,
+        runtime->value_audit?runtime->value_audit->work:nullptr);
+    if(runtime->value_audit && runtime->value_audit->scope)
+        runtime->value_audit->scope(runtime->value_audit->context,scope.get());
     // Ordinary nodes share the exact legacy scope without a second source map or
     // resolution. Only effective winning differences (or inherited differences)
     // need a focal view. CSS-wide classification always comes from the legacy winner.
@@ -442,7 +448,8 @@ static PreparedNodeResult* compute_node(aether_style_runtime_s* runtime, aether_
         }
         backdrop_scope = compute_frozen_custom_property_scope(backdrop_sources,
             parent ? parent->backdrop_custom_properties : nullptr,
-            runtime->options.max_variable_depth, runtime->options.max_variable_expansion_length);
+            runtime->options.max_variable_depth, runtime->options.max_variable_expansion_length,
+        runtime->value_audit?runtime->value_audit->work:nullptr);
     }
 
     // Custom properties have no dependency on the final ordinary style in this
@@ -456,7 +463,10 @@ static PreparedNodeResult* compute_node(aether_style_runtime_s* runtime, aether_
         std::string resolved;
         std::vector<compiled_property_declaration_s> staged;
         const bool substituted = resolve_frozen_computed_value(declaration.source.c_str(), scope.get(),
-            runtime->options.max_variable_depth, runtime->options.max_variable_expansion_length, resolved);
+            runtime->options.max_variable_depth, runtime->options.max_variable_expansion_length, resolved,
+            runtime->value_audit?runtime->value_audit->work:nullptr);
+        if(runtime->value_audit && runtime->value_audit->value)
+            runtime->value_audit->value(runtime->value_audit->context,node,declaration.name,declaration.source,substituted?&resolved:nullptr);
         const bool valid = substituted && validate_pending_declaration_value(resolved) &&
             !variable_has_reference(resolved) &&
             style_source_compile_shorthand(*shorthand, resolved, declaration.important,
@@ -574,10 +584,14 @@ static PreparedNodeResult* compute_node(aether_style_runtime_s* runtime, aether_
             value = initial_value;
             break;
         case compiled_value_mode::deferred: {
-            if (!resolve_frozen_computed_value(compiled.deferred_source.c_str(),
+            const bool substituted = resolve_frozen_computed_value(compiled.deferred_source.c_str(),
                                   definition.name == "backdrop-filter" ? backdrop_scope.get() : scope.get(),
                                   runtime->options.max_variable_depth,
-                                  runtime->options.max_variable_expansion_length, value)) {
+                                  runtime->options.max_variable_expansion_length, value,
+                                  runtime->value_audit?runtime->value_audit->work:nullptr);
+            if(runtime->value_audit && runtime->value_audit->value)
+                runtime->value_audit->value(runtime->value_audit->context,node,definition.name,compiled.deferred_source,substituted?&value:nullptr);
+            if (!substituted) {
                 report(runtime, "AETHER-CSS-VAR", definition.name.c_str(),
                        compiled.deferred_source.c_str(), "Unable to resolve CSS variable.");
                 if (!definition.css_wide || (definition.inherited && parent)) return false;
@@ -966,6 +980,7 @@ static aether_status_t prepare_revision_impl(
         transaction->base_style_tree_epoch = document->identity->style_tree_epoch;
         transaction->candidate = std::make_unique<aether_style_runtime_s>();
         auto& staged = *transaction->candidate;
+        staged.value_audit = runtime->value_audit;
         staged.options = runtime->options; staged.environment = requested_environment;
         if (isolate_legacy_root && root != document && root->parent && root->parent->type != AETHER_NODE_DOCUMENT)
             staged.legacy_inheritance_root = root;
@@ -1209,3 +1224,8 @@ AETHER_API aether_status_t aether_style_runtime_update_resolved_style_map(aether
     }catch(const std::bad_alloc&){return AETHER_ERROR_OUT_OF_MEMORY;}catch(...){return AETHER_ERROR_INVALID_STATE;}
 }
 AETHER_API void aether_style_runtime_clear_cache(aether_style_runtime_t runtime) { if (runtime) { runtime->states.clear(); ++runtime->sheet_epoch; } }
+
+void style_runtime_set_value_audit(aether_style_runtime_t runtime,const style_value_audit_s* audit) {
+    if(runtime&&!runtime->preparing&&runtime->owner_thread==std::this_thread::get_id())
+        runtime->value_audit=audit;
+}

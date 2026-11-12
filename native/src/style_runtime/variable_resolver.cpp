@@ -482,9 +482,9 @@ bool variable_resolve(const char* source, const custom_property_scope_s* scope,
 }
 
 bool aether::style::resolve_frozen_computed_value(const char* source,const FrozenCustomPropertyScope* scope,
-    int32_t depth,int32_t length,std::string& out) {
+    int32_t depth,int32_t length,std::string& out,css_variable_budget* shared) {
     css_variable_budget budget;
-    return resolve_value_with_budget(source,{nullptr,nullptr,nullptr,scope},depth,length,budget,out);
+    return resolve_value_with_budget(source,{nullptr,nullptr,nullptr,scope},depth,length,shared?*shared:budget,out);
 }
 computed_custom_property_s aether::style::resolve_frozen_custom_property_root_with_budget(
     const std::string& name, const custom_property_sources_s& sources,

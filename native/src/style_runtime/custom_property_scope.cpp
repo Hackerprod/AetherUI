@@ -30,11 +30,11 @@ computed_custom_property_scope_ptr compute_custom_property_scope(
 #include <stdexcept>
 namespace aether::style {
 FrozenScopeRef compute_frozen_custom_property_scope(const custom_property_sources_s& sources, FrozenScopeRef parent,
-    int32_t max_depth, int32_t max_expansion_length) {
+    int32_t max_depth, int32_t max_expansion_length, css_variable_budget* shared) {
     CustomPropertyInput local;
     for(const auto& entry:sources) {
         css_variable_budget budget;
-        auto value=resolve_frozen_custom_property_root_with_budget(entry.first,sources,parent.get(),max_depth,max_expansion_length,budget);
+        auto value=resolve_frozen_custom_property_root_with_budget(entry.first,sources,parent.get(),max_depth,max_expansion_length,shared?*shared:budget);
         local.emplace(entry.first,std::move(value));
     }
     FrozenScopeRef result;
