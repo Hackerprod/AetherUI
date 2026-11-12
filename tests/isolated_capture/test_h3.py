@@ -191,7 +191,10 @@ for index, declaration in enumerate([
     'inline-size:10px', 'block-size:10px', 'min-inline-size:0px', 'max-block-size:none',
     'all:initial', 'min-width:auto', 'min-height:1px', 'max-width:100px', 'max-height:100px',
 ]):
-    run('authored_' + str(index), document(css='.unmatched{' + declaration + '}'), False)
+    # H11: only canvas-specific restrictions may be omitted after a full
+    # absence proof. Writing-mode/direction remain GLOBAL H8 restrictions.
+    run('authored_' + str(index), document(css='.unmatched{' + declaration + '}'), index >= 6)
+    run('matched_authored_' + str(index), document(css='canvas{' + declaration + '}'), False)
     run('inline_authored_' + str(index), document(tail='<div style="' + declaration + '"></div>'), False)
 run('comment_not_declaration', document(css='/* direction:rtl; writing-mode:vertical-rl */ canvas{min-width:0px;max-width:none}'))
 run('dir_html', document(attrs='width="100" height="50" dir="ltr"'), False)

@@ -39,6 +39,7 @@ aether_text_metrics_t no_text(const char*,const aether_computed_style_t*,float,v
 #include "inventory.h"
 #include "h3_profile.h"
 #include "h4_profile.h"
+#include "h11_profile.h"
 void check_css(const std::string& s,const h5::Analysis& analysis){
  css_variable_budget budget{max_bytes*4,false};css_variable_lexer lexer(s.data(),s.size(),0,&budget);
  for(;;){auto t=lexer.next();if(t.kind==css_variable_token_kind::end)break;
@@ -89,7 +90,11 @@ int capture(const char* input,const std::string& out,int width,int height,bool g
    size_t sheet_index=0;for(const auto& css:sheets){auto analysis=h5::analyze(css,true);diagnostic::css(css,"style-block-"+std::to_string(sheet_index++),blockers,analysis);try{check_css(css,analysis);}catch(Failure f){blockers.insert(f.reason);}}
    if(canvases.size()>256)blockers.insert("CANVAS_COUNT_LIMIT");
    if(!canvases.empty()){
-    for(const auto& css:sheets)try{h3::authored(css,true);}catch(Failure f){blockers.insert(f.reason);}
+    // Only the H3 admission view is filtered; global diagnostics above and
+    // the original stylesheet passed to the runtime below remain unchanged.
+    h11::Proof proof(o.doc);
+    for(const auto& css:sheets)try{h3::authored(proof.retained(css),true);}catch(Failure f){blockers.insert(f.reason);}
+    logstream<<"canvas_unmatched_rules_omitted="<<proof.omitted<<"\ncanvas_absence_match_queries="<<proof.queries<<"\ncanvas_absence_work_remaining="<<proof.remaining<<std::endl;
     for(const auto& css:inline_sheets)try{h3::authored(css,false);}catch(Failure f){blockers.insert(f.reason);}
    }
    for(const auto& b:blockers)logstream<<"blocker="<<b<<std::endl;

@@ -237,3 +237,40 @@ transform. This is not general 3D support. Only tested block/flex boxes and a
 single identity function are admitted. Intermediate clip escape, root scrolling,
 static transformed flex-item z-index and other untested forms reject the frame.
 See `H10_EVIDENCE.md`, `run_h10_core.sh` and `test_h10.py`.
+
+### H11 absent-selector canvas admission
+
+Only the canvas-specific H3 authored-style check can omit an ordinary rule
+whose entire selector list is proved not to match **any** element in the parsed
+DOM (including head/metadata, hidden elements and canvas fallback content).
+Global CSS syntax/function/resource checks still see every original byte;
+the runtime also receives the original, unfiltered stylesheet. Inline styles,
+conditional rules and state/pseudo-element/nested selectors get no exemption.
+A matching rule remains subject to the original conservative H3 restrictions,
+even if its element appears unrelated to the canvas. This does not establish
+geometric independence of subtrees or support for previously unknown CSS.
+
+The internal proof uses the native strict list parser and native matcher, with
+a narrow selector profile and worst-case work reservation **before** matching.
+Limits are 1,024 DOM nodes, depth 64, 64 attributes/8,192 identity bytes per node,
+512 rules per capture, selector source 512 bytes/128 tokens, 16 list branches,
+4 steps and 8 compound atoms. Only structural non-nested pseudos and attribute
+existence/equality are eligible. Descendant and sibling branching costs are
+multiplied conservatively; the capture's total allowance is 16 million abstract
+proof-work units. These are not limits for the engine's general CSS pipeline.
+If this proof is out of scope, malformed or out of budget, the original H3
+restriction is retained. Allocation failure aborts the capture without a PNG.
+No absence conclusion is cached across a mutation or a later capture.
+
+Reports record `canvas_unmatched_rules_omitted`, `canvas_absence_match_queries`
+and `canvas_absence_work_remaining`; they do not change the honest coverage
+fields (`authored_css_validation=NOT_RUN`, Chromium not run).
+
+```sh
+sh tests/isolated_capture/run_h11_core.sh /tmp/h11-build
+python3 tests/isolated_capture/test_h11.py /tmp/h11-build/aether_capture /tmp/h11-results
+```
+
+The original flexbox fixture still rejects. In particular, the actual matched
+`FLEX-001` min-height rule remains restricted; H11 fixes only the demonstrated
+false rejection for a rule with no matching element. See `H11_EVIDENCE.md`.
