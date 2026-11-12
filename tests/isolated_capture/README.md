@@ -274,3 +274,24 @@ python3 tests/isolated_capture/test_h11.py /tmp/h11-build/aether_capture /tmp/h1
 The original flexbox fixture still rejects. In particular, the actual matched
 `FLEX-001` min-height rule remains restricted; H11 fixes only the demonstrated
 false rejection for a rule with no matching element. See `H11_EVIDENCE.md`.
+
+### H12 flex lifetime allocation recovery contract
+
+The separate `native/tests/test_flex_static_position_lifetime.cpp` test now
+accepts success after an injected failure only after validating full output and
+preserved previous state. It destroys the output, tests engine reuse and
+continues injection at subsequent allocation positions. Only success without
+reaching the requested injection completes the bounded sweep. Required OOM
+failures must still leave the previous output untouched.
+
+This accounts for `std::stable_sort`'s optional buffer and does not change the
+engine, excuse arbitrary errors or stop at the first recoverable allocation.
+The added fixture verifies distinct flex orders and stable equal-order siblings.
+Negative controls deliberately corrupt geometry/order and must be rejected.
+
+```sh
+sh tests/isolated_capture/run_h12_core.sh /tmp/h12-build
+```
+
+See `H12_EVIDENCE.md`. This test is neither a leak detector nor a performance
+benchmark; the original full flexbox page is still unsupported.

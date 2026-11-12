@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <cstring>
 #include <cstdlib>
 #include <new>
 #include <set>
@@ -63,7 +64,8 @@ struct Fixture {
     aether_style_runtime_t runtime = nullptr;
     aether_style_map_t map = nullptr;
     aether_layout_engine_t engine = nullptr;
-    Fixture() {
+    bool ordered;
+    explicit Fixture(bool order_case = false) : ordered(order_case) {
         REQUIRE(aether_doc_create(&doc) == AETHER_OK);
         REQUIRE(aether_doc_parse_html(doc,
             "<html id='html'><body id='body'><div id='prefix'></div>"
@@ -73,6 +75,14 @@ struct Fixture {
         aether_style_runtime_options_t options{};
         aether_style_environment_t env{800,600,1,16,0,0,0};
         REQUIRE(aether_style_runtime_create(&options,&env,nullptr,nullptr,&runtime) == AETHER_OK);
+        if (ordered) {
+            REQUIRE(aether_doc_parse_html(doc,
+                "<html id='html'><body id='body'><div id='prefix'></div>"
+                "<div id='owner'><div id='parent'><div id='fixed'>"
+                "<div id='ordinary'></div><div id='item_b'></div>"
+                "<div id='item_c'></div><div id='item_d'></div><div id='nested'></div></div>"
+                "<div id='sibling'></div></div></div></body></html>") == AETHER_OK);
+        }
         const char* css =
             "*{margin:0;padding:0;border:0;box-sizing:content-box;}"
             "html,body,div{display:block;}#prefix{height:50px;}"
@@ -88,6 +98,12 @@ struct Fixture {
         int64_t sheet = 0;
         REQUIRE(aether_style_runtime_add_stylesheet(runtime,css,0,"flex-static-lifetime",
                                                     &sheet,nullptr) == AETHER_OK);
+        if (ordered) {
+            REQUIRE(aether_style_runtime_add_stylesheet(runtime,
+                "#ordinary{order:2;}#item_b,#item_c,#item_d{width:10px;height:6px;flex-shrink:0;}"
+                "#item_b{order:1;}#item_c{order:2;}#item_d{order:-1;}",
+                0,"ordered-fallback",&sheet,nullptr) == AETHER_OK);
+        }
         aether_style_update_t* updates = nullptr;
         const int count = aether_style_runtime_resolve_subtree(runtime,
                            aether_doc_get_document_element(doc), &updates);
@@ -129,9 +145,9 @@ static void walk(aether_layout_box_s* box, const std::set<aether_layout_box_s*>&
 }
 static void validate(Fixture& f, aether_layout_result_t result, bool log = false) {
     // layout_layout selects body when present, falling back to html only when
-    // body is absent. This fixture therefore has eight element boxes, not nine:
-    // html is a style/overflow source, not an additional layout root wrapper.
-    constexpr size_t expected_boxes = 8;
+    // body is absent. The baseline has eight boxes; the ordered fixture adds
+    // three. html is a style/overflow source, not an extra layout root wrapper.
+    const size_t expected_boxes = f.ordered ? 11 : 8;
     if (log || result->live_box_count != expected_boxes) {
         std::printf("prepared flex-static registry: live=%zu expected=%zu (body-root contract)\n",
                     static_cast<size_t>(result->live_box_count), expected_boxes);
@@ -163,6 +179,8 @@ static void validate(Fixture& f, aether_layout_result_t result, bool log = false
         REQUIRE(node != nullptr);
         REQUIRE(expected_elements.insert(node).second);
     }
+    if (f.ordered) for (const char* id : {"item_b","item_c","item_d"})
+        REQUIRE(expected_elements.insert(aether_doc_get_element_by_id(f.doc,id)).second);
     REQUIRE(elements == expected_elements);
     REQUIRE(result->root == f.box(result,"body"));
     REQUIRE(result->root->kind == LAYOUT_BOX_ELEMENT);
@@ -187,7 +205,13 @@ static void validate(Fixture& f, aether_layout_result_t result, bool log = false
     auto* nested = f.box(result,"nested");
     auto* sibling = f.box(result,"sibling");
     REQUIRE(parent->children == std::vector<aether_layout_box_s*>({fixed,sibling}));
-    REQUIRE(fixed->children == std::vector<aether_layout_box_s*>({ordinary,nested}));
+    if (f.ordered) {
+        // Geometric order is tested separately: physical child registry is not
+        // the CSS order-modified sequence.
+        REQUIRE(fixed->children.size() == 5);
+        for (auto* child : {ordinary,nested,f.box(result,"item_b"),f.box(result,"item_c"),f.box(result,"item_d")})
+            REQUIRE(std::count(fixed->children.begin(),fixed->children.end(),child) == 1);
+    } else REQUIRE(fixed->children == std::vector<aether_layout_box_s*>({ordinary,nested}));
     REQUIRE(owner->children == std::vector<aether_layout_box_s*>({parent}));
     // Independent literals: owner final padding is 420x190, but the child's
     // static center comes from its immediate parent's 300x120 content box.
@@ -198,7 +222,12 @@ static void validate(Fixture& f, aether_layout_result_t result, bool log = false
     rect("parent-padding",parent->padding_box,{50,70,360,160},log);
     rect("parent-content",parent->content_box,{90,80,300,120},log);
     rect("fixed",fixed->border_box,{135,92.5f,210,95},log);
-    rect("ordinary",ordinary->border_box,{135,92.5f,10,6},log);
+    rect("ordinary",ordinary->border_box,{f.ordered ? 155.f : 135.f,92.5f,10,6},log);
+    if (f.ordered) {
+        rect("order-minus-one",f.box(result,"item_d")->border_box,{135,92.5f,10,6},log);
+        rect("order-one",f.box(result,"item_b")->border_box,{145,92.5f,10,6},log);
+        rect("order-two-stable-tie",f.box(result,"item_c")->border_box,{165,92.5f,10,6},log);
+    }
     rect("nested-explicit",nested->border_box,{42,64,12,8},log);
     rect("sibling",sibling->border_box,{220,130,40,20},log);
 }
@@ -207,8 +236,8 @@ struct SavedBox {
     aether_rectf border, padding, content, margin;
     std::vector<aether_layout_box_s*> children;
 };
-int main() {
-    Fixture f;
+static void sweep(bool ordered) {
+    Fixture f(ordered);
     auto* prior = f.layout(nullptr);
     validate(f,prior,true);
     std::vector<SavedBox> saved;
@@ -221,9 +250,11 @@ int main() {
     const auto structure = f.doc->identity->structure_epoch;
     const auto mutation = f.doc->identity->mutation_epoch;
     const auto style = f.doc->identity->style_tree_epoch;
-    long failures = 0;
+    long failures = 0, recoveries = 0, attempts = 0;
+    long last_recovery = -1, terminal_ordinal = -1;
     bool completed = false;
     for (long ordinal = 0; ordinal < 20000; ++ordinal) {
+        ++attempts;
         // Preparation is one-shot and deliberately outside the fault window.
         f.prepare(prior);
         aether_layout_result_t output = prior;
@@ -246,28 +277,59 @@ int main() {
         }
         validate(f,prior);
         if (status == AETHER_OK) {
-            REQUIRE(!injected && output && output != prior);
+            REQUIRE(output && output != prior);
             validate(f,output);
             aether_layout_result_destroy(output);
-            completed = true;
-            break;
+            if (!injected) {
+                completed = true;
+                terminal_ordinal = ordinal;
+                break;
+            }
+            ++recoveries;
+            last_recovery = ordinal;
+        } else {
+            REQUIRE(injected && status == AETHER_ERROR_OUT_OF_MEMORY && output == prior);
+            ++failures;
         }
-        REQUIRE(injected && status == AETHER_ERROR_OUT_OF_MEMORY && output == prior);
-        ++failures;
-        // A new successful layout immediately after every failure proves engine
-        // reuse; it does not attempt to resume a partially constructed result.
+        // A fresh successful layout after every OOM or recovered allocation proves
+        // reuse; it never resumes a partially constructed result.
         auto* fresh = f.layout(prior);
         validate(f,fresh);
         aether_layout_result_destroy(fresh);
     }
     REQUIRE(completed && failures > 0);
+    REQUIRE(attempts == failures + recoveries + 1);
+    // No library-dependent fallback count/ordinal is required. If one occurs,
+    // prove the sweep proceeded beyond it rather than stopping prematurely.
+    REQUIRE(last_recovery < terminal_ordinal);
     auto* fresh = f.layout(prior);
     validate(f,fresh,true);
     validate(f,prior);
     aether_layout_result_destroy(fresh);
     aether_layout_result_destroy(prior);
-    const int scenarios = 1;
-    REQUIRE(scenarios == 1 && assertions > 0);
-    std::printf("flex-static lifetime: mode=prepared scenarios=%d assertions=%ld injected-layout-failures=%ld; "
-                "registry/reachability checks are not leak validation\n",scenarios,assertions,failures);
+    std::printf("flex-static lifetime: ordered=%d assertions=%ld attempts=%ld oom=%ld recovered=%ld terminal=%ld; "
+                "registry/reachability checks are not leak validation\n",
+                ordered,assertions,attempts,failures,recoveries,terminal_ordinal);
+}
+int main(int argc, char** argv) {
+    // Deliberately corrupt a successful result to prove the oracle catches
+    // geometry errors and reversal of equal-order DOM siblings. No engine
+    // behavior is changed by these test-only negative controls.
+    if (argc == 2) {
+        Fixture f(true);
+        auto* result = f.layout(nullptr);
+        validate(f,result);
+        if (std::strcmp(argv[1],"--negative-order") == 0) {
+            std::swap(f.box(result,"ordinary")->border_box.x,
+                      f.box(result,"item_c")->border_box.x);
+        } else if (std::strcmp(argv[1],"--negative-geometry") == 0) {
+            f.box(result,"fixed")->border_box.y += 1;
+        } else return 2;
+        validate(f,result); // Must abort; runner checks the assertion signature.
+        aether_layout_result_destroy(result);
+        return 0;
+    }
+    REQUIRE(argc == 1);
+    sweep(false);
+    sweep(true);
 }
