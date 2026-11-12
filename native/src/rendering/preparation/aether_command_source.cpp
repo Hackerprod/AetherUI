@@ -1,8 +1,8 @@
-#include "aether_visual_compare/aether_command_source.hpp"
+#include "aether/rendering/preparation/aether_command_source.hpp"
 #include <new>
 #include <utility>
 
-namespace avc::preparation {
+namespace aether::rendering::preparation {
 namespace {
 bool cancelled(Cancellation* cancellation) noexcept {
  return cancellation && cancellation->cancelled();
@@ -114,4 +114,4 @@ SnapshotResult snapshot_commands(const AetherApi& api, aether_display_list_t lis
   return Error{ErrorCode::OUT_OF_MEMORY, index, tag};
  }
 }
-} // namespace avc::preparation
+} // namespace aether::rendering::preparation

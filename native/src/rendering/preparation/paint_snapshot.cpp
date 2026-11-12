@@ -1,5 +1,5 @@
-#include "aether_visual_compare/paint_snapshot.hpp"
-#include "aether_visual_compare/resource_manifest.hpp"
+#include "aether/rendering/preparation/paint_snapshot.hpp"
+#include "aether/rendering/preparation/detail/utf8.hpp"
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -8,7 +8,7 @@
 #include <type_traits>
 #include <utility>
 
-namespace avc::preparation {
+namespace aether::rendering::preparation {
 namespace {
 bool nonnegative(float v) noexcept { return std::isfinite(v) && v >= 0; }
 bool valid(Rect r) noexcept {
@@ -55,6 +55,20 @@ int command_tag(const Command& command) noexcept {
  AETHER_PAINT_POP_TRANSFORM,AETHER_PAINT_BEGIN_PAINT_CHUNK,AETHER_PAINT_END_PAINT_CHUNK};
  return command.valueless_by_exception() ? -1 : tags[command.index()];
 }
+std::optional<ErrorCode> validate_text(const Text& value, std::size_t& bytes) noexcept {
+   if (value.text.size() > max_text_bytes || value.font_family.size() >= 64) return ErrorCode::LIMIT_EXCEEDED;
+   if (value.text.find('\0') != std::string::npos || value.font_family.find('\0') != std::string::npos) return ErrorCode::INVALID_PAYLOAD;
+   if (!detail::valid_utf8(value.text) || !detail::valid_utf8(value.font_family)) return ErrorCode::INVALID_UTF8;
+   // These are adapter restrictions, not guarantees made by the core ABI.
+   if (!valid(value.rect) || value.font_family.empty() || !std::isfinite(value.font_size) ||
+       value.font_size <= 0 || value.font_weight < 1 || value.font_weight > 1000 ||
+       !align_valid(value.text_align) || !valid(value.color) ||
+       (value.wrap != AETHER_TRUE && value.wrap != AETHER_FALSE)) return ErrorCode::INVALID_PAYLOAD;
+   const auto size = value.text.size() + value.font_family.size();
+   if (bytes > max_string_bytes || size > max_string_bytes - bytes) return ErrorCode::LIMIT_EXCEEDED;
+   bytes += size;
+   return {};
+}
 std::optional<ErrorCode> validate_command(const Command& command, std::size_t& bytes) noexcept {
  if (command.valueless_by_exception()) return ErrorCode::INVALID_PAYLOAD;
  return std::visit([&bytes](const auto& value) -> std::optional<ErrorCode> {
@@ -64,17 +78,7 @@ std::optional<ErrorCode> validate_command(const Command& command, std::size_t& b
   } else if constexpr (std::is_same_v<T,Stroke>) {
    if (!valid(value.rect) || !valid(value.radii) || !nonnegative(value.stroke_width) || !valid(value.color)) return ErrorCode::INVALID_PAYLOAD;
   } else if constexpr (std::is_same_v<T,Text>) {
-   if (value.text.size() > max_text_bytes || value.font_family.size() >= 64) return ErrorCode::LIMIT_EXCEEDED;
-   if (value.text.find('\0') != std::string::npos || value.font_family.find('\0') != std::string::npos) return ErrorCode::INVALID_PAYLOAD;
-   if (!avc::valid_utf8(value.text) || !avc::valid_utf8(value.font_family)) return ErrorCode::INVALID_UTF8;
-   // These are adapter restrictions, not guarantees made by the core ABI.
-   if (!valid(value.rect) || value.font_family.empty() || !std::isfinite(value.font_size) ||
-       value.font_size <= 0 || value.font_weight < 1 || value.font_weight > 1000 ||
-       !align_valid(value.text_align) || !valid(value.color) ||
-       (value.wrap != AETHER_TRUE && value.wrap != AETHER_FALSE)) return ErrorCode::INVALID_PAYLOAD;
-   const auto size = value.text.size() + value.font_family.size();
-   if (bytes > max_string_bytes || size > max_string_bytes - bytes) return ErrorCode::LIMIT_EXCEEDED;
-   bytes += size;
+   return validate_text(value, bytes);
   } else if constexpr (std::is_same_v<T,PushClip>) {
    if (!valid(value.rect) || !valid(value.radii)) return ErrorCode::INVALID_PAYLOAD;
   } else if constexpr (std::is_same_v<T,PushTransform>) {
@@ -156,4 +160,4 @@ std::optional<Error> replay(const PreparedFrame& frame, CommandSink& sink, Cance
  } catch (const std::bad_alloc&) { return error(ErrorCode::OUT_OF_MEMORY); }
  catch (...) { return error(ErrorCode::SINK_FAILED); }
 }
-} // namespace avc::preparation
+} // namespace aether::rendering::preparation

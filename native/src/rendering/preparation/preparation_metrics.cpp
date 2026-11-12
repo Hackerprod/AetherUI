@@ -1,6 +1,6 @@
-#include "aether_visual_compare/preparation_metrics.hpp"
+#include "aether/rendering/preparation/preparation_metrics.hpp"
 
-namespace avc::preparation {
+namespace aether::rendering::preparation {
 
 std::optional<std::size_t> PreparationMetrics::index(Phase phase) noexcept {
     switch (phase) {
@@ -40,4 +40,4 @@ bool PreparationMetrics::finish(Phase phase, PhaseState terminal_state) noexcept
     return true;
 }
 
-} // namespace avc::preparation
+} // namespace aether::rendering::preparation
