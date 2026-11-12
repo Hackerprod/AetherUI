@@ -75,6 +75,6 @@ int main(){
  assert(s::render(oom,simple).status==s::Status::ok);auto saved=get(oom);fail=true;
  assert(s::render(oom,simple).status==s::Status::allocation_failed);fail=false;assert(get(oom).pixels==saved.pixels);
  assert(store.resize({500,500,1})==FrameStatus::ok);
- assert(s::render(store,prepare({p::Fill{{0,0,500,500},radii(3),{1,0,0,1}}})).status==s::Status::limit_exceeded);
+ assert(s::render(store,prepare({p::Fill{{0,0,500,500},radii(3),{1,0,0,1}}})).status==s::Status::ok);
  std::cout<<"coverage_max_error="<<worst<<" reference_convergence="<<ref_error<<'\n';
 }

@@ -23,10 +23,14 @@ bool uniform(prep::Radii r) noexcept {
  r.top_left_x==r.bottom_left_y && r.top_left_x==r.bottom_right_x && r.top_left_x==r.bottom_right_y;
 }
 // Shape centers always use original geometry, never its clipped bounding box.
-double rounded_area(const Draw& d,int x,int y) noexcept {
+double rounded_area(const Draw& d,int x,int y,std::uint64_t& sampled) noexcept {
  const auto b=intersect(d.rect,{double(x),double(y),double(x)+1,double(y)+1});
  if(empty(b)) return 0;
  const auto o=d.original;const double r=d.radius;
+ // Entire clipped pixel inside either central band is exactly covered.
+ if((b.l>=o.l+r && b.r<=o.r-r) || (b.t>=o.t+r && b.b<=o.b-r))
+  return (b.r-b.l)*(b.b-b.t);
+ ++sampled;
  unsigned inside=0;
  for(int sy=0;sy<16;++sy) for(int sx=0;sx<16;++sx) {
   const double px=b.l+(sx+.5)*(b.r-b.l)/16;
@@ -36,6 +40,24 @@ double rounded_area(const Draw& d,int x,int y) noexcept {
   if(dx*dx+dy*dy<=r*r) ++inside;
  }
  return (b.r-b.l)*(b.b-b.t)*inside/256;
+}
+// Inputs already clipped to the viewport, so integer products are <=8192^2.
+std::uint64_t pixel_count(Rect r) noexcept {
+ if(empty(r)) return 0;
+ return std::uint64_t(std::ceil(r.r)-std::floor(r.l))*
+        std::uint64_t(std::ceil(r.b)-std::floor(r.t));
+}
+std::uint64_t corner_bound(Rect original,Rect clipped,double radius) noexcept {
+ const auto o=original; const double r=radius;
+ const Rect corners[]{{o.l,o.t,o.l+r,o.t+r},{o.r-r,o.t,o.r,o.t+r},
+                      {o.l,o.b-r,o.l+r,o.b},{o.r-r,o.b-r,o.r,o.b}};
+ std::uint64_t sum=0;
+ for(auto c:corners) sum+=pixel_count(intersect(clipped,c));
+ return std::min(sum,pixel_count(clipped));
+}
+bool charge(std::uint64_t& total,std::uint64_t count,std::uint64_t factor) noexcept {
+ if(count>(max_work-total)/factor) return false;
+ total+=count*factor;return true;
 }
 bool identity(prep::Matrix m) noexcept {return m.m11==1 && m.m12==0 && m.m21==0 && m.m22==1 && m.dx==0 && m.dy==0;}
 bool cancelled(prep::Cancellation* c) noexcept {return c && c->cancelled();}
@@ -62,6 +84,7 @@ Result render(FrameStore& store,const prep::PreparedFrame& frame,prep::Cancellat
  // FrameStore owns validation of viewport and its 64 MiB per-surface limit.
  std::uint64_t work=std::uint64_t(v.width)*std::uint64_t(v.height);
  std::size_t index=0;
+ std::uint64_t corner_pixels=0,sampled_pixels=0;
  try {
   if(cancelled(cancel)) return {Status::cancelled};
   std::vector<Draw> draws;
@@ -79,11 +102,14 @@ Result render(FrameStore& store,const prep::PreparedFrame& frame,prep::Cancellat
     auto r=intersect(current,rect(fill->rect));
     if(!empty(r)) {
      // All endpoints are bounded by viewport before integer conversion.
-     const auto width=std::uint64_t(std::ceil(r.r)-std::floor(r.l));
-     const auto height=std::uint64_t(std::ceil(r.b)-std::floor(r.t));
-     const std::uint64_t cost=radius>0?256:1;
-     if(height && width>(max_work-work)/cost/height) return {Status::limit_exceeded,FrameStatus::ok,index,work};
-     work+=cost*width*height;
+     const auto count=pixel_count(r);
+     if(radius>0) {
+      const auto corners=corner_bound(rect(fill->rect),r,radius);
+      if(!charge(work,count,2) || !charge(work,corners,256))
+       return {Status::limit_exceeded,FrameStatus::ok,index,work};
+      // Bounded by total charged work, so this addition cannot overflow.
+      corner_pixels+=corners;
+     } else if(!charge(work,count,1)) return {Status::limit_exceeded,FrameStatus::ok,index,work};
      draws.push_back({r,{},fill->color,index,rect(fill->rect),radius});
     }
    } else if(const auto* stroke=std::get_if<prep::Stroke>(&command)) {
@@ -145,7 +171,7 @@ Result render(FrameStore& store,const prep::PreparedFrame& frame,prep::Cancellat
     for(int y=y0;y<y1;++y) {
      if(cancelled(cancel)) return {Status::cancelled,FrameStatus::ok,index,work};
      for(int x=x0;x<x1;++x) {
-      const unsigned coverage=byte(std::clamp(draw.radius>0?rounded_area(draw,x,y):area(r,x,y)-area(draw.inner,x,y),0.0,1.0));
+      const unsigned coverage=byte(std::clamp(draw.radius>0?rounded_area(draw,x,y,sampled_pixels):area(r,x,y)-area(draw.inner,x,y),0.0,1.0));
       const unsigned sa=mul(alpha,coverage),inv=255-sa;
       auto* p=pixels.data()+std::size_t(y)*stride+std::size_t(x)*4;
       for(int c=0;c<3;++c) p[c]=std::uint8_t(mul(channels[c],sa)+mul(p[c],inv));
@@ -157,7 +183,7 @@ Result render(FrameStore& store,const prep::PreparedFrame& frame,prep::Cancellat
   if(cancelled(cancel)) return {Status::cancelled,FrameStatus::ok,index,work};
   if(auto s=store.commit(token);s!=FrameStatus::ok) return failed(s);
   guard.active=false;
-  return {Status::ok,FrameStatus::ok,0,work};
+  return {Status::ok,FrameStatus::ok,0,work,corner_pixels,sampled_pixels};
  } catch(const std::bad_alloc&) {return {Status::allocation_failed,FrameStatus::ok,index,work};}
 }
 }
