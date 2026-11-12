@@ -50,9 +50,9 @@ std::optional<Matrix> compose(Matrix m, Matrix c) noexcept {
 }
 }
 int command_tag(const Command& command) noexcept {
- constexpr std::array<int,11> tags{AETHER_PAINT_FILL_ROUNDED_RECT,AETHER_PAINT_STROKE_ROUNDED_RECT,
+ constexpr std::array<int,13> tags{AETHER_PAINT_FILL_ROUNDED_RECT,AETHER_PAINT_STROKE_ROUNDED_RECT,
  AETHER_PAINT_DRAW_TEXT,AETHER_PAINT_PUSH_CLIP,AETHER_PAINT_POP_CLIP,AETHER_PAINT_PUSH_TRANSFORM,
- AETHER_PAINT_POP_TRANSFORM,AETHER_PAINT_BEGIN_PAINT_CHUNK,AETHER_PAINT_END_PAINT_CHUNK,AETHER_PAINT_DRAW_BOX_SHADOW,AETHER_PAINT_FILL_BORDER_SIDE};
+ AETHER_PAINT_POP_TRANSFORM,AETHER_PAINT_BEGIN_PAINT_CHUNK,AETHER_PAINT_END_PAINT_CHUNK,AETHER_PAINT_DRAW_BOX_SHADOW,AETHER_PAINT_FILL_BORDER_SIDE,-100,-101};
  return command.valueless_by_exception() ? -1 : tags[command.index()];
 }
 std::optional<ErrorCode> validate_text(const Text& value, std::size_t& bytes) noexcept {
@@ -73,7 +73,11 @@ std::optional<ErrorCode> validate_command(const Command& command, std::size_t& b
  if (command.valueless_by_exception()) return ErrorCode::INVALID_PAYLOAD;
  return std::visit([&bytes](const auto& value) -> std::optional<ErrorCode> {
   using T = std::decay_t<decltype(value)>;
-  if constexpr (std::is_same_v<T,Fill>) {
+  if constexpr (std::is_same_v<T,BeginOpacity>) {
+   if(!value.id || !nonnegative(value.opacity)||value.opacity>1)return ErrorCode::INVALID_PAYLOAD;
+  } else if constexpr (std::is_same_v<T,EndOpacity>) {
+   if(!value.id)return ErrorCode::INVALID_PAYLOAD;
+  } else if constexpr (std::is_same_v<T,Fill>) {
    if (!valid(value.rect) || !valid(value.radii) || !valid(value.color)) return ErrorCode::INVALID_PAYLOAD;
   } else if constexpr (std::is_same_v<T,Stroke>) {
    if (!valid(value.rect) || !valid(value.radii) || !nonnegative(value.stroke_width) || !valid(value.color)) return ErrorCode::INVALID_PAYLOAD;
@@ -114,6 +118,9 @@ PrepareResult prepare(const Snapshot& snapshot, Cancellation* cancellation) noex
   std::vector<Matrix> transforms;
   std::vector<std::size_t> clips;
   std::vector<std::int64_t> chunks;
+  struct Group { std::uint64_t id; std::size_t transforms,clips,chunks; };
+  std::vector<Group> groups;
+  std::uint64_t last_id=0;
   Matrix current = identity;
   std::size_t bytes = 0;
   for (std::size_t i=0; i<snapshot.commands.size(); ++i) {
@@ -125,13 +132,24 @@ PrepareResult prepare(const Snapshot& snapshot, Cancellation* cancellation) noex
    const bool pushes = std::holds_alternative<PushTransform>(command) ||
     std::holds_alternative<PushClip>(command) || std::holds_alternative<BeginChunk>(command);
    if (pushes && transforms.size()+clips.size()+chunks.size() >= max_scope_depth) return error(ErrorCode::LIMIT_EXCEEDED);
-   if (const auto* push = std::get_if<PushTransform>(&command)) {
+   if (const auto* begin=std::get_if<BeginOpacity>(&command)) {
+    if(begin->id<=last_id || begin->parent!=(groups.empty()?0:groups.back().id))return error(ErrorCode::STACK_MISMATCH);
+    last_id=begin->id;
+    if(groups.size()>=8)return error(ErrorCode::LIMIT_EXCEEDED);
+    groups.push_back({begin->id,transforms.size(),clips.size(),chunks.size()});
+   } else if(const auto* end=std::get_if<EndOpacity>(&command)) {
+    if(groups.empty())return error(ErrorCode::STACK_UNDERFLOW);
+    const auto g=groups.back();
+    if(g.id!=end->id || g.transforms!=transforms.size() || g.clips!=clips.size() || g.chunks!=chunks.size())return error(ErrorCode::STACK_MISMATCH);
+    groups.pop_back();
+   } else if (const auto* push = std::get_if<PushTransform>(&command)) {
     auto result = compose(push->matrix,current);
     if (!result) return error(ErrorCode::NUMERIC_RANGE);
     transforms.push_back(current);
     current = *result;
    } else if (std::holds_alternative<PopTransform>(command)) {
     if (transforms.empty()) return error(ErrorCode::STACK_UNDERFLOW);
+    if(!groups.empty() && transforms.size()<=groups.back().transforms)return error(ErrorCode::STACK_MISMATCH);
     if (std::any_of(clips.begin(),clips.end(),[&](auto depth) { return depth >= transforms.size(); })) return error(ErrorCode::CLIP_TRANSFORM_CROSSING);
     current = transforms.back();
     transforms.pop_back();
@@ -139,11 +157,13 @@ PrepareResult prepare(const Snapshot& snapshot, Cancellation* cancellation) noex
     clips.push_back(transforms.size());
    } else if (std::holds_alternative<PopClip>(command)) {
     if (clips.empty()) return error(ErrorCode::STACK_UNDERFLOW);
+    if(!groups.empty() && clips.size()<=groups.back().clips)return error(ErrorCode::STACK_MISMATCH);
     clips.pop_back();
    } else if (const auto* begin = std::get_if<BeginChunk>(&command)) {
     chunks.push_back(begin->id);
    } else if (const auto* end = std::get_if<EndChunk>(&command)) {
     if (chunks.empty()) return error(ErrorCode::STACK_UNDERFLOW);
+    if(!groups.empty() && chunks.size()<=groups.back().chunks)return error(ErrorCode::STACK_MISMATCH);
     if (chunks.back() != end->id) return error(ErrorCode::STACK_MISMATCH);
     chunks.pop_back();
    }
@@ -151,7 +171,7 @@ PrepareResult prepare(const Snapshot& snapshot, Cancellation* cancellation) noex
   }
   index.reset(); tag.reset();
   if (cancelled(cancellation)) return error(ErrorCode::CANCELLED);
-  if (!transforms.empty() || !clips.empty() || !chunks.empty()) return error(ErrorCode::UNCLOSED_SCOPE);
+  if (!groups.empty() || !transforms.empty() || !clips.empty() || !chunks.empty()) return error(ErrorCode::UNCLOSED_SCOPE);
   return PreparedFrame(std::move(events));
  } catch (const std::bad_alloc&) { return error(ErrorCode::OUT_OF_MEMORY); }
 }

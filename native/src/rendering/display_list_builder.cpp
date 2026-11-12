@@ -22,6 +22,7 @@
 #include <cmath>
 #include <cstring>
 #include <string>
+#include <stdexcept>
 #include <vector>
 
 using aether::style::ComputedStyleReadView;
@@ -403,7 +404,17 @@ static void paint_box(aether_display_list_builder_s* builder,
     // CSS opacity applies to the element's whole subtree (it creates a stacking
     // context in Chrome): multiply this box's own opacity (with any live
     // transition override) by the accumulated opacity of its ancestors.
-    ctx.effective_opacity = own_opacity * parent_ctx.inherited_opacity;
+    const bool native = builder->opacity_events != nullptr;
+    if(native && (!std::isfinite(own_opacity) || own_opacity<0 || own_opacity>1)) throw std::runtime_error("opacity range");
+    if(native && box==builder->layout->root && own_opacity!=1) throw std::runtime_error("root opacity unsupported");
+    const bool group = native && box->kind==LAYOUT_BOX_ELEMENT && own_opacity!=1;
+    std::uint64_t group_id=0;
+    if(group) {
+        group_id=++builder->opacity_serial;
+        builder->opacity_events->push_back({cmds.size(),true,group_id,builder->opacity_parents.empty()?0:builder->opacity_parents.back(),own_opacity});
+        builder->opacity_parents.push_back(group_id);
+    }
+    ctx.effective_opacity = native ? 1.f : own_opacity * parent_ctx.inherited_opacity;
     ctx.inherited_opacity = ctx.effective_opacity;
 
     // CSS transforms are post-layout and scope over the element's own paint
@@ -510,6 +521,10 @@ static void paint_box(aether_display_list_builder_s* builder,
     }
 
     if (ctx.has_transform) emit_pop_transform(cmds);
+    if(group) {
+        builder->opacity_events->push_back({cmds.size(),false,group_id,builder->opacity_parents.size()>1?builder->opacity_parents[builder->opacity_parents.size()-2]:0,own_opacity});
+        builder->opacity_parents.pop_back();
+    }
     if (has_paint_chunk) emit_end_paint_chunk(cmds, box->element->style_node_id);
 }
 
@@ -656,6 +671,22 @@ static const aether_node_s* document_element_for(const aether_node_s* body) {
         if (node->type == AETHER_NODE_ELEMENT && node->tag_name == "html") return node;
     }
     return nullptr;
+}
+
+static void validate_native_root(aether_display_list_builder_s* builder,const aether_layout_result_s* layout) {
+    const auto* body=layout->root?layout->root->element:nullptr;
+    const auto* html=document_element_for(body);
+    if(builder->opacity_events) {
+        for(const auto* n : {html,body}) {
+            if(!n) continue;
+            const auto st=builder->style_pin->lookup().lookup_node(n);
+            float opacity=st?st->scalars().opacity:1.f;
+            if(builder->transition_runtime) (void)aether_transition_runtime_opacity_override(builder->transition_runtime,const_cast<aether_node_s*>(n),&opacity);
+            if(!std::isfinite(opacity)||opacity!=1) throw std::runtime_error("canvas opacity unsupported");
+        }
+    }
+    if(builder->opacity_events && layout->root && layout->root->visual_sample_valid && layout->root->visual_opacity!=1)
+        throw std::runtime_error("root visual opacity unsupported");
 }
 
 static void paint_canvas_background(aether_display_list_builder_s* builder,
@@ -836,6 +867,7 @@ AETHER_API aether_status_t aether_display_list_build_with_styles(
     if (!list) return AETHER_ERROR_OUT_OF_MEMORY;
 
     try {
+    validate_native_root(builder,layout);
     builder->border_groups = &list->border_groups;
     builder->canvas_background_source = nullptr;
     paint_canvas_background(builder, layout, list->commands);
@@ -888,6 +920,11 @@ AETHER_API aether_status_t aether_display_list_build_node_with_styles(
     }
 
     try {
+    // An isolated subtree excludes ancestor/canvas state. Root/document nodes
+    // cannot use this route, even when their current opacity happens to be 1.
+    if(builder->opacity_events && (element==layout->root->element ||
+       element==document_element_for(layout->root->element) || element->type==AETHER_NODE_DOCUMENT))
+        return AETHER_ERROR_INVALID_STATE;
     builder->border_groups = &list->border_groups;
     if (auto* box = layout->find_primary_box(element)) {
         paint_box(builder, box, focused_element, paint_context_s{}, list->commands);
@@ -1056,4 +1093,21 @@ AETHER_API void aether_display_list_builder_set_contextual_text_measurer(aether_
     if (!builder) return;
     builder->contextual_text_measurer = callback;
     builder->contextual_text_measurer_data = data;
+}
+
+namespace aether::rendering {
+aether_status_t build_native_opacity(aether_display_list_builder_t b,aether_layout_result_t l,
+ aether_style_map_t styles,aether_node_t node,std::unique_ptr<NativePaintList>& out) noexcept {
+ if(!b||!l)return AETHER_ERROR_NULL_ARG;
+ if(b->style_pin||b->opacity_events)return AETHER_ERROR_INVALID_STATE;
+ try {
+  auto candidate=std::make_unique<NativePaintList>();
+  struct Reset {aether_display_list_builder_t b; ~Reset(){b->opacity_events=nullptr;b->opacity_parents.clear();b->opacity_serial=0;}} reset{b};
+  b->opacity_events=&candidate->events;
+  const auto status=node?aether_display_list_build_node_with_styles(b,l,styles,node,nullptr,&NativeListAccess::list(*candidate)):
+    aether_display_list_build_with_styles(b,l,styles,nullptr,&NativeListAccess::list(*candidate));
+  if(status!=AETHER_OK)return status;
+  out=std::move(candidate);return AETHER_OK;
+ }catch(const std::bad_alloc&){return AETHER_ERROR_OUT_OF_MEMORY;}catch(...){return AETHER_ERROR_INVALID_STATE;}
+}
 }

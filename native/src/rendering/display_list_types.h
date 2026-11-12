@@ -4,6 +4,7 @@
 #include "../layout/layout_types.h"
 #include <vector>
 #include "border_groups.h"
+#include "native_paint_list.h"
 
 namespace aether::layout { class StyleOperationPin; }
 
@@ -19,6 +20,9 @@ struct paint_context_s {
 };
 
 struct aether_display_list_builder_s {
+    std::vector<aether::rendering::OpacityEvent>* opacity_events = nullptr;
+    std::vector<std::uint64_t> opacity_parents;
+    std::uint64_t opacity_serial = 0;
     std::vector<aether_border_group_range>* border_groups = nullptr;
     aether_text_measurer_contextual_fn contextual_text_measurer = nullptr;
     void* contextual_text_measurer_data = nullptr;

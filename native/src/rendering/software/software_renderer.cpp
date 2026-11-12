@@ -11,7 +11,7 @@ constexpr std::uint64_t max_work = 50000000;
 struct Rect { double l, t, r, b; };
 struct CurvedClip { Rect original{}; double radius{}; };
 struct ClipState { Rect bounds; CurvedClip curve; };
-struct Draw { Rect rect; Rect inner; prep::Color color; std::size_t index; Rect original{}; double radius{}; Rect inner_original{}; double inner_radius{}; CurvedClip clip{}; bool shadow{}; Rect source{}; Rect excluded{}; double sigma{}; const prep::BorderGroup* border{}; };
+struct Draw { Rect rect; Rect inner; prep::Color color; std::size_t index; Rect original{}; double radius{}; Rect inner_original{}; double inner_radius{}; CurvedClip clip{}; bool shadow{}; Rect source{}; Rect excluded{}; double sigma{}; const prep::BorderGroup* border{}; int layer_event{}; float layer_opacity{1}; };
 Rect intersect(Rect a, Rect b) noexcept {
  return {std::max(a.l,b.l),std::max(a.t,b.t),std::min(a.r,b.r),std::min(a.b,b.b)};
 }
@@ -109,12 +109,21 @@ Result render(FrameStore& store,const prep::PreparedFrame& frame,prep::Cancellat
   std::vector<Draw> draws;
   std::vector<ClipState> clips;
   CurvedClip curve;
+  std::size_t layer_depth=0,max_layer_depth=0;
+  const auto surface_bytes=std::uint64_t(v.width)*std::uint64_t(v.height)*4;
   Rect current{0,0,double(v.width),double(v.height)};
   for(const auto& event:frame.events()) {
    if(cancelled(cancel)) return {Status::cancelled,FrameStatus::ok,index,work};
    const auto& command=event.command;
    if(!identity(event.matrix)) return {Status::unsupported,FrameStatus::ok,index,work};
-   if(const auto* fill=std::get_if<prep::Fill>(&command)) {
+   if(const auto* begin=std::get_if<prep::BeginOpacity>(&command)) {
+    ++layer_depth;max_layer_depth=std::max(layer_depth,max_layer_depth);
+    if(layer_depth>8 || surface_bytes*layer_depth>64u*1024u*1024u || !charge(work,surface_bytes/4,2))
+     return {Status::limit_exceeded,FrameStatus::ok,index,work};
+    Draw d{};d.index=index;d.layer_event=1;d.layer_opacity=begin->opacity;draws.push_back(d);
+   } else if(std::holds_alternative<prep::EndOpacity>(command)) {
+    --layer_depth;Draw d{};d.index=index;d.layer_event=-1;draws.push_back(d);
+   } else if(const auto* fill=std::get_if<prep::Fill>(&command)) {
     const double radius=fill->radii.top_left_x;
     if(!uniform(fill->radii) || (radius>0 &&
        (fill->rect.width<=0 || fill->rect.height<=0 || 2*radius>std::min(fill->rect.width,fill->rect.height))))
@@ -245,6 +254,11 @@ Result render(FrameStore& store,const prep::PreparedFrame& frame,prep::Cancellat
    clip_corner_pixels+=bound;
   }
   if(cancelled(cancel)) return {Status::cancelled,FrameStatus::ok,index,work};
+  std::vector<std::vector<std::uint8_t>> layers(max_layer_depth);
+  for(auto& layer:layers) {
+   if(cancelled(cancel))return {Status::cancelled,FrameStatus::ok,index,work};
+   layer.resize(std::size_t(surface_bytes));
+  }
   FrameStore::Token token;
   if(auto s=store.prepare(token);s!=FrameStatus::ok) return failed(s);
   Guard guard{store,token};
@@ -256,9 +270,32 @@ Result render(FrameStore& store,const prep::PreparedFrame& frame,prep::Cancellat
     if(cancelled(cancel)) return {Status::cancelled,FrameStatus::ok,index,work};
     std::fill_n(pixels.data()+std::size_t(y)*stride,stride,std::uint8_t(0));
    }
+   const auto root_pixels=pixels;
+   std::vector<unsigned> alphas;alphas.reserve(max_layer_depth);
    for(const auto& draw:draws) {
     index=draw.index;
     if(cancelled(cancel)) return {Status::cancelled,FrameStatus::ok,index,work};
+    if(draw.layer_event==1) {
+     pixels=layers[alphas.size()];alphas.push_back(byte(draw.layer_opacity));
+     for(int y=0;y<v.height;++y){
+      if(cancelled(cancel))return {Status::cancelled,FrameStatus::ok,index,work};
+      std::fill_n(pixels.data()+std::size_t(y)*stride,stride,std::uint8_t(0));
+     }
+     continue;
+    }
+    if(draw.layer_event==-1) {
+     const auto source=pixels;const auto opacity=alphas.back();alphas.pop_back();
+     pixels=alphas.empty()?root_pixels:std::span<std::uint8_t>(layers[alphas.size()-1]);
+     for(int y=0;y<v.height;++y){
+      if(cancelled(cancel))return {Status::cancelled,FrameStatus::ok,index,work};
+      for(int x=0;x<v.width;++x){
+       const auto offset=std::size_t(y)*stride+std::size_t(x)*4;
+       const unsigned alpha=mul(source[offset+3],opacity),inv=255-alpha;
+       for(int c=0;c<4;++c)pixels[offset+c]=std::uint8_t(mul(source[offset+c],opacity)+mul(pixels[offset+c],inv));
+      }
+     }
+     continue;
+    }
     const auto r=draw.rect;
     const int x0=int(std::floor(r.l)),x1=int(std::ceil(r.r));
     const int y0=int(std::floor(r.t)),y1=int(std::ceil(r.b));

@@ -48,3 +48,6 @@ target_link_libraries(aether_software_shadow_test PRIVATE aether_software_raster
 
 add_executable(aether_software_border_group_test ../../native/tests/test_software_border_group.cpp)
 target_link_libraries(aether_software_border_group_test PRIVATE aether_software_raster)
+
+add_executable(aether_software_opacity_test ../../native/tests/test_software_opacity.cpp)
+target_link_libraries(aether_software_opacity_test PRIVATE aether_software_raster)

@@ -40,8 +40,10 @@ struct PushTransform { Matrix matrix{identity}; };
 struct PopTransform {};
 struct BeginChunk { std::int64_t id{}; };
 struct EndChunk { std::int64_t id{}; };
+struct BeginOpacity { std::uint64_t id{}, parent{}; float opacity{1}; };
+struct EndOpacity { std::uint64_t id{}; };
 using Command = std::variant<Fill, Stroke, Text, PushClip, PopClip, PushTransform,
- PopTransform, BeginChunk, EndChunk, BoxShadow, BorderGroup>;
+ PopTransform, BeginChunk, EndChunk, BoxShadow, BorderGroup, BeginOpacity, EndOpacity>;
 struct Snapshot { std::vector<Command> commands; };
 int command_tag(const Command&) noexcept;
 // Shared field validation; updates string budget only on success. Does not check scopes.
