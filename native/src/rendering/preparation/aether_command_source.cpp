@@ -3,6 +3,8 @@
 #include <utility>
 #include <span>
 #include "../border_groups.h"
+#include "../native_paint_list.h"
+#include <algorithm>
 
 namespace aether::rendering::preparation {
 namespace {
@@ -21,7 +23,12 @@ std::optional<std::size_t> bounded_length(const char* text, std::size_t capacity
  return std::nullopt;
 }
 using CopyResult = std::variant<Command, ErrorCode>;
-CopyResult copy_command(const aether_paint_command_t& source, std::size_t string_bytes) {
+CopyResult copy_command(const aether_paint_command_t& source, std::size_t string_bytes,
+ std::span<const NativeScrollState> scroll, bool native_scroll) {
+ const auto lookup=[&](std::int64_t id)->const NativeScrollState* {
+  const auto it=std::lower_bound(scroll.begin(),scroll.end(),id,[](const auto& a,auto key){return a.id<key;});
+  return it!=scroll.end()&&it->id==id?&*it:nullptr;
+ };
  switch (source.tag) {
  case AETHER_PAINT_FILL_ROUNDED_RECT: {
   const auto& p = source.data.fill_rounded_rect;
@@ -68,17 +75,29 @@ CopyResult copy_command(const aether_paint_command_t& source, std::size_t string
  case AETHER_PAINT_DRAW_TEXT_SHADOW:
  case AETHER_PAINT_DRAW_BACKGROUND_IMAGE:
  case AETHER_PAINT_APPLY_BACKDROP_FILTER:
- case AETHER_PAINT_PUSH_SCROLL_OFFSET:
- case AETHER_PAINT_POP_SCROLL_OFFSET:
- case AETHER_PAINT_DRAW_SCROLLBAR_CHROME:
   return ErrorCode::UNSUPPORTED_TAG;
+ case AETHER_PAINT_PUSH_SCROLL_OFFSET: {
+  if(!native_scroll)return ErrorCode::UNSUPPORTED_TAG;
+  const auto* s=lookup(source.data.push_scroll_offset.scroll_container_id);
+  if(!s)return ErrorCode::INVALID_PAYLOAD;
+  return Command{PushScroll{s->id,s->x,s->y}};
+ }
+ case AETHER_PAINT_POP_SCROLL_OFFSET:
+  if(!native_scroll)return ErrorCode::UNSUPPORTED_TAG;
+  return Command{PopScroll{}};
+ case AETHER_PAINT_DRAW_SCROLLBAR_CHROME: {
+  if(!native_scroll)return ErrorCode::UNSUPPORTED_TAG;
+  const auto* s=lookup(source.data.draw_scrollbar_chrome.scroll_container_id);
+  if(!s)return ErrorCode::INVALID_PAYLOAD;
+  return Command{ScrollChrome{s->chrome}};
+ }
  default: return ErrorCode::UNKNOWN_TAG;
  }
 }
 } // namespace
 
 SnapshotResult snapshot_with_border_groups(const AetherApi& api, aether_display_list_t list,
-                                 std::span<const aether_border_group_range> groups, Cancellation* cancellation) noexcept {
+                                 std::span<const aether_border_group_range> groups, Cancellation* cancellation, std::span<const NativeScrollState> scroll, bool native_scroll) noexcept {
  std::optional<std::size_t> index;
  std::optional<int> tag;
  try {
@@ -133,7 +152,7 @@ SnapshotResult snapshot_with_border_groups(const AetherApi& api, aether_display_
    const CommandGuard guard{api, source};
    tag = static_cast<int>(source.tag);
    if (cancelled(cancellation)) return Error{ErrorCode::CANCELLED, index, tag};
-   auto copied = copy_command(source, string_bytes);
+   auto copied = copy_command(source, string_bytes,scroll,native_scroll);
    if (const auto* error = std::get_if<ErrorCode>(&copied)) return Error{*error, index, tag};
    auto& command = std::get<Command>(copied);
    if (const auto error = validate_command(command, string_bytes)) return Error{*error, index, tag};
@@ -146,6 +165,6 @@ SnapshotResult snapshot_with_border_groups(const AetherApi& api, aether_display_
  }
 }
 SnapshotResult snapshot_commands(const AetherApi& api,aether_display_list_t list,Cancellation* c) noexcept {
- return snapshot_with_border_groups(api,list,{},c);
+ return snapshot_with_border_groups(api,list,{},c,{},false);
 }
 } // namespace aether::rendering::preparation

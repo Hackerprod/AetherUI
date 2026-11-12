@@ -50,9 +50,9 @@ std::optional<Matrix> compose(Matrix m, Matrix c) noexcept {
 }
 }
 int command_tag(const Command& command) noexcept {
- constexpr std::array<int,13> tags{AETHER_PAINT_FILL_ROUNDED_RECT,AETHER_PAINT_STROKE_ROUNDED_RECT,
+ constexpr std::array<int,16> tags{AETHER_PAINT_FILL_ROUNDED_RECT,AETHER_PAINT_STROKE_ROUNDED_RECT,
  AETHER_PAINT_DRAW_TEXT,AETHER_PAINT_PUSH_CLIP,AETHER_PAINT_POP_CLIP,AETHER_PAINT_PUSH_TRANSFORM,
- AETHER_PAINT_POP_TRANSFORM,AETHER_PAINT_BEGIN_PAINT_CHUNK,AETHER_PAINT_END_PAINT_CHUNK,AETHER_PAINT_DRAW_BOX_SHADOW,AETHER_PAINT_FILL_BORDER_SIDE,-100,-101};
+ AETHER_PAINT_POP_TRANSFORM,AETHER_PAINT_BEGIN_PAINT_CHUNK,AETHER_PAINT_END_PAINT_CHUNK,AETHER_PAINT_DRAW_BOX_SHADOW,AETHER_PAINT_FILL_BORDER_SIDE,-100,-101,AETHER_PAINT_PUSH_SCROLL_OFFSET,AETHER_PAINT_POP_SCROLL_OFFSET,AETHER_PAINT_DRAW_SCROLLBAR_CHROME};
  return command.valueless_by_exception() ? -1 : tags[command.index()];
 }
 std::optional<ErrorCode> validate_text(const Text& value, std::size_t& bytes) noexcept {
@@ -73,7 +73,13 @@ std::optional<ErrorCode> validate_command(const Command& command, std::size_t& b
  if (command.valueless_by_exception()) return ErrorCode::INVALID_PAYLOAD;
  return std::visit([&bytes](const auto& value) -> std::optional<ErrorCode> {
   using T = std::decay_t<decltype(value)>;
-  if constexpr (std::is_same_v<T,BeginOpacity>) {
+  if constexpr (std::is_same_v<T,PushScroll>) {
+   if(value.id<=0 || !std::isfinite(value.x)||!std::isfinite(value.y)||value.x<0||value.y<0||value.x>65536||value.y>65536)return ErrorCode::INVALID_PAYLOAD;
+  } else if constexpr (std::is_same_v<T,ScrollChrome>) {
+   const auto& g=value.geometry;
+   const auto bounded=[](Rect r){return valid(r)&&std::abs(double(r.x))<=65536&&std::abs(double(r.y))<=65536&&std::abs(double(r.x)+r.width)<=65536&&std::abs(double(r.y)+r.height)<=65536;};
+   if((g.horizontal_visible!=0 && g.horizontal_visible!=1)||(g.vertical_visible!=0 && g.vertical_visible!=1)||!bounded(g.horizontal_track)||!bounded(g.vertical_track)||!bounded(g.horizontal_thumb)||!bounded(g.vertical_thumb)||!bounded(g.corner))return ErrorCode::INVALID_PAYLOAD;
+  } else if constexpr (std::is_same_v<T,BeginOpacity>) {
    if(!value.id || !nonnegative(value.opacity)||value.opacity>1)return ErrorCode::INVALID_PAYLOAD;
   } else if constexpr (std::is_same_v<T,EndOpacity>) {
    if(!value.id)return ErrorCode::INVALID_PAYLOAD;
@@ -118,7 +124,9 @@ PrepareResult prepare(const Snapshot& snapshot, Cancellation* cancellation) noex
   std::vector<Matrix> transforms;
   std::vector<std::size_t> clips;
   std::vector<std::int64_t> chunks;
-  struct Group { std::uint64_t id; std::size_t transforms,clips,chunks; };
+  struct ScrollScope { double x,y; std::size_t clips,transforms,chunks,groups; };
+  std::vector<ScrollScope> scrolls; double scroll_x=0,scroll_y=0;
+  struct Group { std::uint64_t id; std::size_t transforms,clips,chunks,scrolls; };
   std::vector<Group> groups;
   std::uint64_t last_id=0;
   Matrix current = identity;
@@ -130,17 +138,26 @@ PrepareResult prepare(const Snapshot& snapshot, Cancellation* cancellation) noex
    if (cancelled(cancellation)) return error(ErrorCode::CANCELLED);
    if (auto e = validate_command(command,bytes)) return error(*e);
    const bool pushes = std::holds_alternative<PushTransform>(command) ||
-    std::holds_alternative<PushClip>(command) || std::holds_alternative<BeginChunk>(command);
-   if (pushes && transforms.size()+clips.size()+chunks.size() >= max_scope_depth) return error(ErrorCode::LIMIT_EXCEEDED);
-   if (const auto* begin=std::get_if<BeginOpacity>(&command)) {
+    std::holds_alternative<PushClip>(command) || std::holds_alternative<BeginChunk>(command) || std::holds_alternative<PushScroll>(command);
+   if (pushes && transforms.size()+clips.size()+chunks.size()+scrolls.size() >= max_scope_depth) return error(ErrorCode::LIMIT_EXCEEDED);
+   if(const auto* push=std::get_if<PushScroll>(&command)) {
+    scrolls.push_back({scroll_x,scroll_y,clips.size(),transforms.size(),chunks.size(),groups.size()});
+    scroll_x-=push->x;scroll_y-=push->y;
+    if(std::abs(scroll_x)>65536||std::abs(scroll_y)>65536)return error(ErrorCode::NUMERIC_RANGE);
+   } else if(std::holds_alternative<PopScroll>(command)) {
+    if(scrolls.empty())return error(ErrorCode::STACK_UNDERFLOW);
+    const auto top=scrolls.back();
+    if(top.clips!=clips.size()||top.transforms!=transforms.size()||top.chunks!=chunks.size()||top.groups!=groups.size())return error(ErrorCode::STACK_MISMATCH);
+    scroll_x=top.x;scroll_y=top.y;scrolls.pop_back();
+   } else if (const auto* begin=std::get_if<BeginOpacity>(&command)) {
     if(begin->id<=last_id || begin->parent!=(groups.empty()?0:groups.back().id))return error(ErrorCode::STACK_MISMATCH);
     last_id=begin->id;
     if(groups.size()>=8)return error(ErrorCode::LIMIT_EXCEEDED);
-    groups.push_back({begin->id,transforms.size(),clips.size(),chunks.size()});
+    groups.push_back({begin->id,transforms.size(),clips.size(),chunks.size(),scrolls.size()});
    } else if(const auto* end=std::get_if<EndOpacity>(&command)) {
     if(groups.empty())return error(ErrorCode::STACK_UNDERFLOW);
     const auto g=groups.back();
-    if(g.id!=end->id || g.transforms!=transforms.size() || g.clips!=clips.size() || g.chunks!=chunks.size())return error(ErrorCode::STACK_MISMATCH);
+    if(g.id!=end->id || g.transforms!=transforms.size() || g.clips!=clips.size() || g.chunks!=chunks.size() || g.scrolls!=scrolls.size())return error(ErrorCode::STACK_MISMATCH);
     groups.pop_back();
    } else if (const auto* push = std::get_if<PushTransform>(&command)) {
     auto result = compose(push->matrix,current);
@@ -149,6 +166,7 @@ PrepareResult prepare(const Snapshot& snapshot, Cancellation* cancellation) noex
     current = *result;
    } else if (std::holds_alternative<PopTransform>(command)) {
     if (transforms.empty()) return error(ErrorCode::STACK_UNDERFLOW);
+    if(!scrolls.empty() && transforms.size()<=scrolls.back().transforms)return error(ErrorCode::STACK_MISMATCH);
     if(!groups.empty() && transforms.size()<=groups.back().transforms)return error(ErrorCode::STACK_MISMATCH);
     if (std::any_of(clips.begin(),clips.end(),[&](auto depth) { return depth >= transforms.size(); })) return error(ErrorCode::CLIP_TRANSFORM_CROSSING);
     current = transforms.back();
@@ -157,21 +175,34 @@ PrepareResult prepare(const Snapshot& snapshot, Cancellation* cancellation) noex
     clips.push_back(transforms.size());
    } else if (std::holds_alternative<PopClip>(command)) {
     if (clips.empty()) return error(ErrorCode::STACK_UNDERFLOW);
+    if(!scrolls.empty() && clips.size()<=scrolls.back().clips)return error(ErrorCode::STACK_MISMATCH);
     if(!groups.empty() && clips.size()<=groups.back().clips)return error(ErrorCode::STACK_MISMATCH);
     clips.pop_back();
    } else if (const auto* begin = std::get_if<BeginChunk>(&command)) {
     chunks.push_back(begin->id);
    } else if (const auto* end = std::get_if<EndChunk>(&command)) {
     if (chunks.empty()) return error(ErrorCode::STACK_UNDERFLOW);
+    if(!scrolls.empty() && chunks.size()<=scrolls.back().chunks)return error(ErrorCode::STACK_MISMATCH);
     if(!groups.empty() && chunks.size()<=groups.back().chunks)return error(ErrorCode::STACK_MISMATCH);
     if (chunks.back() != end->id) return error(ErrorCode::STACK_MISMATCH);
     chunks.pop_back();
    }
-   events.push_back(PreparedEvent{command,current,transforms.size()});
+   if(const auto* chrome=std::get_if<ScrollChrome>(&command)) {
+    const auto emit=[&](Rect r, bool rounded,float alpha){
+     if(r.width==0||r.height==0)return;
+     const float rad=rounded?std::min(r.width,r.height)/2:0;
+     Radii radii{rad,rad,rad,rad,rad,rad,rad,rad};
+     events.push_back({Fill{r,radii,{.5f,.5f,.5f,alpha}},current,transforms.size(),scroll_x,scroll_y,scrolls.size()});
+    };
+    if(chrome->geometry.horizontal_visible)emit(chrome->geometry.horizontal_thumb,true,.55f);
+    if(chrome->geometry.vertical_visible)emit(chrome->geometry.vertical_thumb,true,.55f);
+    emit(chrome->geometry.corner,false,.28f);
+   }else events.push_back(PreparedEvent{command,current,transforms.size(),scroll_x,scroll_y,scrolls.size()});
+   if(events.size()>max_commands)return error(ErrorCode::COMMAND_COUNT);
   }
   index.reset(); tag.reset();
   if (cancelled(cancellation)) return error(ErrorCode::CANCELLED);
-  if (!groups.empty() || !transforms.empty() || !clips.empty() || !chunks.empty()) return error(ErrorCode::UNCLOSED_SCOPE);
+  if (!scrolls.empty() || !groups.empty() || !transforms.empty() || !clips.empty() || !chunks.empty()) return error(ErrorCode::UNCLOSED_SCOPE);
   return PreparedFrame(std::move(events));
  } catch (const std::bad_alloc&) { return error(ErrorCode::OUT_OF_MEMORY); }
 }

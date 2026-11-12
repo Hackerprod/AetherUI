@@ -6,5 +6,11 @@ SnapshotResult snapshot_native_commands(aether_display_list_t, Cancellation* = n
 }
 namespace aether::rendering { class NativePaintList; }
 namespace aether::rendering::preparation {
+enum class ValidationDomain { ResolvedGeometryOnly, AuthoredCss };
+struct GeometryValidationReport {
+ static constexpr const char* authored_css_validation = "NOT_RUN";
+ static constexpr bool flexbox_semantic_acceptance = false;
+};
+SnapshotResult snapshot_native_geometry(const aether::rendering::NativePaintList&,ValidationDomain,Cancellation* = nullptr) noexcept;
 SnapshotResult snapshot_native_opacity(const aether::rendering::NativePaintList&,Cancellation* = nullptr) noexcept;
 }

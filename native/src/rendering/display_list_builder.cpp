@@ -405,6 +405,8 @@ static void paint_box(aether_display_list_builder_s* builder,
     // context in Chrome): multiply this box's own opacity (with any live
     // transition override) by the accumulated opacity of its ancestors.
     const bool native = builder->opacity_events != nullptr;
+    if(native && builder->native_scroll_depth && style.position==AETHER_POSITION_FIXED)
+        throw std::runtime_error("fixed under scroll unsupported");
     if(native && (!std::isfinite(own_opacity) || own_opacity<0 || own_opacity>1)) throw std::runtime_error("opacity range");
     if(native && box==builder->layout->root && own_opacity!=1) throw std::runtime_error("root opacity unsupported");
     const bool group = native && box->kind==LAYOUT_BOX_ELEMENT && own_opacity!=1;
@@ -492,7 +494,7 @@ static void paint_box(aether_display_list_builder_s* builder,
 
     const bool dynamic_scroll = layout_box_has_dynamic_scroll(builder->layout, box);
     const bool scrollbar_chrome = visible && box->element && !empty_border_box && box_has_scrollbar_chrome(builder, box);
-    if (dynamic_scroll) emit_push_scroll_offset(cmds, box->element->style_node_id);
+    if (dynamic_scroll) { emit_push_scroll_offset(cmds, box->element->style_node_id); if(builder->opacity_events)++builder->native_scroll_depth; }
     // Children (or atomic control paint)
     if (box->is_atomic_control) {
         if (visible) paint_control(builder, box, focused_element, ctx, cmds);
@@ -500,7 +502,7 @@ static void paint_box(aether_display_list_builder_s* builder,
         paint_children(builder, box, focused_element, ctx, cmds);
     }
 
-    if (dynamic_scroll) emit_pop_scroll_offset(cmds);
+    if (dynamic_scroll) { emit_pop_scroll_offset(cmds); if(builder->opacity_events)--builder->native_scroll_depth; }
     // Scrollbar chrome is retained separately from content offset. Bindings
     // resolve its live thumb position from the same native geometry formula
     // used by hit-testing.
@@ -1096,18 +1098,59 @@ AETHER_API void aether_display_list_builder_set_contextual_text_measurer(aether_
 }
 
 namespace aether::rendering {
-aether_status_t build_native_opacity(aether_display_list_builder_t b,aether_layout_result_t l,
- aether_style_map_t styles,aether_node_t node,std::unique_ptr<NativePaintList>& out) noexcept {
+namespace {
+aether_status_t build_scroll(aether_display_list_builder_t b,aether_layout_result_t l,
+ aether_style_map_t styles,aether_node_t node,const NativeScrollInput* input,std::unique_ptr<NativePaintList>& out) noexcept {
  if(!b||!l)return AETHER_ERROR_NULL_ARG;
  if(b->style_pin||b->opacity_events)return AETHER_ERROR_INVALID_STATE;
  try {
+  if(input && input->size()>65536)return AETHER_ERROR_INVALID_STATE;
   auto candidate=std::make_unique<NativePaintList>();
-  struct Reset {aether_display_list_builder_t b; ~Reset(){b->opacity_events=nullptr;b->opacity_parents.clear();b->opacity_serial=0;}} reset{b};
+  struct Reset {aether_display_list_builder_t b; ~Reset(){b->opacity_events=nullptr;b->opacity_parents.clear();b->opacity_serial=0;b->native_scroll_depth=0;}} reset{b};
   b->opacity_events=&candidate->events;
   const auto status=node?aether_display_list_build_node_with_styles(b,l,styles,node,nullptr,&NativeListAccess::list(*candidate)):
     aether_display_list_build_with_styles(b,l,styles,nullptr,&NativeListAccess::list(*candidate));
   if(status!=AETHER_OK)return status;
+  auto list=NativeListAccess::list(*candidate);
+  if(list->commands.size()>65536)return AETHER_ERROR_INVALID_STATE;
+  std::vector<std::int64_t> ids;
+  for(const auto& c:list->commands) {
+   if(c.tag==AETHER_PAINT_PUSH_SCROLL_OFFSET)ids.push_back(c.data.push_scroll_offset.scroll_container_id);
+   if(c.tag==AETHER_PAINT_DRAW_SCROLLBAR_CHROME)ids.push_back(c.data.draw_scrollbar_chrome.scroll_container_id);
+  }
+  std::sort(ids.begin(),ids.end());ids.erase(std::unique(ids.begin(),ids.end()),ids.end());
+  NativeScrollInput sorted=input?*input:NativeScrollInput{};
+  if(!input)for(auto id:ids)sorted.push_back({id,0,0});
+  std::sort(sorted.begin(),sorted.end(),[](const auto& a,const auto& b){return a.id<b.id;});
+  if(sorted.size()!=ids.size())return AETHER_ERROR_INVALID_STATE;
+  for(std::size_t i=0;i<ids.size();++i)if(ids[i]<=0||sorted[i].id!=ids[i])return AETHER_ERROR_INVALID_STATE;
+  // Build one bounded map of element IDs, not one traversal per command.
+  std::unordered_map<std::int64_t,const aether_layout_box_s*> boxes;
+  for(const auto& item:l->primary_boxes)if(item.first)boxes.emplace(item.first->style_node_id,item.second);
+  for(const auto& offset:sorted) {
+   const auto it=boxes.find(offset.id);
+   if(it==boxes.end()||it->second==l->root)return AETHER_ERROR_INVALID_STATE;
+   const auto& box=*it->second;
+   const double rx=box.scroll.scrollable_overflow_x,ry=box.scroll.scrollable_overflow_y;
+   if(!std::isfinite(rx)||!std::isfinite(ry)||rx<0||ry<0||rx>65536||ry>65536||
+      !std::isfinite(offset.x)||!std::isfinite(offset.y)||offset.x<0||offset.y<0||offset.x>rx||offset.y>ry)
+    return AETHER_ERROR_INVALID_STATE;
+   // Resolver API is float. Require exact representability so the thumb and
+   // content use precisely the same frozen offset rather than separate rounding.
+   const float x=static_cast<float>(offset.x),y=static_cast<float>(offset.y);
+   if(double(x)!=offset.x||double(y)!=offset.y)return AETHER_ERROR_INVALID_STATE;
+   candidate->scroll.push_back({offset.id,offset.x,offset.y,rx,ry,aether_resolve_scrollbar_geometry(box,{x,y})});
+  }
   out=std::move(candidate);return AETHER_OK;
  }catch(const std::bad_alloc&){return AETHER_ERROR_OUT_OF_MEMORY;}catch(...){return AETHER_ERROR_INVALID_STATE;}
+}
+}
+aether_status_t build_native_opacity(aether_display_list_builder_t b,aether_layout_result_t l,
+ aether_style_map_t styles,aether_node_t node,std::unique_ptr<NativePaintList>& out) noexcept {
+ return build_scroll(b,l,styles,node,nullptr,out);
+}
+aether_status_t build_native_opacity(aether_display_list_builder_t b,aether_layout_result_t l,
+ aether_style_map_t styles,aether_node_t node,const NativeScrollInput& input,std::unique_ptr<NativePaintList>& out) noexcept {
+ return build_scroll(b,l,styles,node,&input,out);
 }
 }

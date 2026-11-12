@@ -17,7 +17,7 @@ enum class ErrorCode { INVALID_API, INVALID_LIST, ABI_VERSION, ABI_CAPABILITY,
  ABI_SIZE, COMMAND_COUNT, GET_COMMAND_FAILED, UNKNOWN_TAG, UNSUPPORTED_TAG,
  LIMIT_EXCEEDED, INVALID_PAYLOAD, INVALID_UTF8, STACK_UNDERFLOW, STACK_MISMATCH,
  CLIP_TRANSFORM_CROSSING, UNCLOSED_SCOPE, NUMERIC_RANGE, CANCELLED,
- OUT_OF_MEMORY, SINK_FAILED };
+ OUT_OF_MEMORY, SINK_FAILED, UnsupportedValidationDomain };
 // Allocation-free errors never include document content.
 struct Error { ErrorCode code; std::optional<std::size_t> index{}; std::optional<int> tag{}; };
 // Implementations must not throw. Synchronous callbacks cannot be interrupted.
@@ -42,14 +42,17 @@ struct BeginChunk { std::int64_t id{}; };
 struct EndChunk { std::int64_t id{}; };
 struct BeginOpacity { std::uint64_t id{}, parent{}; float opacity{1}; };
 struct EndOpacity { std::uint64_t id{}; };
+struct PushScroll { std::int64_t id{}; double x{},y{}; };
+struct PopScroll {};
+struct ScrollChrome { aether_scrollbar_geometry_t geometry{}; };
 using Command = std::variant<Fill, Stroke, Text, PushClip, PopClip, PushTransform,
- PopTransform, BeginChunk, EndChunk, BoxShadow, BorderGroup, BeginOpacity, EndOpacity>;
+ PopTransform, BeginChunk, EndChunk, BoxShadow, BorderGroup, BeginOpacity, EndOpacity, PushScroll, PopScroll, ScrollChrome>;
 struct Snapshot { std::vector<Command> commands; };
 int command_tag(const Command&) noexcept;
 // Shared field validation; updates string budget only on success. Does not check scopes.
 std::optional<ErrorCode> validate_text(const Text&, std::size_t& string_bytes) noexcept;
 std::optional<ErrorCode> validate_command(const Command&, std::size_t& string_bytes) noexcept;
-struct PreparedEvent { Command command; Matrix matrix{identity}; std::size_t transform_depth{}; };
+struct PreparedEvent { Command command; Matrix matrix{identity}; std::size_t transform_depth{}; double scroll_x{}, scroll_y{}; std::size_t scroll_depth{}; };
 class PreparedFrame;
 using PrepareResult = std::variant<PreparedFrame, Error>;
 class PreparedFrame {
