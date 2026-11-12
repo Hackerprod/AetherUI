@@ -1,0 +1,6 @@
+<!doctype html><html><head><style>
+body {margin:0;background-color:white;display:flex}
+.box {width:20px;height:20px;background-color:#ff0000}
+@supports (display:flex) {.yes {border:6px solid #0000ff}}
+@supports not (display:flex) {.no {border:6px solid #0000ff}}
+</style></head><body><div class="box yes"></div><div class="box no"></div></body></html>

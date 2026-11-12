@@ -66,7 +66,7 @@ for css in [
  '@media not print{'+base+'}', '@media only screen{'+base+'}', '@media (width:2em){'+base+'}',
  '@media (width:-1px){'+base+'}', '@media (width:1e999px){'+base+'}', '@media (width >= 2px){'+base+'}',
  '@media print{.box{width:fit-content(2px)}}', '@media print{.box{background:url(secret)}}',
- '@media print{@supports (display:flex){'+base+'}}', '@keyframes a{from{color:red}}',
+ '@keyframes a{from{color:red}}',
  '.box{background-color:rgba(1,2,3,.5) junk}', '.box{background-color:rgba(1%,2,3,.5)}',
  '.box{background-color:rgba(1,2,3,1e999)}', '.box{background-color:rgba(1 2 3 / .5)}',
  '.box{box-shadow:0 0 rgba(0,0,0,.5) junk}', '.box{box-shadow:inset 0 0 rgba(0,0,0,.5)}',

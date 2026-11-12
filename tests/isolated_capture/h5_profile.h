@@ -4,10 +4,12 @@
 #include "h4_profile.h"
 #include "../../native/src/style_runtime/h5_parser_profile.h"
 #include "../../native/src/style_runtime/h5_color_profile.h"
+#include "../../native/src/style_runtime/supports_condition.h"
 namespace h5 {
 struct Analysis { std::set<size_t> functions, at_rules; bool valid=true; };
 struct Scanner {
  const std::string& s; std::vector<css_variable_token> ts; Analysis out;
+ size_t supports_budget=65536;
  bool d(size_t i,char c)const{return i<ts.size()&&ts[i].delimiter==c&&ts[i].serialization!=css_variable_serialization::string;}
  std::string ident(size_t i)const{return h4::identifier(s,ts[i].begin,ts[i].end);}
  bool pair(size_t begin,size_t end,size_t& close)const{
@@ -46,6 +48,12 @@ struct Scanner {
     if(name=="media"&&depth<32){auto b=ts[start].end;auto ev=media_condition_profile(std::string_view(s).substr(b,ts[open].begin-b));
      if(ev.full_consumption&&ev.profile_supported&&!ev.saw_unknown_or_discarded)out.at_rules.insert(ts[start].begin);else out.valid=false;
      // Always analyze descendants, even screen-false print/media branches.
+     rules(open+1,close,depth+1);
+    }else if(name=="supports"&&depth<32){
+     auto b=ts[start].end;auto condition=s.substr(b,ts[open].begin-b);
+     auto ev=supports_condition_probe(condition,supports_budget);
+     if(ev.syntax_valid&&ev.profile_supported&&!ev.budget_exhausted&&ev.consumed==condition.size())out.at_rules.insert(ts[start].begin);else out.valid=false;
+     // Truth does not erase evidence: inspect inactive bodies as well.
      rules(open+1,close,depth+1);
     }else out.valid=false;
    }else{

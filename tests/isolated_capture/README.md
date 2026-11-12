@@ -166,3 +166,27 @@ See [H5_EVIDENCE.md](H5_EVIDENCE.md) for the bounded nth-child, legacy rgba and
 screen/media admission profile, tests and limitations. The analysis is shared
 with inventory and checks inactive branches too. This does not certify the
 original Flexbox page or change CSS eligibility from Unknown.
+
+## H6: compile-time `@supports` with shared evidence
+
+`@supports` condition truth comes from a complete, side-effect-free single
+property declaration probe in the normal core parser. Captured geometry has a
+narrower certified condition profile: implemented `display` literals and
+`initial`/`inherit`/`unset`, homogeneous `and`/`or`, `not`, and grouping.
+`general-enclosed`, unknown properties/values, `var()`, `revert`, `revert-layer`
+and the `line-break` extension remain outside that profile even if negation or
+another true operand would select the rule. Coverage evidence is accumulated
+before boolean folding. Inactive rule bodies are still inventoried/audited.
+Both directions of media/supports nesting share the maximum depth of 32.
+Supports parsing shares a 65,536-token budget across each stylesheet; no parse
+attempt resets it. This is not a claim of complete parser/layout work budgets.
+
+Manual regression commands (after the build above):
+
+```
+sh tests/isolated_capture/run_h6_core.sh /tmp/h6-build
+python3 tests/isolated_capture/test_h6.py /tmp/h6-build/aether_capture /tmp/h6-results
+```
+
+The original flexbox fixture remains unchanged and blocked; no Chromium render,
+complete CSS compatibility or full flexbox acceptance is asserted.

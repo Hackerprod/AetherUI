@@ -34,6 +34,7 @@ struct Objects {
  ~Objects(){if(builder)aether_display_list_builder_destroy(builder);if(layout)aether_layout_result_destroy(layout);if(engine)aether_layout_destroy(engine);if(styles)aether_style_map_destroy(styles);if(runtime)aether_style_runtime_destroy(runtime);if(doc)aether_doc_destroy(doc);}
 };
 aether_text_metrics_t no_text(const char*,const aether_computed_style_t*,float,void* state){*static_cast<bool*>(state)=true;return {};}
+#include "../../native/src/style_runtime/style_property_registry_internal.h"
 #include "h5_profile.h"
 #include "inventory.h"
 #include "h3_profile.h"
@@ -64,6 +65,8 @@ int capture(const char* input,const std::string& out,int width,int height,bool g
   std::string html;{Stage s("read");html=read_input(input);}
   logstream<<"input_sha256="<<avc::sha256(html)<<"\ninput_bytes="<<html.size()<<std::endl;
   require(geometry,"REQUESTED_CSS_DOMAIN_UNAVAILABLE");
+  // Prepare immutable builtin definitions before the side-effect-free supports probe.
+  style_property_registry_init();
   Objects o;require(aether_doc_create(&o.doc)==AETHER_OK,"DOC_CREATE_FAILED");
   {Stage s("parse");require(aether_doc_parse_html(o.doc,html.c_str())==AETHER_OK,"PARSE_FAILED");}
   std::vector<std::string> sheets, inline_sheets;std::set<std::string> blockers;

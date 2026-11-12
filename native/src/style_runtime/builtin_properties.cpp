@@ -3,6 +3,7 @@ using namespace aether::style;
 #include "style_property_registry_internal.h"
 #include "style_runtime_types.h"
 #include "builtin_property_parse_utils.h"
+#include "css_single_identifier.h"
 #include "transition_properties_internal.h"
 #include "shadow_values.h"
 #include "css_component_values.h"
@@ -726,7 +727,7 @@ void builtin_properties_register(style_property_registry_s* reg) {
             "inline",
             [](const char* s, std::string& o) -> bool {
                 std::string v;
-                if (!bi_try_keyword(s, kw, 9, v)) return false;
+                if (!s || !css_single_identifier(s, v)) return false;
                 for (int i = 0; i < 9; ++i)
                     if (str_iequals(v, kw[i])) { o = std::to_string(vals[i]); return true; }
                 return false;

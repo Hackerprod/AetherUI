@@ -5,6 +5,8 @@
 #include <type_traits>
 #include "css_component_tokens.h"
 #include "css_important.h"
+#include "css_single_identifier.h"
+#include "supports_condition.h"
 #include "style_property_registry_internal.h"
 #include <string_view>
 #include <cctype>
@@ -155,14 +157,22 @@ static bool try_compile_longhand(
     if (!def) return false;
 
     std::string normalized = str_trim(value);
+    // Decode only for CSS-wide classification. The registered display parser
+    // consumes source tokens itself; feeding it decoded text would re-interpret
+    // an escaped backslash (e.g. \5c 66lex) as a second CSS escape.
+    std::string wide_keyword = normalized;
+    if (name == "display") {
+        std::string ident;
+        if (css_single_identifier(value, ident)) wide_keyword = std::move(ident);
+    }
     compiled_style_value_s compiled;
 
-    const auto css_wide = def->css_wide ? def->css_wide(normalized) : property_css_wide_e::none;
-    if (css_wide == property_css_wide_e::initial || str_iequals(normalized, "initial") || str_iequals(normalized, "revert")) {
+    const auto css_wide = def->css_wide ? def->css_wide(wide_keyword) : property_css_wide_e::none;
+    if (css_wide == property_css_wide_e::initial || str_iequals(wide_keyword, "initial") || str_iequals(wide_keyword, "revert")) {
         compiled.mode = compiled_value_mode::initial;
-    } else if (css_wide == property_css_wide_e::inherit || str_iequals(normalized, "inherit")) {
+    } else if (css_wide == property_css_wide_e::inherit || str_iequals(wide_keyword, "inherit")) {
         compiled.mode = compiled_value_mode::inherit;
-    } else if (css_wide == property_css_wide_e::unset || str_iequals(normalized, "unset")) {
+    } else if (css_wide == property_css_wide_e::unset || str_iequals(wide_keyword, "unset")) {
         compiled.mode = compiled_value_mode::unset;
     } else if (contains_variable(normalized)) {
         compiled.mode = compiled_value_mode::deferred;
@@ -308,6 +318,113 @@ static declaration_compilation_result compile_declarations(
     return result;
 }
 
+namespace {
+struct supports_parser_s {
+    const std::string& source;
+    style_property_registry_s* registry;
+    std::vector<css_variable_token> tokens;
+    std::vector<size_t> mate;
+    bool valid=true, exhausted=false;
+    struct result { bool syntax=false, truth=false, covered=false; };
+    supports_parser_s(const std::string& s, size_t& budget):source(s),registry(style_property_registry_get_global()) {
+        css_component_lexer lexer(s.data(),s.size());
+        std::vector<size_t> stack;
+        for(;;){
+            auto t=lexer.next();
+            if(t.kind==css_variable_token_kind::end)break;
+            if(!budget){exhausted=true;valid=false;return;} --budget;
+            if(t.kind==css_variable_token_kind::error){valid=false;return;}
+            if(t.kind==css_variable_token_kind::whitespace||t.kind==css_variable_token_kind::comment)continue;
+            const size_t n=tokens.size(); tokens.push_back(t);mate.push_back(n);
+            if(t.kind==css_variable_token_kind::open||t.kind==css_variable_token_kind::function){
+                if(stack.size()>=32){valid=false;return;}stack.push_back(n);
+            }else if(t.kind==css_variable_token_kind::close){
+                if(stack.empty()){valid=false;return;}auto j=stack.back();stack.pop_back();
+                const char c=tokens[j].delimiter;
+                if(t.delimiter!=(c=='('?')':c=='['?']':'}')){valid=false;return;}
+                mate[j]=n;mate[n]=j;
+            }
+        }
+        if(!stack.empty())valid=false;
+    }
+    bool word(size_t p,const char* expected)const {
+        if(p>=tokens.size()||tokens[p].kind!=css_variable_token_kind::ident)return false;
+        std::string id;return css_single_identifier(source.substr(tokens[p].begin,tokens[p].end-tokens[p].begin),id)&&id==expected;
+    }
+    result declaration(size_t a,size_t b) {
+        // Only one name : complete-value. No semicolon, braces or annotation
+        // remnants may be ignored by the tolerant declaration-list compiler.
+        if(a+2>b||tokens[a].kind!=css_variable_token_kind::ident||tokens[a+1].delimiter!=':')return {};
+        if(a+2==b)return {true,false,false};
+        for(size_t i=a+2;i<b;++i){
+            if(tokens[i].delimiter==';'||tokens[i].delimiter=='{'||tokens[i].delimiter=='}')return {};
+        }
+        std::string name;
+        if(!css_single_identifier(source.substr(tokens[a].begin,tokens[a].end-tokens[a].begin),name))return {};
+        std::string value=source.substr(tokens[a+2].begin,tokens[b-1].end-tokens[a+2].begin);
+        const bool important=css_strip_important(value);
+        // A terminal annotation was stripped above; any remaining ! is invalid.
+        css_component_lexer vl(value.data(),value.size());
+        for(;;){auto t=vl.next();if(t.kind==css_variable_token_kind::end)break;if(t.delimiter=='!')return {true,false,false};}
+        std::string id;const bool single=css_single_identifier(value,id);
+        bool covered=name=="display"&&single&&(id=="none"||id=="block"||id=="inline"||id=="inline-block"||id=="flex"||id=="table"||id=="table-row"||id=="table-cell"||id=="initial"||id=="inherit"||id=="unset");
+        if(!registry)return {true,false,false};
+        compiled_property_declaration_s discarded;
+        // No mutation, style application, diagnostic callbacks or external order.
+        bool accepted=(!contains_variable(value)||validate_pending_declaration_value(value)) &&
+            try_compile_longhand(name,value,important,0,registry,discarded,nullptr,nullptr);
+        if(!accepted){
+            if(const auto* sh=registry->try_get_shorthand(name.c_str())){
+                std::vector<compiled_property_declaration_s> tmp;
+                accepted=style_source_compile_shorthand(*sh,value,important,0,registry,tmp,nullptr,nullptr);
+            }
+        }
+        return {true,accepted,covered};
+    }
+    result atom(size_t& p,size_t end,size_t depth) {
+        if(p>=end||depth>32)return {};
+        auto t=tokens[p];const size_t close=mate[p];
+        if(t.kind==css_variable_token_kind::function){
+            if(close<=p||close>=end)return {};
+            p=close+1;return {true,false,false};
+        }
+        if(t.kind!=css_variable_token_kind::open||t.delimiter!='('||close<=p||close>=end)return {};
+        const size_t a=p+1,b=close;p=close+1;
+        if(a==b)return {true,false,false};
+        if(a+1<b&&tokens[a].kind==css_variable_token_kind::ident&&tokens[a+1].delimiter==':'){auto r=declaration(a,b);return r.syntax?r:result{true,false,false};}
+        // A condition starts with not or supports-in-parens. Anything else
+        // starting with an identifier is general-enclosed, CSS false.
+        if(tokens[a].kind==css_variable_token_kind::ident&&!word(a,"not"))return {true,false,false};
+        auto nested=condition(a,b,depth+1);
+        return nested.syntax?nested:result{true,false,false};
+    }
+    result condition(size_t a,size_t b,size_t depth=0) {
+        if(depth>32||a==b)return {};
+        size_t p=a;
+        if(word(p,"not")){++p;auto r=atom(p,b,depth);if(!r.syntax||p!=b)return {};r.truth=!r.truth;return r;}
+        auto r=atom(p,b,depth);if(!r.syntax)return {};
+        int op=0;
+        while(p<b){
+            int next=word(p,"and")?1:word(p,"or")?2:0;
+            if(!next||(op&&next!=op))return {};
+            op=next;++p;
+            auto rhs=atom(p,b,depth);if(!rhs.syntax)return {};
+            r.covered=r.covered&&rhs.covered; // audit before boolean folding
+            r.truth=op==1?(r.truth&&rhs.truth):(r.truth||rhs.truth);
+        }
+        return r;
+    }
+};
+}
+supports_condition_evidence_s supports_condition_probe(const std::string& source,size_t& budget) {
+    supports_parser_s parser(source,budget);
+    supports_condition_evidence_s e;e.budget_exhausted=parser.exhausted;
+    if(!parser.valid||source.find('\0')!=std::string::npos)return e;
+    auto r=parser.condition(0,parser.tokens.size());
+    e.syntax_valid=r.syntax;e.matches=r.syntax&&r.truth;e.profile_supported=r.syntax&&r.covered;
+    e.consumed=source.size();return e;
+}
+
 // ═══ Compile ranges (iterative depth-first source order) ════════════════
 
 static aether_status_t source_limit_error(aether_style_diagnostic_fn callback, void* user_data,
@@ -335,9 +452,11 @@ static aether_status_t compile_range(
         int32_t index;
         int32_t end;
         media_condition_s* condition;
+        bool active;
     };
     style_source_block_index_s blocks(source);
-    std::vector<frame_s> frames{{start, end, inherited_condition}};
+    std::vector<frame_s> frames{{start, end, inherited_condition, true}};
+    size_t supports_budget=65536;
     while (!frames.empty()) {
         auto& frame = frames.back();
         auto& index = frame.index;
@@ -351,14 +470,12 @@ static aether_status_t compile_range(
         if (source[index] == '@') {
             int32_t at_offset = index;
             index++;
-            int32_t name_start = index;
-            while (index < end &&
-                   (std::isalnum(static_cast<unsigned char>(source[index])) ||
-                    source[index] == '-' || source[index] == '_')) {
-                index++;
-            }
-
-            std::string name = str_to_lower(source.substr(name_start, index - name_start));
+            css_component_lexer at_lexer(original.data(),static_cast<size_t>(end),static_cast<size_t>(index));
+            const auto name_token=at_lexer.next();
+            if(name_token.kind!=css_variable_token_kind::ident){index=end;continue;}
+            std::string name;
+            if(!css_single_identifier(original.substr(name_token.begin,name_token.end-name_token.begin),name)){index=end;continue;}
+            index=static_cast<int32_t>(name_token.end);
             skip_whitespace(source, index, end);
 
             int32_t delimiter = find_at_rule_delimiter(source, index, end);
@@ -375,15 +492,22 @@ static aether_status_t compile_range(
             const auto* extent = blocks.find(delimiter);
             if (!extent || extent->next > end) return AETHER_ERROR_INVALID_STATE;
             std::string prelude = str_trim(source.substr(index, delimiter - index));
+            const std::string supports_prelude=original.substr(index,delimiter-index);
 
             // Commit the parent's source position before push_back can move
             // frames. The block-index cursor still belongs to the child next.
             index = extent->next;
-            if (name == "media") {
+            if ((name == "media" || name == "supports") && frames.size() > 32)
+                return source_limit_error(diagnostics_callback, diagnostics_user_data, "Conditional nesting exceeds 32.");
+            if (name == "supports") {
+                const auto evidence=supports_condition_probe(supports_prelude, supports_budget);
+                if(evidence.budget_exhausted)return source_limit_error(diagnostics_callback,diagnostics_user_data,"Supports token budget exhausted.");
+                frames.push_back({delimiter+1,extent->body_end,frame.condition,frame.active&&evidence.syntax_valid&&evidence.matches});
+            } else if (name == "media") {
                 media_condition_s* media = media_condition_parse(
                     prelude.c_str(), nullptr, nullptr, at_offset, &media_scope);
                 media_condition_s* combined = media_condition_and(frame.condition, media, &media_scope);
-                frames.push_back({delimiter + 1, extent->body_end, combined});
+                frames.push_back({delimiter + 1, extent->body_end, combined, frame.active});
             }
             continue;
         }
@@ -410,7 +534,7 @@ static aether_status_t compile_range(
             original.substr(opening + 1, extent->body_end - opening - 1),
             registry, diagnostics_callback, diagnostics_user_data);
 
-        if (!selectors.empty() &&
+        if (frame.active && !selectors.empty() &&
             (!declarations.properties.empty() || !declarations.custom.empty() || !declarations.content.empty() ||
              !declarations.shorthands.empty()))
         {
