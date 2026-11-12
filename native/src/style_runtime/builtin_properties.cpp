@@ -8,6 +8,7 @@ using namespace aether::style;
 #include "paused_animation_properties.h"
 #include "shadow_values.h"
 #include "css_component_values.h"
+#include "gap_length_source.h"
 #include "../primitives/ascii_text.h"
 #include <limits>
 #include <charconv>
@@ -73,6 +74,13 @@ static bool bi_try_non_negative_length(const char* src, std::string& out) {
         out = t; return true;
     }
     return false;
+}
+
+static bool bi_try_gap_length(const char* source, std::string& out) {
+    if (!source) return false;
+    std::string normalized;
+    return gap_length_source(str_trim(source), normalized) &&
+        bi_try_non_negative_length(normalized.c_str(), out);
 }
 
 static bool bi_try_size(const char* src, std::string& out) {
@@ -1104,7 +1112,7 @@ void builtin_properties_register(style_property_registry_s* reg) {
 
     // row-gap
     reg->register_property("row-gap", false, STYLE_IMPACT_LAYOUT, "0",
-        bi_try_non_negative_length,
+        bi_try_gap_length,
         [](aether_computed_style_t* st, const std::string& v) {
             aether_css_length l; aether_css_length_try_parse(v.c_str(), &l);
             st->gap = aether_css_length_resolve(l, 0.0f, 16.0f, 16.0f, 1920.0f, 1080.0f);
@@ -1112,7 +1120,7 @@ void builtin_properties_register(style_property_registry_s* reg) {
 
     // column-gap
     reg->register_property("column-gap", false, STYLE_IMPACT_LAYOUT, "0",
-        bi_try_non_negative_length,
+        bi_try_gap_length,
         [](aether_computed_style_t* st, const std::string& v) {
             aether_css_length l; aether_css_length_try_parse(v.c_str(), &l);
             st->gap = aether_css_length_resolve(l, 0.0f, 16.0f, 16.0f, 1920.0f, 1080.0f);
@@ -1671,10 +1679,10 @@ void builtin_properties_register(style_property_registry_s* reg) {
             auto parts = bi_split_ws(t);
             if (parts.size() < 1 || parts.size() > 2) return false;
             std::string v1;
-            if (!bi_try_non_negative_length(parts[0].c_str(), v1)) return false;
+            if (!bi_try_gap_length(parts[0].c_str(), v1)) return false;
             if (parts.size() == 2) {
                 std::string v2;
-                if (!bi_try_non_negative_length(parts[1].c_str(), v2)) return false;
+                if (!bi_try_gap_length(parts[1].c_str(), v2)) return false;
                 writer.set("row-gap", v1.c_str());
                 writer.set("column-gap", v2.c_str());
             } else {

@@ -209,3 +209,22 @@ python3 tests/isolated_capture/test_h7.py /tmp/h7-build/aether_capture
 ```
 
 See `H7_EVIDENCE.md` for exact boundaries, OOM tests, ownership and exclusions.
+
+## H9 linear calculated flex gaps
+
+The geometry CLI admits `calc()` linear px/% values in `gap`, `row-gap` and
+`column-gap`. The existing core resolves the two axes independently against the
+container's content box; cyclic/indefinite percentage bases contribute zero,
+while the absolute term survives. Escaped calc/unit identifiers use a bounded
+private normalization step before the existing length parser. This does not
+add generic CSS math: comparison functions and relative units within calculated
+gaps remain outside the CLI profile. `var()` is tested in native runtime but is
+still refused by the CLI's source gate. No external browser was executed.
+
+```sh
+sh tests/isolated_capture/run_h9_core.sh /tmp/h9-build
+python3 tests/isolated_capture/test_h9.py /tmp/h9-build/aether_capture
+```
+
+The original flexbox page is unchanged and remains blocked. See
+`H9_EVIDENCE.md` for measured test coverage and limitations.

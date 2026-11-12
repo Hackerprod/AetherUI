@@ -2,6 +2,8 @@
 // A narrow source-context gate, not a CSS coverage certificate. Only tested
 // declaration/value combinations can admit function-token offsets.
 #include "../../native/src/css/contextual_math.h"
+#include "../../native/src/css/css_length_internal.h"
+#include "../../native/src/style_runtime/gap_length_source.h"
 #include "../../native/src/style_runtime/css_component_values.h"
 #include <set>
 namespace h4 {
@@ -23,8 +25,32 @@ inline bool number(const std::string& s){
  if(t.serialization!=css_variable_serialization::number||t.begin!=0||t.end!=s.size())return false;
  aether::css::c_numeric_locale locale;auto n=locale.parse_double(s);return n.valid&&!n.range_error&&n.value>=0;
 }
+// H9 is deliberately narrower than contextual padding math: calc-only,
+// linear px/% values. Inspect every literal (including cancelled terms) so
+// unsupported units/functions cannot disappear during algebraic folding.
+inline bool gap_length(const std::string& source){
+ std::string s;if(!gap_length_source(source,s))return false;
+ aether::css::math_tree tree;if(!aether::css::parse_contextual_math(s,tree))return false;
+ std::vector<aether::css::math_tree> work{tree};
+ while(!work.empty()) {
+  auto t=work.back();work.pop_back();using namespace aether::css;
+  if(t->op==math_op::minimum||t->op==math_op::maximum||t->op==math_op::clamp)return false;
+  if(t->op==math_op::literal&&t->unit!=math_unit::number&&t->unit!=math_unit::px&&t->unit!=math_unit::percent)return false;
+  for(const auto& c:t->children)work.push_back(c);
+ }
+ // Reject even folded numeric comparison functions and decode escaped names.
+ css_variable_lexer lex(s.data(),s.size());bool function=false;
+ for(;;){auto t=lex.next();if(t.kind==css_variable_token_kind::end)break;if(t.kind==css_variable_token_kind::error)return false;
+  if(t.kind==css_variable_token_kind::function){function=true;if(identifier(s,t.begin,t.end-1)!="calc")return false;}
+ }
+ aether::css::calc_value_s linear;
+ // Existing core parser is the authority for syntax actually supported.
+ if(function)return aether::css::try_parse_calc(s,linear)&&linear.kind==aether::css::calc_value_kind_e::length;
+ return tree->value>=0;
+}
 inline bool value(const std::string& property,const std::string& source){
  bool valid=false;auto parts=css_split_components(source,&valid);if(!valid||parts.empty())return false;
+ if(property=="gap"||property=="row-gap"||property=="column-gap"){if(parts.size()>(property=="gap"?2u:1u))return false;for(const auto& p:parts)if(!gap_length(p))return false;return true;}
  if(property=="padding") {if(parts.size()>4)return false;for(const auto& p:parts)if(!length(p))return false;return true;}
  if(property=="padding-top"||property=="padding-right"||property=="padding-bottom"||property=="padding-left"||property=="flex-basis")return parts.size()==1&&length(parts[0]);
  // Deliberately admit only explicit grow shrink basis, the tested H4 profile.
