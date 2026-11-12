@@ -83,6 +83,7 @@ static aether_node_s* create_anonymous_flex_item(
     if (const auto parent_measures = styles->lookup_measures_owner(parent)) {
         auto values = parent_measures->scalars();
         values.row_gap = values.column_gap = aether_css_length_zero();
+        values.flex_order = 0; // Anonymous flex items do not inherit order.
         const auto positions = parent_measures->background_positions();
         const auto sizes = parent_measures->background_sizes();
         const auto dependencies = parent_measures->property_dependencies();
@@ -139,6 +140,12 @@ const std::vector<aether_node_s*>& collect_flex_items(
         }
     }
     flush_direct_text();
+    // CSS order-modified document order. Only the layout-owned item sequence
+    // changes: DOM siblings, selector positions and text extraction stay intact.
+    std::stable_sort(items.begin(), items.end(), [styles](auto* a, auto* b) {
+        const auto am = layout_measures(styles, a), bm = layout_measures(styles, b);
+        return (am ? am->flex_order() : 0) < (bm ? bm->flex_order() : 0);
+    });
     return items;
 }
 

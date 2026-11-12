@@ -97,11 +97,16 @@ int capture(const char* input,const std::string& out,int width,int height,bool g
   }
   aether_style_environment_t env{static_cast<float>(width),static_cast<float>(height),1,16,0,0,0};aether_style_runtime_options_t options{};
   bool text_requested=false;
-  {Stage s("style");require(aether_style_runtime_create(&options,&env,nullptr,nullptr,&o.runtime)==AETHER_OK,"STYLE_CREATE_FAILED");
+  bool animation_unsupported=false;
+  auto animation_diagnostic=[](const char* code,const char*,const char*,const char*,void* state){
+   if(code&&std::string_view(code)=="AETHER-CSS-ANIMATION-PROFILE")*static_cast<bool*>(state)=true;
+  };
+  {Stage s("style");require(aether_style_runtime_create(&options,&env,animation_diagnostic,&animation_unsupported,&o.runtime)==AETHER_OK,"STYLE_CREATE_FAILED");
    const char* ua=aether_style_runtime_defaults_css();logstream<<"ua_sha256="<<avc::sha256(ua)<<std::endl;
    int64_t handle{};int32_t nr{};require(aether_style_runtime_add_stylesheet(o.runtime,ua,0,"builtin-UA",&handle,&nr)==AETHER_OK,"UA_FAILED");
    size_t index=0;for(const auto& css:sheets){logstream<<"style_"<<index++<<"_compiled_bytes_sha256="<<avc::sha256(css)<<std::endl;require(aether_style_runtime_add_stylesheet(o.runtime,css.c_str(),1,"DOM-style",&handle,&nr)==AETHER_OK,"SHEET_FAILED");}
    aether_style_update_t* updates=nullptr;int count=aether_style_runtime_resolve_subtree(o.runtime,aether_doc_get_body(o.doc),&updates);require(count>=0,"STYLE_RESOLVE_FAILED");aether_style_updates_free(updates,count);
+   require(!animation_unsupported,"CSS_ANIMATION_PROFILE_UNSUPPORTED");
    require(aether_style_runtime_create_resolved_style_map(o.runtime,o.doc,&o.styles)==AETHER_OK,"STYLE_MAP_FAILED");
   }
   h3::scripts(o.styles,inert_scripts);auto expected=h3::before(o.styles,canvases);

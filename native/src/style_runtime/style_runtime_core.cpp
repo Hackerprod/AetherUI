@@ -19,6 +19,7 @@
 #include "css_variable_tokens.h"
 #include "custom_property_scope_internal.h"
 #include "frozen_runtime_metadata.h"
+#include "paused_keyframes.h"
 #include "../css/style_revision.h"
 #include "../css/frozen_measure_read.h"
 #include "../css/style_map_version.h"
@@ -93,8 +94,13 @@ struct aether_style_runtime_s {
     aether_node_s* legacy_inheritance_root = nullptr; // Candidate-only compatibility boundary.
     std::thread::id owner_thread = std::this_thread::get_id();
     rule_index_s index;
+    // Borrowed only by a synchronous preparation transaction, like index.
+    // Final snapshots retain sampled scalar/measure values, never these pointers.
+    std::vector<const compiled_rule_s*> paused_rules;
     void copy_index_for_preparation(const aether_style_runtime_s& source) {
         index = source.index;
+        for(const auto& sheet:source.sheets)for(const auto& rule:sheet.second->rules)
+            if(rule.keyframes)paused_rules.push_back(&rule);
         // Unlike a generic copy, synchronous preparation borrows only stable,
         // runtime-owned sheets. No callbacks run while preparing, mutations are
         // guarded, and sheet_epoch rejects stale commits before rule use.
@@ -639,6 +645,38 @@ static PreparedNodeResult* compute_node(aether_style_runtime_s* runtime, aether_
     for (size_t i = 0; i < cascade.size(); ++i) {
         if (cascade[i].is_set && !is_color_producer(registry->definitions[i]) && registry->definitions[i].name != "font-size")
             apply_definition(i);
+    }
+    // Deterministic local-time-zero sample, after normal cascade and before
+    // freezing/diff/layout. Each resolution starts from an unanimated builder.
+    const auto animation=paused_animation_read(cascade,registry);
+    const compiled_rule_s* animation_rule=nullptr;
+    if(animation.name!="none") {
+        for(const auto* rule_ptr:runtime->paused_rules) {
+            const auto& rule=*rule_ptr;
+            if(!rule.keyframes||rule.keyframes->name!=animation.name||
+               !media_condition_matches(rule.condition,&runtime->environment))continue;
+            if(!animation_rule||rule.layer>animation_rule->layer||
+               (rule.layer==animation_rule->layer&&rule.source_order>animation_rule->source_order))animation_rule=&rule;
+        }
+    }
+    if(!animation.profile_supported || (animation.name!="none"&&(!animation_rule||!animation_rule->keyframes->profile_supported))) {
+        report(runtime,"AETHER-CSS-ANIMATION-PROFILE","animation",animation.name.c_str(),
+               "Animation is outside the deterministic paused capture profile.");
+    } else if(animation.active && animation_rule) {
+        for(const auto& endpoint:animation_rule->keyframes->values) {
+            const auto* definition=registry->try_get(endpoint.property.c_str());
+            if(!definition)throw std::logic_error("Missing registered animation target");
+            const auto& winner=cascade[static_cast<size_t>(definition->id)];
+            if(winner.is_set&&winner.priority.important)continue;
+            double sampled=endpoint.from+(endpoint.to-endpoint.from)*animation.progress;
+            if(endpoint.property=="order")sampled=std::floor(sampled+0.5);
+            if(endpoint.property=="flex-direction")sampled=animation.progress<0.5?endpoint.from:endpoint.to;
+            std::string value=paused_animation::number_text(sampled);
+            if(endpoint.property=="flex-basis"||endpoint.property=="row-gap"||endpoint.property=="column-gap")value+="px";
+            measure_apply_state_s destination(*measures,endpoint.property);
+            if(!apply_property_value(*definition,next,color_references,value,true,destination))
+                throw std::invalid_argument("Invalid sampled animation property");
+        }
     }
     if (!std::isfinite(measure_used_line_height(measures.get(), next)))
         throw std::overflow_error("Non-finite inherited line-height");

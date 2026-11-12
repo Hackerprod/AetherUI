@@ -24,6 +24,7 @@ measure_line_height_s MeasuresReadView::line_height() const {
     if(!frozen_) return builder_.value().line_height();
     return {read_kind(frozen_->scalars().line_height_kind), frozen_->scalars().line_height_value};
 }
+int32_t MeasuresReadView::flex_order() const { return frozen_ ? frozen_->scalars().flex_order : builder_.value().flex_order(); }
 aether_css_length MeasuresReadView::row_gap() const { return frozen_ ? frozen_->scalars().row_gap : builder_.value().row_gap(); }
 aether_css_length MeasuresReadView::column_gap() const { return frozen_ ? frozen_->scalars().column_gap : builder_.value().column_gap(); }
 measure_inputs_s MeasuresReadView::inputs() const { return inputs_with_self_font(self_font_size()); }
@@ -56,7 +57,7 @@ aether_status_t freeze_runtime_measures(const measure_state_s& source, FrozenDoc
     try {
         if(!document || source.background_positions.empty() || source.background_sizes.empty()) return AETHER_ERROR_INVALID_STATE;
         MeasureScalarValues scalars{source.parent_font_size,source.self_font_size,freeze_kind(source.line_height.kind),
-            source.line_height.value,source.row_gap,source.column_gap,source.dependencies};
+            source.line_height.value,source.row_gap,source.column_gap,source.dependencies,source.flex_order};
         std::vector<MeasureBackgroundPosition> positions;
         positions.reserve(source.background_positions.size());
         for(const auto& p:source.background_positions) positions.push_back({p.x,p.y});

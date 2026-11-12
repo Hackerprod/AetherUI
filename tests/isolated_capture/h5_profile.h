@@ -2,6 +2,7 @@
 // One contextual analysis shared by inventory and admission. This is a bounded
 // geometry profile, never a claim of complete CSS coverage.
 #include "h4_profile.h"
+#include "h7_profile.h"
 #include "../../native/src/style_runtime/h5_parser_profile.h"
 #include "../../native/src/style_runtime/h5_color_profile.h"
 #include "../../native/src/style_runtime/supports_condition.h"
@@ -33,6 +34,7 @@ struct Scanner {
    size_t end=i;if(end>=start+2&&d(end-2,'!')&&ts[end-1].kind==css_variable_token_kind::ident&&ident(end-1)=="important")end-=2;
    if(start==end){out.valid=false;return;}
    auto value=s.substr(ts[start].begin,ts[end-1].end-ts[start].begin);
+   if(!h7::declaration(property,value))out.valid=false;
    if(h5_rgba_declaration_supported(property,value))for(size_t j=start;j<end;++j)if(ts[j].kind==css_variable_token_kind::function)out.functions.insert(ts[j].begin);
   }
  }
@@ -55,6 +57,10 @@ struct Scanner {
      if(ev.syntax_valid&&ev.profile_supported&&!ev.budget_exhausted&&ev.consumed==condition.size())out.at_rules.insert(ts[start].begin);else out.valid=false;
      // Truth does not erase evidence: inspect inactive bodies as well.
      rules(open+1,close,depth+1);
+    }else if(name=="keyframes"){
+     const auto name_source=s.substr(ts[start].end,ts[open].begin-ts[start].end);
+     const auto body=s.substr(ts[open].end,ts[close].begin-ts[open].end);
+     if(h7::keyframes(name_source,body))out.at_rules.insert(ts[start].begin);else out.valid=false;
     }else out.valid=false;
    }else{
     auto source=std::string_view(s).substr(ts[start].begin,ts[open].begin-ts[start].begin);

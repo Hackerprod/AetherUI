@@ -5,6 +5,7 @@ using namespace aether::style;
 #include "builtin_property_parse_utils.h"
 #include "css_single_identifier.h"
 #include "transition_properties_internal.h"
+#include "paused_animation_properties.h"
 #include "shadow_values.h"
 #include "css_component_values.h"
 #include "../primitives/ascii_text.h"
@@ -1102,9 +1103,34 @@ void builtin_properties_register(style_property_registry_s* reg) {
         });
 
     // order
-    reg->register_property("order", false, STYLE_IMPACT_LAYOUT, "0",
-        bi_try_integer,
-        [](aether_computed_style_t* st, const std::string& v) { (void)st; (void)v; });
+    reg->register_property("order", false, STYLE_IMPACT_LAYOUT | STYLE_IMPACT_PAINT | STYLE_IMPACT_HITTEST, "0",
+        [](const char* source, std::string& out) {
+            if (!source) return false;
+            const auto value = str_trim(source);
+            if (value.empty()) return false;
+            size_t i = value[0] == '+' || value[0] == '-' ? 1 : 0;
+            if (i == value.size()) return false;
+            const bool negative = value[0] == '-';
+            const uint64_t limit = negative ? uint64_t(INT32_MAX) + 1 : uint64_t(INT32_MAX);
+            uint64_t magnitude = 0;
+            for (; i < value.size(); ++i) {
+                if (value[i] < '0' || value[i] > '9') return false;
+                const unsigned digit = unsigned(value[i] - '0');
+                if (magnitude > (limit - digit) / 10) return false;
+                magnitude = magnitude * 10 + digit;
+            }
+            const int64_t signed_value = negative ? -int64_t(magnitude) : int64_t(magnitude);
+            out = std::to_string(signed_value);
+            return true;
+        }, [](aether_computed_style_t*, const std::string&) {});
+    reg->definitions.back().css_wide = bi_origin_css_wide;
+    reg->definitions.back().apply_with_context = [](property_apply_context_s& context, const std::string& value) {
+        if (context.measures) context.measures->set_flex_order(static_cast<int32_t>(std::stoll(value)));
+    };
+    reg->definitions.back().inherit_context = [](property_apply_context_s& context, ComputedStyleReadView,
+                                                const MeasuresReadView* parent) {
+        if (context.measures) context.measures->set_flex_order(parent ? parent->flex_order() : 0);
+    };
 
     // ── Text ───────────────────────────────────────────────────
 
@@ -1512,6 +1538,7 @@ void builtin_properties_register(style_property_registry_s* reg) {
         bi_apply_transform_origin, bi_origin_parse_failure, bi_inherit_transform_origin, bi_origin_css_wide);
 
     transition_properties_register_longhands(reg);
+    paused_animation_register_longhands(reg);
 
     // ── Shorthands ─────────────────────────────────────────────
 
@@ -2103,4 +2130,5 @@ void builtin_properties_register(style_property_registry_s* reg) {
     }
 
     transition_properties_register_shorthands(reg);
+    paused_animation_register_shorthands(reg);
 }

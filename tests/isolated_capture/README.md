@@ -190,3 +190,22 @@ python3 tests/isolated_capture/test_h6.py /tmp/h6-build/aether_capture /tmp/h6-r
 
 The original flexbox fixture remains unchanged and blocked; no Chromium render,
 complete CSS compatibility or full flexbox acceptance is asserted.
+
+## H7 paused animation profile
+
+`@keyframes` and one initially paused linear animation can be sampled at local
+ time zero before layout, for flex-grow, px flex-basis/gaps, integer order and
+ discrete flex-direction. Both effective endpoints are required. The CLI
+ rejects unsupported authored or effective animation states, even when a
+ conditional branch is inactive. This is not a live timeline or full CSS claim.
+ `order` is now a frozen private sidecar consumed by flex layout/paint/hit-test;
+ legacy flat export refuses a nonzero order instead of losing it.
+
+Run after the manual build:
+
+```sh
+sh tests/isolated_capture/run_h7_core.sh /tmp/h7-build
+python3 tests/isolated_capture/test_h7.py /tmp/h7-build/aether_capture
+```
+
+See `H7_EVIDENCE.md` for exact boundaries, OOM tests, ownership and exclusions.

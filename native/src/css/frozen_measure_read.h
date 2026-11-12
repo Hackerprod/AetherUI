@@ -18,6 +18,7 @@ public:
     float parent_font_size() const;
     float self_font_size() const;
     measure_line_height_s line_height() const;
+    int32_t flex_order() const;
     aether_css_length row_gap() const;
     aether_css_length column_gap() const;
     measure_inputs_s inputs() const;

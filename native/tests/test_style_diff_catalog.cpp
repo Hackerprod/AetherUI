@@ -15,7 +15,7 @@ int main(){
         require(index<style_dependency_catalog.size(),"registered key is classified");
         const auto& policy=style_dependency_catalog[index];
         const auto name=policy.name;
-        const bool no_op=name=="font-style"||name=="letter-spacing"||name=="order"||name=="align-content";
+        const bool no_op=name=="font-style"||name=="letter-spacing"||name=="align-content"||name.starts_with("animation-");
         const bool alias=name=="-webkit-backdrop-filter"||name=="-webkit-background-clip"||name=="-webkit-text-fill-color"||name=="text-fill-color";
         require((policy.state==PropertyStatePolicy::no_op)==no_op,"explicit no-op policy");
         require((policy.state==PropertyStatePolicy::alias)==alias,"explicit alias policy");
@@ -28,7 +28,7 @@ int main(){
     }
     for(const auto& shorthand:registry->shorthand_defs)
         for(const auto& name:shorthand.target_names)require(style_dependency_index(name)<style_dependency_catalog.size(),"shorthand target classified");
-    require(noops==4&&aliases==4&&percentage==9,"catalog classes explicitly counted");
+    require(noops==11&&aliases==4&&percentage==9,"catalog classes explicitly counted");
     std::printf("style diff catalog: %zu registered keys, %zu aliases, %zu no-ops, %zu percentage consumers PASS\n",registry->definitions.size(),aliases,noops,percentage);
     style_property_registry_shutdown();
 }

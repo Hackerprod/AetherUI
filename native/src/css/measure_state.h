@@ -37,6 +37,7 @@ struct measure_background_size_s {
     aether_css_length y = aether_css_length_auto();
 };
 struct measure_state_s {
+    int32_t flex_order = 0;
     std::shared_ptr<const document_measure_context_s> document;
     float parent_font_size = 16, self_font_size = 16;
     measure_line_height_s line_height;
@@ -78,6 +79,7 @@ inline void measure_recompute_dependencies(measure_state_s& state) noexcept {
 // No engaged vectors, dependency map or document owner is constructed for a
 // probe. Only the selected property's writes become owned local output.
 struct measure_property_delta_s {
+    std::optional<int32_t> flex_order;
     std::optional<float> self_font_size;
     std::optional<measure_line_height_s> line_height;
     std::optional<aether_css_length> row_gap, column_gap;
@@ -107,6 +109,9 @@ public:
         }
         const auto found = base_->contextual_lengths.find(property);
         return found == base_->contextual_lengths.end() ? nullptr : found->second;
+    }
+    int32_t flex_order() const noexcept {
+        return delta_ && delta_->flex_order ? *delta_->flex_order : base_->flex_order;
     }
     float parent_font_size() const noexcept { return base_->parent_font_size; }
     float self_font_size() const noexcept {
@@ -171,6 +176,9 @@ public:
     }
     void set_line_height(measure_line_height_s value) noexcept {
         if (target_) target_->line_height = value; else delta_->line_height = value;
+    }
+    void set_flex_order(int32_t value) noexcept {
+        if (target_) target_->flex_order = value; else delta_->flex_order = value;
     }
     void set_row_gap(aether_css_length value) noexcept {
         if (target_) target_->row_gap = value; else delta_->row_gap = value;

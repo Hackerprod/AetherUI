@@ -9,7 +9,7 @@ while IFS= read -r source; do
  c++ -std=c++20 -O1 -Inative/include -c "$source" -o "$out/core/$object.o"
 done < "$out/sources.txt"
 mkdir -p "$out/extra"
-for source in native/src/rendering/native_frame.cpp native/src/rendering/preparation/paint_snapshot.cpp native/src/rendering/software/software_renderer.cpp native/src/rendering/preparation/aether_command_source.cpp native/src/rendering/preparation/native_command_source.cpp tests/visual_compare/src/sha256.cpp; do
+for source in native/src/rendering/native_frame.cpp native/src/rendering/preparation/paint_snapshot.cpp native/src/rendering/software/software_renderer.cpp native/src/rendering/preparation/aether_command_source.cpp native/src/rendering/preparation/native_command_source.cpp tests/visual_compare/src/sha256.cpp tests/isolated_capture/h7_profile.cpp; do
  object=$(printf '%s' "$source" | tr / _)
  c++ -std=c++20 -O1 -Wall -Wextra -Inative/include -Inative/src/rendering/preparation/include -c "$source" -o "$out/extra/$object.o"
 done

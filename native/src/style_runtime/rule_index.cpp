@@ -68,6 +68,7 @@ void rule_index_clear(rule_index_s* idx) {
 }
 
 void rule_index_add(rule_index_s* idx, const compiled_rule_s* rule) {
+    if (rule->keyframes) return;
     idx->invalidate_capabilities();
     idx->dependencies = idx->dependencies | rule->selector.dependencies;
     const auto& anchor = rule->selector.anchor;

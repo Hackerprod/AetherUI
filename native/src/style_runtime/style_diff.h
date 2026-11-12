@@ -110,6 +110,7 @@ AETHER_STYLE_PAYLOAD_POLICIES(AETHER_PAYLOAD_POLICY)
     X(parent_font_size) \
     X(self_font_size) \
     X(line_height) \
+    X(flex_order) \
     X(row_gap) \
     X(column_gap) \
     X(background_positions) \
@@ -137,6 +138,7 @@ AETHER_SIDECAR_POLICY(combined_dependencies, metadata, 0, false)
 AETHER_SIDECAR_POLICY(parent_font_size, metadata, 0, false)
 AETHER_SIDECAR_POLICY(self_font_size, metadata, 0, false)
 AETHER_SIDECAR_POLICY(line_height, value, 81, true)
+AETHER_SIDECAR_POLICY(flex_order, value, 7, false)
 AETHER_SIDECAR_POLICY(row_gap, value, 17, false)
 AETHER_SIDECAR_POLICY(column_gap, value, 17, false)
 AETHER_SIDECAR_POLICY(background_positions, metadata, 0, false)
@@ -168,6 +170,15 @@ inline constexpr auto style_dependency_catalog = std::to_array<StyleDependencyPo
     {"align-content", DependencyPercentagePolicy::metadata, PropertyStatePolicy::no_op},
     {"align-items", DependencyPercentagePolicy::metadata, PropertyStatePolicy::stored},
     {"align-self", DependencyPercentagePolicy::metadata, PropertyStatePolicy::stored},
+    // Parameters are resolved before layout; sampled target fields carry the visual diff.
+    {"animation-delay", DependencyPercentagePolicy::metadata, PropertyStatePolicy::no_op},
+    {"animation-direction", DependencyPercentagePolicy::metadata, PropertyStatePolicy::no_op},
+    {"animation-duration", DependencyPercentagePolicy::metadata, PropertyStatePolicy::no_op},
+    {"animation-fill-mode", DependencyPercentagePolicy::metadata, PropertyStatePolicy::no_op},
+    {"animation-iteration-count", DependencyPercentagePolicy::metadata, PropertyStatePolicy::no_op},
+    {"animation-name", DependencyPercentagePolicy::metadata, PropertyStatePolicy::no_op},
+    {"animation-play-state", DependencyPercentagePolicy::metadata, PropertyStatePolicy::no_op},
+    {"animation-timing-function", DependencyPercentagePolicy::metadata, PropertyStatePolicy::no_op},
     {"backdrop-filter", DependencyPercentagePolicy::metadata, PropertyStatePolicy::stored},
     {"background-clip", DependencyPercentagePolicy::metadata, PropertyStatePolicy::stored},
     {"background-color", DependencyPercentagePolicy::metadata, PropertyStatePolicy::stored},
@@ -222,7 +233,7 @@ inline constexpr auto style_dependency_catalog = std::to_array<StyleDependencyPo
     {"min-height", DependencyPercentagePolicy::dimension, PropertyStatePolicy::stored},
     {"min-width", DependencyPercentagePolicy::dimension, PropertyStatePolicy::stored},
     {"opacity", DependencyPercentagePolicy::metadata, PropertyStatePolicy::stored},
-    {"order", DependencyPercentagePolicy::metadata, PropertyStatePolicy::no_op},
+    {"order", DependencyPercentagePolicy::metadata, PropertyStatePolicy::stored},
     {"overflow-x", DependencyPercentagePolicy::metadata, PropertyStatePolicy::stored},
     {"overflow-y", DependencyPercentagePolicy::metadata, PropertyStatePolicy::stored},
     {"padding-bottom", DependencyPercentagePolicy::metadata, PropertyStatePolicy::stored},

@@ -7,6 +7,7 @@
 #include "css_important.h"
 #include "css_single_identifier.h"
 #include "supports_condition.h"
+#include "paused_keyframes.h"
 #include "style_property_registry_internal.h"
 #include <string_view>
 #include <cctype>
@@ -457,6 +458,7 @@ static aether_status_t compile_range(
     style_source_block_index_s blocks(source);
     std::vector<frame_s> frames{{start, end, inherited_condition, true}};
     size_t supports_budget=65536;
+    size_t keyframes_budget=65536;
     while (!frames.empty()) {
         auto& frame = frames.back();
         auto& index = frame.index;
@@ -472,10 +474,14 @@ static aether_status_t compile_range(
             index++;
             css_component_lexer at_lexer(original.data(),static_cast<size_t>(end),static_cast<size_t>(index));
             const auto name_token=at_lexer.next();
-            if(name_token.kind!=css_variable_token_kind::ident){index=end;continue;}
+            if(name_token.kind!=css_variable_token_kind::ident && name_token.kind!=css_variable_token_kind::function){index=end;continue;}
+            // @media(...) has no whitespace between its at-keyword and prelude.
+            // The component lexer groups the following '(' with the name; keep
+            // that punctuation in the prelude rather than dropping the rule.
+            const size_t name_end=name_token.end-(name_token.kind==css_variable_token_kind::function?1:0);
             std::string name;
-            if(!css_single_identifier(original.substr(name_token.begin,name_token.end-name_token.begin),name)){index=end;continue;}
-            index=static_cast<int32_t>(name_token.end);
+            if(!css_single_identifier(original.substr(name_token.begin,name_end-name_token.begin),name)){index=end;continue;}
+            index=static_cast<int32_t>(name_end);
             skip_whitespace(source, index, end);
 
             int32_t delimiter = find_at_rule_delimiter(source, index, end);
@@ -503,6 +509,16 @@ static aether_status_t compile_range(
                 const auto evidence=supports_condition_probe(supports_prelude, supports_budget);
                 if(evidence.budget_exhausted)return source_limit_error(diagnostics_callback,diagnostics_user_data,"Supports token budget exhausted.");
                 frames.push_back({delimiter+1,extent->body_end,frame.condition,frame.active&&evidence.syntax_valid&&evidence.matches});
+            } else if (name == "keyframes") {
+                auto keyframes=std::make_shared<paused_keyframes_s>(paused_keyframes_parse(
+                    supports_prelude,original.substr(delimiter+1,extent->body_end-delimiter-1), &keyframes_budget));
+                if(keyframes->limit_exceeded)return source_limit_error(diagnostics_callback,diagnostics_user_data,"Keyframes limit exceeded.");
+                if(frame.active && !keyframes->name.empty()) {
+                    if(!style_rule_ids_fit(rule_id_counter,1))return source_limit_error(diagnostics_callback,diagnostics_user_data,"Keyframes rule ID exhausted.");
+                    compiled_rule_s rule;rule.rule_id=rule_id_counter++;rule.source_order=rule.rule_id;
+                    rule.sheet_handle=sheet_handle;rule.layer=layer;rule.condition=frame.condition;
+                    rule.keyframes=std::move(keyframes);out_rules.push_back(std::move(rule));
+                }
             } else if (name == "media") {
                 media_condition_s* media = media_condition_parse(
                     prelude.c_str(), nullptr, nullptr, at_offset, &media_scope);

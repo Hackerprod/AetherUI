@@ -87,6 +87,7 @@ struct MeasureScalarValues {
     float line_height_value = 1.2f;
     aether_css_length row_gap{}, column_gap{};
     uint32_t dependencies = 0;
+    int32_t flex_order = 0;
 };
 struct MeasureBackgroundPosition { aether_css_length x{}, y{}; };
 struct MeasureBackgroundSize { int32_t kind = 0; aether_css_length x{}, y{}; };

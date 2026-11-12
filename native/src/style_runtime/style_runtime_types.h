@@ -416,7 +416,9 @@ media_condition_s* media_condition_parse(const char* source, aether_style_diagno
 
 // ═══ Compiled rule & stylesheet ════════════════════════════════
 
+struct paused_keyframes_s;
 struct compiled_rule_s {
+    std::shared_ptr<const paused_keyframes_s> keyframes;
     int32_t  rule_id = 0;
     int64_t  sheet_handle = 0;
     style_sheet_layer layer = style_sheet_layer::author;
