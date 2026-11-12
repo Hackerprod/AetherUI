@@ -176,12 +176,23 @@ inline std::vector<aether::stacking::stack_item_t> layout_children_paint_order(
 {
     using namespace aether::stacking;
     const auto classify = [&styles, policy](const aether_layout_box_s* child) {
-        return child->kind == LAYOUT_BOX_TEXT || child->is_atomic_control
-            ? paint_classification_t{} : classify_element_paint(layout_box_style(child, styles, policy).scalars());
+        if (child->kind == LAYOUT_BOX_TEXT || child->is_atomic_control) return paint_classification_t{};
+        const auto view = layout_box_style(child, styles, policy);
+        auto classification = classify_element_paint(view.scalars());
+        // A static transformed box paints at stack level zero, not in-flow.
+        // Its declared z-index remains inapplicable (except flex items, outside
+        // this local stacking profile). Share the phase with hit testing.
+        if (view.scalars().position == AETHER_POSITION_STATIC && !view.transforms().empty())
+            classification.cls = paint_class_t::auto_;
+        return classification;
     };
     bool needs_order = false;
     for (auto* child : box->children) {
-        if (classify(child).has_explicit_z_index) { needs_order = true; break; }
+        const auto classification = classify(child);
+        if (classification.has_explicit_z_index ||
+            (child->kind == LAYOUT_BOX_ELEMENT && !layout_box_style(child, styles, policy).transforms().empty())) {
+            needs_order = true; break;
+        }
     }
     if (!needs_order) return {};
     std::vector<stack_item_t> items;

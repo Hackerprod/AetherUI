@@ -127,7 +127,9 @@ static std::vector<Case> cases(){
     inl("causal-mixed-baselines","<span>UP</span><span>down</span>"+item,"#host{font-size:1px;line-height:1px}",{0,18,40,20});
     basic("inline-block-boundary","#item{display:inline-block}",{80,0,40,20},{0,0,80,30},true);
     basic("inline-boundary","#item{display:inline}",{80,0,40,20},{0,0,80,30},true);
-    basic("fixed-boundary","#item{position:fixed}",{80,0,40,20},{0,0,80,30},true);
+    // H10: fixed uses the same block static insertion rule as absolute.
+    // The old cycle boundary intentionally froze the legacy inline-end bug.
+    basic("fixed-block-static","#item{position:fixed}",{0,30,40,20},{0,0,80,30},false);
     inl("inline-centered-boundary","ab"+item,"#host{text-align:center}#item{display:inline-block}",{160,0,40,20});out.back().expected[0].control=true;
     basic("outer-flex","#item{display:flex}",{0,30,40,20});
     out.push_back({"outer-flex-internal",host(previous+"<div id='item'><div id='inner'></div></div>"),"#item{display:flex}#inner{width:10px;height:6px}",{{"item",{0,30,40,20}},{"inner",{0,30,10,6}},{"prev",{0,0,80,30},true}}});

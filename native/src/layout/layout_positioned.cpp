@@ -45,7 +45,8 @@ void layout_positioned_children(
     aether_node_s* parent,
     aether_rectf positioning_block,
     aether_rectf parent_content_box,
-    aether_layout_result_s* result, aether_node_s* only_node)
+    aether_layout_result_s* result, aether_node_s* only_node,
+    const aether_rectf* retained_static_anchor)
 {
     auto flex_static_position = [&](const BoxStyleSnapshot& child_style,
                                     const aether_rectf& containing,
@@ -83,6 +84,7 @@ void layout_positioned_children(
     };
 
     auto static_position = [&](aether_node_s* node) {
+        if (retained_static_anchor) return *retained_static_anchor;
         // A positioned box with an auto inset keeps the position it would have occupied in
         // normal flow. The laid-out in-flow children give us that anchor without putting the
         // positioned box back into sizing. In particular this keeps ::after adjacent to the
@@ -133,9 +135,16 @@ void layout_positioned_children(
         aether_rectf containing = style.position == AETHER_POSITION_FIXED
             ? aether_rectf{0.f, 0.f, result->viewport.width, result->viewport.height}
             : positioning_block;
-        if (style.position == AETHER_POSITION_FIXED && result->effective_context_enabled) {
+        bool transformed_absolute = false;
+        if (style.position == AETHER_POSITION_ABSOLUTE && result->effective_context_enabled)
+            for (auto* ancestor=parent; ancestor; ancestor=ancestor->parent)
+                if (result->effective_fixed_container_nodes.count(ancestor)) { transformed_absolute=true; break; }
+        if (result->effective_context_enabled && (style.position==AETHER_POSITION_FIXED || transformed_absolute)) {
             for (auto* ancestor = parent; ancestor; ancestor = ancestor->parent) {
-                if (!result->effective_fixed_container_nodes.count(ancestor)) continue;
+                const bool transformed = result->effective_fixed_container_nodes.count(ancestor) != 0;
+                const auto ancestor_style = get_style(styles, ancestor);
+                const bool positioned = ancestor_style.position != AETHER_POSITION_STATIC;
+                if (!transformed && !(style.position == AETHER_POSITION_ABSOLUTE && positioned)) continue;
                 if (ancestor == parent) containing = positioning_block;
                 else if (const auto* owner = result->find_primary_box(ancestor)) containing = owner->padding_box;
                 break;
@@ -256,8 +265,8 @@ void layout_positioned_children(
         offset_box(child_box, x - flow_margin.x, y - flow_margin.y);
         parent_box->add_child(child_box);
     }
-    // The result publishes geometry, not the scratch insertion history. Fixed-only
-    // re-finalization uses completed geometry and never consumes these records.
+    // The result publishes geometry, not the scratch insertion history.
+    // Re-finalization retains the completed block anchor before replacing a box.
     if (!only_node) parent_box->block_static_anchors.clear();
 }
 
@@ -279,7 +288,8 @@ bool finalize_fixed_children(const aether_layout_engine_s* engine, const StyleLo
         auto* child = parent->children[index];
         bool has_container = false;
         bool table_owner = false;
-        if (child->kind == LAYOUT_BOX_ELEMENT && child->style.position == AETHER_POSITION_FIXED) {
+        if (child->kind == LAYOUT_BOX_ELEMENT &&
+            (child->style.position == AETHER_POSITION_FIXED || child->style.position == AETHER_POSITION_ABSOLUTE)) {
             for (auto* ancestor = child->element->parent; ancestor; ancestor = ancestor->parent) {
                 if (result->effective_fixed_container_nodes.count(ancestor)) {
                     has_container = true;
@@ -297,6 +307,16 @@ bool finalize_fixed_children(const aether_layout_engine_s* engine, const StyleLo
             table_rebuilt = tables && (inside_table_cell || table_owner ||
                                        contains_finalized_table_cell(child));
             auto* node = child->element;
+            // The flow pass already consumed its insertion markers. Preserve
+            // the completed block anchor rather than reconstructing it from a
+            // previous sibling's inline end. The geometry has followed ancestor
+            // translations. Explicit inset axes ignore this anchor; flex keeps
+            // recomputing alignment against the new size instead.
+            const auto retained_anchor = normal_flow_margin_box(child);
+            const bool retain_block_anchor = parent->style.display == AETHER_DISPLAY_BLOCK &&
+                node->pseudo_element == aether_pseudo_element_t::none &&
+                (child->style.display == AETHER_DISPLAY_BLOCK || child->style.display == AETHER_DISPLAY_FLEX ||
+                 child->style.display == AETHER_DISPLAY_TABLE);
             // Only after the complete flow pass are ancestor auto block sizes
             // known. Re-run positioned sizing, not just a visual translation:
             // percentages and opposing insets must see the final padding box.
@@ -304,7 +324,8 @@ bool finalize_fixed_children(const aether_layout_engine_s* engine, const StyleLo
             delete child;
             const auto previous_count = parent->children.size();
             layout_positioned_children(engine, styles, parent, node->parent,
-                parent->padding_box, parent->content_box, result, node);
+                parent->padding_box, parent->content_box, result, node,
+                retain_block_anchor ? &retained_anchor : nullptr);
             if (parent->children.size() != previous_count + 1)
                 throw std::runtime_error("Fixed child preparation did not produce a box");
             child = parent->children.back();

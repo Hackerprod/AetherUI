@@ -109,8 +109,23 @@ int capture(const char* input,const std::string& out,int width,int height,bool g
    require(!animation_unsupported,"CSS_ANIMATION_PROFILE_UNSUPPORTED");
    require(aether_style_runtime_create_resolved_style_map(o.runtime,o.doc,&o.styles)==AETHER_OK,"STYLE_MAP_FAILED");
   }
+  // Read frozen scalar/transform views; exporting a contextual style to the
+  // flat compatibility ABI would reject unrelated supported math properties.
+  { const auto version=aether::style::pin_style_map(o.styles);
+    for(const auto& entry:version->backing()->entries()) {
+      const auto& record=entry.second;auto* n=record->node();const auto view=record->style_view();
+      if(view.transforms().empty())continue;const auto& st=view.scalars();
+      require((st.display==AETHER_DISPLAY_BLOCK||st.display==AETHER_DISPLAY_FLEX)&&
+              n->tag_name!="body"&&n->tag_name!="html"&&n->tag_name!="canvas",
+              "IDENTITY_TRANSFORM_BOX_UNSUPPORTED");
+      if(n->parent){const auto* parent=version->backing()->find(n->parent);
+        require(!parent || parent->style_view().scalars().display!=AETHER_DISPLAY_FLEX ||
+                st.position!=AETHER_POSITION_STATIC || st.z_index_kind!=AETHER_Z_INDEX_INTEGER,
+                "IDENTITY_TRANSFORM_FLEX_Z_UNSUPPORTED");}
+    }
+  }
   h3::scripts(o.styles,inert_scripts);auto expected=h3::before(o.styles,canvases);
-  {Stage s("layout");require(aether_layout_create(no_text,&text_requested,&o.engine)==AETHER_OK,"LAYOUT_CREATE_FAILED");set_initial_canvas_mode(o.engine,true);require(aether_layout_layout(o.engine,o.doc,o.styles,width,height,nullptr,nullptr,&o.layout)==AETHER_OK,"LAYOUT_FAILED");require(!text_requested,"TEXT_MEASURE_REQUESTED_UNSUPPORTED");}
+  {Stage s("layout");require(aether_layout_create(no_text,&text_requested,&o.engine)==AETHER_OK,"LAYOUT_CREATE_FAILED");set_initial_canvas_mode(o.engine,true);aether_bool_t changed{};require(aether_layout_prepare_transition_context(o.engine,nullptr,o.styles,nullptr,&changed)==AETHER_OK,"LAYOUT_CONTEXT_FAILED");require(aether_layout_layout(o.engine,o.doc,o.styles,width,height,nullptr,nullptr,&o.layout)==AETHER_OK,"LAYOUT_FAILED");require(!text_requested,"TEXT_MEASURE_REQUESTED_UNSUPPORTED");}
   h3::after(o.layout,o.styles,expected);
   logstream<<"canvas_entries="<<o.engine->initial_canvas_entries.size()<<"\ncanvas_registry_bytes="<<o.engine->initial_canvas_entries.size()*sizeof(decltype(o.engine->initial_canvas_entries)::value_type)<<"\ncanvas_registry_bytes_scope=ENTRY_PAYLOAD_EXCLUDES_ALLOCATOR_OVERHEAD\n";
   std::unique_ptr<aether::rendering::NativePaintList> list;

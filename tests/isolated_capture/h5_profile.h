@@ -35,6 +35,13 @@ struct Scanner {
    size_t end=i;if(end>=start+2&&d(end-2,'!')&&ts[end-1].kind==css_variable_token_kind::ident&&ident(end-1)=="important")end-=2;
    if(start==end){out.valid=false;return;}
    auto value=s.substr(ts[start].begin,ts[end-1].end-ts[start].begin);
+   // display:contents is not represented by this geometry profile. Do not
+   // silently turn a non-transformable authored box into a fallback block.
+   if(property=="display" && ts[start].kind==css_variable_token_kind::ident && ident(start)=="contents")out.valid=false;
+   if(property=="perspective" || property=="transform-style" || property=="rotate" || property=="scale" || property=="translate") {
+    const auto keyword=ts[start].kind==css_variable_token_kind::ident&&end==start+1?ident(start):std::string{};
+    if(keyword!=(property=="transform-style"?"flat":"none") && keyword!="initial" && keyword!="unset")out.valid=false;
+   }
    if(!h7::declaration(property,value)||!h8::declaration(property,value))out.valid=false;
    if(h5_rgba_declaration_supported(property,value))for(size_t j=start;j<end;++j)if(ts[j].kind==css_variable_token_kind::function)out.functions.insert(ts[j].begin);
   }

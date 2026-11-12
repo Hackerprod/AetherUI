@@ -228,3 +228,12 @@ python3 tests/isolated_capture/test_h9.py /tmp/h9-build/aether_capture
 
 The original flexbox page is unchanged and remains blocked. See
 `H9_EVIDENCE.md` for measured test coverage and limitations.
+
+### H10 identity transform profile
+
+`transform:translateZ(0)` (literal number/px zero, including identifier escapes)
+now preserves the containing-block and stacking effects of a non-`none`
+transform. This is not general 3D support. Only tested block/flex boxes and a
+single identity function are admitted. Intermediate clip escape, root scrolling,
+static transformed flex-item z-index and other untested forms reject the frame.
+See `H10_EVIDENCE.md`, `run_h10_core.sh` and `test_h10.py`.

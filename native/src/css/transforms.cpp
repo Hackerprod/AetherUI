@@ -1,6 +1,7 @@
 #include <new>
 #include "../style_runtime/css_component_values.h"
 #include "transforms.h"
+#include "identity_translate_z.h"
 #include "css_length_internal.h"
 #include "css_numeric_conversion_internal.h"
 #include "../primitives/ascii_text.h"
@@ -147,7 +148,14 @@ bool parse_transform_function(const std::string& name, const std::vector<std::st
     if (!out) return false;
     aether_transform_operation result{};
     const std::string function = aether::ascii_lowercase(name);
-    if (function == "translate" || function == "translatex" || function == "translatey") {
+    if (function == "translatez") {
+        if (args.size() != 1 || !aether::css::identity_z_argument(args[0])) return false;
+        // Preserve a nonempty operation list: identity still establishes a
+        // containing block and stacking context. No perspective/3D support.
+        result.kind = AETHER_TRANSFORM_TRANSLATE;
+        result.x = aether_css_length_zero();
+        result.y = aether_css_length_zero();
+    } else if (function == "translate" || function == "translatex" || function == "translatey") {
         const bool x_only = function == "translatex";
         const bool y_only = function == "translatey";
         if ((x_only || y_only) ? args.size() != 1 : (args.empty() || args.size() > 2)) return false;

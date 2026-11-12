@@ -192,7 +192,8 @@ void layout_positioned_children(
     aether_node_s* parent,
     aether_rectf positioning_block,
     aether_rectf parent_content_box,
-    aether_layout_result_s* result, aether_node_s* only_node = nullptr);
+    aether_layout_result_s* result, aether_node_s* only_node = nullptr,
+    const aether_rectf* retained_static_anchor = nullptr);
 void layout_finalize_fixed_containers(const aether_layout_engine_s* engine,
     const StyleLookup* styles, aether_layout_result_s* result);
 

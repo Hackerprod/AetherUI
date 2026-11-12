@@ -959,7 +959,7 @@ float layout_flow_children(
     for (auto* node : parent->children) {
         if (node->type == AETHER_NODE_ELEMENT && node->pseudo_element == aether_pseudo_element_t::none) {
             const auto style = get_style(styles, node);
-            if (style.position == AETHER_POSITION_ABSOLUTE &&
+            if (is_out_of_flow(style) &&
                 (style.display == AETHER_DISPLAY_BLOCK || style.display == AETHER_DISPLAY_FLEX ||
                  style.display == AETHER_DISPLAY_TABLE)) {
                 const size_t index = parent_box->block_static_anchors.size();

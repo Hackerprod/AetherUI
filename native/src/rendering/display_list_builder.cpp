@@ -405,8 +405,23 @@ static void paint_box(aether_display_list_builder_s* builder,
     // context in Chrome): multiply this box's own opacity (with any live
     // transition override) by the accumulated opacity of its ancestors.
     const bool native = builder->opacity_events != nullptr;
-    if(native && builder->native_scroll_depth && style.position==AETHER_POSITION_FIXED)
-        throw std::runtime_error("fixed under scroll unsupported");
+    if(native && (style.position==AETHER_POSITION_FIXED || style.position==AETHER_POSITION_ABSOLUTE)) {
+        // The native tree traversal can scroll a positioned descendant with its
+        // transformed owner, but cannot escape an intervening clip/scroll scope.
+        bool transformed_owner = false, intervening_clip = false;
+        for (auto* ancestor = box->element ? box->element->parent : nullptr; ancestor; ancestor=ancestor->parent) {
+            if (builder->layout->effective_fixed_container_nodes.count(ancestor)) { transformed_owner=true; break; }
+            const auto* owner=builder->layout->find_primary_box(ancestor);
+            if (owner && style.position==AETHER_POSITION_ABSOLUTE && owner->style.position!=AETHER_POSITION_STATIC) break;
+            if (owner && owner!=builder->layout->root &&
+                (owner->style.overflow_x!=AETHER_OVERFLOW_VISIBLE || owner->style.overflow_y!=AETHER_OVERFLOW_VISIBLE))
+                intervening_clip = true;
+        }
+        if (intervening_clip && (transformed_owner || style.position==AETHER_POSITION_FIXED))
+            throw std::runtime_error("positioned escape from intermediate clip unsupported");
+        if (style.position==AETHER_POSITION_FIXED && !transformed_owner && builder->native_scroll_depth)
+            throw std::runtime_error("fixed under scroll unsupported");
+    }
     if(native && (!std::isfinite(own_opacity) || own_opacity<0 || own_opacity>1)) throw std::runtime_error("opacity range");
     if(native && box==builder->layout->root && own_opacity!=1) throw std::runtime_error("root opacity unsupported");
     const bool group = native && box->kind==LAYOUT_BOX_ELEMENT && own_opacity!=1;
