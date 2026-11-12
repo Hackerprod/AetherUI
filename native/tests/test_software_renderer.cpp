@@ -40,7 +40,7 @@ int main() {
  auto identity=prepare({p::BeginChunk{1},p::PushTransform{},fill(0,0,1,1),p::PopTransform{},p::EndChunk{1}});
  assert(s::render(store,identity).status==s::Status::ok);
  const auto saved=get(store);
- auto unsupported=prepare({fill(0,0,4,4),p::Stroke{}});
+ auto unsupported=prepare({fill(0,0,4,4),p::Text{"x",{},"sans",12,400,0,{0,0,0,1},0}});
  assert(s::render(store,unsupported).status==s::Status::unsupported);
  assert(get(store).pixels==saved.pixels && get(store).sequence==saved.sequence);
  auto rounded=fill(0,0,1,1);rounded.radii.top_left_x=1;

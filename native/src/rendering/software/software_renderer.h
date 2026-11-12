@@ -10,7 +10,7 @@ struct Result {
  std::size_t command_index{};
  std::uint64_t pixel_budget{}; // Includes transparent clear. Not a time metric.
 };
-// R6.1: rectangle fills and rectangular clips only; DPI exactly 1.
+// R7.1: rectangle fills, solid strokes and rectangular clips; DPI exactly 1.
 // Owner-thread synchronous call. No reentry or store mutation by callbacks.
 // Unsupported commands reject the whole frame before candidate allocation.
 // Allocation and all failures preserve the confirmed frame.

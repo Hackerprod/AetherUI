@@ -6,3 +6,15 @@ target_link_libraries(aether_software_smoke PRIVATE aether_software_raster)
 add_executable(aether_software_raster_test ../../native/tests/test_software_renderer.cpp)
 target_link_libraries(aether_software_raster_test PRIVATE aether_software_raster)
 # No automatic test execution or workflows.
+
+# This standalone emitter integration test currently uses ELF section GC.
+# Other platforms need the full engine target and are not claimed validated.
+if(UNIX AND NOT APPLE AND CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+ add_executable(aether_software_stroke_test
+  ../../native/tests/test_software_stroke.cpp
+  ../../native/src/rendering/border_painter.cpp
+  ../../native/src/css/border_radii.cpp)
+ target_link_libraries(aether_software_stroke_test PRIVATE aether_software_raster)
+ target_compile_options(aether_software_stroke_test PRIVATE -ffunction-sections -fdata-sections)
+ target_link_options(aether_software_stroke_test PRIVATE -Wl,--gc-sections)
+endif()

@@ -7,7 +7,7 @@ namespace aether::rendering::software {
 namespace {
 constexpr std::uint64_t max_work = 50000000;
 struct Rect { double l, t, r, b; };
-struct Draw { Rect rect; prep::Color color; std::size_t index; };
+struct Draw { Rect rect; Rect inner; prep::Color color; std::size_t index; };
 Rect intersect(Rect a, Rect b) noexcept {
  return {std::max(a.l,b.l),std::max(a.t,b.t),std::min(a.r,b.r),std::min(a.b,b.b)};
 }
@@ -19,6 +19,11 @@ bool zero(prep::Radii r) noexcept {
 }
 bool identity(prep::Matrix m) noexcept {return m.m11==1 && m.m12==0 && m.m21==0 && m.m22==1 && m.dx==0 && m.dy==0;}
 bool cancelled(prep::Cancellation* c) noexcept {return c && c->cancelled();}
+double area(Rect r, int x, int y) noexcept {
+ const double w=std::max(0.0,std::min(r.r,double(x)+1)-std::max(r.l,double(x)));
+ const double h=std::max(0.0,std::min(r.b,double(y)+1)-std::max(r.t,double(y)));
+ return w*h;
+}
 unsigned byte(double v) noexcept {return unsigned(std::floor(v*255+0.5));}
 unsigned mul(unsigned a,unsigned b) noexcept {return (a*b+127)/255;}
 Result failed(FrameStatus s) noexcept {
@@ -55,7 +60,28 @@ Result render(FrameStore& store,const prep::PreparedFrame& frame,prep::Cancellat
      const auto height=std::uint64_t(std::ceil(r.b)-std::floor(r.t));
      if(height && width>(max_work-work)/height) return {Status::limit_exceeded,FrameStatus::ok,index,work};
      work+=width*height;
-     draws.push_back({r,fill->color,index});
+     draws.push_back({r,{},fill->color,index});
+    }
+   } else if(const auto* stroke=std::get_if<prep::Stroke>(&command)) {
+    if(!zero(stroke->radii)) return {Status::unsupported,FrameStatus::ok,index,work};
+    if(stroke->stroke_width>0) {
+     // A degenerate centerline may represent a visible thick CSS border.
+     // Its original border-box cannot be reconstructed: reject, never omit.
+     if(stroke->rect.width==0 || stroke->rect.height==0)
+      return {Status::unsupported,FrameStatus::ok,index,work};
+     const auto center=rect(stroke->rect);
+     const double half=double(stroke->stroke_width)/2;
+     auto outer=intersect(current,{center.l-half,center.t-half,center.r+half,center.b+half});
+     auto inner=intersect(current,{center.l+half,center.t+half,center.r-half,center.b-half});
+     if(!empty(outer)) {
+      const auto width=std::uint64_t(std::ceil(outer.r)-std::floor(outer.l));
+      const auto height=std::uint64_t(std::ceil(outer.b)-std::floor(outer.t));
+      // Two area evaluations per pixel; all endpoints bounded by viewport.
+      if(height && width>(max_work-work)/2/height)
+       return {Status::limit_exceeded,FrameStatus::ok,index,work};
+      work+=2*width*height;
+      draws.push_back({outer,inner,stroke->color,index});
+     }
     }
    } else if(const auto* clip=std::get_if<prep::PushClip>(&command)) {
     if(!zero(clip->radii)) return {Status::unsupported,FrameStatus::ok,index,work};
@@ -94,10 +120,8 @@ Result render(FrameStore& store,const prep::PreparedFrame& frame,prep::Cancellat
     const unsigned channels[]{byte(draw.color.b),byte(draw.color.g),byte(draw.color.r)};
     for(int y=y0;y<y1;++y) {
      if(cancelled(cancel)) return {Status::cancelled,FrameStatus::ok,index,work};
-     const double cy=std::min(r.b,double(y)+1)-std::max(r.t,double(y));
      for(int x=x0;x<x1;++x) {
-      const double cx=std::min(r.r,double(x)+1)-std::max(r.l,double(x));
-      const unsigned coverage=byte(std::clamp(cx*cy,0.0,1.0));
+      const unsigned coverage=byte(std::clamp(area(r,x,y)-area(draw.inner,x,y),0.0,1.0));
       const unsigned sa=mul(alpha,coverage),inv=255-sa;
       auto* p=pixels.data()+std::size_t(y)*stride+std::size_t(x)*4;
       for(int c=0;c<3;++c) p[c]=std::uint8_t(mul(channels[c],sa)+mul(p[c],inv));
