@@ -12,7 +12,7 @@ namespace h5 {
 // Shared traversal returns original declaration spans; never executable flattened CSS.
 struct DeclarationRange { size_t begin,end; bool keyframe; unsigned depth; size_t selector_begin=SIZE_MAX,selector_end=SIZE_MAX; };
 struct WorkBudget { size_t bytes=2*1024*1024, tokens=524288, rules=65536, steps=32*1024*1024; };
-struct Analysis { std::vector<DeclarationRange> declarations; std::set<size_t> functions, at_rules; bool valid=true; bool variables=false; size_t failure_begin=SIZE_MAX,failure_end=SIZE_MAX,failure_selector_begin=SIZE_MAX,failure_selector_end=SIZE_MAX; bool limit_failure=false,lexical_failure=false; };
+struct Analysis { std::vector<DeclarationRange> declarations; std::set<size_t> functions, at_rules; bool valid=true; bool variables=false; bool h19_display_unproven=false; size_t failure_begin=SIZE_MAX,failure_end=SIZE_MAX,failure_selector_begin=SIZE_MAX,failure_selector_end=SIZE_MAX; bool limit_failure=false,lexical_failure=false; };
 struct Scanner {
  explicit Scanner(const std::string& source):s(source){}
  const std::string& s; std::vector<css_variable_token> ts; Analysis out;
@@ -48,6 +48,15 @@ struct Scanner {
    if(start==end){if(property.starts_with("--"))continue;invalid();return;}
    auto value=s.substr(ts[start].begin,ts[end-1].end-ts[start].begin);
    if(h14::variable_source(property,value)){out.variables=true;for(size_t j=start;j<end;++j)if(ts[j].kind==css_variable_token_kind::function)out.functions.insert(ts[j].begin);}
+   // H19 must never infer flex from an earlier declaration when the native
+   // parser silently discards a later valid-but-unimplemented display syntax.
+   // Restrict its proof to an explicit native-supported single-keyword subset.
+   // Other profiles retain their existing behavior; this flag is H19-scoped.
+   if(property=="all")out.h19_display_unproven=true;
+   if(property=="display") {
+    const auto word=end==start+1&&ts[start].kind==css_variable_token_kind::ident?ident(start):std::string{};
+    if(word!="none"&&word!="block"&&word!="inline"&&word!="inline-block"&&word!="flex"&&word!="table"&&word!="table-row"&&word!="table-cell"&&word!="contents"&&word!="initial"&&word!="inherit"&&word!="unset")out.h19_display_unproven=true;
+   }
    // H18 validates display:contents using resolved native styles before layout.
    if(property=="perspective" || property=="transform-style" || property=="rotate" || property=="scale" || property=="translate") {
     const auto keyword=ts[start].kind==css_variable_token_kind::ident&&end==start+1?ident(start):std::string{};

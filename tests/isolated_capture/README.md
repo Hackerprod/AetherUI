@@ -340,3 +340,18 @@ This does not make the original flexbox fixture fully supported.
 sh tests/isolated_capture/run_h18_core.sh /tmp/h18-build
 python3 tests/isolated_capture/test_h18.py /tmp/h18-build/aether_capture /tmp/h18-results
 ```
+
+## H19: explicit first-letter pseudo-element, inapplicable flex hosts only
+
+The native selector parser preserves `::first-letter` (and historical
+`:first-letter`) as a separate pseudo-element with correct specificity, without
+applying its declarations to the host or creating generated nodes. Capture
+requires a bounded native matching proof that **every matched host itself** is
+computed flex. This does not implement text or first-letter rendering; block,
+contents and unsupported contexts are rejected. Global CSS checks and H11 remain
+unchanged. See `H19_EVIDENCE.md` for scope, budgets and verification.
+
+```sh
+sh tests/isolated_capture/run_h19_core.sh /tmp/h19-build
+python3 tests/isolated_capture/test_h19.py /tmp/h19-build/aether_capture /tmp/h19-results
+```

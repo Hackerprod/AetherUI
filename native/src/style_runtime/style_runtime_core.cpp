@@ -208,6 +208,9 @@ rule_index_s aether_style_runtime_s::prepare_rule_index(const aether_style_runti
         if (!rule_ids.insert(rule.rule_id).second) unique_ids = false;
         switch (rule.selector.pseudo_element) {
         case aether_pseudo_element_t::none: break;
+        // Syntax is retained for applicability auditing. There is deliberately
+        // no generated node or host-style application for first-letter.
+        case aether_pseudo_element_t::first_letter: break;
         case aether_pseudo_element_t::before: prepared.before_possible_ = true; break;
         case aether_pseudo_element_t::after: prepared.after_possible_ = true; break;
         default: complete = false; break;

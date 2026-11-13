@@ -255,6 +255,7 @@ static std::vector<std::string_view> split_top_level(std::string_view source, ch
 struct selector_parse_context_s {
     bool disallow_pseudo_elements = false;
     bool strict_profile = false;
+    bool nested_selector_argument = false;
     size_t depth = 0;
 };
 
@@ -548,6 +549,7 @@ static bool try_parse_pseudo(parser_s& p, pseudo_selector_s& pseudo,
         // functions within it. Copy context so neither success nor recovery can
         // change the grammar of the containing selector or its sibling branches.
         auto argument_context = p.context;
+        argument_context.nested_selector_argument = true;
         if (argument_context.strict_profile && ++argument_context.depth > 32) return false;
         if (name == "has") argument_context.disallow_pseudo_elements = true;
         if (!selector_parse_list_view(body, nested, policy, argument_context)) return false;
@@ -622,22 +624,35 @@ static bool try_parse_compound(parser_s& p, compound_selector_s& compound) {
         } else if (c == ':') {
             ++p.index;
             p.skip_comments();
-            if (p.peek() == ':') {
+            const size_t pseudo_name_start = p.index;
+            const bool double_colon = p.peek() == ':';
+            // CSS2 legacy single-colon first-letter has pseudo-element specificity.
+            bool legacy_first_letter = false;
+            if (!double_colon) {
+                legacy_first_letter = aether::ascii_lowercase(p.read_identifier()) == "first-letter";
+                p.index = pseudo_name_start;
+            }
+            if (double_colon || legacy_first_letter) {
                 if (p.context.disallow_pseudo_elements ||
                     p.pseudo_element != aether_pseudo_element_t::none) return false;
-                ++p.index;
+                if (double_colon) ++p.index;
                 p.skip_comments();
                 auto name = aether::ascii_lowercase(p.read_identifier());
                 if (name == "before") {
                     p.pseudo_element = aether_pseudo_element_t::before;
                 } else if (name == "after") {
                     p.pseudo_element = aether_pseudo_element_t::after;
+                } else if (name == "first-letter") {
+                    if (p.context.nested_selector_argument) return false;
+                    p.pseudo_element = aether_pseudo_element_t::first_letter;
                 } else {
                     return false;
                 }
                 // Pseudo-elements have type-selector specificity.
                 p.specificity = p.specificity + specificity_s{0, 0, 1};
                 consumed = true;
+                // No chained states/elements are implemented for first-letter.
+                if (p.pseudo_element == aether_pseudo_element_t::first_letter) return true;
                 continue;
             }
             pseudo_selector_s pseudo;

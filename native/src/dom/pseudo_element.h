@@ -6,4 +6,6 @@ enum class aether_pseudo_element_t : unsigned char {
     none = 0,
     before,
     after,
+    // Recognized syntax only: no first-letter layout node is generated yet.
+    first_letter,
 };
