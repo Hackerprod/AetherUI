@@ -1,3 +1,4 @@
+#include "hit_order_oom_helpers.h"
 // Authentic private-core regression. Checks are deliberately active under NDEBUG.
 // The construction-only block_static_anchors field is part of the cycle8 private
 // implementation contract, not a public header or ABI requirement.
@@ -196,8 +197,8 @@ static long layout_sweep(bool prepared) {
         REQUIRE(f.map->current==base && f.doc->identity->structure_epoch==structure);
         REQUIRE(f.doc->identity->mutation_epoch==mutation && f.doc->identity->style_tree_epoch==style);
         if(status==AETHER_OK) {
-            REQUIRE(!injected && out && out!=prior); validate(f,out); aether_layout_result_destroy(out);
-            completed=true; break;
+            REQUIRE((!injected || hit_oom_optional_success(out,prior)) && out && out!=prior); validate(f,out); aether_layout_result_destroy(out);
+            completed=!injected; if(completed) break; else continue;
         }
         REQUIRE(injected && status==AETHER_ERROR_OUT_OF_MEMORY && out==prior); ++failures;
         auto* fresh=f.layout(prepared,prior); validate(f,fresh); aether_layout_result_destroy(fresh);

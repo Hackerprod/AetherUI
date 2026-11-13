@@ -1,3 +1,4 @@
+#include "hit_order_oom_helpers.h"
 #include "../src/layout/layout_internal.h"
 #include <aether/aether_contextual_style.h>
 
@@ -303,12 +304,12 @@ static void run(MapMode mode, bool col, const char* basis, bool positioned) {
             f.intact(); intact_boxes(geometry);
             REQUIRE(source->primary_boxes == primary && source->paint_order == paint_order && source->assets == assets);
             if (status == AETHER_OK) {
-                REQUIRE(!injected && output && output != source);
+                REQUIRE((!injected || (!clone && hit_oom_optional_success(output,source))) && output && output != source);
                 ownership(output);
                 if (clone) REQUIRE(output->assets == assets);
                 f.paint(output);
                 aether_layout_result_destroy(output);
-                completed = true;
+                completed = !injected;
             } else {
                 REQUIRE(injected && status == AETHER_ERROR_OUT_OF_MEMORY && output == source);
                 ++failures;

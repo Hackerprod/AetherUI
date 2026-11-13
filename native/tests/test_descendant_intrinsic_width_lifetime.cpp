@@ -1,3 +1,4 @@
+#include "hit_order_oom_helpers.h"
 #include "../src/layout/layout_internal.h"
 #include <aether/aether_contextual_style.h>
 
@@ -331,10 +332,10 @@ static void allocation_sweeps(MapMode mode) {
             fail_at = -1;
             f.intact(); intact_boxes(boxes);
             if (status == AETHER_OK) {
-                REQUIRE(!injected && output != source);
+                REQUIRE((!injected || (!clone && hit_oom_optional_success(output,source))) && output != source);
                 REQUIRE(same(rect(f, output, "a").width, 80));
                 consumers(f, output, rect(f, output, "b"));
-                aether_layout_result_destroy(output); completed = true; break;
+                aether_layout_result_destroy(output); completed = !injected; if(completed) break; else continue;
             }
             REQUIRE(injected && status == AETHER_ERROR_OUT_OF_MEMORY && output == source);
             ++failures;

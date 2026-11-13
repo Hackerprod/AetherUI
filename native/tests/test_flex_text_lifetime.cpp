@@ -1,4 +1,5 @@
 #include "../src/layout/layout_types.h"
+#include "hit_order_oom_helpers.h"
 #include <aether/aether_contextual_style.h>
 #include <cstdio>
 #include <cstdlib>
@@ -239,8 +240,14 @@ static void allocation_sweeps(MapMode mode) {
         const auto status = aether_layout_layout(f.engine, f.doc, f.map, 800, 600, nullptr, nullptr, &output);
         fail_at = -1; f.intact();
         if (status == AETHER_OK) {
-            REQUIRE(!injected && output != source); f.wrappers(output); f.paint(output);
-            aether_layout_result_destroy(output); completed = true; break;
+            // Optional hit-order metadata may fail after mandatory layout
+            // succeeds. Validate that result and keep sweeping all ordinals.
+            REQUIRE(output != source);
+            if (injected) REQUIRE(hit_oom_optional_success(output, source));
+            f.wrappers(output); f.paint(output);
+            aether_layout_result_destroy(output);
+            if (injected) continue;
+            completed = true; break;
         }
         REQUIRE(injected && status == AETHER_ERROR_OUT_OF_MEMORY && output == source); ++failures;
     }

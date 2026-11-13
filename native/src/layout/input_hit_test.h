@@ -43,7 +43,7 @@ inline layout_input_hit_t layout_hit_test_input(const aether_layout_result_s* la
             const auto visit = [&](const aether_layout_box_s* child) {
                 return layout_hit_test_input(layout, child, styles, policy, child_x, child_y, offsets, data);
             };
-            const auto order = layout_children_paint_order(box, styles, policy);
+            const auto order = layout_hit_order(box, styles, policy);
             if (order.empty()) {
                 for (auto it = box->children.rbegin(); it != box->children.rend(); ++it) {
                     const auto hit = visit(*it); if (hit.part != AETHER_INPUT_HIT_NONE) return hit;

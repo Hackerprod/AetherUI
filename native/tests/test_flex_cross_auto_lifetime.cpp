@@ -1,3 +1,4 @@
+#include "hit_order_oom_helpers.h"
 #include "../src/layout/layout_internal.h"
 #include <aether/aether_contextual_style.h>
 
@@ -242,11 +243,11 @@ static void sweeps(MapMode mode, bool col, int lines, bool stretch, int limit_ca
         REQUIRE(source->primary_boxes == primary && source->paint_order == paint_order);
         REQUIRE(source->assets == assets);
         if (status == AETHER_OK) {
-            REQUIRE(!injected && output && output != source);
+            REQUIRE((!injected || hit_oom_optional_success(output,source)) && output && output != source);
             f.paint(output);
             aether_layout_result_destroy(output);
-            completed = true;
-            break;
+            completed = !injected;
+            if(completed) break; else continue;
         }
         REQUIRE(injected && status == AETHER_ERROR_OUT_OF_MEMORY && output == source);
         ++failures;

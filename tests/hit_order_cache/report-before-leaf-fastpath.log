@@ -1,0 +1,94 @@
+PASS public callback mutation/detach/destroy/reentry/external release cached and baseline
+oom_failpoints=34 complete_under_failure=0
+n=100 mixed=0 cold_us=6.001 cold_allocs=109 cold_allocated_bytes=6768
+cold_classifications=101 cold_sorts=0 cache_entries=102
+cold_p50_us=3.901 cold_p95_us=6.210 retained_logical_bytes=4336 (excludes hash-node links and allocator overhead)
+n=100 mixed=0 mode=baseline y=5 p50_us=2.647 p95_us=2.819 allocs=0 allocated_bytes=0
+classifications=10201 sorts=0 cache_hits=0 fallbacks=10302
+n=100 mixed=0 mode=baseline y=1985 p50_us=1.252 p95_us=1.578 allocs=0 allocated_bytes=0
+classifications=10201 sorts=0 cache_hits=0 fallbacks=303
+n=100 mixed=0 mode=baseline y=2100 p50_us=2.663 p95_us=3.178 allocs=0 allocated_bytes=0
+classifications=10201 sorts=0 cache_hits=0 fallbacks=10302
+n=100 mixed=0 mode=cache y=5 p50_us=1.612 p95_us=1.732 allocs=0 allocated_bytes=0
+classifications=0 sorts=0 cache_hits=10302 fallbacks=0
+n=100 mixed=0 mode=cache y=1985 p50_us=0.074 p95_us=0.075 allocs=0 allocated_bytes=0
+classifications=0 sorts=0 cache_hits=303 fallbacks=0
+n=100 mixed=0 mode=cache y=2100 p50_us=1.657 p95_us=1.775 allocs=0 allocated_bytes=0
+classifications=0 sorts=0 cache_hits=10302 fallbacks=0
+n=100 mixed=1 cold_us=10.115 cold_allocs=111 cold_allocated_bytes=9768
+cold_classifications=102 cold_sorts=1 cache_entries=102
+cold_p50_us=6.235 cold_p95_us=7.168 retained_logical_bytes=6336 (excludes hash-node links and allocator overhead)
+n=100 mixed=1 mode=baseline y=5 p50_us=4.161 p95_us=4.262 allocs=202 allocated_bytes=303000
+classifications=10302 sorts=101 cache_hits=0 fallbacks=10302
+n=100 mixed=1 mode=baseline y=1925 p50_us=2.792 p95_us=2.843 allocs=202 allocated_bytes=303000
+classifications=10302 sorts=101 cache_hits=0 fallbacks=303
+n=100 mixed=1 mode=baseline y=2100 p50_us=4.096 p95_us=5.068 allocs=202 allocated_bytes=303000
+classifications=10302 sorts=101 cache_hits=0 fallbacks=10302
+n=100 mixed=1 mode=cache y=5 p50_us=1.848 p95_us=1.988 allocs=0 allocated_bytes=0
+classifications=0 sorts=0 cache_hits=10302 fallbacks=0
+n=100 mixed=1 mode=cache y=1925 p50_us=0.090 p95_us=0.091 allocs=0 allocated_bytes=0
+classifications=0 sorts=0 cache_hits=303 fallbacks=0
+n=100 mixed=1 mode=cache y=2100 p50_us=1.917 p95_us=1.957 allocs=0 allocated_bytes=0
+classifications=0 sorts=0 cache_hits=10302 fallbacks=0
+n=1000 mixed=0 cold_us=100.141 cold_allocs=1012 cold_allocated_bytes=65224
+cold_classifications=1001 cold_sorts=0 cache_entries=1002
+cold_p50_us=61.999 cold_p95_us=109.274 retained_logical_bytes=40992 (excludes hash-node links and allocator overhead)
+n=1000 mixed=0 mode=baseline y=5 p50_us=26.830 p95_us=42.737 allocs=0 allocated_bytes=0
+classifications=101101 sorts=0 cache_hits=0 fallbacks=101202
+n=1000 mixed=0 mode=baseline y=19985 p50_us=12.478 p95_us=34.463 allocs=0 allocated_bytes=0
+classifications=101101 sorts=0 cache_hits=0 fallbacks=303
+n=1000 mixed=0 mode=baseline y=20100 p50_us=25.410 p95_us=48.992 allocs=0 allocated_bytes=0
+classifications=101101 sorts=0 cache_hits=0 fallbacks=101202
+n=1000 mixed=0 mode=cache y=5 p50_us=17.333 p95_us=47.777 allocs=0 allocated_bytes=0
+classifications=0 sorts=0 cache_hits=101202 fallbacks=0
+n=1000 mixed=0 mode=cache y=19985 p50_us=0.065 p95_us=0.070 allocs=0 allocated_bytes=0
+classifications=0 sorts=0 cache_hits=303 fallbacks=0
+n=1000 mixed=0 mode=cache y=20100 p50_us=17.112 p95_us=46.229 allocs=0 allocated_bytes=0
+classifications=0 sorts=0 cache_hits=101202 fallbacks=0
+n=1000 mixed=1 cold_us=91.695 cold_allocs=1014 cold_allocated_bytes=95224
+cold_classifications=1002 cold_sorts=1 cache_entries=1002
+cold_p50_us=80.782 cold_p95_us=622.336 retained_logical_bytes=60992 (excludes hash-node links and allocator overhead)
+n=1000 mixed=1 mode=baseline y=5 p50_us=45.242 p95_us=417.582 allocs=202 allocated_bytes=3030000
+classifications=101202 sorts=101 cache_hits=0 fallbacks=101202
+n=1000 mixed=1 mode=baseline y=19925 p50_us=31.319 p95_us=85.411 allocs=202 allocated_bytes=3030000
+classifications=101202 sorts=101 cache_hits=0 fallbacks=303
+n=1000 mixed=1 mode=baseline y=20100 p50_us=45.499 p95_us=205.323 allocs=202 allocated_bytes=3030000
+classifications=101202 sorts=101 cache_hits=0 fallbacks=101202
+n=1000 mixed=1 mode=cache y=5 p50_us=20.586 p95_us=37.248 allocs=0 allocated_bytes=0
+classifications=0 sorts=0 cache_hits=101202 fallbacks=0
+n=1000 mixed=1 mode=cache y=19925 p50_us=0.081 p95_us=0.093 allocs=0 allocated_bytes=0
+classifications=0 sorts=0 cache_hits=303 fallbacks=0
+n=1000 mixed=1 mode=cache y=20100 p50_us=20.608 p95_us=91.459 allocs=0 allocated_bytes=0
+classifications=0 sorts=0 cache_hits=101202 fallbacks=0
+n=10000 mixed=0 cold_us=2966.846 cold_allocs=10015 cold_allocated_bytes=638960
+cold_classifications=10001 cold_sorts=0 cache_entries=10002
+cold_p50_us=1901.233 cold_p95_us=2446.352 retained_logical_bytes=402304 (excludes hash-node links and allocator overhead)
+n=10000 mixed=0 mode=baseline y=5 p50_us=577.272 p95_us=1656.841 allocs=0 allocated_bytes=0
+classifications=1010101 sorts=0 cache_hits=0 fallbacks=1010202
+n=10000 mixed=0 mode=baseline y=199985 p50_us=266.731 p95_us=387.443 allocs=0 allocated_bytes=0
+classifications=1010101 sorts=0 cache_hits=0 fallbacks=303
+n=10000 mixed=0 mode=baseline y=200100 p50_us=584.677 p95_us=956.884 allocs=0 allocated_bytes=0
+classifications=1010101 sorts=0 cache_hits=0 fallbacks=1010202
+n=10000 mixed=0 mode=cache y=5 p50_us=645.142 p95_us=2294.129 allocs=0 allocated_bytes=0
+classifications=0 sorts=0 cache_hits=1010202 fallbacks=0
+n=10000 mixed=0 mode=cache y=199985 p50_us=0.065 p95_us=0.070 allocs=0 allocated_bytes=0
+classifications=0 sorts=0 cache_hits=303 fallbacks=0
+n=10000 mixed=0 mode=cache y=200100 p50_us=622.787 p95_us=1038.328 allocs=0 allocated_bytes=0
+classifications=0 sorts=0 cache_hits=1010202 fallbacks=0
+n=10000 mixed=1 cold_us=1987.017 cold_allocs=10017 cold_allocated_bytes=938960
+cold_classifications=10002 cold_sorts=1 cache_entries=10002
+cold_p50_us=1881.100 cold_p95_us=2432.735 retained_logical_bytes=602304 (excludes hash-node links and allocator overhead)
+n=10000 mixed=1 mode=baseline y=5 p50_us=1024.323 p95_us=1355.425 allocs=202 allocated_bytes=30300000
+classifications=1010202 sorts=101 cache_hits=0 fallbacks=1010202
+n=10000 mixed=1 mode=baseline y=199925 p50_us=521.203 p95_us=864.076 allocs=202 allocated_bytes=30300000
+classifications=1010202 sorts=101 cache_hits=0 fallbacks=303
+n=10000 mixed=1 mode=baseline y=200100 p50_us=1004.590 p95_us=1427.609 allocs=202 allocated_bytes=30300000
+classifications=1010202 sorts=101 cache_hits=0 fallbacks=1010202
+n=10000 mixed=1 mode=cache y=5 p50_us=765.750 p95_us=1147.402 allocs=0 allocated_bytes=0
+classifications=0 sorts=0 cache_hits=1010202 fallbacks=0
+n=10000 mixed=1 mode=cache y=199925 p50_us=0.092 p95_us=0.116 allocs=0 allocated_bytes=0
+classifications=0 sorts=0 cache_hits=303 fallbacks=0
+n=10000 mixed=1 mode=cache y=200100 p50_us=809.856 p95_us=1550.103 allocs=0 allocated_bytes=0
+classifications=0 sorts=0 cache_hits=1010202 fallbacks=0
+hot vector copies=0 by noncopyable borrowed-view structural guarantee (not a dynamic copy counter)
+PASS hit cache differential, scroll, override, OOM and benchmark

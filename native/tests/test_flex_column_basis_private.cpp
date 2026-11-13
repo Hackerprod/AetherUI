@@ -1,3 +1,4 @@
+#include "hit_order_oom_helpers.h"
 #include "../src/layout/layout_internal.h"
 #include <aether/aether_contextual_style.h>
 
@@ -315,7 +316,7 @@ static void mixed_lifetime(MapMode mode, bool column, bool stretch, const char* 
             REQUIRE(source->primary_boxes == primary && source->paint_order == paint_order);
             REQUIRE(source->anonymous_flex_items == anonymous && source->assets == assets);
             if (status == AETHER_OK) {
-                REQUIRE(!injected && output && output != source);
+                REQUIRE((!injected || (!clone && hit_oom_optional_success(output,source))) && output && output != source);
                 ownership(output); f.paint(output);
                 for (const auto& node : f.dom) {
                     const auto found = primary.find(node.node);
@@ -323,7 +324,7 @@ static void mixed_lifetime(MapMode mode, bool column, bool stretch, const char* 
                         REQUIRE(same(output->primary_boxes.at(node.node)->border_box,found->second->border_box));
                 }
                 if (clone) REQUIRE(output->assets == assets);
-                aether_layout_result_destroy(output); completed = true;
+                aether_layout_result_destroy(output); completed = !injected;
             } else {
                 REQUIRE(injected && status == AETHER_ERROR_OUT_OF_MEMORY && output == source);
                 ++failures;

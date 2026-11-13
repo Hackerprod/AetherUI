@@ -1,3 +1,4 @@
+#include "hit_order_oom_helpers.h"
 // Public layout failure boundaries with authentic direct core objects.
 #define main historical_geometry_suite
 #include "test_contextual_used_geometry.cpp"
@@ -88,6 +89,10 @@ static void oom_sweep() {
     // Fresh result per call; retained baseline is never the operation's mutable candidate.
     fixture f("#p{display:flex;width:200px;padding:2%;border:1px solid red;transform:translateX(0)}#c{margin:-3px;padding:1rem;border:2px hidden blue;width:20px;height:10px;text-shadow:1px 2px red}#fixed{position:fixed;left:10%;width:20px;height:10px}","anonymous text<div id='c'>edge text</div><div id='fixed'></div>");
     aether_layout_set_contextual_text_measurer(f.engine,[](const char*,const aether_computed_style_t*,float h,float,void*)->aether_text_metrics_t{return {20,h,h*.8f};},nullptr);
+    // The callback above changes measurements relative to fixture construction.
+    // Compare optional-cache recovery against a fresh identical-input layout.
+    aether_layout_result_t expected{};
+    REQUIRE(aether_layout_layout(f.engine,f.doc,f.map,800,600,nullptr,nullptr,&expected)==AETHER_OK);
     const auto before=snapshot(f.layout);const auto generation=f.map->current->generation();
     for(int kind=0;kind<4;++kind) {
         long failures=0,reachable=0;
@@ -97,6 +102,7 @@ static void oom_sweep() {
             family=-1;reachable=calls;
             REQUIRE(snapshot(f.layout)==before);REQUIRE(f.map->current->generation()==generation);
             if(!injected) {REQUIRE(status==AETHER_OK);aether_layout_result_destroy(output);break;}
+            if(status==AETHER_OK) { REQUIRE(hit_oom_optional_success(output,expected));aether_layout_result_destroy(output);continue; }
             REQUIRE(status==AETHER_ERROR_OUT_OF_MEMORY);REQUIRE(output==f.layout);++failures;
             aether_layout_result_t retry{};REQUIRE(aether_layout_layout(f.engine,f.doc,f.map,800,600,nullptr,nullptr,&retry)==AETHER_OK);aether_layout_result_destroy(retry);
             REQUIRE(i<9999);
@@ -104,5 +110,6 @@ static void oom_sweep() {
         if(kind==0||kind==1)REQUIRE(failures>0);
         std::printf("edge layout OOM family=%d failures=%ld reachable=%ld%s\n",kind,failures,reachable,reachable?"":" (unreachable in fixture)");
     }
+    aether_layout_result_destroy(expected);
 }
 int main() { REQUIRE(historical_geometry_suite()==0);std::fprintf(stderr,"historical geometry complete\n");overflow_atomic();oom_sweep();std::puts("checked edges public atomic PASS"); }

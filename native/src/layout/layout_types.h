@@ -173,6 +173,32 @@ inline aether::style::ComputedStyleReadView layout_box_style(
     return styles.lookup_box(*box, policy);
 }
 
+// Immutable optional hit-order metadata. A missing table/entry means unavailable;
+// an entry with no indices explicitly means DOM order, never construction failure.
+struct LayoutHitOrderTable {
+    std::unordered_map<const aether_layout_box_s*, std::vector<aether::stacking::stack_item_t>> entries;
+};
+class LayoutHitOrderView {
+    std::vector<aether::stacking::stack_item_t> fallback_;
+    const std::vector<aether::stacking::stack_item_t>* borrowed_ = nullptr;
+    const auto& items() const { return borrowed_ ? *borrowed_ : fallback_; }
+public:
+    LayoutHitOrderView(const LayoutHitOrderView&) = delete;
+    LayoutHitOrderView& operator=(const LayoutHitOrderView&) = delete;
+    LayoutHitOrderView(LayoutHitOrderView&&) = default;
+    LayoutHitOrderView& operator=(LayoutHitOrderView&&) = default;
+    explicit LayoutHitOrderView(const std::vector<aether::stacking::stack_item_t>* p) : borrowed_(p) {}
+    explicit LayoutHitOrderView(std::vector<aether::stacking::stack_item_t>&& v) : fallback_(std::move(v)) {}
+    bool empty() const { return items().empty(); }
+    auto rbegin() const { return items().rbegin(); }
+    auto rend() const { return items().rend(); }
+};
+inline LayoutHitOrderView layout_hit_order(const aether_layout_box_s*, const StyleLookup&, BoxStylePolicy);
+
+// Internal opt-in measurement, thread-local and disabled in normal use.
+struct LayoutHitOrderMetrics { size_t classifications=0, sorts=0, cache_hits=0, fallbacks=0; };
+inline thread_local LayoutHitOrderMetrics* layout_hit_order_metrics = nullptr;
+
 // Empty means exact DOM order. Classification is shared by paint and hit testing,
 // including children later omitted for visibility, display or pointer events.
 inline std::vector<aether::stacking::stack_item_t> layout_children_paint_order(
@@ -180,6 +206,7 @@ inline std::vector<aether::stacking::stack_item_t> layout_children_paint_order(
 {
     using namespace aether::stacking;
     const auto classify = [&styles, policy](const aether_layout_box_s* child) {
+        if (layout_hit_order_metrics) ++layout_hit_order_metrics->classifications;
         if (child->kind == LAYOUT_BOX_TEXT || child->is_atomic_control) return paint_classification_t{};
         const auto view = layout_box_style(child, styles, policy);
         auto classification = classify_element_paint(view.scalars());
@@ -212,6 +239,7 @@ inline std::vector<aether::stacking::stack_item_t> layout_children_paint_order(
         item.has_explicit_z_index = classification.has_explicit_z_index;
         items.push_back(item);
     }
+    if (layout_hit_order_metrics) ++layout_hit_order_metrics->sorts;
     stable_sort_stack_items(items);
     return items;
 }
@@ -297,6 +325,10 @@ struct inline_item_s {
 };
 
 struct aether_layout_result_s {
+    // Built once from the finalized reachable tree. Clones deliberately default
+    // to unavailable. Readers never mutate it and painting never consults it.
+    std::unique_ptr<const LayoutHitOrderTable> hit_order_cache;
+    void build_hit_order_cache() noexcept;
     size_t references = 1;
     aether_layout_box_s* root = nullptr;
     // Immutable effective context for this result, installed before all passes.
@@ -386,7 +418,7 @@ private:
             style.overflow_x != AETHER_OVERFLOW_VISIBLE ||
             style.overflow_y != AETHER_OVERFLOW_VISIBLE;
         if (!clips_children || ((style.overflow_x == AETHER_OVERFLOW_VISIBLE || (x >= box->padding_box.x && x <= box->padding_box.x + box->padding_box.width)) && (style.overflow_y == AETHER_OVERFLOW_VISIBLE || (y >= box->padding_box.y && y <= box->padding_box.y + box->padding_box.height)))) {
-            const auto order = layout_children_paint_order(box, styles, policy);
+            const auto order = layout_hit_order(box, styles, policy);
             if (order.empty()) {
                 for (auto it = box->children.rbegin(); it != box->children.rend(); ++it) {
                     if (auto* found = hit_test_recursive(*it, child_x, child_y, styles, policy, offsets, data)) return found;
@@ -402,6 +434,52 @@ private:
         return nullptr;
     }
 };
+
+inline void aether_layout_result_s::build_hit_order_cache() noexcept {
+    // Construction-only, before publication; never rebuild a published table.
+    if (hit_order_cache) return;
+    // Optimization only: never convert an otherwise valid layout into OOM.
+    // All allocation is transactional, including the traversal stack.
+    try {
+        if (!root || !assets) return;
+        auto pending = std::make_unique<LayoutHitOrderTable>();
+        StyleLookup styles(assets, {}, false);
+        std::vector<const aether_layout_box_s*> work{root};
+        size_t children_total = 0;
+        constexpr size_t max_boxes = 1024 * 1024;
+        while (!work.empty()) {
+            const auto* box = work.back(); work.pop_back();
+            // Bound optional retained/work memory. No partial table is exposed.
+            if (pending->entries.size() >= max_boxes || box->children.size() > max_boxes - children_total) return;
+            children_total += box->children.size();
+            pending->entries.emplace(box, layout_children_paint_order(box, styles, BoxStylePolicy::snapshot));
+            work.insert(work.end(), box->children.begin(), box->children.end());
+        }
+        hit_order_cache = std::move(pending);
+    } catch (const std::bad_alloc&) {
+        // Existing uncached algorithm remains the authoritative fallback.
+    }
+}
+inline LayoutHitOrderView layout_hit_order(const aether_layout_box_s* box,
+    const StyleLookup& styles, BoxStylePolicy policy) {
+    const auto* owner = box->owner;
+    if (owner && owner->hit_order_cache && policy == BoxStylePolicy::snapshot &&
+        !styles.override_supplied() && styles.matches_assets(owner->assets)) {
+        // Empty child order is invariant. Avoid a hash lookup for every leaf
+        // in long miss/back-order traversals (no coordinates or hit cached).
+        if (box->children.empty()) {
+            if (layout_hit_order_metrics) ++layout_hit_order_metrics->cache_hits;
+            return LayoutHitOrderView(nullptr);
+        }
+        const auto it = owner->hit_order_cache->entries.find(box);
+        if (it != owner->hit_order_cache->entries.end()) {
+            if (layout_hit_order_metrics) ++layout_hit_order_metrics->cache_hits;
+            return LayoutHitOrderView(&it->second);
+        }
+    }
+    if (layout_hit_order_metrics) ++layout_hit_order_metrics->fallbacks;
+    return LayoutHitOrderView(layout_children_paint_order(box, styles, policy));
+}
 
 /* ── Layout engine (stateless; mutable per-layout scratch) ──────── */
 

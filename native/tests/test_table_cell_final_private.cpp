@@ -1,3 +1,4 @@
+#include "hit_order_oom_helpers.h"
 // Link the existing aether_flex_text_test_core objects, not the shared DSO.
 #include "../src/layout/layout_internal.h"
 #include <aether/aether_contextual_layout.h>
@@ -441,9 +442,9 @@ static void oom_sweep() {
         }
         validate(prior);
         if (status==AETHER_OK) {
-            REQUIRE(!injected && output && output!=prior); validate(output);
+            REQUIRE((!injected || hit_oom_optional_success(output,prior)) && output && output!=prior); validate(output);
             number("sweep completion height",f.box(output,"short")->border_box.height,80);
-            aether_layout_result_destroy(output); completed=true; break;
+            aether_layout_result_destroy(output); completed=!injected; if(completed) break; else continue;
         }
         REQUIRE(injected && status==AETHER_ERROR_OUT_OF_MEMORY && output==prior); ++failures;
         auto* recovered=f.layout(true,prior); validate(recovered);

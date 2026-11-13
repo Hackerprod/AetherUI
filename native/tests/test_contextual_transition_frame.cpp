@@ -1,5 +1,6 @@
 #include <aether/aether.h>
 #include <aether/aether_contextual_style.h>
+#include <aether/aether_contextual_layout.h>
 #include <aether/aether_contextual_transitions.h>
 #include <cassert>
 #include <cmath>
@@ -111,17 +112,27 @@ int main() {
     REQUIRE(aether_layout_result_hit_test_input(layout, nullptr, 90, 10, nullptr, nullptr, &part, &owner) == AETHER_OK);
     REQUIRE(owner == child);
 
+    // Eligible cached traversal allocates nothing, even under allocator failure.
+    fail_allocation_after = 0;
+    const auto cached_status = aether_layout_result_hit_test_input(
+        layout, nullptr, 90, 10, nullptr, nullptr, &part, &owner);
+    const auto cached_raw = aether_layout_result_hit_test(layout, 90, 10);
+    fail_allocation_after = -1;
+    REQUIRE(cached_status == AETHER_OK && owner == child && cached_raw == child);
+    // Clones intentionally have no cache: exercise the prior OOM contract too.
+    aether_layout_result_t uncached{};
+    REQUIRE(aether_layout_clone_snapshot(layout, &uncached) == AETHER_OK);
     // Stacking-order allocation failure never crosses the C ABI.
     part = AETHER_INPUT_HIT_CONTENT;
     owner = child;
     fail_allocation_after = 0;
     const auto input_failure = aether_layout_result_hit_test_input(
-        layout, nullptr, 90, 10, nullptr, nullptr, &part, &owner);
+        uncached, nullptr, 90, 10, nullptr, nullptr, &part, &owner);
     fail_allocation_after = -1;
     REQUIRE(input_failure == AETHER_ERROR_OUT_OF_MEMORY);
     REQUIRE(part == AETHER_INPUT_HIT_NONE && owner == nullptr);
     fail_allocation_after = 0;
-    const auto raw_failure = aether_layout_result_hit_test(layout, 90, 10);
+    const auto raw_failure = aether_layout_result_hit_test(uncached, 90, 10);
     fail_allocation_after = -1;
     REQUIRE(raw_failure == nullptr);
     fail_allocation_after = 0;
@@ -129,6 +140,8 @@ int main() {
         layout, after_map, 90, 10, nullptr, nullptr);
     fail_allocation_after = -1;
     REQUIRE(styled_failure == nullptr);
+
+    aether_layout_result_destroy(uncached);
 
     aether_display_list_builder_t builder{};
     REQUIRE(aether_display_list_builder_create(nullptr, nullptr, &builder) == AETHER_OK);

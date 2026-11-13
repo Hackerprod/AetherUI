@@ -1,3 +1,4 @@
+#include "hit_order_oom_helpers.h"
 // OOM transaction checks through public ABI; shared-core operator-new interposition.
 #include <new>
 #include <cstdlib>
@@ -42,7 +43,8 @@ static int sweep(const char* name,const std::string& content,const std::string& 
   auto status=aether_layout_layout(f.engine,f.doc,f.map,600,400,nullptr,nullptr,&out);
   fail_after=-1;
   if(!fault_delivered){need(status==AETHER_OK,"successful terminating layout");aether_layout_result_destroy(out);completed_sweep=true;break;}
-  ++delivered;check(status==AETHER_ERROR_OUT_OF_MEMORY,"OOM status");check(out==original,"output unchanged on OOM");
+  ++delivered; if(status==AETHER_OK) check(hit_oom_optional_success(out,original),"optional cache OOM preserves full geometry");
+  else {check(status==AETHER_ERROR_OUT_OF_MEMORY,"OOM status");check(out==original,"output unchanged on OOM");}
   near(f.rect().height,original_rect.height,"retained result height");
   std::vector<RetainedBox> now;save_boxes(f.box(),now);check(now.size()==saved.size(),"retained full subtree count");
   for(size_t i=0;i<now.size()&&i<saved.size();++i){check(now[i].box==saved[i].box,"retained subtree pointer");near(now[i].rect.x,saved[i].rect.x,"retained subtree x");near(now[i].rect.y,saved[i].rect.y,"retained subtree y");near(now[i].rect.width,saved[i].rect.width,"retained subtree width");near(now[i].rect.height,saved[i].rect.height,"retained subtree height");}

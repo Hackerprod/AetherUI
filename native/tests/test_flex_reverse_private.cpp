@@ -1,3 +1,4 @@
+#include "hit_order_oom_helpers.h"
 // Private reverse-placement lifetime and percentage-height contracts.
 // Core object linkage makes allocation injection observe the transient plan.
 #include "../src/layout/layout_internal.h"
@@ -115,7 +116,7 @@ void allocation_contract(bool prepared,bool col,bool wrap) {
    fail_at=-1;tracking=false;
    need(f.map->current==map&&source->assets==assets,"map and assets unchanged");need(f.doc->identity->structure_epoch==epoch&&f.doc->identity->mutation_epoch==mutation,"DOM epochs unchanged");
    need(source->primary_boxes==primary&&source->paint_order==order,"retained indexes unchanged");unchanged(saved);
-   if(status==AETHER_OK) {need(!injected&&output!=source,"successful complete operation");owned(output);aether_layout_result_destroy(output);complete=true;}
+   if(status==AETHER_OK) {need((!injected||(!clone&&hit_oom_optional_success(output,source)))&&output!=source,"successful complete operation");owned(output);aether_layout_result_destroy(output);complete=!injected;}
    else {need(injected&&status==AETHER_ERROR_OUT_OF_MEMORY&&output==source,"atomic OOM leaves output untouched");(clone?clone_failures:oom_failures)++;}
    need(live_allocations==0&&live_bytes==0,"no leaked transient plan or tree allocations");
    if(complete)break;

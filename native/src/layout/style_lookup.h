@@ -31,6 +31,7 @@ public:
     bool structure_valid() const noexcept {
         return assets_ ? assets_->structure_valid() : aether::style::structure_valid(base_.get());
     }
+    bool matches_assets(const LayoutAssetsRef& assets) const noexcept { return assets_ == assets; }
     bool override_supplied() const noexcept { return override_supplied_; }
     const FrozenNodeRecord* lookup_record(const aether_node_s* node) const noexcept {
         if (synthetic(node)) return nullptr;

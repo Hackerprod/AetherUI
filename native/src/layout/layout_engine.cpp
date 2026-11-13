@@ -2536,6 +2536,7 @@ AETHER_API aether_status_t aether_layout_layout(
         if (status != AETHER_OK) { delete result; return status; }
     }
     validate_used_geometry(result);
+    result->build_hit_order_cache();
     result->abandoned = false;
     *out_result = result;
     return AETHER_OK;

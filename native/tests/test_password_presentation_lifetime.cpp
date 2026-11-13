@@ -1,3 +1,4 @@
+#include "hit_order_oom_helpers.h"
 #include "../src/layout/layout_internal.h"
 #include "../src/layout/form_controls.h"
 #include <aether/aether_contextual_style.h>
@@ -325,14 +326,14 @@ bool sweep(Operation op, const char* name) {
             source_saved.intact(r);
             clone_saved.intact(r);
             if (status == AETHER_OK) {
-                r.check(!did_inject, 26);
+                r.check(!did_inject || (op == Operation::layout && hit_oom_optional_success(f.candidate,f.source)), 26);
                 // The irrelevant output sentinel is not owned by the candidate.
                 if (op == Operation::layout || op == Operation::clone) f.candidate_list = nullptr;
                 else f.candidate = nullptr;
                 verify_candidate(f, op);
                 release_candidate(f);
-                r.completed = true;
-                break;
+                r.completed = !did_inject;
+                if(r.completed) break; else continue;
             }
             r.check(did_inject && status == AETHER_ERROR_OUT_OF_MEMORY, 27);
             r.check(f.candidate == f.source && f.candidate_list == f.old_list, 28);
