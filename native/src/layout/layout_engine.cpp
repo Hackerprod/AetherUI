@@ -1060,6 +1060,7 @@ struct measured_inline_fragment {
     inline_line_metrics metrics;
     aether_layout_box_s* atomic_box = nullptr;
     std::vector<aether_layout_box_s*> atomic_paint_order;
+    aether::rendering::text::Placement native_text;
 };
 
 // Source-unit preparation is operation-local and never measures or joins text
@@ -1146,11 +1147,12 @@ static measured_source_unit measure_source_unit(const aether_layout_engine_s* en
     measured_source_unit result;
     for (const auto& fragment : source.fragments) {
         const auto& item = items[fragment.item_index];
-        const auto metrics = engine_measure_text(engine, fragment.text.c_str(), &item.style, 0.f, item.element);
+        const auto measured = engine_measure_text_transport(engine, fragment.text.c_str(), &item.style, 0.f, item.element);
+        const auto metrics = measured.metrics;
         result.width = checked_inline_sum(result.width, metrics.width);
         result.fragments.push_back({fragment.item_index, fragment.text,
             {metrics.width, metrics.height, metrics.baseline, true,
-             source.kind == inline_source_kind::space, item.style.white_space}, nullptr, {}});
+             source.kind == inline_source_kind::space, item.style.white_space}, nullptr, {}, {measured.run, metrics.baseline}});
     }
     return result;
 }
@@ -1298,9 +1300,10 @@ static float resolve_hanging_inline_lines(
             const bool wrap = aether_white_space_allows_soft_wrap(item.style.white_space);
             if (whitespace && wrap) flush_unit();
             if (collapsible && (previous_collapsible || (resolver.empty() && unit.empty()))) continue;
-            const auto metrics = engine_measure_text(engine, token.text.c_str(), &item.style, 0.f, item.element);
+            const auto measured = engine_measure_text_transport(engine, token.text.c_str(), &item.style, 0.f, item.element);
+            const auto metrics = measured.metrics;
             measured_inline_fragment fragment{item_index, token.text,
-                {metrics.width, metrics.height, metrics.baseline, true, whitespace, item.style.white_space}, nullptr, {}};
+                {metrics.width, metrics.height, metrics.baseline, true, whitespace, item.style.white_space}, nullptr, {}, {measured.run, metrics.baseline}};
             if (whitespace && wrap) {
                 // A preserved trailing group never wraps due to its own width.
                 accept(std::move(fragment));
@@ -1389,6 +1392,7 @@ static float layout_resolved_inline_items(
                 box->style = item.style;
                 box->presentation_owner = item.element ? item.element->anonymous_flex_owner : nullptr;
                 box->text = fragment.text;
+                box->native_text = fragment.native_text;
                 box->content_box = {x, start_y + y + std::max(0.f, summary.ascent - fragment.metrics.baseline),
                     width, fragment.metrics.height};
                 box->padding_box = box->border_box = box->margin_box = box->content_box;
@@ -1522,7 +1526,8 @@ float layout_inline_items(
             const bool whitespace = collapsible || token.kind == aether_inline_text_token_kind_e::preserved_space;
             if (collapsible && (cursor_x <= start_x || previous_collapsible_space)) continue;
             const bool allow_wrap = aether_white_space_allows_soft_wrap(item.style.white_space);
-            const auto metrics = engine_measure_text(engine, token.text.c_str(), &item.style, 0.f, item.element);
+            const auto measured = engine_measure_text_transport(engine, token.text.c_str(), &item.style, 0.f, item.element);
+            const auto metrics = measured.metrics;
             if (allow_wrap && cursor_x > start_x && cursor_x + metrics.width > start_x + available_width &&
                 (!whitespace || token.kind == aether_inline_text_token_kind_e::preserved_space)) {
                 finish_line(false);
@@ -1534,6 +1539,7 @@ float layout_inline_items(
             fragment->style = item.style;
             fragment->presentation_owner = item.element ? item.element->anonymous_flex_owner : nullptr;
             fragment->text = token.text;
+            fragment->native_text = {measured.run,metrics.baseline};
             fragment->content_box = { cursor_x, cursor_y, metrics.width, metrics.height };
             fragment->padding_box = fragment->content_box;
             fragment->border_box  = fragment->content_box;
@@ -2005,7 +2011,8 @@ static float measure_inline_items_height(
             // Skip before measuring: a redundant space must not affect metrics.
             if (collapsible && previous_collapsible_space) continue;
             const bool whitespace = token.kind != aether_inline_text_token_kind_e::word;
-            const auto metrics = engine_measure_text(engine, token.text.c_str(), &item.style, 0.f, item.element);
+            const auto measured = engine_measure_text_transport(engine, token.text.c_str(), &item.style, 0.f, item.element);
+            const auto metrics = measured.metrics;
             // Match final inline layout: forced breaks remain unconditional, but
             // soft wrapping belongs to the text run rather than its parent.
             if (append_fragment(metrics.width, metrics.height, whitespace, collapsible,

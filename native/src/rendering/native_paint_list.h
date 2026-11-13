@@ -3,15 +3,18 @@
 #include <cstdint>
 #include <memory>
 #include <vector>
+#include "text/shaped_run.h"
 namespace aether::rendering {
 struct OpacityEvent { std::size_t boundary{}; bool open{}; std::uint64_t id{}, parent{}; float opacity{1}; };
 struct NativeScrollOffset { std::int64_t id{}; double x{},y{}; };
 using NativeScrollInput = std::vector<NativeScrollOffset>;
 struct NativeScrollState { std::int64_t id{}; double x{},y{},range_x{},range_y{}; aether_scrollbar_geometry_t chrome{}; };
+struct NativeTextEntry { std::size_t command_index{}; text::Placement placement; };
 class NativePaintList {
  aether_display_list_t list_{};
  friend struct NativeListAccess;
  public:
+ std::vector<NativeTextEntry> text_runs;
  std::vector<OpacityEvent> events;
  std::vector<NativeScrollState> scroll;
  NativePaintList()=default;

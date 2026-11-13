@@ -22,6 +22,7 @@ using aether::layout::CallbackEpochGuard;
 #include "../css/measure_state.h"
 #include "../dom/dom_types.h"
 #include "../rendering/stacking.h"
+#include "../rendering/text/shaped_run.h"
 
 /* ── Internal layout types (mirrors C# LayoutBox/LayoutResult) ──── */
 
@@ -104,6 +105,7 @@ struct aether_layout_box_s {
     // Published snapshots and clones never contain logical construction records.
     std::vector<block_static_anchor_s> block_static_anchors;
     std::string text;
+    aether::rendering::text::Placement native_text;
     bool  is_atomic_control = false;
     bool is_initial_canvas = false;
     std::string control_display_text;
@@ -477,4 +479,13 @@ inline aether_text_metrics_t engine_measure_text(
     if (!std::isfinite(metrics.width) || !std::isfinite(metrics.height) || !std::isfinite(metrics.baseline) || metrics.width < 0.f || metrics.height < 0.f)
         throw std::overflow_error("Invalid text metrics");
     return metrics;
+}
+
+
+// Reserved transport boundary: legacy callers return no native identity. There
+// is intentionally no native-provider selector until the real provider gate.
+inline aether::rendering::text::Measurement engine_measure_text_transport(
+    const aether_layout_engine_s* e, const char* text,
+    const BoxStyleSnapshot* style, float width, aether_node_s* node=nullptr) {
+    return {engine_measure_text(e,text,style,width,node), {}};
 }

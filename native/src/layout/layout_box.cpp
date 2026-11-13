@@ -70,6 +70,7 @@ aether_layout_box_s* clone_box_tree(aether_layout_result_s* destination, const a
     box->presentation_owner = source->presentation_owner;
     box->kind = source->kind; box->element = source->element; box->style = source->style;
     box->is_initial_canvas = source->is_initial_canvas;
+    box->native_text = source->native_text;
     box->text = source->text; box->is_atomic_control = source->is_atomic_control;
     box->control_display_text = source->control_display_text; box->control_shows_placeholder = source->control_shows_placeholder;
     box->scroll_proxy = source->scroll_proxy;

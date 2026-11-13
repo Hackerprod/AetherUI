@@ -464,7 +464,13 @@ static void paint_box(aether_display_list_builder_s* builder,
 
     // Text box → emit text command and return
     if (box->kind == LAYOUT_BOX_TEXT) {
+        const auto first_text_command = cmds.size();
         if (visible && !empty_border_box && !box->text.empty()) {
+            if(builder->native_text_runs && (!box->native_text.run ||
+               box->native_text.run->source != box->text ||
+               box->native_text.baseline != box->native_text.run->metrics.baseline))
+                throw std::runtime_error("native text identity missing");
+
             emit_text_shadows(cmds, view, box->text.c_str(), box->content_box,
                               AETHER_TEXT_ALIGN_START, false, ctx.effective_opacity);
             if (style.has_text_gradient) {
@@ -484,6 +490,14 @@ static void paint_box(aether_display_list_builder_s* builder,
                                apply_opacity(style.color, ctx.effective_opacity), false);
             }
         }
+            if(builder->native_text_runs && cmds.size()!=first_text_command) {
+                // Reject effects/gradient until their resource contract exists.
+                if(cmds.size()!=first_text_command+1 || cmds.back().tag!=AETHER_PAINT_DRAW_TEXT)
+                    throw std::runtime_error("native text effects unsupported");
+                auto placement=box->native_text;
+                placement.baseline += box->content_box.y;
+                builder->native_text_runs->push_back({first_text_command,std::move(placement)});
+            }
         if (ctx.has_transform) emit_pop_transform(cmds);
         return;
     }
@@ -763,6 +777,7 @@ static AETHER_PAINT_CONTROL_NOINLINE void paint_control(aether_display_list_buil
                            const paint_context_s& ctx,
                            std::vector<aether_paint_command_t>& cmds)
 {
+    if(builder->native_text_runs) throw std::runtime_error("native controls unsupported");
     auto* element = box->element;
     const auto view = style_for_box(builder, box);
     const auto& style = view.scalars();
@@ -1127,13 +1142,28 @@ aether_status_t build_scroll(aether_display_list_builder_t b,aether_layout_resul
  try {
   if(input && input->size()>65536)return AETHER_ERROR_INVALID_STATE;
   auto candidate=std::make_unique<NativePaintList>();
-  struct Reset {aether_display_list_builder_t b; ~Reset(){b->opacity_events=nullptr;b->opacity_parents.clear();b->opacity_serial=0;b->native_scroll_depth=0;}} reset{b};
+  struct Reset {aether_display_list_builder_t b; ~Reset(){b->opacity_events=nullptr;b->native_text_runs=nullptr;b->opacity_parents.clear();b->opacity_serial=0;b->native_scroll_depth=0;}} reset{b};
   b->opacity_events=&candidate->events;
+  b->native_text_runs=&candidate->text_runs;
   const auto status=node?aether_display_list_build_node_with_styles(b,l,styles,node,nullptr,&NativeListAccess::list(*candidate)):
     aether_display_list_build_with_styles(b,l,styles,nullptr,&NativeListAccess::list(*candidate));
   if(status!=AETHER_OK)return status;
   auto list=NativeListAccess::list(*candidate);
   if(list->commands.size()>65536)return AETHER_ERROR_INVALID_STATE;
+  std::size_t text_index=0, glyph_count=0;
+  for(std::size_t i=0;i<list->commands.size();++i) {
+   const auto tag=list->commands[i].tag;
+   if(tag==AETHER_PAINT_DRAW_TEXT_GRADIENT || tag==AETHER_PAINT_DRAW_TEXT_SHADOW)
+    return AETHER_ERROR_INVALID_STATE;
+   if(tag!=AETHER_PAINT_DRAW_TEXT)continue;
+   if(text_index>=candidate->text_runs.size())return AETHER_ERROR_INVALID_STATE;
+   const auto& entry=candidate->text_runs[text_index++];
+   if(entry.command_index!=i || !entry.placement.run ||
+      !std::isfinite(entry.placement.baseline))return AETHER_ERROR_INVALID_STATE;
+   glyph_count+=entry.placement.run->glyphs.size();
+   if(glyph_count>text::max_frame_glyphs)return AETHER_ERROR_INVALID_STATE;
+  }
+  if(text_index!=candidate->text_runs.size())return AETHER_ERROR_INVALID_STATE;
   std::vector<std::int64_t> ids;
   for(const auto& c:list->commands) {
    if(c.tag==AETHER_PAINT_PUSH_SCROLL_OFFSET)ids.push_back(c.data.push_scroll_offset.scroll_container_id);

@@ -74,3 +74,34 @@ path; this checkpoint supplies none and does not bypass environment restrictions
 7. Independent code and execution review; Chromium comparison only if actually executed.
 
 A read-only dependency report or dependency-free contract tests cannot satisfy this gate.
+
+## T1.1 transport checkpoint (2026-11-13)
+
+Private C++ immutable font-byte/run values and strong run placements now exist.
+Both inline fragmentation routes pass through a measurement transport boundary;
+the boundary remains **legacy-only** and returns no run. No native mode is
+selectable, no provider is installed, and native raster text stays unsupported.
+Snapshot cloning retains the exact strong reference and relative baseline.
+
+NativePaintList builds text command sidecars in its private candidate, checks
+command indices/tags, bounds cumulative glyphs, and commits only after success.
+Missing run identity, native controls, text effects or malformed baseline fail
+without replacing the caller's previous list. This does not make the list
+renderable: the software text rejection remains in force. Public C lists retain
+legacy behavior and do not carry native resource identity. The frame/list API
+must be used as an immutable owned snapshot; mutating its private C++ vectors is
+not a supported consumption interface.
+
+Transport contains no HB/FT handles: all stored values can be read and released
+on another thread. Future provider caches and handles need owner-thread creation,
+use and destruction; they cannot be inserted into these values via custom
+callbacks. Eviction of an external cache cannot invalidate a retained run/font.
+Limits are declared for font bytes, source bytes, glyphs per run/frame and future
+mask bytes/operations. Mask limits are not enforcement of a nonexistent provider.
+
+Dependency-free fixture tests test ownership, clone retention, legacy building,
+failed replacement, allocation failure and cross-thread final release only.
+They do NOT validate fonts, hashes, UTF-8, actual shaping, masks, text pixels or
+Chromium equivalence. Source hash is unverified identity metadata at this stage.
+The real provider must validate those inputs before creating a run and must
+never substitute zero metrics or callbacks when native preparation fails.

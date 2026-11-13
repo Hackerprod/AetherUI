@@ -21,6 +21,7 @@ struct paint_context_s {
 
 struct aether_display_list_builder_s {
     std::vector<aether::rendering::OpacityEvent>* opacity_events = nullptr;
+    std::vector<aether::rendering::NativeTextEntry>* native_text_runs = nullptr;
     std::size_t native_scroll_depth = 0;
     std::vector<std::uint64_t> opacity_parents;
     std::uint64_t opacity_serial = 0;
