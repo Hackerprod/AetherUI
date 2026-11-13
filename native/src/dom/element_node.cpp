@@ -51,6 +51,9 @@ AETHER_API aether_status_t aether_element_set_attribute(
     }
 
     const std::string attribute_name = aether::canonical_html_attribute_name(name);
+    // Invalidate before the first write: index/map insertion or string assignment
+    // can throw after a partial mutation. Keep legacy mutation_epoch timing intact.
+    aether_node_touch_non_state(element);
     if (attribute_name == "id") {
         auto* root = element;
         while (root->parent) root = root->parent;
@@ -106,5 +109,5 @@ AETHER_API int32_t aether_element_get_state(aether_node_t element) {
 }
 
 AETHER_API void aether_element_set_state(aether_node_t element, int32_t state) {
-    if (element && element->state != state) { element->state = state; aether_node_touch(element); }
+    if (element && element->state != state) { element->state = state; aether_node_touch_state(element); }
 }

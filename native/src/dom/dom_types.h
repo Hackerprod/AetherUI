@@ -52,11 +52,27 @@ inline aether_node_s* aether_dom_root(aether_node_s* node) noexcept {
     while (node && node->parent) node = node->parent;
     return node;
 }
+inline void aether_node_touch_non_state(aether_node_s* node) noexcept {
+    auto* root = aether_dom_root(node);
+    if (!root) return;
+    auto& id = *root->identity;
+    if (id.non_state_epoch == UINT64_MAX) id.non_state_exhausted = true;
+    else if (++id.non_state_epoch == UINT64_MAX) id.non_state_exhausted = true;
+}
 inline void aether_node_touch(aether_node_s* node, bool structure = false) noexcept {
+    aether_node_touch_non_state(node);
     auto* root = aether_dom_root(node);
     if (!root) return;
     ++root->identity->mutation_epoch;
     if (structure) ++root->identity->structure_epoch;
+}
+// Only the public state setter calls this. Synthetic writes cannot certify real-DOM state.
+inline void aether_node_touch_state(aether_node_s* node) noexcept {
+    auto* root = aether_dom_root(node);
+    if (!root) return;
+    ++root->identity->mutation_epoch;
+    for (auto* n = node; n; n = n->parent)
+        if (n->is_generated || n->anonymous_flex_owner) { aether_node_touch_non_state(node); break; }
 }
 inline void aether_node_mark_attached(aether_node_s* node, bool attached) noexcept {
     if (!node) return;

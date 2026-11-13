@@ -17,6 +17,7 @@
 #include "style_source_limits.h"
 #include "style_diff.h"
 #include "hover_probe.h"
+#include "hover_provenance.h"
 #include "css_variable_tokens.h"
 #include "custom_property_scope_internal.h"
 #include "typography_scope_probe.h"
@@ -95,6 +96,7 @@ struct aether_style_runtime_s {
     std::unordered_map<aether_node_s*, std::unique_ptr<PreparedNodeResult>> prepared;
     std::shared_ptr<document_measure_context_s> document_measures;
     std::shared_ptr<const style_revision_s> revision;
+    HoverProvenance hover_provenance; // Evidence only; R0a has no reuse path.
     uint64_t generation = 0;
     uint64_t sheet_epoch = 0;
     bool preparing = false;
@@ -1148,6 +1150,7 @@ static aether_status_t prepare_revision_impl(
         transaction->base_style_tree_epoch = document->identity->style_tree_epoch;
         transaction->candidate = std::make_unique<aether_style_runtime_s>();
         auto& staged = *transaction->candidate;
+        staged.hover_provenance = HoverProvenance::capture(document);
         staged.value_audit = runtime->value_audit;
         staged.options = runtime->options; staged.environment = requested_environment;
         if (isolate_legacy_root && root != document && root->parent && root->parent->type != AETHER_NODE_DOCUMENT)
@@ -1282,7 +1285,9 @@ static aether_status_t prepare_revision_impl(
         }
         transaction->revision = revision;
         transaction->output = std::make_unique<aether_style_revision_handle_s>(); transaction->output->value = revision;
-        if (!document->identity->alive || document->identity->mutation_epoch != transaction->input_epoch ||
+        if (document->identity->non_state_epoch != staged.hover_provenance.non_state_epoch ||
+            document->identity->non_state_exhausted != staged.hover_provenance.exhausted ||
+            !document->identity->alive || document->identity->mutation_epoch != transaction->input_epoch ||
             runtime->generation != transaction->base_generation || runtime->sheet_epoch != transaction->base_sheet_epoch ||
             document->identity->style_tree_epoch != transaction->base_style_tree_epoch)
             return AETHER_ERROR_INVALID_STATE;
@@ -1303,7 +1308,10 @@ AETHER_API aether_status_t aether_style_runtime_commit_revision(
     if (!runtime || !transaction || !out_revision) return AETHER_ERROR_NULL_ARG;
     if (transaction->owner != runtime || transaction->committed || runtime->preparing ||
         runtime->owner_thread != std::this_thread::get_id() || runtime->generation != transaction->base_generation ||
-        runtime->sheet_epoch != transaction->base_sheet_epoch || !transaction->document_lifetime->alive ||
+        runtime->sheet_epoch != transaction->base_sheet_epoch ||
+        transaction->document_lifetime->non_state_epoch != transaction->candidate->hover_provenance.non_state_epoch ||
+        transaction->document_lifetime->non_state_exhausted != transaction->candidate->hover_provenance.exhausted ||
+        !transaction->document_lifetime->alive ||
         transaction->document_lifetime->mutation_epoch != transaction->input_epoch ||
         transaction->document_lifetime->style_tree_epoch != transaction->base_style_tree_epoch) return AETHER_ERROR_INVALID_STATE;
     aether::hover_probe::Scope publication_probe(aether::hover_probe::publication);
@@ -1315,6 +1323,7 @@ AETHER_API aether_status_t aether_style_runtime_commit_revision(
         for (auto& current : link.host->generated_storage) aether_node_mark_attached(current.get(), true);
     }
     transaction->document_lifetime->style_tree_epoch = transaction->revision->style_tree_epoch();
+    runtime->hover_provenance.swap(transaction->candidate->hover_provenance);
     runtime->states.swap(transaction->candidate->states);
     runtime->document_measures.swap(transaction->candidate->document_measures);
     runtime->environment = transaction->revision->environment();
