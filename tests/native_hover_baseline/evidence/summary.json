@@ -1,0 +1,3428 @@
+{
+  "run": {
+    "kind": "diagnostic-native-only",
+    "deadline_seconds": 90,
+    "cpu_quota": "unknown",
+    "memory_quota": "unknown",
+    "host_comparison": false,
+    "seed": "deterministic index order; no PRNG",
+    "build": "clean manual build (local path omitted)",
+    "warmup": "two native resolutions per fixture before transition, nochange follows transition",
+    "completed_blocks": 5,
+    "coverage": "complete 5 blocks x 21 cells x 3 modes",
+    "platform": "Linux-6.18.57-x86_64-with-glibc2.41",
+    "compiler": "c++ (Debian 14.2.0-19) 14.2.0",
+    "commit": "8c03b7d47f4c6213999367c8d60555d3f4898ff6",
+    "working_tree_dirty": true,
+    "canonical": "PASS full serialized corpus outputs agree across three configs; unsupported payloads fail closed",
+    "calibration_seconds": 0.4149704380033654,
+    "frozen_transitions": 2,
+    "elapsed_seconds": 49.91932152299705,
+    "baseline_tree": "416351179afcc4cde10be8f077d4132a27a89c93",
+    "pilot_runner_note": "Executed runner used 90s deadline; after launch runner hardening added 85s subprocess deadline plus 5s teardown reserve and post-run CPU metadata. No rerun; measured binaries unchanged."
+  },
+  "measurements": [
+    {
+      "cards": 18,
+      "scenario": 0,
+      "phase": 0,
+      "mode": 0,
+      "paired_blocks": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "wall_per_resolve_median_s": 0.000605286,
+      "wall_min_s": 0.000583146,
+      "wall_max_s": 0.000931838,
+      "vs_off_paired_absolute_median_s": 0.0,
+      "vs_off_paired_relative_median": 0.0
+    },
+    {
+      "cards": 18,
+      "scenario": 0,
+      "phase": 0,
+      "mode": 1,
+      "paired_blocks": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "wall_per_resolve_median_s": 0.000608238,
+      "wall_min_s": 0.000517368,
+      "wall_max_s": 0.00130509,
+      "vs_off_paired_absolute_median_s": 1.0006000000000012e-05,
+      "vs_off_paired_relative_median": 0.016983357802992316
+    },
+    {
+      "cards": 18,
+      "scenario": 0,
+      "phase": 0,
+      "mode": 2,
+      "paired_blocks": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "wall_per_resolve_median_s": 0.000720779,
+      "wall_min_s": 0.000536159,
+      "wall_max_s": 0.000863749,
+      "vs_off_paired_absolute_median_s": 0.00010152899999999994,
+      "vs_off_paired_relative_median": 0.16773723496000237
+    },
+    {
+      "cards": 18,
+      "scenario": 0,
+      "phase": 1,
+      "mode": 0,
+      "paired_blocks": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "wall_per_resolve_median_s": 0.000477261,
+      "wall_min_s": 0.0004311325,
+      "wall_max_s": 0.0007328065,
+      "vs_off_paired_absolute_median_s": 0.0,
+      "vs_off_paired_relative_median": 0.0
+    },
+    {
+      "cards": 18,
+      "scenario": 0,
+      "phase": 1,
+      "mode": 1,
+      "paired_blocks": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "wall_per_resolve_median_s": 0.0004740705,
+      "wall_min_s": 0.000439993,
+      "wall_max_s": 0.000518163,
+      "vs_off_paired_absolute_median_s": -2.0164499999999986e-05,
+      "vs_off_paired_relative_median": -0.03745768142998451
+    },
+    {
+      "cards": 18,
+      "scenario": 0,
+      "phase": 1,
+      "mode": 2,
+      "paired_blocks": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "wall_per_resolve_median_s": 0.0004651275,
+      "wall_min_s": 0.000425628,
+      "wall_max_s": 0.000502621,
+      "vs_off_paired_absolute_median_s": -1.2133500000000008e-05,
+      "vs_off_paired_relative_median": -0.025423196112818736
+    },
+    {
+      "cards": 18,
+      "scenario": 0,
+      "phase": 2,
+      "mode": 0,
+      "paired_blocks": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "wall_per_resolve_median_s": 0.0004787235,
+      "wall_min_s": 0.0004243,
+      "wall_max_s": 0.000650816,
+      "vs_off_paired_absolute_median_s": 0.0,
+      "vs_off_paired_relative_median": 0.0
+    },
+    {
+      "cards": 18,
+      "scenario": 0,
+      "phase": 2,
+      "mode": 1,
+      "paired_blocks": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "wall_per_resolve_median_s": 0.0004843525,
+      "wall_min_s": 0.0004786585,
+      "wall_max_s": 0.0005469755,
+      "vs_off_paired_absolute_median_s": 3.746549999999999e-05,
+      "vs_off_paired_relative_median": 0.08491861838243131
+    },
+    {
+      "cards": 18,
+      "scenario": 0,
+      "phase": 2,
+      "mode": 2,
+      "paired_blocks": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "wall_per_resolve_median_s": 0.00053945,
+      "wall_min_s": 0.000438319,
+      "wall_max_s": 0.000645053,
+      "vs_off_paired_absolute_median_s": 6.846499999999992e-05,
+      "vs_off_paired_relative_median": 0.14301574917462778
+    },
+    {
+      "cards": 18,
+      "scenario": 1,
+      "phase": 0,
+      "mode": 0,
+      "paired_blocks": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "wall_per_resolve_median_s": 0.000547998,
+      "wall_min_s": 0.000510096,
+      "wall_max_s": 0.00085288,
+      "vs_off_paired_absolute_median_s": 0.0,
+      "vs_off_paired_relative_median": 0.0
+    },
+    {
+      "cards": 18,
+      "scenario": 1,
+      "phase": 0,
+      "mode": 1,
+      "paired_blocks": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "wall_per_resolve_median_s": 0.000844315,
+      "wall_min_s": 0.00059514,
+      "wall_max_s": 0.001089272,
+      "vs_off_paired_absolute_median_s": 7.086400000000002e-05,
+      "vs_off_paired_relative_median": 0.13516544720719637
+    },
+    {
+      "cards": 18,
+      "scenario": 1,
+      "phase": 0,
+      "mode": 2,
+      "paired_blocks": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "wall_per_resolve_median_s": 0.000534896,
+      "wall_min_s": 0.000482417,
+      "wall_max_s": 0.000896758,
+      "vs_off_paired_absolute_median_s": -3.460399999999993e-05,
+      "vs_off_paired_relative_median": -0.06314621586210156
+    },
+    {
+      "cards": 18,
+      "scenario": 1,
+      "phase": 1,
+      "mode": 0,
+      "paired_blocks": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "wall_per_resolve_median_s": 0.0004827095,
+      "wall_min_s": 0.000455854,
+      "wall_max_s": 0.0005093965,
+      "vs_off_paired_absolute_median_s": 0.0,
+      "vs_off_paired_relative_median": 0.0
+    },
+    {
+      "cards": 18,
+      "scenario": 1,
+      "phase": 1,
+      "mode": 1,
+      "paired_blocks": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "wall_per_resolve_median_s": 0.000431693,
+      "wall_min_s": 0.000402092,
+      "wall_max_s": 0.000582444,
+      "vs_off_paired_absolute_median_s": -3.107149999999998e-05,
+      "vs_off_paired_relative_median": -0.06816107788897319
+    },
+    {
+      "cards": 18,
+      "scenario": 1,
+      "phase": 1,
+      "mode": 2,
+      "paired_blocks": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "wall_per_resolve_median_s": 0.0004841895,
+      "wall_min_s": 0.0004397885,
+      "wall_max_s": 0.000630155,
+      "vs_off_paired_absolute_median_s": 1.3594999999999927e-06,
+      "vs_off_paired_relative_median": 0.002815690822856931
+    },
+    {
+      "cards": 18,
+      "scenario": 1,
+      "phase": 2,
+      "mode": 0,
+      "paired_blocks": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "wall_per_resolve_median_s": 0.000464576,
+      "wall_min_s": 0.0004227135,
+      "wall_max_s": 0.0006879385,
+      "vs_off_paired_absolute_median_s": 0.0,
+      "vs_off_paired_relative_median": 0.0
+    },
+    {
+      "cards": 18,
+      "scenario": 1,
+      "phase": 2,
+      "mode": 1,
+      "paired_blocks": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "wall_per_resolve_median_s": 0.0004884515,
+      "wall_min_s": 0.000456897,
+      "wall_max_s": 0.001187442,
+      "vs_off_paired_absolute_median_s": 3.4183499999999975e-05,
+      "vs_off_paired_relative_median": 0.08086682824182323
+    },
+    {
+      "cards": 18,
+      "scenario": 1,
+      "phase": 2,
+      "mode": 2,
+      "paired_blocks": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "wall_per_resolve_median_s": 0.000469735,
+      "wall_min_s": 0.000422442,
+      "wall_max_s": 0.000547765,
+      "vs_off_paired_absolute_median_s": -2.7150000000004644e-07,
+      "vs_off_paired_relative_median": -0.0006422789903801629
+    },
+    {
+      "cards": 18,
+      "scenario": 2,
+      "phase": 0,
+      "mode": 0,
+      "paired_blocks": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "wall_per_resolve_median_s": 0.000670304,
+      "wall_min_s": 0.000535659,
+      "wall_max_s": 0.000930099,
+      "vs_off_paired_absolute_median_s": 0.0,
+      "vs_off_paired_relative_median": 0.0
+    },
+    {
+      "cards": 18,
+      "scenario": 2,
+      "phase": 0,
+      "mode": 1,
+      "paired_blocks": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "wall_per_resolve_median_s": 0.000764637,
+      "wall_min_s": 0.000552565,
+      "wall_max_s": 0.001151164,
+      "vs_off_paired_absolute_median_s": 0.000127321,
+      "vs_off_paired_relative_median": 0.19977687677698341
+    },
+    {
+      "cards": 18,
+      "scenario": 2,
+      "phase": 0,
+      "mode": 2,
+      "paired_blocks": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "wall_per_resolve_median_s": 0.000538006,
+      "wall_min_s": 0.000509675,
+      "wall_max_s": 0.000915363,
+      "vs_off_paired_absolute_median_s": -0.00010573500000000003,
+      "vs_off_paired_relative_median": -0.15774186040960525
+    },
+    {
+      "cards": 18,
+      "scenario": 2,
+      "phase": 1,
+      "mode": 0,
+      "paired_blocks": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "wall_per_resolve_median_s": 0.0004594,
+      "wall_min_s": 0.0004121735,
+      "wall_max_s": 0.0005140275,
+      "vs_off_paired_absolute_median_s": 0.0,
+      "vs_off_paired_relative_median": 0.0
+    },
+    {
+      "cards": 18,
+      "scenario": 2,
+      "phase": 1,
+      "mode": 1,
+      "paired_blocks": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "wall_per_resolve_median_s": 0.000463742,
+      "wall_min_s": 0.0004318545,
+      "wall_max_s": 0.0005008805,
+      "vs_off_paired_absolute_median_s": 4.342000000000007e-06,
+      "vs_off_paired_relative_median": 0.009451458424031278
+    },
+    {
+      "cards": 18,
+      "scenario": 2,
+      "phase": 1,
+      "mode": 2,
+      "paired_blocks": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "wall_per_resolve_median_s": 0.000463038,
+      "wall_min_s": 0.000435634,
+      "wall_max_s": 0.0005278565,
+      "vs_off_paired_absolute_median_s": 2.1135999999999996e-05,
+      "vs_off_paired_relative_median": 0.050991802131735264
+    },
+    {
+      "cards": 18,
+      "scenario": 2,
+      "phase": 2,
+      "mode": 0,
+      "paired_blocks": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "wall_per_resolve_median_s": 0.000460293,
+      "wall_min_s": 0.000400465,
+      "wall_max_s": 0.001004838,
+      "vs_off_paired_absolute_median_s": 0.0,
+      "vs_off_paired_relative_median": 0.0
+    },
+    {
+      "cards": 18,
+      "scenario": 2,
+      "phase": 2,
+      "mode": 1,
+      "paired_blocks": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "wall_per_resolve_median_s": 0.0005350645,
+      "wall_min_s": 0.0004417325,
+      "wall_max_s": 0.000610856,
+      "vs_off_paired_absolute_median_s": 1.0504999999999954e-05,
+      "vs_off_paired_relative_median": 0.022822419632712032
+    },
+    {
+      "cards": 18,
+      "scenario": 2,
+      "phase": 2,
+      "mode": 2,
+      "paired_blocks": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "wall_per_resolve_median_s": 0.000433292,
+      "wall_min_s": 0.0003925065,
+      "wall_max_s": 0.0006496145,
+      "vs_off_paired_absolute_median_s": -5.5557999999999985e-05,
+      "vs_off_paired_relative_median": -0.12399554082057385
+    },
+    {
+      "cards": 18,
+      "scenario": 3,
+      "phase": 0,
+      "mode": 0,
+      "paired_blocks": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "wall_per_resolve_median_s": 0.000658968,
+      "wall_min_s": 0.000544976,
+      "wall_max_s": 0.000779454,
+      "vs_off_paired_absolute_median_s": 0.0,
+      "vs_off_paired_relative_median": 0.0
+    },
+    {
+      "cards": 18,
+      "scenario": 3,
+      "phase": 0,
+      "mode": 1,
+      "paired_blocks": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "wall_per_resolve_median_s": 0.000787945,
+      "wall_min_s": 0.000578973,
+      "wall_max_s": 0.004420142,
+      "vs_off_paired_absolute_median_s": 6.82250000000001e-05,
+      "vs_off_paired_relative_median": 0.0875292191713688
+    },
+    {
+      "cards": 18,
+      "scenario": 3,
+      "phase": 0,
+      "mode": 2,
+      "paired_blocks": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "wall_per_resolve_median_s": 0.000539282,
+      "wall_min_s": 0.000526407,
+      "wall_max_s": 0.000733315,
+      "vs_off_paired_absolute_median_s": -9.672999999999973e-06,
+      "vs_off_paired_relative_median": -0.01774940547840631
+    },
+    {
+      "cards": 18,
+      "scenario": 3,
+      "phase": 1,
+      "mode": 0,
+      "paired_blocks": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "wall_per_resolve_median_s": 0.000479506,
+      "wall_min_s": 0.0004388395,
+      "wall_max_s": 0.000520124,
+      "vs_off_paired_absolute_median_s": 0.0,
+      "vs_off_paired_relative_median": 0.0
+    },
+    {
+      "cards": 18,
+      "scenario": 3,
+      "phase": 1,
+      "mode": 1,
+      "paired_blocks": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "wall_per_resolve_median_s": 0.000481474,
+      "wall_min_s": 0.0004294405,
+      "wall_max_s": 0.0007309945,
+      "vs_off_paired_absolute_median_s": 1.9680000000000327e-06,
+      "vs_off_paired_relative_median": 0.004104223930461837
+    },
+    {
+      "cards": 18,
+      "scenario": 3,
+      "phase": 1,
+      "mode": 2,
+      "paired_blocks": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "wall_per_resolve_median_s": 0.000444404,
+      "wall_min_s": 0.0004318685,
+      "wall_max_s": 0.000569994,
+      "vs_off_paired_absolute_median_s": -1.2939500000000014e-05,
+      "vs_off_paired_relative_median": -0.02909007931512031
+    },
+    {
+      "cards": 18,
+      "scenario": 3,
+      "phase": 2,
+      "mode": 0,
+      "paired_blocks": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "wall_per_resolve_median_s": 0.0004921855,
+      "wall_min_s": 0.000470175,
+      "wall_max_s": 0.0005011685,
+      "vs_off_paired_absolute_median_s": 0.0,
+      "vs_off_paired_relative_median": 0.0
+    },
+    {
+      "cards": 18,
+      "scenario": 3,
+      "phase": 2,
+      "mode": 1,
+      "paired_blocks": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "wall_per_resolve_median_s": 0.000535572,
+      "wall_min_s": 0.00043511,
+      "wall_max_s": 0.000613799,
+      "vs_off_paired_absolute_median_s": 3.440349999999997e-05,
+      "vs_off_paired_relative_median": 0.06864657295899468
+    },
+    {
+      "cards": 18,
+      "scenario": 3,
+      "phase": 2,
+      "mode": 2,
+      "paired_blocks": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "wall_per_resolve_median_s": 0.0004330165,
+      "wall_min_s": 0.0004102585,
+      "wall_max_s": 0.000444174,
+      "vs_off_paired_absolute_median_s": -5.776849999999999e-05,
+      "vs_off_paired_relative_median": -0.1177063276179997
+    },
+    {
+      "cards": 18,
+      "scenario": 4,
+      "phase": 0,
+      "mode": 0,
+      "paired_blocks": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "wall_per_resolve_median_s": 0.000556459,
+      "wall_min_s": 0.000508303,
+      "wall_max_s": 0.000970093,
+      "vs_off_paired_absolute_median_s": 0.0,
+      "vs_off_paired_relative_median": 0.0
+    },
+    {
+      "cards": 18,
+      "scenario": 4,
+      "phase": 0,
+      "mode": 1,
+      "paired_blocks": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "wall_per_resolve_median_s": 0.00070693,
+      "wall_min_s": 0.000514555,
+      "wall_max_s": 0.001187123,
+      "vs_off_paired_absolute_median_s": 0.000150471,
+      "vs_off_paired_relative_median": 0.22372081851946146
+    },
+    {
+      "cards": 18,
+      "scenario": 4,
+      "phase": 0,
+      "mode": 2,
+      "paired_blocks": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "wall_per_resolve_median_s": 0.000765297,
+      "wall_min_s": 0.000617728,
+      "wall_max_s": 0.001546532,
+      "vs_off_paired_absolute_median_s": 0.00020883799999999993,
+      "vs_off_paired_relative_median": 0.3752980902456424
+    },
+    {
+      "cards": 18,
+      "scenario": 4,
+      "phase": 1,
+      "mode": 0,
+      "paired_blocks": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "wall_per_resolve_median_s": 0.0004966885,
+      "wall_min_s": 0.000422751,
+      "wall_max_s": 0.0005769745,
+      "vs_off_paired_absolute_median_s": 0.0,
+      "vs_off_paired_relative_median": 0.0
+    },
+    {
+      "cards": 18,
+      "scenario": 4,
+      "phase": 1,
+      "mode": 1,
+      "paired_blocks": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "wall_per_resolve_median_s": 0.0004405535,
+      "wall_min_s": 0.0004356675,
+      "wall_max_s": 0.000809177,
+      "vs_off_paired_absolute_median_s": 1.7802499999999984e-05,
+      "vs_off_paired_relative_median": 0.042111077206204106
+    },
+    {
+      "cards": 18,
+      "scenario": 4,
+      "phase": 1,
+      "mode": 2,
+      "paired_blocks": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "wall_per_resolve_median_s": 0.000469393,
+      "wall_min_s": 0.0004274205,
+      "wall_max_s": 0.0006905135,
+      "vs_off_paired_absolute_median_s": 2.7460500000000047e-05,
+      "vs_off_paired_relative_median": 0.06213731735050043
+    },
+    {
+      "cards": 18,
+      "scenario": 4,
+      "phase": 2,
+      "mode": 0,
+      "paired_blocks": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "wall_per_resolve_median_s": 0.000464715,
+      "wall_min_s": 0.00040756,
+      "wall_max_s": 0.0005825685,
+      "vs_off_paired_absolute_median_s": 0.0,
+      "vs_off_paired_relative_median": 0.0
+    },
+    {
+      "cards": 18,
+      "scenario": 4,
+      "phase": 2,
+      "mode": 1,
+      "paired_blocks": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "wall_per_resolve_median_s": 0.0004884205,
+      "wall_min_s": 0.0004228745,
+      "wall_max_s": 0.0005007035,
+      "vs_off_paired_absolute_median_s": 3.011500000000037e-06,
+      "vs_off_paired_relative_median": 0.007172577721780815
+    },
+    {
+      "cards": 18,
+      "scenario": 4,
+      "phase": 2,
+      "mode": 2,
+      "paired_blocks": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "wall_per_resolve_median_s": 0.000482159,
+      "wall_min_s": 0.00041791,
+      "wall_max_s": 0.0005898675,
+      "vs_off_paired_absolute_median_s": 7.298999999999999e-06,
+      "vs_off_paired_relative_median": 0.012528998735771069
+    },
+    {
+      "cards": 18,
+      "scenario": 5,
+      "phase": 0,
+      "mode": 0,
+      "paired_blocks": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "wall_per_resolve_median_s": 0.000571201,
+      "wall_min_s": 0.000522966,
+      "wall_max_s": 0.00060597,
+      "vs_off_paired_absolute_median_s": 0.0,
+      "vs_off_paired_relative_median": 0.0
+    },
+    {
+      "cards": 18,
+      "scenario": 5,
+      "phase": 0,
+      "mode": 1,
+      "paired_blocks": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "wall_per_resolve_median_s": 0.000615968,
+      "wall_min_s": 0.000550645,
+      "wall_max_s": 0.000785239,
+      "vs_off_paired_absolute_median_s": 7.930600000000002e-05,
+      "vs_off_paired_relative_median": 0.1477764402920274
+    },
+    {
+      "cards": 18,
+      "scenario": 5,
+      "phase": 0,
+      "mode": 2,
+      "paired_blocks": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "wall_per_resolve_median_s": 0.00068912,
+      "wall_min_s": 0.000546336,
+      "wall_max_s": 0.000853833,
+      "vs_off_paired_absolute_median_s": 9.648399999999998e-05,
+      "vs_off_paired_relative_median": 0.16280482454660183
+    },
+    {
+      "cards": 18,
+      "scenario": 5,
+      "phase": 1,
+      "mode": 0,
+      "paired_blocks": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "wall_per_resolve_median_s": 0.00047084,
+      "wall_min_s": 0.000441698,
+      "wall_max_s": 0.000867779,
+      "vs_off_paired_absolute_median_s": 0.0,
+      "vs_off_paired_relative_median": 0.0
+    },
+    {
+      "cards": 18,
+      "scenario": 5,
+      "phase": 1,
+      "mode": 1,
+      "paired_blocks": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "wall_per_resolve_median_s": 0.0005122605,
+      "wall_min_s": 0.0004544055,
+      "wall_max_s": 0.000755816,
+      "vs_off_paired_absolute_median_s": 2.988699999999998e-05,
+      "vs_off_paired_relative_median": 0.06347591538526887
+    },
+    {
+      "cards": 18,
+      "scenario": 5,
+      "phase": 1,
+      "mode": 2,
+      "paired_blocks": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "wall_per_resolve_median_s": 0.000573909,
+      "wall_min_s": 0.000492128,
+      "wall_max_s": 0.000680557,
+      "vs_off_paired_absolute_median_s": 8.935950000000007e-05,
+      "vs_off_paired_relative_median": 0.15114999640560067
+    },
+    {
+      "cards": 18,
+      "scenario": 5,
+      "phase": 2,
+      "mode": 0,
+      "paired_blocks": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "wall_per_resolve_median_s": 0.000489166,
+      "wall_min_s": 0.0004306995,
+      "wall_max_s": 0.0005649305,
+      "vs_off_paired_absolute_median_s": 0.0,
+      "vs_off_paired_relative_median": 0.0
+    },
+    {
+      "cards": 18,
+      "scenario": 5,
+      "phase": 2,
+      "mode": 1,
+      "paired_blocks": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "wall_per_resolve_median_s": 0.000574927,
+      "wall_min_s": 0.0004456505,
+      "wall_max_s": 0.0008413035,
+      "vs_off_paired_absolute_median_s": 8.576100000000006e-05,
+      "vs_off_paired_relative_median": 0.17532085222603389
+    },
+    {
+      "cards": 18,
+      "scenario": 5,
+      "phase": 2,
+      "mode": 2,
+      "paired_blocks": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "wall_per_resolve_median_s": 0.000553095,
+      "wall_min_s": 0.000509234,
+      "wall_max_s": 0.000632681,
+      "vs_off_paired_absolute_median_s": 6.775049999999995e-05,
+      "vs_off_paired_relative_median": 0.11992714148023498
+    },
+    {
+      "cards": 18,
+      "scenario": 6,
+      "phase": 0,
+      "mode": 0,
+      "paired_blocks": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "wall_per_resolve_median_s": 0.000530203,
+      "wall_min_s": 0.000521005,
+      "wall_max_s": 0.000564507,
+      "vs_off_paired_absolute_median_s": 0.0,
+      "vs_off_paired_relative_median": 0.0
+    },
+    {
+      "cards": 18,
+      "scenario": 6,
+      "phase": 0,
+      "mode": 1,
+      "paired_blocks": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "wall_per_resolve_median_s": 0.000526905,
+      "wall_min_s": 0.000487457,
+      "wall_max_s": 0.00054023,
+      "vs_off_paired_absolute_median_s": -9.945999999999935e-06,
+      "vs_off_paired_relative_median": -0.018884081057629953
+    },
+    {
+      "cards": 18,
+      "scenario": 6,
+      "phase": 0,
+      "mode": 2,
+      "paired_blocks": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "wall_per_resolve_median_s": 0.00054985,
+      "wall_min_s": 0.000491003,
+      "wall_max_s": 0.000613641,
+      "vs_off_paired_absolute_median_s": 1.9602000000000074e-05,
+      "vs_off_paired_relative_median": 0.03721755046165964
+    },
+    {
+      "cards": 18,
+      "scenario": 6,
+      "phase": 1,
+      "mode": 0,
+      "paired_blocks": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "wall_per_resolve_median_s": 0.000480254,
+      "wall_min_s": 0.000408369,
+      "wall_max_s": 0.000535329,
+      "vs_off_paired_absolute_median_s": 0.0,
+      "vs_off_paired_relative_median": 0.0
+    },
+    {
+      "cards": 18,
+      "scenario": 6,
+      "phase": 1,
+      "mode": 1,
+      "paired_blocks": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "wall_per_resolve_median_s": 0.0004598395,
+      "wall_min_s": 0.0004453385,
+      "wall_max_s": 0.0024092945,
+      "vs_off_paired_absolute_median_s": 1.3477500000000028e-05,
+      "vs_off_paired_relative_median": 0.02806327485039173
+    },
+    {
+      "cards": 18,
+      "scenario": 6,
+      "phase": 1,
+      "mode": 2,
+      "paired_blocks": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "wall_per_resolve_median_s": 0.0004631655,
+      "wall_min_s": 0.0004043855,
+      "wall_max_s": 0.0005455,
+      "vs_off_paired_absolute_median_s": -1.14685e-05,
+      "vs_off_paired_relative_median": -0.026270398299416353
+    },
+    {
+      "cards": 18,
+      "scenario": 6,
+      "phase": 2,
+      "mode": 0,
+      "paired_blocks": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "wall_per_resolve_median_s": 0.0004911705,
+      "wall_min_s": 0.0004124795,
+      "wall_max_s": 0.00058809,
+      "vs_off_paired_absolute_median_s": 0.0,
+      "vs_off_paired_relative_median": 0.0
+    },
+    {
+      "cards": 18,
+      "scenario": 6,
+      "phase": 2,
+      "mode": 1,
+      "paired_blocks": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "wall_per_resolve_median_s": 0.0004477345,
+      "wall_min_s": 0.0004301135,
+      "wall_max_s": 0.0004726645,
+      "vs_off_paired_absolute_median_s": -4.343600000000005e-05,
+      "vs_off_paired_relative_median": -0.08843364982221047
+    },
+    {
+      "cards": 18,
+      "scenario": 6,
+      "phase": 2,
+      "mode": 2,
+      "paired_blocks": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "wall_per_resolve_median_s": 0.0004625605,
+      "wall_min_s": 0.000400131,
+      "wall_max_s": 0.000634387,
+      "vs_off_paired_absolute_median_s": -9.103950000000001e-05,
+      "vs_off_paired_relative_median": -0.18535213332233924
+    },
+    {
+      "cards": 180,
+      "scenario": 0,
+      "phase": 0,
+      "mode": 0,
+      "paired_blocks": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "wall_per_resolve_median_s": 0.00502646,
+      "wall_min_s": 0.004870616,
+      "wall_max_s": 0.006100037,
+      "vs_off_paired_absolute_median_s": 0.0,
+      "vs_off_paired_relative_median": 0.0
+    },
+    {
+      "cards": 180,
+      "scenario": 0,
+      "phase": 0,
+      "mode": 1,
+      "paired_blocks": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "wall_per_resolve_median_s": 0.00551815,
+      "wall_min_s": 0.005310378,
+      "wall_max_s": 0.006729409,
+      "vs_off_paired_absolute_median_s": 0.000647534,
+      "vs_off_paired_relative_median": 0.13294704406999025
+    },
+    {
+      "cards": 180,
+      "scenario": 0,
+      "phase": 0,
+      "mode": 2,
+      "paired_blocks": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "wall_per_resolve_median_s": 0.0050053,
+      "wall_min_s": 0.004585573,
+      "wall_max_s": 0.005848582,
+      "vs_off_paired_absolute_median_s": -0.00020692399999999982,
+      "vs_off_paired_relative_median": -0.039769452338793365
+    },
+    {
+      "cards": 180,
+      "scenario": 0,
+      "phase": 1,
+      "mode": 0,
+      "paired_blocks": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "wall_per_resolve_median_s": 0.0043335765,
+      "wall_min_s": 0.004087131,
+      "wall_max_s": 0.0049242225,
+      "vs_off_paired_absolute_median_s": 0.0,
+      "vs_off_paired_relative_median": 0.0
+    },
+    {
+      "cards": 180,
+      "scenario": 0,
+      "phase": 1,
+      "mode": 1,
+      "paired_blocks": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "wall_per_resolve_median_s": 0.00452808,
+      "wall_min_s": 0.004507028,
+      "wall_max_s": 0.0050839055,
+      "vs_off_paired_absolute_median_s": 0.00021640299999999956,
+      "vs_off_paired_relative_median": 0.050436241806263604
+    },
+    {
+      "cards": 180,
+      "scenario": 0,
+      "phase": 1,
+      "mode": 2,
+      "paired_blocks": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "wall_per_resolve_median_s": 0.004372333,
+      "wall_min_s": 0.004141759,
+      "wall_max_s": 0.004877284,
+      "vs_off_paired_absolute_median_s": 2.7589999999997478e-06,
+      "vs_off_paired_relative_median": 0.0006430298616169061
+    },
+    {
+      "cards": 180,
+      "scenario": 0,
+      "phase": 2,
+      "mode": 0,
+      "paired_blocks": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "wall_per_resolve_median_s": 0.0046434915,
+      "wall_min_s": 0.004296789,
+      "wall_max_s": 0.0053785385,
+      "vs_off_paired_absolute_median_s": 0.0,
+      "vs_off_paired_relative_median": 0.0
+    },
+    {
+      "cards": 180,
+      "scenario": 0,
+      "phase": 2,
+      "mode": 1,
+      "paired_blocks": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "wall_per_resolve_median_s": 0.004776662,
+      "wall_min_s": 0.0040086235,
+      "wall_max_s": 0.0074839075,
+      "vs_off_paired_absolute_median_s": 0.0001331704999999999,
+      "vs_off_paired_relative_median": 0.028678958494916973
+    },
+    {
+      "cards": 180,
+      "scenario": 0,
+      "phase": 2,
+      "mode": 2,
+      "paired_blocks": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "wall_per_resolve_median_s": 0.004523133,
+      "wall_min_s": 0.004374757,
+      "wall_max_s": 0.0049030865,
+      "vs_off_paired_absolute_median_s": -0.00026873450000000024,
+      "vs_off_paired_relative_median": -0.05445991688492202
+    },
+    {
+      "cards": 180,
+      "scenario": 1,
+      "phase": 0,
+      "mode": 0,
+      "paired_blocks": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "wall_per_resolve_median_s": 0.005172774,
+      "wall_min_s": 0.00424966,
+      "wall_max_s": 0.005767714,
+      "vs_off_paired_absolute_median_s": 0.0,
+      "vs_off_paired_relative_median": 0.0
+    },
+    {
+      "cards": 180,
+      "scenario": 1,
+      "phase": 0,
+      "mode": 1,
+      "paired_blocks": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "wall_per_resolve_median_s": 0.004880115,
+      "wall_min_s": 0.00468652,
+      "wall_max_s": 0.006207884,
+      "vs_off_paired_absolute_median_s": 0.00021656800000000032,
+      "vs_off_paired_relative_median": 0.04643847269042212
+    },
+    {
+      "cards": 180,
+      "scenario": 1,
+      "phase": 0,
+      "mode": 2,
+      "paired_blocks": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "wall_per_resolve_median_s": 0.005030805,
+      "wall_min_s": 0.004342128,
+      "wall_max_s": 0.005177393,
+      "vs_off_paired_absolute_median_s": -0.00032141899999999987,
+      "vs_off_paired_relative_median": -0.06892157407226729
+    },
+    {
+      "cards": 180,
+      "scenario": 1,
+      "phase": 1,
+      "mode": 0,
+      "paired_blocks": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "wall_per_resolve_median_s": 0.0043313525,
+      "wall_min_s": 0.004203811,
+      "wall_max_s": 0.00514511,
+      "vs_off_paired_absolute_median_s": 0.0,
+      "vs_off_paired_relative_median": 0.0
+    },
+    {
+      "cards": 180,
+      "scenario": 1,
+      "phase": 1,
+      "mode": 1,
+      "paired_blocks": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "wall_per_resolve_median_s": 0.005041723,
+      "wall_min_s": 0.004501143,
+      "wall_max_s": 0.006131197,
+      "vs_off_paired_absolute_median_s": 0.0007103704999999998,
+      "vs_off_paired_relative_median": 0.16400662379707032
+    },
+    {
+      "cards": 180,
+      "scenario": 1,
+      "phase": 1,
+      "mode": 2,
+      "paired_blocks": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "wall_per_resolve_median_s": 0.004241947,
+      "wall_min_s": 0.0041443105,
+      "wall_max_s": 0.0046756165,
+      "vs_off_paired_absolute_median_s": -1.32489999999999e-05,
+      "vs_off_paired_relative_median": -0.0031516640495968806
+    },
+    {
+      "cards": 180,
+      "scenario": 1,
+      "phase": 2,
+      "mode": 0,
+      "paired_blocks": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "wall_per_resolve_median_s": 0.004533476,
+      "wall_min_s": 0.00393548,
+      "wall_max_s": 0.0056919905,
+      "vs_off_paired_absolute_median_s": 0.0,
+      "vs_off_paired_relative_median": 0.0
+    },
+    {
+      "cards": 180,
+      "scenario": 1,
+      "phase": 2,
+      "mode": 1,
+      "paired_blocks": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "wall_per_resolve_median_s": 0.0044829935,
+      "wall_min_s": 0.004320322,
+      "wall_max_s": 0.005077631,
+      "vs_off_paired_absolute_median_s": 8.618499999999991e-05,
+      "vs_off_paired_relative_median": 0.018066461982606752
+    },
+    {
+      "cards": 180,
+      "scenario": 1,
+      "phase": 2,
+      "mode": 2,
+      "paired_blocks": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "wall_per_resolve_median_s": 0.0044894015,
+      "wall_min_s": 0.00421229,
+      "wall_max_s": 0.004963809,
+      "vs_off_paired_absolute_median_s": -0.00016716400000000003,
+      "vs_off_paired_relative_median": -0.038047306719822926
+    },
+    {
+      "cards": 180,
+      "scenario": 2,
+      "phase": 0,
+      "mode": 0,
+      "paired_blocks": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "wall_per_resolve_median_s": 0.005069894,
+      "wall_min_s": 0.004505879,
+      "wall_max_s": 0.007843855,
+      "vs_off_paired_absolute_median_s": 0.0,
+      "vs_off_paired_relative_median": 0.0
+    },
+    {
+      "cards": 180,
+      "scenario": 2,
+      "phase": 0,
+      "mode": 1,
+      "paired_blocks": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "wall_per_resolve_median_s": 0.004966483,
+      "wall_min_s": 0.004359009,
+      "wall_max_s": 0.008477041,
+      "vs_off_paired_absolute_median_s": 6.137799999999995e-05,
+      "vs_off_paired_relative_median": 0.013439295125633466
+    },
+    {
+      "cards": 180,
+      "scenario": 2,
+      "phase": 0,
+      "mode": 2,
+      "paired_blocks": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "wall_per_resolve_median_s": 0.004928876,
+      "wall_min_s": 0.004312318,
+      "wall_max_s": 0.005294145,
+      "vs_off_paired_absolute_median_s": -0.00019356100000000008,
+      "vs_off_paired_relative_median": -0.04295743405448749
+    },
+    {
+      "cards": 180,
+      "scenario": 2,
+      "phase": 1,
+      "mode": 0,
+      "paired_blocks": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "wall_per_resolve_median_s": 0.004458564,
+      "wall_min_s": 0.0041774435,
+      "wall_max_s": 0.0049978405,
+      "vs_off_paired_absolute_median_s": 0.0,
+      "vs_off_paired_relative_median": 0.0
+    },
+    {
+      "cards": 180,
+      "scenario": 2,
+      "phase": 1,
+      "mode": 1,
+      "paired_blocks": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "wall_per_resolve_median_s": 0.0048864625,
+      "wall_min_s": 0.0041525705,
+      "wall_max_s": 0.00546976,
+      "vs_off_paired_absolute_median_s": 0.0005294614999999999,
+      "vs_off_paired_relative_median": 0.12654301992797157
+    },
+    {
+      "cards": 180,
+      "scenario": 2,
+      "phase": 1,
+      "mode": 2,
+      "paired_blocks": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "wall_per_resolve_median_s": 0.004404292,
+      "wall_min_s": 0.0043133785,
+      "wall_max_s": 0.0047685715,
+      "vs_off_paired_absolute_median_s": 0.0001293350000000004,
+      "vs_off_paired_relative_median": 0.030911485504393044
+    },
+    {
+      "cards": 180,
+      "scenario": 2,
+      "phase": 2,
+      "mode": 0,
+      "paired_blocks": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "wall_per_resolve_median_s": 0.0042880595,
+      "wall_min_s": 0.004116313,
+      "wall_max_s": 0.0044453765,
+      "vs_off_paired_absolute_median_s": 0.0,
+      "vs_off_paired_relative_median": 0.0
+    },
+    {
+      "cards": 180,
+      "scenario": 2,
+      "phase": 2,
+      "mode": 1,
+      "paired_blocks": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "wall_per_resolve_median_s": 0.004683185,
+      "wall_min_s": 0.0043576235,
+      "wall_max_s": 0.005074815,
+      "vs_off_paired_absolute_median_s": 0.00039512550000000025,
+      "vs_off_paired_relative_median": 0.09214552643217755
+    },
+    {
+      "cards": 180,
+      "scenario": 2,
+      "phase": 2,
+      "mode": 2,
+      "paired_blocks": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "wall_per_resolve_median_s": 0.0045670525,
+      "wall_min_s": 0.0041456955,
+      "wall_max_s": 0.005305693,
+      "vs_off_paired_absolute_median_s": 0.00044249800000000037,
+      "vs_off_paired_relative_median": 0.10749862801978383
+    },
+    {
+      "cards": 180,
+      "scenario": 3,
+      "phase": 0,
+      "mode": 0,
+      "paired_blocks": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "wall_per_resolve_median_s": 0.004918086,
+      "wall_min_s": 0.004601098,
+      "wall_max_s": 0.006322791,
+      "vs_off_paired_absolute_median_s": 0.0,
+      "vs_off_paired_relative_median": 0.0
+    },
+    {
+      "cards": 180,
+      "scenario": 3,
+      "phase": 0,
+      "mode": 1,
+      "paired_blocks": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "wall_per_resolve_median_s": 0.004889914,
+      "wall_min_s": 0.004526448,
+      "wall_max_s": 0.009328153,
+      "vs_off_paired_absolute_median_s": -0.00034390500000000025,
+      "vs_off_paired_relative_median": -0.07061192484405143
+    },
+    {
+      "cards": 180,
+      "scenario": 3,
+      "phase": 0,
+      "mode": 2,
+      "paired_blocks": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "wall_per_resolve_median_s": 0.00531426,
+      "wall_min_s": 0.004521537,
+      "wall_max_s": 0.006100601,
+      "vs_off_paired_absolute_median_s": -1.5349999999995576e-06,
+      "vs_off_paired_relative_median": -0.00028876207603933945
+    },
+    {
+      "cards": 180,
+      "scenario": 3,
+      "phase": 1,
+      "mode": 0,
+      "paired_blocks": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "wall_per_resolve_median_s": 0.005059926,
+      "wall_min_s": 0.004604537,
+      "wall_max_s": 0.0062842745,
+      "vs_off_paired_absolute_median_s": 0.0,
+      "vs_off_paired_relative_median": 0.0
+    },
+    {
+      "cards": 180,
+      "scenario": 3,
+      "phase": 1,
+      "mode": 1,
+      "paired_blocks": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "wall_per_resolve_median_s": 0.0048811835,
+      "wall_min_s": 0.0046450665,
+      "wall_max_s": 0.0055091935,
+      "vs_off_paired_absolute_median_s": -9.872199999999987e-05,
+      "vs_off_paired_relative_median": -0.019510562012171717
+    },
+    {
+      "cards": 180,
+      "scenario": 3,
+      "phase": 1,
+      "mode": 2,
+      "paired_blocks": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "wall_per_resolve_median_s": 0.00488409,
+      "wall_min_s": 0.0044193715,
+      "wall_max_s": 0.00506966,
+      "vs_off_paired_absolute_median_s": -0.00041061599999999993,
+      "vs_off_paired_relative_median": -0.0811505939019661
+    },
+    {
+      "cards": 180,
+      "scenario": 3,
+      "phase": 2,
+      "mode": 0,
+      "paired_blocks": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "wall_per_resolve_median_s": 0.005122744,
+      "wall_min_s": 0.0046241585,
+      "wall_max_s": 0.00587768,
+      "vs_off_paired_absolute_median_s": 0.0,
+      "vs_off_paired_relative_median": 0.0
+    },
+    {
+      "cards": 180,
+      "scenario": 3,
+      "phase": 2,
+      "mode": 1,
+      "paired_blocks": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "wall_per_resolve_median_s": 0.0047766135,
+      "wall_min_s": 0.0040949165,
+      "wall_max_s": 0.006519021,
+      "vs_off_paired_absolute_median_s": -0.0003826040000000008,
+      "vs_off_paired_relative_median": -0.0741593080733659
+    },
+    {
+      "cards": 180,
+      "scenario": 3,
+      "phase": 2,
+      "mode": 2,
+      "paired_blocks": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "wall_per_resolve_median_s": 0.0046208915,
+      "wall_min_s": 0.0043417265,
+      "wall_max_s": 0.011736581,
+      "vs_off_paired_absolute_median_s": -3.2670000000003738e-06,
+      "vs_off_paired_relative_median": -0.0007065069244491795
+    },
+    {
+      "cards": 180,
+      "scenario": 4,
+      "phase": 0,
+      "mode": 0,
+      "paired_blocks": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "wall_per_resolve_median_s": 0.004930096,
+      "wall_min_s": 0.00447822,
+      "wall_max_s": 0.008277353,
+      "vs_off_paired_absolute_median_s": 0.0,
+      "vs_off_paired_relative_median": 0.0
+    },
+    {
+      "cards": 180,
+      "scenario": 4,
+      "phase": 0,
+      "mode": 1,
+      "paired_blocks": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "wall_per_resolve_median_s": 0.004986827,
+      "wall_min_s": 0.004258364,
+      "wall_max_s": 0.006412566,
+      "vs_off_paired_absolute_median_s": -0.00021985600000000004,
+      "vs_off_paired_relative_median": -0.04909450629937784
+    },
+    {
+      "cards": 180,
+      "scenario": 4,
+      "phase": 0,
+      "mode": 2,
+      "paired_blocks": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "wall_per_resolve_median_s": 0.004908678,
+      "wall_min_s": 0.004539573,
+      "wall_max_s": 0.006148769,
+      "vs_off_paired_absolute_median_s": 0.00027977899999999997,
+      "vs_off_paired_relative_median": 0.0624754924947859
+    },
+    {
+      "cards": 180,
+      "scenario": 4,
+      "phase": 1,
+      "mode": 0,
+      "paired_blocks": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "wall_per_resolve_median_s": 0.0042852095,
+      "wall_min_s": 0.0041819805,
+      "wall_max_s": 0.0053947535,
+      "vs_off_paired_absolute_median_s": 0.0,
+      "vs_off_paired_relative_median": 0.0
+    },
+    {
+      "cards": 180,
+      "scenario": 4,
+      "phase": 1,
+      "mode": 1,
+      "paired_blocks": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "wall_per_resolve_median_s": 0.0046923435,
+      "wall_min_s": 0.004601384,
+      "wall_max_s": 0.0053831175,
+      "vs_off_paired_absolute_median_s": 0.0004180369999999996,
+      "vs_off_paired_relative_median": 0.0979853028022839
+    },
+    {
+      "cards": 180,
+      "scenario": 4,
+      "phase": 1,
+      "mode": 2,
+      "paired_blocks": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "wall_per_resolve_median_s": 0.0047066935,
+      "wall_min_s": 0.0044344625,
+      "wall_max_s": 0.0059275455,
+      "vs_off_paired_absolute_median_s": 0.0004314309999999995,
+      "vs_off_paired_relative_median": 0.07997232867080939
+    },
+    {
+      "cards": 180,
+      "scenario": 4,
+      "phase": 2,
+      "mode": 0,
+      "paired_blocks": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "wall_per_resolve_median_s": 0.0044445135,
+      "wall_min_s": 0.004157342,
+      "wall_max_s": 0.004987436,
+      "vs_off_paired_absolute_median_s": 0.0,
+      "vs_off_paired_relative_median": 0.0
+    },
+    {
+      "cards": 180,
+      "scenario": 4,
+      "phase": 2,
+      "mode": 1,
+      "paired_blocks": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "wall_per_resolve_median_s": 0.004733965,
+      "wall_min_s": 0.0044232855,
+      "wall_max_s": 0.0054671215,
+      "vs_off_paired_absolute_median_s": 0.0005332230000000002,
+      "vs_off_paired_relative_median": 0.12826055686542026
+    },
+    {
+      "cards": 180,
+      "scenario": 4,
+      "phase": 2,
+      "mode": 2,
+      "paired_blocks": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "wall_per_resolve_median_s": 0.004507435,
+      "wall_min_s": 0.0043624395,
+      "wall_max_s": 0.0081936325,
+      "vs_off_paired_absolute_median_s": 0.00027630550000000073,
+      "vs_off_paired_relative_median": 0.06646205676607808
+    },
+    {
+      "cards": 180,
+      "scenario": 5,
+      "phase": 0,
+      "mode": 0,
+      "paired_blocks": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "wall_per_resolve_median_s": 0.00492402,
+      "wall_min_s": 0.004783468,
+      "wall_max_s": 0.006504187,
+      "vs_off_paired_absolute_median_s": 0.0,
+      "vs_off_paired_relative_median": 0.0
+    },
+    {
+      "cards": 180,
+      "scenario": 5,
+      "phase": 0,
+      "mode": 1,
+      "paired_blocks": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "wall_per_resolve_median_s": 0.004879883,
+      "wall_min_s": 0.004450392,
+      "wall_max_s": 0.004909371,
+      "vs_off_paired_absolute_median_s": -0.00019030300000000017,
+      "vs_off_paired_relative_median": -0.03978347926650705
+    },
+    {
+      "cards": 180,
+      "scenario": 5,
+      "phase": 0,
+      "mode": 2,
+      "paired_blocks": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "wall_per_resolve_median_s": 0.005375245,
+      "wall_min_s": 0.004594294,
+      "wall_max_s": 0.010765023,
+      "vs_off_paired_absolute_median_s": -0.00023547100000000012,
+      "vs_off_paired_relative_median": -0.04875413192981437
+    },
+    {
+      "cards": 180,
+      "scenario": 5,
+      "phase": 1,
+      "mode": 0,
+      "paired_blocks": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "wall_per_resolve_median_s": 0.0049051505,
+      "wall_min_s": 0.004586172,
+      "wall_max_s": 0.0056021215,
+      "vs_off_paired_absolute_median_s": 0.0,
+      "vs_off_paired_relative_median": 0.0
+    },
+    {
+      "cards": 180,
+      "scenario": 5,
+      "phase": 1,
+      "mode": 1,
+      "paired_blocks": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "wall_per_resolve_median_s": 0.004658152,
+      "wall_min_s": 0.004325922,
+      "wall_max_s": 0.005149388,
+      "vs_off_paired_absolute_median_s": -0.00026025000000000006,
+      "vs_off_paired_relative_median": -0.05674667238821396
+    },
+    {
+      "cards": 180,
+      "scenario": 5,
+      "phase": 1,
+      "mode": 2,
+      "paired_blocks": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "wall_per_resolve_median_s": 0.004821043,
+      "wall_min_s": 0.0046428475,
+      "wall_max_s": 0.005348586,
+      "vs_off_paired_absolute_median_s": 0.00018964149999999968,
+      "vs_off_paired_relative_median": 0.040946892641460675
+    },
+    {
+      "cards": 180,
+      "scenario": 5,
+      "phase": 2,
+      "mode": 0,
+      "paired_blocks": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "wall_per_resolve_median_s": 0.004941093,
+      "wall_min_s": 0.0047446635,
+      "wall_max_s": 0.0342620615,
+      "vs_off_paired_absolute_median_s": 0.0,
+      "vs_off_paired_relative_median": 0.0
+    },
+    {
+      "cards": 180,
+      "scenario": 5,
+      "phase": 2,
+      "mode": 1,
+      "paired_blocks": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "wall_per_resolve_median_s": 0.0049755675,
+      "wall_min_s": 0.004341387,
+      "wall_max_s": 0.005709511,
+      "vs_off_paired_absolute_median_s": 0.0001228100000000001,
+      "vs_off_paired_relative_median": 0.024854824630906602
+    },
+    {
+      "cards": 180,
+      "scenario": 5,
+      "phase": 2,
+      "mode": 2,
+      "paired_blocks": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "wall_per_resolve_median_s": 0.0047518035,
+      "wall_min_s": 0.0043623035,
+      "wall_max_s": 0.0056066915,
+      "vs_off_paired_absolute_median_s": -0.00018928949999999934,
+      "vs_off_paired_relative_median": -0.03830923643817252
+    },
+    {
+      "cards": 180,
+      "scenario": 6,
+      "phase": 0,
+      "mode": 0,
+      "paired_blocks": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "wall_per_resolve_median_s": 0.005537551,
+      "wall_min_s": 0.004493019,
+      "wall_max_s": 0.006401498,
+      "vs_off_paired_absolute_median_s": 0.0,
+      "vs_off_paired_relative_median": 0.0
+    },
+    {
+      "cards": 180,
+      "scenario": 6,
+      "phase": 0,
+      "mode": 1,
+      "paired_blocks": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "wall_per_resolve_median_s": 0.005275564,
+      "wall_min_s": 0.00458971,
+      "wall_max_s": 0.009184494,
+      "vs_off_paired_absolute_median_s": 0.00024003099999999992,
+      "vs_off_paired_relative_median": 0.04163106802852057
+    },
+    {
+      "cards": 180,
+      "scenario": 6,
+      "phase": 0,
+      "mode": 2,
+      "paired_blocks": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "wall_per_resolve_median_s": 0.005338181,
+      "wall_min_s": 0.004768144,
+      "wall_max_s": 0.006207793,
+      "vs_off_paired_absolute_median_s": 2.565999999999853e-06,
+      "vs_off_paired_relative_median": 0.0005384446545624311
+    },
+    {
+      "cards": 180,
+      "scenario": 6,
+      "phase": 1,
+      "mode": 0,
+      "paired_blocks": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "wall_per_resolve_median_s": 0.0050518695,
+      "wall_min_s": 0.0048498255,
+      "wall_max_s": 0.005647044,
+      "vs_off_paired_absolute_median_s": 0.0,
+      "vs_off_paired_relative_median": 0.0
+    },
+    {
+      "cards": 180,
+      "scenario": 6,
+      "phase": 1,
+      "mode": 1,
+      "paired_blocks": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "wall_per_resolve_median_s": 0.0043746095,
+      "wall_min_s": 0.0041641725,
+      "wall_max_s": 0.0050903665,
+      "vs_off_paired_absolute_median_s": -0.0006946305000000005,
+      "vs_off_paired_relative_median": -0.14296329775049543
+    },
+    {
+      "cards": 180,
+      "scenario": 6,
+      "phase": 1,
+      "mode": 2,
+      "paired_blocks": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "wall_per_resolve_median_s": 0.004551306,
+      "wall_min_s": 0.00388375,
+      "wall_max_s": 0.004996198,
+      "vs_off_paired_absolute_median_s": -0.0003074970000000003,
+      "vs_off_paired_relative_median": -0.06328657490332501
+    },
+    {
+      "cards": 180,
+      "scenario": 6,
+      "phase": 2,
+      "mode": 0,
+      "paired_blocks": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "wall_per_resolve_median_s": 0.00485017,
+      "wall_min_s": 0.0043435685,
+      "wall_max_s": 0.007855768,
+      "vs_off_paired_absolute_median_s": 0.0,
+      "vs_off_paired_relative_median": 0.0
+    },
+    {
+      "cards": 180,
+      "scenario": 6,
+      "phase": 2,
+      "mode": 1,
+      "paired_blocks": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "wall_per_resolve_median_s": 0.004539652,
+      "wall_min_s": 0.004264577,
+      "wall_max_s": 0.00517929,
+      "vs_off_paired_absolute_median_s": -0.0005548050000000002,
+      "vs_off_paired_relative_median": -0.11438877400173608
+    },
+    {
+      "cards": 180,
+      "scenario": 6,
+      "phase": 2,
+      "mode": 2,
+      "paired_blocks": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "wall_per_resolve_median_s": 0.004651171,
+      "wall_min_s": 0.004232439,
+      "wall_max_s": 0.0049875985,
+      "vs_off_paired_absolute_median_s": -0.0006177309999999998,
+      "vs_off_paired_relative_median": -0.12736275223342686
+    },
+    {
+      "cards": 1800,
+      "scenario": 0,
+      "phase": 0,
+      "mode": 0,
+      "paired_blocks": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "wall_per_resolve_median_s": 0.058063928,
+      "wall_min_s": 0.052793415,
+      "wall_max_s": 0.060075311,
+      "vs_off_paired_absolute_median_s": 0.0,
+      "vs_off_paired_relative_median": 0.0
+    },
+    {
+      "cards": 1800,
+      "scenario": 0,
+      "phase": 0,
+      "mode": 1,
+      "paired_blocks": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "wall_per_resolve_median_s": 0.05529101,
+      "wall_min_s": 0.052760105,
+      "wall_max_s": 0.076137322,
+      "vs_off_paired_absolute_median_s": -0.001651686999999999,
+      "vs_off_paired_relative_median": -0.029006125227963753
+    },
+    {
+      "cards": 1800,
+      "scenario": 0,
+      "phase": 0,
+      "mode": 2,
+      "paired_blocks": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "wall_per_resolve_median_s": 0.055794425,
+      "wall_min_s": 0.052365117,
+      "wall_max_s": 0.074279983,
+      "vs_off_paired_absolute_median_s": -0.0014357310000000026,
+      "vs_off_paired_relative_median": -0.025213610798940578
+    },
+    {
+      "cards": 1800,
+      "scenario": 0,
+      "phase": 1,
+      "mode": 0,
+      "paired_blocks": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "wall_per_resolve_median_s": 0.0537666825,
+      "wall_min_s": 0.051839712,
+      "wall_max_s": 0.054314219,
+      "vs_off_paired_absolute_median_s": 0.0,
+      "vs_off_paired_relative_median": 0.0
+    },
+    {
+      "cards": 1800,
+      "scenario": 0,
+      "phase": 1,
+      "mode": 1,
+      "paired_blocks": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "wall_per_resolve_median_s": 0.052657855,
+      "wall_min_s": 0.0489408085,
+      "wall_max_s": 0.061557381,
+      "vs_off_paired_absolute_median_s": -0.0016563639999999935,
+      "vs_off_paired_relative_median": -0.030495955396136587
+    },
+    {
+      "cards": 1800,
+      "scenario": 0,
+      "phase": 1,
+      "mode": 2,
+      "paired_blocks": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "wall_per_resolve_median_s": 0.052060977,
+      "wall_min_s": 0.0492554635,
+      "wall_max_s": 0.057679562,
+      "vs_off_paired_absolute_median_s": -0.0010874200000000056,
+      "vs_off_paired_relative_median": -0.02022479255624532
+    },
+    {
+      "cards": 1800,
+      "scenario": 0,
+      "phase": 2,
+      "mode": 0,
+      "paired_blocks": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "wall_per_resolve_median_s": 0.053586769,
+      "wall_min_s": 0.050826931,
+      "wall_max_s": 0.056179905,
+      "vs_off_paired_absolute_median_s": 0.0,
+      "vs_off_paired_relative_median": 0.0
+    },
+    {
+      "cards": 1800,
+      "scenario": 0,
+      "phase": 2,
+      "mode": 1,
+      "paired_blocks": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "wall_per_resolve_median_s": 0.0542291315,
+      "wall_min_s": 0.0479214205,
+      "wall_max_s": 0.06382857,
+      "vs_off_paired_absolute_median_s": 0.00022364849999999964,
+      "vs_off_paired_relative_median": 0.004141218401842561
+    },
+    {
+      "cards": 1800,
+      "scenario": 0,
+      "phase": 2,
+      "mode": 2,
+      "paired_blocks": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "wall_per_resolve_median_s": 0.050422337,
+      "wall_min_s": 0.0485053005,
+      "wall_max_s": 0.0533423835,
+      "vs_off_paired_absolute_median_s": -0.0022581389999999993,
+      "vs_off_paired_relative_median": -0.041813143306208334
+    },
+    {
+      "cards": 1800,
+      "scenario": 1,
+      "phase": 0,
+      "mode": 0,
+      "paired_blocks": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "wall_per_resolve_median_s": 0.057865743,
+      "wall_min_s": 0.051946112,
+      "wall_max_s": 0.107270828,
+      "vs_off_paired_absolute_median_s": 0.0,
+      "vs_off_paired_relative_median": 0.0
+    },
+    {
+      "cards": 1800,
+      "scenario": 1,
+      "phase": 0,
+      "mode": 1,
+      "paired_blocks": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "wall_per_resolve_median_s": 0.053519681,
+      "wall_min_s": 0.047786255,
+      "wall_max_s": 0.125705959,
+      "vs_off_paired_absolute_median_s": -0.0016692970000000001,
+      "vs_off_paired_relative_median": -0.028847758854491867
+    },
+    {
+      "cards": 1800,
+      "scenario": 1,
+      "phase": 0,
+      "mode": 2,
+      "paired_blocks": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "wall_per_resolve_median_s": 0.060483484,
+      "wall_min_s": 0.053971914,
+      "wall_max_s": 0.101805916,
+      "vs_off_paired_absolute_median_s": 0.0009359809999999955,
+      "vs_off_paired_relative_median": 0.0157182241545879
+    },
+    {
+      "cards": 1800,
+      "scenario": 1,
+      "phase": 1,
+      "mode": 0,
+      "paired_blocks": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "wall_per_resolve_median_s": 0.0534128605,
+      "wall_min_s": 0.049071307,
+      "wall_max_s": 0.0565028875,
+      "vs_off_paired_absolute_median_s": 0.0,
+      "vs_off_paired_relative_median": 0.0
+    },
+    {
+      "cards": 1800,
+      "scenario": 1,
+      "phase": 1,
+      "mode": 1,
+      "paired_blocks": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "wall_per_resolve_median_s": 0.049047575,
+      "wall_min_s": 0.048654153,
+      "wall_max_s": 0.0766796255,
+      "vs_off_paired_absolute_median_s": -0.00043530249999999826,
+      "vs_off_paired_relative_median": -0.008867535717522856
+    },
+    {
+      "cards": 1800,
+      "scenario": 1,
+      "phase": 1,
+      "mode": 2,
+      "paired_blocks": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "wall_per_resolve_median_s": 0.053202171,
+      "wall_min_s": 0.0500777075,
+      "wall_max_s": 0.0545733455,
+      "vs_off_paired_absolute_median_s": 0.00017229099999999803,
+      "vs_off_paired_relative_median": 0.0032256463778044253
+    },
+    {
+      "cards": 1800,
+      "scenario": 1,
+      "phase": 2,
+      "mode": 0,
+      "paired_blocks": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "wall_per_resolve_median_s": 0.052577896,
+      "wall_min_s": 0.049609629,
+      "wall_max_s": 0.0569210245,
+      "vs_off_paired_absolute_median_s": 0.0,
+      "vs_off_paired_relative_median": 0.0
+    },
+    {
+      "cards": 1800,
+      "scenario": 1,
+      "phase": 2,
+      "mode": 1,
+      "paired_blocks": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "wall_per_resolve_median_s": 0.05084491,
+      "wall_min_s": 0.046994076,
+      "wall_max_s": 0.066611954,
+      "vs_off_paired_absolute_median_s": 0.0012352809999999978,
+      "vs_off_paired_relative_median": 0.024900024952817068
+    },
+    {
+      "cards": 1800,
+      "scenario": 1,
+      "phase": 2,
+      "mode": 2,
+      "paired_blocks": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "wall_per_resolve_median_s": 0.0550065555,
+      "wall_min_s": 0.0500443065,
+      "wall_max_s": 0.060599174,
+      "vs_off_paired_absolute_median_s": 0.00044481749999999987,
+      "vs_off_paired_relative_median": 0.008460161661851151
+    },
+    {
+      "cards": 1800,
+      "scenario": 2,
+      "phase": 0,
+      "mode": 0,
+      "paired_blocks": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "wall_per_resolve_median_s": 0.057308664,
+      "wall_min_s": 0.052073448,
+      "wall_max_s": 0.195382495,
+      "vs_off_paired_absolute_median_s": 0.0,
+      "vs_off_paired_relative_median": 0.0
+    },
+    {
+      "cards": 1800,
+      "scenario": 2,
+      "phase": 0,
+      "mode": 1,
+      "paired_blocks": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "wall_per_resolve_median_s": 0.056512161,
+      "wall_min_s": 0.054795595,
+      "wall_max_s": 0.066162704,
+      "vs_off_paired_absolute_median_s": 1.6999999999933735e-06,
+      "vs_off_paired_relative_median": 2.5718279006436973e-05
+    },
+    {
+      "cards": 1800,
+      "scenario": 2,
+      "phase": 0,
+      "mode": 2,
+      "paired_blocks": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "wall_per_resolve_median_s": 0.061231168,
+      "wall_min_s": 0.053827896,
+      "wall_max_s": 0.075511009,
+      "vs_off_paired_absolute_median_s": 0.002185857999999999,
+      "vs_off_paired_relative_median": 0.04197644066127526
+    },
+    {
+      "cards": 1800,
+      "scenario": 2,
+      "phase": 1,
+      "mode": 0,
+      "paired_blocks": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "wall_per_resolve_median_s": 0.056269691,
+      "wall_min_s": 0.0496216475,
+      "wall_max_s": 0.0633892855,
+      "vs_off_paired_absolute_median_s": 0.0,
+      "vs_off_paired_relative_median": 0.0
+    },
+    {
+      "cards": 1800,
+      "scenario": 2,
+      "phase": 1,
+      "mode": 1,
+      "paired_blocks": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "wall_per_resolve_median_s": 0.0545529585,
+      "wall_min_s": 0.050524397,
+      "wall_max_s": 0.056430335,
+      "vs_off_paired_absolute_median_s": 0.00016064400000000145,
+      "vs_off_paired_relative_median": 0.002854893942815462
+    },
+    {
+      "cards": 1800,
+      "scenario": 2,
+      "phase": 1,
+      "mode": 2,
+      "paired_blocks": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "wall_per_resolve_median_s": 0.056287137,
+      "wall_min_s": 0.0488386795,
+      "wall_max_s": 0.0626889035,
+      "vs_off_paired_absolute_median_s": -0.000782967999999995,
+      "vs_off_paired_relative_median": -0.015778758655685454
+    },
+    {
+      "cards": 1800,
+      "scenario": 2,
+      "phase": 2,
+      "mode": 0,
+      "paired_blocks": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "wall_per_resolve_median_s": 0.0535652905,
+      "wall_min_s": 0.0473312085,
+      "wall_max_s": 0.056040807,
+      "vs_off_paired_absolute_median_s": 0.0,
+      "vs_off_paired_relative_median": 0.0
+    },
+    {
+      "cards": 1800,
+      "scenario": 2,
+      "phase": 2,
+      "mode": 1,
+      "paired_blocks": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "wall_per_resolve_median_s": 0.0545939535,
+      "wall_min_s": 0.0495279515,
+      "wall_max_s": 0.0590778295,
+      "vs_off_paired_absolute_median_s": 0.003617845500000001,
+      "vs_off_paired_relative_median": 0.067540854651017
+    },
+    {
+      "cards": 1800,
+      "scenario": 2,
+      "phase": 2,
+      "mode": 2,
+      "paired_blocks": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "wall_per_resolve_median_s": 0.052114595,
+      "wall_min_s": 0.0484109565,
+      "wall_max_s": 0.057680026,
+      "vs_off_paired_absolute_median_s": -0.0010322850000000008,
+      "vs_off_paired_relative_median": -0.020878182107053056
+    },
+    {
+      "cards": 1800,
+      "scenario": 3,
+      "phase": 0,
+      "mode": 0,
+      "paired_blocks": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "wall_per_resolve_median_s": 0.05577538,
+      "wall_min_s": 0.045843073,
+      "wall_max_s": 0.069239813,
+      "vs_off_paired_absolute_median_s": 0.0,
+      "vs_off_paired_relative_median": 0.0
+    },
+    {
+      "cards": 1800,
+      "scenario": 3,
+      "phase": 0,
+      "mode": 1,
+      "paired_blocks": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "wall_per_resolve_median_s": 0.058221098,
+      "wall_min_s": 0.047066466,
+      "wall_max_s": 0.082066334,
+      "vs_off_paired_absolute_median_s": 0.004945274999999999,
+      "vs_off_paired_relative_median": 0.08866412026238102
+    },
+    {
+      "cards": 1800,
+      "scenario": 3,
+      "phase": 0,
+      "mode": 2,
+      "paired_blocks": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "wall_per_resolve_median_s": 0.056382251,
+      "wall_min_s": 0.053797593,
+      "wall_max_s": 0.066569894,
+      "vs_off_paired_absolute_median_s": 0.0014417559999999954,
+      "vs_off_paired_relative_median": 0.02753763634797779
+    },
+    {
+      "cards": 1800,
+      "scenario": 3,
+      "phase": 1,
+      "mode": 0,
+      "paired_blocks": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "wall_per_resolve_median_s": 0.059870914,
+      "wall_min_s": 0.054101046,
+      "wall_max_s": 0.0680546105,
+      "vs_off_paired_absolute_median_s": 0.0,
+      "vs_off_paired_relative_median": 0.0
+    },
+    {
+      "cards": 1800,
+      "scenario": 3,
+      "phase": 1,
+      "mode": 1,
+      "paired_blocks": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "wall_per_resolve_median_s": 0.0612645485,
+      "wall_min_s": 0.052048408,
+      "wall_max_s": 0.069860272,
+      "vs_off_paired_absolute_median_s": -0.0048975839999999965,
+      "vs_off_paired_relative_median": -0.0740239743632809
+    },
+    {
+      "cards": 1800,
+      "scenario": 3,
+      "phase": 1,
+      "mode": 2,
+      "paired_blocks": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "wall_per_resolve_median_s": 0.0601057145,
+      "wall_min_s": 0.053818874,
+      "wall_max_s": 0.076923027,
+      "vs_off_paired_absolute_median_s": -0.0002821719999999972,
+      "vs_off_paired_relative_median": -0.005215647771394272
+    },
+    {
+      "cards": 1800,
+      "scenario": 3,
+      "phase": 2,
+      "mode": 0,
+      "paired_blocks": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "wall_per_resolve_median_s": 0.0537728245,
+      "wall_min_s": 0.048905956,
+      "wall_max_s": 0.065156107,
+      "vs_off_paired_absolute_median_s": 0.0,
+      "vs_off_paired_relative_median": 0.0
+    },
+    {
+      "cards": 1800,
+      "scenario": 3,
+      "phase": 2,
+      "mode": 1,
+      "paired_blocks": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "wall_per_resolve_median_s": 0.053521554,
+      "wall_min_s": 0.0522579785,
+      "wall_max_s": 0.0594775415,
+      "vs_off_paired_absolute_median_s": -0.0002512704999999976,
+      "vs_off_paired_relative_median": -0.004672815726836088
+    },
+    {
+      "cards": 1800,
+      "scenario": 3,
+      "phase": 2,
+      "mode": 2,
+      "paired_blocks": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "wall_per_resolve_median_s": 0.0527407095,
+      "wall_min_s": 0.0512167405,
+      "wall_max_s": 0.0626090405,
+      "vs_off_paired_absolute_median_s": -2.3275000000003154e-05,
+      "vs_off_paired_relative_median": -0.0004510220173447044
+    },
+    {
+      "cards": 1800,
+      "scenario": 4,
+      "phase": 0,
+      "mode": 0,
+      "paired_blocks": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "wall_per_resolve_median_s": 0.058658176,
+      "wall_min_s": 0.048113065,
+      "wall_max_s": 0.061285444,
+      "vs_off_paired_absolute_median_s": 0.0,
+      "vs_off_paired_relative_median": 0.0
+    },
+    {
+      "cards": 1800,
+      "scenario": 4,
+      "phase": 0,
+      "mode": 1,
+      "paired_blocks": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "wall_per_resolve_median_s": 0.056158781,
+      "wall_min_s": 0.050955534,
+      "wall_max_s": 0.065854256,
+      "vs_off_paired_absolute_median_s": -0.0024446899999999994,
+      "vs_off_paired_relative_median": -0.03989022254615626
+    },
+    {
+      "cards": 1800,
+      "scenario": 4,
+      "phase": 0,
+      "mode": 2,
+      "paired_blocks": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "wall_per_resolve_median_s": 0.060401687,
+      "wall_min_s": 0.055117337,
+      "wall_max_s": 0.07031482,
+      "vs_off_paired_absolute_median_s": 0.009029375999999999,
+      "vs_off_paired_relative_median": 0.1473331253013359
+    },
+    {
+      "cards": 1800,
+      "scenario": 4,
+      "phase": 1,
+      "mode": 0,
+      "paired_blocks": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "wall_per_resolve_median_s": 0.053800832,
+      "wall_min_s": 0.0499809265,
+      "wall_max_s": 0.057841519,
+      "vs_off_paired_absolute_median_s": 0.0,
+      "vs_off_paired_relative_median": 0.0
+    },
+    {
+      "cards": 1800,
+      "scenario": 4,
+      "phase": 1,
+      "mode": 1,
+      "paired_blocks": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "wall_per_resolve_median_s": 0.051297669,
+      "wall_min_s": 0.049833529,
+      "wall_max_s": 0.058382403,
+      "vs_off_paired_absolute_median_s": -0.00014739750000000024,
+      "vs_off_paired_relative_median": -0.002949074983634059
+    },
+    {
+      "cards": 1800,
+      "scenario": 4,
+      "phase": 1,
+      "mode": 2,
+      "paired_blocks": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "wall_per_resolve_median_s": 0.056366838,
+      "wall_min_s": 0.050428715,
+      "wall_max_s": 0.0568713215,
+      "vs_off_paired_absolute_median_s": 0.0020514745000000043,
+      "vs_off_paired_relative_median": 0.0376588552498236
+    },
+    {
+      "cards": 1800,
+      "scenario": 4,
+      "phase": 2,
+      "mode": 0,
+      "paired_blocks": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "wall_per_resolve_median_s": 0.0547586925,
+      "wall_min_s": 0.0483512385,
+      "wall_max_s": 0.063228977,
+      "vs_off_paired_absolute_median_s": 0.0,
+      "vs_off_paired_relative_median": 0.0
+    },
+    {
+      "cards": 1800,
+      "scenario": 4,
+      "phase": 2,
+      "mode": 1,
+      "paired_blocks": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "wall_per_resolve_median_s": 0.0553360655,
+      "wall_min_s": 0.050891281,
+      "wall_max_s": 0.0654305045,
+      "vs_off_paired_absolute_median_s": -0.0007008405000000009,
+      "vs_off_paired_relative_median": -0.01358425433232091
+    },
+    {
+      "cards": 1800,
+      "scenario": 4,
+      "phase": 2,
+      "mode": 2,
+      "paired_blocks": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "wall_per_resolve_median_s": 0.05241844,
+      "wall_min_s": 0.0506769045,
+      "wall_max_s": 0.069022207,
+      "vs_off_paired_absolute_median_s": -0.000915216999999996,
+      "vs_off_paired_relative_median": -0.017739472101374942
+    },
+    {
+      "cards": 1800,
+      "scenario": 5,
+      "phase": 0,
+      "mode": 0,
+      "paired_blocks": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "wall_per_resolve_median_s": 0.059927994,
+      "wall_min_s": 0.057468101,
+      "wall_max_s": 0.062023201,
+      "vs_off_paired_absolute_median_s": 0.0,
+      "vs_off_paired_relative_median": 0.0
+    },
+    {
+      "cards": 1800,
+      "scenario": 5,
+      "phase": 0,
+      "mode": 1,
+      "paired_blocks": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "wall_per_resolve_median_s": 0.059309419,
+      "wall_min_s": 0.0549356,
+      "wall_max_s": 0.084794777,
+      "vs_off_paired_absolute_median_s": -0.0006185749999999962,
+      "vs_off_paired_relative_median": -0.01032197073040686
+    },
+    {
+      "cards": 1800,
+      "scenario": 5,
+      "phase": 0,
+      "mode": 2,
+      "paired_blocks": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "wall_per_resolve_median_s": 0.057308657,
+      "wall_min_s": 0.055437018,
+      "wall_max_s": 0.063322784,
+      "vs_off_paired_absolute_median_s": -0.002031083000000003,
+      "vs_off_paired_relative_median": -0.03534278955902859
+    },
+    {
+      "cards": 1800,
+      "scenario": 5,
+      "phase": 1,
+      "mode": 0,
+      "paired_blocks": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "wall_per_resolve_median_s": 0.0553464325,
+      "wall_min_s": 0.051079229,
+      "wall_max_s": 0.0583567865,
+      "vs_off_paired_absolute_median_s": 0.0,
+      "vs_off_paired_relative_median": 0.0
+    },
+    {
+      "cards": 1800,
+      "scenario": 5,
+      "phase": 1,
+      "mode": 1,
+      "paired_blocks": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "wall_per_resolve_median_s": 0.0561708475,
+      "wall_min_s": 0.052278175,
+      "wall_max_s": 0.0647617905,
+      "vs_off_paired_absolute_median_s": -0.000750692499999997,
+      "vs_off_paired_relative_median": -0.01318819729754317
+    },
+    {
+      "cards": 1800,
+      "scenario": 5,
+      "phase": 1,
+      "mode": 2,
+      "paired_blocks": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "wall_per_resolve_median_s": 0.0565328405,
+      "wall_min_s": 0.051880171,
+      "wall_max_s": 0.0569532365,
+      "vs_off_paired_absolute_median_s": 0.0008009420000000059,
+      "vs_off_paired_relative_median": 0.015680385465489444
+    },
+    {
+      "cards": 1800,
+      "scenario": 5,
+      "phase": 2,
+      "mode": 0,
+      "paired_blocks": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "wall_per_resolve_median_s": 0.0572436005,
+      "wall_min_s": 0.050827242,
+      "wall_max_s": 0.0829361645,
+      "vs_off_paired_absolute_median_s": 0.0,
+      "vs_off_paired_relative_median": 0.0
+    },
+    {
+      "cards": 1800,
+      "scenario": 5,
+      "phase": 2,
+      "mode": 1,
+      "paired_blocks": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "wall_per_resolve_median_s": 0.055693543,
+      "wall_min_s": 0.0526662555,
+      "wall_max_s": 0.0577790655,
+      "vs_off_paired_absolute_median_s": -0.003607344999999998,
+      "vs_off_paired_relative_median": -0.06367578663142537
+    },
+    {
+      "cards": 1800,
+      "scenario": 5,
+      "phase": 2,
+      "mode": 2,
+      "paired_blocks": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "wall_per_resolve_median_s": 0.0563559655,
+      "wall_min_s": 0.0510203175,
+      "wall_max_s": 0.060346184,
+      "vs_off_paired_absolute_median_s": -0.0003424750000000018,
+      "vs_off_paired_relative_median": -0.005982764833249776
+    },
+    {
+      "cards": 1800,
+      "scenario": 6,
+      "phase": 0,
+      "mode": 0,
+      "paired_blocks": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "wall_per_resolve_median_s": 0.055676154,
+      "wall_min_s": 0.051984829,
+      "wall_max_s": 0.063484876,
+      "vs_off_paired_absolute_median_s": 0.0,
+      "vs_off_paired_relative_median": 0.0
+    },
+    {
+      "cards": 1800,
+      "scenario": 6,
+      "phase": 0,
+      "mode": 1,
+      "paired_blocks": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "wall_per_resolve_median_s": 0.058610282,
+      "wall_min_s": 0.054090214,
+      "wall_max_s": 0.067591523,
+      "vs_off_paired_absolute_median_s": 0.004493954000000001,
+      "vs_off_paired_relative_median": 0.08071595606262605
+    },
+    {
+      "cards": 1800,
+      "scenario": 6,
+      "phase": 0,
+      "mode": 2,
+      "paired_blocks": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "wall_per_resolve_median_s": 0.061355287,
+      "wall_min_s": 0.054421509,
+      "wall_max_s": 0.092155996,
+      "vs_off_paired_absolute_median_s": 0.009370457999999998,
+      "vs_off_paired_relative_median": 0.18025370440287491
+    },
+    {
+      "cards": 1800,
+      "scenario": 6,
+      "phase": 1,
+      "mode": 0,
+      "paired_blocks": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "wall_per_resolve_median_s": 0.051762123,
+      "wall_min_s": 0.0495287225,
+      "wall_max_s": 0.058599039,
+      "vs_off_paired_absolute_median_s": 0.0,
+      "vs_off_paired_relative_median": 0.0
+    },
+    {
+      "cards": 1800,
+      "scenario": 6,
+      "phase": 1,
+      "mode": 1,
+      "paired_blocks": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "wall_per_resolve_median_s": 0.0553593675,
+      "wall_min_s": 0.052043721,
+      "wall_max_s": 0.069064906,
+      "vs_off_paired_absolute_median_s": 0.004625275499999998,
+      "vs_off_paired_relative_median": 0.0893563716465029
+    },
+    {
+      "cards": 1800,
+      "scenario": 6,
+      "phase": 1,
+      "mode": 2,
+      "paired_blocks": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "wall_per_resolve_median_s": 0.056505353,
+      "wall_min_s": 0.0520027555,
+      "wall_max_s": 0.0683452355,
+      "vs_off_paired_absolute_median_s": 0.0024740330000000005,
+      "vs_off_paired_relative_median": 0.049951480173953566
+    },
+    {
+      "cards": 1800,
+      "scenario": 6,
+      "phase": 2,
+      "mode": 0,
+      "paired_blocks": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "wall_per_resolve_median_s": 0.053421215,
+      "wall_min_s": 0.05039285,
+      "wall_max_s": 0.0575299475,
+      "vs_off_paired_absolute_median_s": 0.0,
+      "vs_off_paired_relative_median": 0.0
+    },
+    {
+      "cards": 1800,
+      "scenario": 6,
+      "phase": 2,
+      "mode": 1,
+      "paired_blocks": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "wall_per_resolve_median_s": 0.051181035,
+      "wall_min_s": 0.049703203,
+      "wall_max_s": 0.062634132,
+      "vs_off_paired_absolute_median_s": -0.0037180119999999997,
+      "vs_off_paired_relative_median": -0.06959804265028413
+    },
+    {
+      "cards": 1800,
+      "scenario": 6,
+      "phase": 2,
+      "mode": 2,
+      "paired_blocks": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "wall_per_resolve_median_s": 0.0528204825,
+      "wall_min_s": 0.0522168835,
+      "wall_max_s": 0.059053788,
+      "vs_off_paired_absolute_median_s": 0.0010022299999999998,
+      "vs_off_paired_relative_median": 0.019392009808170352
+    }
+  ]
+}

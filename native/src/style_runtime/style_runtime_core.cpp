@@ -16,6 +16,7 @@
 #include <cassert>
 #include "style_source_limits.h"
 #include "style_diff.h"
+#include "hover_probe.h"
 #include "css_variable_tokens.h"
 #include "custom_property_scope_internal.h"
 #include "typography_scope_probe.h"
@@ -339,6 +340,9 @@ static PreparedNodeResult* compute_node(aether_style_runtime_s* runtime, aether_
                                           uint32_t& impact, uint32_t& inherited_change_impact,
                                           selector_match_context_s& selector_context,
                                           std::optional<std::string>* generated_content = nullptr) {
+    aether::hover_probe::Scope cascade_probe(aether::hover_probe::cascade);
+    if (node->is_generated) { AETHER_HP_ADD(compute_pseudo,1); }
+    else { AETHER_HP_ADD(compute_original,1); }
     // The legacy subtree entry point starts an isolated inheritance scope.
     // Contextual preparation never installs this compatibility boundary.
     if (node == runtime->legacy_inheritance_root) parent = nullptr;
@@ -400,10 +404,12 @@ static PreparedNodeResult* compute_node(aether_style_runtime_s* runtime, aether_
     std::vector<const compiled_rule_s*> candidates;
     auto info = get_node_info(node);
     rule_index_get_candidates(&runtime->index, &info, candidates);
+    AETHER_HP_ADD(candidates,candidates.size());
     for (const auto* rule : candidates) {
         if (rule->selector.pseudo_element != node->pseudo_element) continue;
-        if (!media_condition_matches(rule->condition, &runtime->environment) ||
-            !selector_match(rule->selector, node, selector_context)) continue;
+        if (!media_condition_matches(rule->condition, &runtime->environment)) continue;
+        AETHER_HP_ADD(matcher_calls,1);
+        if (!selector_match(rule->selector, node, selector_context)) continue;
         typography_discarded = typography_discarded || rule->typography_discarded;
         for (const auto& declaration : rule->declarations) {
             cascade_priority_t priority{
@@ -437,6 +443,7 @@ static PreparedNodeResult* compute_node(aether_style_runtime_s* runtime, aether_
     // Generated pseudo-elements retain host attributes for selector matching, but
     // the host's inline declaration block does not cascade onto ::before/::after.
     if (!node->is_generated) if (auto it = node->attributes.find("style"); it != node->attributes.end()) {
+        AETHER_HP_ADD(inline_compiles,1);
         style_source_accounting_s inline_accounting;
         const auto inline_status=style_source_compile_inline(it->second.c_str(), inline_properties, inline_custom, inline_shorthands,
                                     runtime->diag_cb, runtime->diag_user_data, &typography_discarded_inline, &inline_accounting, &runtime->source_budget);
@@ -1174,9 +1181,11 @@ static aether_status_t prepare_revision_impl(
             // The ancestor-ID experiment is not accepted: normal preparation
             // retains the original matcher path. Only private tests opt in.
             selector_match_context_s selector_context;
+            aether::hover_probe::Scope preparation_probe(aether::hover_probe::preparation);
             prepare_tree(&staged, document, nullptr, 0, transaction->links, order, selector_context);
             assert(document->identity.get() == identity && identity->structure_epoch == structure_epoch);
         }
+        aether::hover_probe::Scope freeze_probe(aether::hover_probe::freeze);
         std::unordered_set<aether_node_s*> current_nodes(order.begin(), order.end());
         // Freeze document once, only after root-font bootstrap and complete traversal.
         StyleRevisionInput revision_input;
@@ -1240,17 +1249,25 @@ static aether_status_t prepare_revision_impl(
             input.node_lifetime=node->identity;input.document_lifetime=document->identity;
             if(auto it=leaves.find(node);it!=leaves.end())input.generated_leaf=it->second;
             FrozenNodeRef record;require_style_status(freeze_node_record(input,record));
+            AETHER_HP_ADD(frozen_records,1);
             next_states.emplace(node,record);backing.entries.emplace(node,record);
             revision_input.entries.push_back({node,record,prepared.impact});
         }
+        freeze_probe.stop();
+        aether::hover_probe::Scope backing_probe(aether::hover_probe::backing);
         require_style_status(freeze_backing(backing,revision_input.backing));
         if(runtime->revision)for(const auto& old:runtime->revision->entries())
             if(!current_nodes.count(old.node()))revision_input.retired.push_back({old.record(),STYLE_IMPACT_ALL_BITS});
+        AETHER_HP_ADD(revision_entries,revision_input.entries.size());
+        AETHER_HP_ADD(retired_entries,revision_input.retired.size());
         StyleRevisionRef revision;require_style_status(freeze_style_revision(revision_input,revision));
+        backing_probe.stop();
+        aether::hover_probe::Scope updates_probe(aether::hover_probe::updates);
         for(const auto& entry:revision_input.entries)if(entry.impact) {
             auto update=std::make_unique<aether_style_update_s>();update->node=entry.node;update->impact=entry.impact;
             const auto& record=entry.record;
             require_style_status(computed_style_deep_copy(record->style_view(),&update->current.style));
+            AETHER_HP_ADD(update_copies,1);
             update->current.record=record;update->current.measures=record->measures();update->current.revision=revision;
             update->current.document_identity=record->document_identity();update->current.node_identity=record->node_identity();
             update->current.node_lifetime=record->node_lifetime();update->current.document_lifetime=record->document_lifetime();
@@ -1281,6 +1298,7 @@ AETHER_API aether_status_t aether_style_runtime_prepare_revision(
 }
 AETHER_API aether_status_t aether_style_runtime_commit_revision(
     aether_style_runtime_t runtime, aether_style_transaction_t transaction, aether_style_revision_t* out_revision) {
+    aether::hover_probe::Scope commit_probe(aether::hover_probe::commit_total);
     if (out_revision) *out_revision = nullptr;
     if (!runtime || !transaction || !out_revision) return AETHER_ERROR_NULL_ARG;
     if (transaction->owner != runtime || transaction->committed || runtime->preparing ||
@@ -1288,6 +1306,7 @@ AETHER_API aether_status_t aether_style_runtime_commit_revision(
         runtime->sheet_epoch != transaction->base_sheet_epoch || !transaction->document_lifetime->alive ||
         transaction->document_lifetime->mutation_epoch != transaction->input_epoch ||
         transaction->document_lifetime->style_tree_epoch != transaction->base_style_tree_epoch) return AETHER_ERROR_INVALID_STATE;
+    aether::hover_probe::Scope publication_probe(aether::hover_probe::publication);
     // No callbacks, allocation, comparison, diagnostics or fallible work in this
     // publication boundary. Old generated storage stays owned by retained frames.
     for (auto& link : transaction->links) {
@@ -1303,6 +1322,8 @@ AETHER_API aether_status_t aether_style_runtime_commit_revision(
     runtime->revision = transaction->revision;
     transaction->committed = true;
     *out_revision = transaction->output.release();
+    publication_probe.stop();
+    aether::hover_probe::Scope replay_probe(aether::hover_probe::replay);
     // Consumer reentrancy may publish another revision. Outputs above remain
     // those prepared by this operation; never read/write runtime after replay.
     try { transaction->diagnostics->replay(); } catch (...) { /* C callback must not unwind through C ABI. */ }
@@ -1322,6 +1343,8 @@ static int32_t resolve_legacy_atomic(aether_style_runtime_t runtime, aether_node
     const int32_t count = static_cast<int32_t>(transaction->updates.size());
     *out_updates = transaction->legacy_array.release();
     for (auto& update : transaction->updates) update.release();
+    { aether::hover_probe::Scope cleanup_probe(aether::hover_probe::cleanup);
+      transaction.reset(); }
     return count;
 }
 AETHER_API aether_status_t aether_style_runtime_retain_revision(aether_style_runtime_t runtime, aether_style_revision_t* out) {

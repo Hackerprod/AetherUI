@@ -1,0 +1,34 @@
+Native hover diagnostic baseline. NOT optimization acceptance.
+{
+  "kind": "diagnostic-native-only",
+  "deadline_seconds": 90,
+  "cpu_quota": "unknown",
+  "memory_quota": "unknown",
+  "host_comparison": false,
+  "seed": "deterministic index order; no PRNG",
+  "build": "clean manual build (local path omitted)",
+  "warmup": "two native resolutions per fixture before transition, nochange follows transition",
+  "completed_blocks": 5,
+  "coverage": "complete 5 blocks x 21 cells x 3 modes",
+  "platform": "Linux-6.18.57-x86_64-with-glibc2.41",
+  "compiler": "c++ (Debian 14.2.0-19) 14.2.0",
+  "commit": "8c03b7d47f4c6213999367c8d60555d3f4898ff6",
+  "working_tree_dirty": true,
+  "canonical": "PASS full serialized corpus outputs agree across three configs; unsupported payloads fail closed",
+  "calibration_seconds": 0.4149704380033654,
+  "frozen_transitions": 2,
+  "elapsed_seconds": 49.91932152299705,
+  "baseline_tree": "416351179afcc4cde10be8f077d4132a27a89c93",
+  "pilot_runner_note": "Executed runner used 90s deadline; after launch runner hardening added 85s subprocess deadline plus 5s teardown reserve and post-run CPU metadata. No rerun; measured binaries unchanged."
+}
+
+Clean build: 70 common C++20/O1 objects plus three runtime/harness variants.
+Canonical: 7 scenarios x 3 configurations, complete byte-equivalence, retained revisions unchanged, inline diagnostics and source limit rejection.
+Measurement: 945 rows, 5 blocks x 21 cells x 3 modes x 3 phases.
+Counters asserted for original computed nodes, frozen/revision entries, update copies and matcher bound.
+Regression off: diagnostic reentrancy 291 checks, zero failures; style revision atomic 5357 checks, 22 aligned failures exercised; hit-order-cache regression PASS (its legacy microbenchmark not used here).
+Default-off core object: nm -C contains no hover_probe symbols.
+Unknown quotas/frequency/governor/shared-host isolation; no speedup, C#, Chromium, renderer or flexbox page claim.
+Overhead absolute/relative paired by block in summary.json; raw.csv authoritative.
+
+CORRECTION after first commit: original inline fixture changed source accounting but produced no callback diagnostic; its diagnostic-order comparison was vacuous. Canonical-only fixture now uses malformed calc and asserts nonempty callbacks. Supplemental 21/21 cross-config checks PASS in 1.207s; no second timing pilot. Measurements unchanged and apply to --measure branch before this canonical-only correction. Original canonical output files were replaced externally; their original hashes remain canonical-sha256.txt; corrected hashes canonical-corrected-sha256.txt. See canonical-validation.json.

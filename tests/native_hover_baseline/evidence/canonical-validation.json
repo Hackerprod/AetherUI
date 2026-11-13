@@ -1,0 +1,8 @@
+{
+  "canonical_runs": 21,
+  "result": "PASS",
+  "diagnostics": "nonempty AETHER-CSS-CALC asserted",
+  "elapsed_seconds": 1.2074500159942545,
+  "note": "Corrected inline-only correctness corpus after timing pilot; timed fixture unchanged.",
+  "provenance": "Original canonical text files were overwritten by corrected check, then moved under canonical-corrected. Original timing raw/summary/report are unchanged. Do not treat corrected files as outputs captured during pilot."
+}
