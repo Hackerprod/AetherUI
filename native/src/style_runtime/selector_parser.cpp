@@ -513,6 +513,7 @@ static bool try_parse_pseudo(parser_s& p, pseudo_selector_s& pseudo,
         selector_dependency_t dep = SELECTOR_DEP_NONE;
         if      (name == "root")        { kind = PSEUDO_ROOT; }
         else if (name == "empty")       { kind = PSEUDO_EMPTY; dep = SELECTOR_DEP_STRUCTURE; }
+        else if (name == "first-of-type") { kind = PSEUDO_FIRST_OF_TYPE; dep = SELECTOR_DEP_STRUCTURE; }
         else if (name == "first-child") { kind = PSEUDO_FIRST_CHILD; dep = SELECTOR_DEP_STRUCTURE; }
         else if (name == "last-child")  { kind = PSEUDO_LAST_CHILD; dep = SELECTOR_DEP_STRUCTURE; }
         else if (name == "only-child")  { kind = PSEUDO_ONLY_CHILD; dep = SELECTOR_DEP_STRUCTURE; }

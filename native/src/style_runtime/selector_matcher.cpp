@@ -309,6 +309,22 @@ static bool matches_pseudo(const pseudo_selector_s& pseudo, aether_node_s* node,
         return node->parent == nullptr || node->parent->type == AETHER_NODE_DOCUMENT;
     case PSEUDO_EMPTY:
         return is_empty_for_selector(node);
+    case PSEUDO_FIRST_OF_TYPE: {
+        // HTML type identity follows the existing ASCII-insensitive type matcher.
+        // This does not add XML/namespace semantics.
+        if (!is_selector_dom_element(node)) return false;
+        if (!node->parent) return true;
+        auto* parent = dom_parent(node);
+        if (!parent) return false;
+        for (auto* sibling : parent->children) {
+            if (sibling == node) return true;
+            if (is_selector_dom_element(sibling) &&
+                aether::ascii_iequals(std::string_view(sibling->tag_name),
+                                     std::string_view(node->tag_name)))
+                return false;
+        }
+        return false;
+    }
     case PSEUDO_FIRST_CHILD:
         return is_first_dom_element_child(node);
     case PSEUDO_LAST_CHILD:

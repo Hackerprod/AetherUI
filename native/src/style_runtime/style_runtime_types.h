@@ -143,6 +143,7 @@ enum pseudo_selector_kind_t : uint8_t {
     PSEUDO_ROOT,
     PSEUDO_EMPTY,
     PSEUDO_FIRST_CHILD,
+    PSEUDO_FIRST_OF_TYPE,
     PSEUDO_LAST_CHILD,
     PSEUDO_ONLY_CHILD,
     PSEUDO_NTH_CHILD,
