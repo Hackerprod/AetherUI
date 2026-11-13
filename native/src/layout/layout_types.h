@@ -23,6 +23,7 @@ using aether::layout::CallbackEpochGuard;
 #include "../dom/dom_types.h"
 #include "../rendering/stacking.h"
 #include "../rendering/text/shaped_run.h"
+#include "../rendering/text/measurement_provider.h"
 
 /* ── Internal layout types (mirrors C# LayoutBox/LayoutResult) ──── */
 
@@ -405,6 +406,15 @@ private:
 
 struct initial_canvas_dimensions { float width, height; };
 struct aether_layout_engine_s {
+private:
+    std::shared_ptr<const aether::rendering::text::MeasurementSelection> text_selection_;
+public:
+    // Internal setter rejects mutation during a layout; ownership is retained.
+    bool select_text_measurement(std::shared_ptr<const aether::rendering::text::MeasurementSelection> s) {
+        if(layout_in_progress) return false;
+        text_selection_=std::move(s); return true;
+    }
+    const auto& text_selection() const { return text_selection_; }
     bool initial_canvas_mode = false;
     std::unordered_map<aether_node_s*, initial_canvas_dimensions> initial_canvas_entries;
     bool layout_in_progress = false;
@@ -482,11 +492,28 @@ inline aether_text_metrics_t engine_measure_text(
 }
 
 
-// Reserved transport boundary: legacy callers return no native identity. There
-// is intentionally no native-provider selector until the real provider gate.
+// Intrinsic and final fragments use this same explicit selection. Legacy is
+// the default; choosing native is never permission to fall back to callbacks.
 inline aether::rendering::text::Measurement engine_measure_text_transport(
     const aether_layout_engine_s* e, const char* text,
     const BoxStyleSnapshot* style, float width, aether_node_s* node=nullptr) {
+    const auto selection=e ? e->text_selection() : nullptr;
+    if(selection && selection->mode==aether::rendering::text::MeasurementMode::native) {
+        if(e->text_measurer || e->contextual_text_measurer)
+            throw std::invalid_argument("native and callback measurement conflict");
+        const auto lifetime=e->measure_document;
+        const CallbackEpochGuard guard(lifetime);
+        std::shared_ptr<node_identity_s> identity;
+        if(node && e->measure_styles)
+            if(const auto* record=e->measure_styles->lookup_record(node)) identity=record->node_lifetime();
+        const auto valid_node=[&](){return !identity || (identity->owner==node && identity->alive && identity->attached);};
+        if(!valid_node()) throw std::runtime_error("retired native measurement node");
+        auto measured=aether::rendering::text::native_measure(*selection,text,style->font_size,width);
+        if(!guard.valid() || !valid_node()) throw std::runtime_error("DOM mutated during native measurement");
+        return measured;
+    }
+    if(selection && (selection->provider || selection->font))
+        throw std::invalid_argument("native resources in legacy selection");
     return {engine_measure_text(e,text,style,width,node), {}};
 }
 
@@ -498,7 +525,7 @@ inline aether_text_metrics_t layout_fragment_metrics(
 {
     const auto& placement = fragment.native_text;
     if (!placement.run)
-        return engine_measure_text(engine, fragment.text.c_str(), &fragment.style, 0.f, fragment.element);
+        return engine_measure_text_transport(engine, fragment.text.c_str(), &fragment.style, 0.f, fragment.element).metrics;
     const auto& run = *placement.run;
     if (!run.font || run.source != fragment.text ||
         !std::isfinite(placement.baseline) || placement.baseline != run.metrics.baseline ||

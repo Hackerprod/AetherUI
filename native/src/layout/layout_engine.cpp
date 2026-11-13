@@ -32,6 +32,8 @@ static opaque_control_size_s measure_opaque_single_line_control(
     aether_node_s* element,
     const BoxStyleSnapshot& style)
 {
+    if(engine->text_selection() && engine->text_selection()->mode==aether::rendering::text::MeasurementMode::native)
+        throw std::invalid_argument("opaque controls outside native text contract");
     const float min_height = std::max(style.font_size * 1.1f, layout_used_line_height(engine, element, style));
     const std::string text = aether_opaque_control_display_text(element, style);
     if (text.empty()) return {0.f, min_height};
@@ -1727,8 +1729,8 @@ static intrinsic_widths_s measure_inline_items_intrinsic_widths(
                 continue;
             }
             const bool whitespace = token.kind != aether_inline_text_token_kind_e::word;
-            const float width = engine_measure_text(
-                engine, token.text.c_str(), &item.style, 0.f, item.element).width;
+            const float width = engine_measure_text_transport(
+                engine, token.text.c_str(), &item.style, 0.f, item.element).metrics.width;
             append(whitespace ? aether_inline_fragment_kind_e::whitespace : aether_inline_fragment_kind_e::word,
                 {width, width});
         }
@@ -2416,6 +2418,12 @@ AETHER_API aether_status_t aether_layout_layout(
     result->abandoned = true;
     struct measure_scope_s { aether_layout_engine_s* e; ~measure_scope_s() { e->measure_styles = nullptr; e->measure_document.reset(); } } measure_scope{engine};
     try {
+    const auto text_selection = engine->text_selection();
+    if(text_selection && ((text_selection->mode==aether::rendering::text::MeasurementMode::native &&
+        (!text_selection->provider || !text_selection->font || engine->text_measurer || engine->contextual_text_measurer)) ||
+        (text_selection->mode==aether::rendering::text::MeasurementMode::legacy &&
+        (text_selection->provider || text_selection->font))))
+        throw std::invalid_argument("invalid text measurement selection");
     aether::style::FrozenStyleRef defaults;
     const auto default_flat = aether_computed_style_default();
     const auto default_status = aether::style::freeze_style(default_flat, defaults);
@@ -2514,6 +2522,8 @@ AETHER_API aether_status_t aether_layout_layout(
 AETHER_API void aether_layout_set_contextual_text_measurer(aether_layout_engine_t engine,
     aether_text_measurer_contextual_fn callback, void* data) {
     if (!engine) return;
+    if (engine->layout_in_progress && engine->text_selection() &&
+        engine->text_selection()->mode==aether::rendering::text::MeasurementMode::native) return;
     engine->contextual_text_measurer = callback;
     engine->contextual_text_measurer_data = data;
 }
