@@ -18,6 +18,7 @@
 #include "style_diff.h"
 #include "css_variable_tokens.h"
 #include "custom_property_scope_internal.h"
+#include "typography_scope_probe.h"
 #include "frozen_runtime_metadata.h"
 #include "value_audit_internal.h"
 #include "paused_keyframes.h"
@@ -358,11 +359,17 @@ static PreparedNodeResult* compute_node(aether_style_runtime_s* runtime, aether_
         if (name == "font-family") typography_parse_family(source, typography);
         else if (name == "font-style") typography_parse_style(source, typography);
         else if (name == "letter-spacing") typography_parse_spacing(source, typography);
+        else if (name == "font-size") { typography.size_state=source.size()<=65536?TypographyFieldState::known:TypographyFieldState::unsupported; typography.provenance[3].resolved_source=source.size()<=65536?source:std::string{}; }
+        else if (name == "font-weight") { typography.weight_state=source.size()<=65536?TypographyFieldState::known:TypographyFieldState::unsupported; typography.provenance[4].resolved_source=source.size()<=65536?source:std::string{}; }
+        else if (name == "line-height") { typography.line_height_state=source.size()<=65536?TypographyFieldState::known:TypographyFieldState::unsupported; typography.provenance[5].resolved_source=source.size()<=65536?source:std::string{}; }
     };
     auto typography_reset = [&](const std::string& name) {
         if (name == "font-family") { typography.family_state=TypographyFieldState::unknown; typography.families.clear(); }
         else if (name == "font-style") { typography.style_state=TypographyFieldState::unknown; typography.font_style.clear(); }
         else if (name == "letter-spacing") { typography.spacing_state=TypographyFieldState::unknown; typography.spacing_normal=false; typography.spacing_px=0; }
+        else if (name == "font-size") { typography.size_state=TypographyFieldState::unknown; typography.size_px=0; typography.size_dependencies=0; typography.provenance[3].resolved_source.clear(); }
+        else if (name == "font-weight") { typography.weight_state=TypographyFieldState::unknown; typography.weight=0; typography.provenance[4].resolved_source.clear(); }
+        else if (name == "line-height") { typography.line_height_state=TypographyFieldState::unknown; typography.line_height_value=0; typography.line_height_used_px=0; typography.line_height_dependencies=0; typography.provenance[5].resolved_source.clear(); }
     };
     std::vector<cascade_entry_s> cascade(static_cast<size_t>(registry->property_count()));
     struct custom_winner_s {
@@ -581,15 +588,33 @@ static PreparedNodeResult* compute_node(aether_style_runtime_s* runtime, aether_
         color_references.text_shadow_uses_current_color =
             copy_text_color_flags(*parent->color_references);
     }
-    bool typography_scope_uncertain=false;
-    for (auto* current=scope.get(); current; current=current->parent())
-        for (const auto& terminal:current->local_entries())
-            if (terminal.status()!=custom_property_status::valid) typography_scope_uncertain=true;
+    // T19_SCOPE_BEGIN: benchmark replaces only this region for the eager baseline.
+    auto* scope_counters = typography_scope_counters;
+    if (scope_counters) ++scope_counters->node_computations;
+    std::optional<bool> typography_scope_result;
+    auto typography_scope_uncertain = [&]() {
+        if (typography_scope_result) return *typography_scope_result;
+        if (scope_counters) ++scope_counters->queries;
+        for (auto* current=scope.get(); current; current=current->parent()) {
+            if (scope_counters) ++scope_counters->scopes;
+            for (const auto& terminal:current->local_entries()) {
+                if (scope_counters) ++scope_counters->terminals;
+                if (terminal.status()!=custom_property_status::valid) {
+                    if (scope_counters) ++scope_counters->uncertain_exits;
+                    typography_scope_result=true;
+                    return true;
+                }
+            }
+        }
+        typography_scope_result=false;
+        return false;
+    };
+    // T19_SCOPE_END
     auto apply_definition = [&](size_t i) {
         if (!cascade[i].is_set) return false;
         const auto& definition = registry->definitions[i];
         const auto& compiled = cascade[i].value;
-        const int typography_index=definition.name=="font-family"?0:definition.name=="font-style"?1:definition.name=="letter-spacing"?2:-1;
+        const int typography_index=definition.name=="font-family"?0:definition.name=="font-style"?1:definition.name=="letter-spacing"?2:definition.name=="font-size"?3:definition.name=="font-weight"?4:definition.name=="line-height"?5:-1;
         if (typography_index>=0) {
             auto& origin=typography.provenance[static_cast<size_t>(typography_index)];
             origin.declaration=true;
@@ -600,7 +625,7 @@ static PreparedNodeResult* compute_node(aether_style_runtime_s* runtime, aether_
             origin.source_order=cascade[i].priority.source_order; origin.declaration_order=cascade[i].priority.decl_order;
             origin.accepted_source=compiled.typography_source.size()<=65536?compiled.typography_source:std::string{};
         }
-        if (typography_index>=0 && compiled.mode==compiled_value_mode::deferred && typography_scope_uncertain) {
+        if (typography_index>=0 && compiled.mode==compiled_value_mode::deferred && typography_scope_uncertain()) {
             typography_reset(definition.name); typography.coverage_gaps |= 2;
         }
         const std::string initial_value = definition.name == "font-size" ?
@@ -693,7 +718,7 @@ static PreparedNodeResult* compute_node(aether_style_runtime_s* runtime, aether_
                 if (!definition.css_wide || (definition.inherited && parent)) return false;
                 value = initial_value;
             } else {
-                if (!typography_scope_uncertain && !typography_css_wide(typography_keyword)) typography_set(definition.name, typography_resolved_source);
+                if (typography_index>=0 && !typography_scope_uncertain() && !typography_css_wide(typography_keyword)) typography_set(definition.name, typography_resolved_source);
             }
             break;
         }
@@ -713,7 +738,10 @@ static PreparedNodeResult* compute_node(aether_style_runtime_s* runtime, aether_
             return apply_property_value(definition, style, references, value, emit_diagnostics, destination);
         };
         measure_apply_state_s selected_measures(*measures, definition.name);
-        if (!apply_selected(next, color_references, true, selected_measures)) return false;
+        if (!apply_selected(next, color_references, true, selected_measures)) {
+            if (typography_index>=0) { typography_reset(definition.name); typography.coverage_gaps |= 2; }
+            return false;
+        }
         return true;
     };
 
@@ -782,6 +810,26 @@ static PreparedNodeResult* compute_node(aether_style_runtime_s* runtime, aether_
         }
     }
 
+    // Read successful contextual outputs here, never reconstruct specified units
+    // from lossy scalars. Inherited unitless line height keeps its kind and is
+    // evaluated with this node's final font-size, unlike inherited absolute px.
+    if (typography.size_state==TypographyFieldState::known) {
+        typography.size_px=next.font_size;
+        typography.size_dependencies=measure_property_dependencies(*measures,"font-size");
+        // The existing resolver treats these keywords as parent-relative, but
+        // its unit-token dependency scanner cannot see keyword dependencies.
+        const auto size_source=typography_ascii_lower(typography.provenance[3].resolved_source);
+        if (size_source=="smaller" || size_source=="larger") typography.size_dependencies |= MEASURE_PARENT;
+    }
+    if (typography.weight_state==TypographyFieldState::known) typography.weight=next.font_weight;
+    if (typography.line_height_state==TypographyFieldState::known) {
+        typography.line_height_kind=static_cast<TypographyLineHeightKind>(measures->line_height.kind);
+        typography.line_height_value=measures->line_height.value;
+        typography.line_height_used_px=measure_used_line_height(measures.get(),next);
+        typography.line_height_dependencies=measure_property_dependencies(*measures,"line-height");
+        if (measures->line_height.kind!=measure_line_height_kind_e::absolute_css_px)
+            typography.line_height_dependencies |= MEASURE_SELF_FONT;
+    }
     measure_recompute_dependencies(*measures);
     const bool is_new_node = found == runtime->states.end();
     // One final semantic comparison per existing node. Neither historical

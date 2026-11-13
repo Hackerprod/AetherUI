@@ -11,6 +11,7 @@
 #include <vector>
 
 namespace aether::style {
+enum class TypographyLineHeightKind { normal, number, absolute_css_px };
 enum class TypographyFieldState { unknown, known, unsupported };
 struct TypographyFamily {
     std::string name;
@@ -20,15 +21,16 @@ struct TypographyFamily {
 struct TypographyProvenance {
     bool declaration=false, inherited=false, important=false, inline_style=false;
     int32_t layer=0, source_order=0, declaration_order=0;
+    std::string resolved_source; // source delivered by the existing resolver, before typed normalization
     std::string accepted_source; // bounded to 64 KiB; never diagnostics
     bool operator==(const TypographyProvenance& v) const {
         return declaration==v.declaration && inherited==v.inherited && important==v.important &&
             inline_style==v.inline_style && layer==v.layer && source_order==v.source_order &&
-            declaration_order==v.declaration_order && accepted_source==v.accepted_source;
+            declaration_order==v.declaration_order && accepted_source==v.accepted_source && resolved_source==v.resolved_source;
     }
 };
 struct TypographyEvidence {
-    std::array<TypographyProvenance,3> provenance{};
+    std::array<TypographyProvenance,6> provenance{};
     TypographyFieldState family_state = TypographyFieldState::unknown;
     std::vector<TypographyFamily> families;
     TypographyFieldState style_state = TypographyFieldState::unknown;
@@ -36,7 +38,15 @@ struct TypographyEvidence {
     TypographyFieldState spacing_state = TypographyFieldState::unknown;
     bool spacing_normal = false;
     double spacing_px = 0;
-    // These three fields never prove complete typography coverage on their own.
+    TypographyFieldState size_state = TypographyFieldState::unknown;
+    TypographyFieldState weight_state = TypographyFieldState::unknown;
+    TypographyFieldState line_height_state = TypographyFieldState::unknown;
+    float size_px = 0;
+    int weight = 0; // existing runtime's narrow integer profile, not general CSS weights
+    TypographyLineHeightKind line_height_kind = TypographyLineHeightKind::normal;
+    float line_height_value = 0, line_height_used_px = 0;
+    uint32_t size_dependencies = 0, line_height_dependencies = 0;
+    // These six fields never prove complete typography coverage on their own.
     bool coverage_complete = false;
     // Bit 1: unrepresented typography pipeline/sheets; bit 2: matched discarded
     // declaration. Never treat absence of a tracked property as an initial value.
@@ -45,7 +55,11 @@ struct TypographyEvidence {
         return provenance == v.provenance && family_state == v.family_state && families == v.families &&
             style_state == v.style_state && font_style == v.font_style &&
             spacing_state == v.spacing_state && spacing_normal == v.spacing_normal &&
-            spacing_px == v.spacing_px && coverage_complete == v.coverage_complete && coverage_gaps == v.coverage_gaps;
+            spacing_px == v.spacing_px && size_state == v.size_state && weight_state == v.weight_state &&
+            line_height_state == v.line_height_state && size_px == v.size_px && weight == v.weight &&
+            line_height_kind == v.line_height_kind && line_height_value == v.line_height_value &&
+            line_height_used_px == v.line_height_used_px && size_dependencies == v.size_dependencies &&
+            line_height_dependencies == v.line_height_dependencies && coverage_complete == v.coverage_complete && coverage_gaps == v.coverage_gaps;
     }
     bool operator!=(const TypographyEvidence& v) const { return !(*this == v); }
 };

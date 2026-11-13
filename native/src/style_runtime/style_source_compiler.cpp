@@ -168,7 +168,8 @@ static bool try_compile_longhand(
         if (css_single_identifier(value, ident)) wide_keyword = std::move(ident);
     }
     compiled_style_value_s compiled;
-    if (name == "font-family" || name == "font-style" || name == "letter-spacing")
+    if (name == "font-family" || name == "font-style" || name == "letter-spacing" ||
+        name == "font-size" || name == "font-weight" || name == "line-height")
         compiled.typography_source = normalized;
 
     const auto css_wide = def->css_wide ? def->css_wide(wide_keyword) : property_css_wide_e::none;
@@ -320,7 +321,8 @@ static declaration_compilation_result compile_declarations(
         if (try_compile_longhand(name, value, important, declaration_order++, registry, compiled,
                                  diagnostics_callback, diagnostics_user_data))
             result.properties.push_back(std::move(compiled));
-        else if (name == "font-family" || name == "font-style" || name == "letter-spacing")
+        else if (name == "font-family" || name == "font-style" || name == "letter-spacing" ||
+        name == "font-size" || name == "font-weight" || name == "line-height")
             result.typography_discarded = true;
     }
 
