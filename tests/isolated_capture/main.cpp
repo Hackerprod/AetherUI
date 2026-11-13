@@ -25,7 +25,7 @@
 namespace p=aether::rendering::preparation;
 using Clock=std::chrono::steady_clock;
 constexpr size_t max_bytes=2*1024*1024;
-struct Failure {const char* reason;};
+struct Failure {const char* reason; size_t begin=SIZE_MAX,end=SIZE_MAX,selector_begin=SIZE_MAX,selector_end=SIZE_MAX;};
 std::ofstream logstream;
 void require(bool ok,const char* reason){if(!ok)throw Failure{reason};}
 struct Stage {const char* name;Clock::time_point t=Clock::now(); explicit Stage(const char* n):name(n){logstream<<"stage_started="<<name<<std::endl;} ~Stage(){logstream<<name<<"_wall_ms="<<std::chrono::duration<double,std::milli>(Clock::now()-t).count()<<std::endl;}};
@@ -41,16 +41,19 @@ aether_text_metrics_t no_text(const char*,const aether_computed_style_t*,float,v
 #include "h3_profile.h"
 #include "h4_profile.h"
 #include "h11_profile.h"
+#include "h16_diagnostic.h"
 void check_css(const std::string& s,const h5::Analysis& analysis){
  css_variable_budget budget{max_bytes*4,false};css_variable_lexer lexer(s.data(),s.size(),0,&budget);
  for(;;){auto t=lexer.next();if(t.kind==css_variable_token_kind::end)break;
+  try {
   require(!budget.exhausted&&t.kind!=css_variable_token_kind::error,"CSS_LEXICAL_OR_WORK_LIMIT");
   require(t.serialization!=css_variable_serialization::at_keyword||analysis.at_rules.count(t.begin),"CSS_AT_RULE_UNSUPPORTED");
   require(t.serialization!=css_variable_serialization::url&&t.serialization!=css_variable_serialization::bad_url,"CSS_RESOURCE_UNSUPPORTED");
   require(t.kind!=css_variable_token_kind::function||analysis.functions.count(t.begin),"CSS_FUNCTION_UNSUPPORTED");
+  }catch(Failure f){f.begin=t.begin;f.end=t.end;throw f;}
  }
  require(!budget.exhausted,"CSS_WORK_LIMIT");
- require(analysis.valid,"CSS_CONTEXT_PROFILE_UNSUPPORTED");
+ if(!analysis.valid)throw Failure{"CSS_CONTEXT_PROFILE_UNSUPPORTED",analysis.failure_begin,analysis.failure_end,analysis.failure_selector_begin,analysis.failure_selector_end};
 }
 std::string read_input(const char* path){
  int fd=open(path,O_RDONLY|O_NOFOLLOW|O_NONBLOCK);require(fd>=0,"INPUT_OPEN_FAILED");
@@ -62,7 +65,7 @@ std::string read_input(const char* path){
 }
 int capture(const char* input,const std::string& out,int width,int height,bool geometry){
  logstream.open(out+"/worker.log",std::ios::out);if(!logstream)return 8;
- logstream<<"format=H3-initial-canvas\ncanvas_mode=ENABLED_INITIAL_EMPTY\njavascript_execution=NONE\ninventory_scope=DOM_EXTRACTED_CSS_AND_ELEMENTS\ninventory_locations=CSS_SOURCE_LOCAL_BYTE_OFFSETS_NOT_HTML\ninventory_semantic_context=NOT_PROVEN\noutput_domain=AetherResolvedOutput\ncss_eligibility=Unknown\ncss_reason=PARSER_COVERAGE_UNPROVEN\nauthored_css_validation=NOT_RUN\nflexbox_semantic_acceptance=false\nchromium=NOT_RUN\nnetwork_resolver=NONE\nhost_font_lookup=NONE\ninternal_parse_layout_work_limits=NOT_IMPLEMENTED\nprocess_limits=AS_1GiB_CPU_5s_STACK_8MiB_WALL_10s\ninput_limit_bytes="<<max_bytes<<"\nviewport="<<width<<"x"<<height<<"\ndpr=1\n"<<std::flush;
+ h16::emitted=0;logstream<<"diagnostic_format=H16-v1\ndiagnostic_coverage=PARTIAL_NOT_ALL_BLOCKERS\ndiagnostic_selectors=RANGES_AND_HASHES_NO_VALUES\nformat=H3-initial-canvas\ncanvas_mode=ENABLED_INITIAL_EMPTY\njavascript_execution=NONE\ninventory_scope=DOM_EXTRACTED_CSS_AND_ELEMENTS\ninventory_locations=CSS_SOURCE_LOCAL_BYTE_OFFSETS_NOT_HTML\ninventory_semantic_context=NOT_PROVEN\noutput_domain=AetherResolvedOutput\ncss_eligibility=Unknown\ncss_reason=PARSER_COVERAGE_UNPROVEN\nauthored_css_validation=NOT_RUN\nflexbox_semantic_acceptance=false\nchromium=NOT_RUN\nnetwork_resolver=NONE\nhost_font_lookup=NONE\ninternal_parse_layout_work_limits=NOT_IMPLEMENTED\nprocess_limits=AS_1GiB_CPU_5s_STACK_8MiB_WALL_10s\ninput_limit_bytes="<<max_bytes<<"\nviewport="<<width<<"x"<<height<<"\ndpr=1\n"<<std::flush;
  try{
   std::string html;{Stage s("read");html=read_input(input);}
   logstream<<"input_sha256="<<avc::sha256(html)<<"\ninput_bytes="<<html.size()<<std::endl;
@@ -72,7 +75,7 @@ int capture(const char* input,const std::string& out,int width,int height,bool g
   Objects o;require(aether_doc_create(&o.doc)==AETHER_OK,"DOC_CREATE_FAILED");
   {Stage s("parse");require(aether_doc_parse_html(o.doc,html.c_str())==AETHER_OK,"PARSE_FAILED");}
   bool variable_profile=false; h5::WorkBudget css_work;
-  std::vector<std::string> sheets, inline_sheets;std::set<std::string> blockers;
+  std::vector<std::string> sheets, inline_sheets,inline_sources;std::set<std::string> blockers;
   std::vector<aether_node_s*> canvases, inert_scripts;
   {Stage s("dom_preflight");
    struct Item{aether_node_s* n;size_t depth;bool metadata;};std::vector<Item> todo{{o.doc,0,false}};size_t count=0;
@@ -85,19 +88,19 @@ int capture(const char* input,const std::string& out,int width,int height,bool g
     if(tag=="style") {std::string css;for(auto* c:n->children){if(c->type!=AETHER_NODE_TEXT)blockers.insert("STYLE_CONTENT_UNSUPPORTED");else css+=c->text;}sheets.push_back(std::move(css));}
     if((tag=="script"&&!h3::json(n))||tag=="link"||tag=="img"||tag=="svg"||tag=="video"||tag=="audio"||tag=="object"||tag=="iframe"||tag=="embed"||tag=="base"){blockers.insert("RESOURCE_OR_SCRIPT_ELEMENT_UNSUPPORTED");diagnostic::element(n,count);}
     if(n->type==AETHER_NODE_TEXT&&!meta&&n->text.find_first_not_of(" \t\r\n\f")!=std::string::npos)blockers.insert("TEXT_RENDERER_UNAVAILABLE");
-    for(const auto& [key,value]:n->attributes){if(h3::lower(key).starts_with("on"))blockers.insert("EVENT_HANDLER_UNSUPPORTED");if(key=="style"){inline_sheets.push_back(value);auto analysis=h5::analyze(value,false,&css_work);variable_profile|=analysis.variables;diagnostic::css(value,"inline-dom-"+std::to_string(count),blockers,analysis);try{check_css(value,analysis);}catch(Failure f){blockers.insert(f.reason);}}if(key=="dir")blockers.insert("HTML_DIR_UNSUPPORTED");}
+    for(const auto& [key,value]:n->attributes){if(h3::lower(key).starts_with("on"))blockers.insert("EVENT_HANDLER_UNSUPPORTED");if(key=="style"){inline_sheets.push_back(value);inline_sources.push_back("inline-dom-"+std::to_string(count));auto analysis=h5::analyze(value,false,&css_work);variable_profile|=analysis.variables;diagnostic::css(value,"inline-dom-"+std::to_string(count),blockers,analysis);try{check_css(value,analysis);}catch(Failure f){blockers.insert(f.reason);h16::failure(inline_sources.back(),value,f,nullptr,&analysis);}}if(key=="dir")blockers.insert("HTML_DIR_UNSUPPORTED");}
     for(auto it=n->children.rbegin();it!=n->children.rend();++it)todo.push_back({*it,depth+1,meta});
    }
    logstream<<"dom_nodes="<<count<<"\nstyle_blocks="<<sheets.size()<<std::endl;
-   size_t sheet_index=0;for(const auto& css:sheets){auto analysis=h5::analyze(css,true,&css_work);variable_profile|=analysis.variables;diagnostic::css(css,"style-block-"+std::to_string(sheet_index++),blockers,analysis);try{check_css(css,analysis);}catch(Failure f){blockers.insert(f.reason);}}
+   size_t sheet_index=0;for(const auto& css:sheets){auto analysis=h5::analyze(css,true,&css_work);variable_profile|=analysis.variables;diagnostic::css(css,"style-block-"+std::to_string(sheet_index++),blockers,analysis);try{check_css(css,analysis);}catch(Failure f){blockers.insert(f.reason);h16::failure("style-block-"+std::to_string(sheet_index-1),css,f,nullptr,&analysis);}}
    if(canvases.size()>256)blockers.insert("CANVAS_COUNT_LIMIT");
    if(!canvases.empty()){
     // Only the H3 admission view is filtered; global diagnostics above and
     // the original stylesheet passed to the runtime below remain unchanged.
     h11::Proof proof(o.doc); h5::WorkBudget canvas_css_work;
-    for(const auto& css:sheets)try{h3::authored(proof.retained(css),true,&canvas_css_work);}catch(Failure f){blockers.insert(f.reason);}
+    size_t canvas_source=0;for(const auto& css:sheets){h11::SourceMap provenance;try{h3::authored(proof.retained(css,&provenance),true,&canvas_css_work);}catch(Failure f){blockers.insert(f.reason);h16::failure("style-block-"+std::to_string(canvas_source),css,f,&provenance);}++canvas_source;}
     logstream<<"canvas_unmatched_rules_omitted="<<proof.omitted<<"\ncanvas_absence_match_queries="<<proof.queries<<"\ncanvas_absence_work_remaining="<<proof.remaining<<std::endl;
-    for(const auto& css:inline_sheets)try{h3::authored(css,false);}catch(Failure f){blockers.insert(f.reason);}
+    for(size_t n=0;n<inline_sheets.size();++n)try{h3::authored(inline_sheets[n],false);}catch(Failure f){blockers.insert(f.reason);h16::failure(inline_sources[n],inline_sheets[n],f);}
    }
    for(const auto& b:blockers)logstream<<"blocker="<<b<<std::endl;
    require(blockers.empty(),"PREFLIGHT_UNSUPPORTED");
@@ -159,7 +162,7 @@ int capture(const char* input,const std::string& out,int width,int height,bool g
   {Stage s("png");auto bytes=smoke_png::png(smoke_png::rgba(*image),width,height);std::ofstream f(out+"/aether.png.pending",std::ios::binary);f.write(reinterpret_cast<const char*>(bytes.data()),bytes.size());f.close();require(bool(f),"PNG_WRITE_FAILED");}
   logstream<<"worker_status=GEOMETRY_RENDERED\npaint_coverage=AETHER_EMITTED_COMMANDS_ONLY\n"<<std::flush;return 0;
  }catch(Failure f){logstream<<"worker_status=REJECTED\nreason="<<f.reason<<std::endl;return 3;}
- catch(const std::bad_alloc&){logstream<<"worker_status=FAILED\nreason=MEMORY_LIMIT_OR_ALLOCATION\n"<<std::flush;return 4;}
+ catch(const std::bad_alloc&){logstream<<"diagnostic_v1_incomplete=MEMORY_FAILURE\nworker_status=FAILED\nreason=MEMORY_LIMIT_OR_ALLOCATION\n"<<std::flush;return 4;}
  catch(...){logstream<<"worker_status=FAILED\nreason=UNEXPECTED_EXCEPTION\n"<<std::flush;return 5;}
 }
 int number(const char* s){int n=0;auto e=s+std::strlen(s);auto r=std::from_chars(s,e,n);return r.ec==std::errc{}&&r.ptr==e?n:0;}

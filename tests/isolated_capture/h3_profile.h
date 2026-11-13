@@ -33,6 +33,8 @@ inline void authored_declarations(const std::string& s){
  auto delim=[&](size_t p,char c){return p<ts.size()&&ts[p].delimiter==c&&ts[p].serialization!=css_variable_serialization::string;};
  while(i<ts.size()){
   if(delim(i,';')){++i;continue;}
+  const size_t declaration_begin=ts[i].begin;
+  try {
   require(ts[i].kind==css_variable_token_kind::ident,"CANVAS_AUTHORED_CSS_UNKNOWN");std::string key=lower(diagnostic::name(s,ts[i].begin,ts[i].end));++i;
   require(delim(i,':'),"CANVAS_AUTHORED_CSS_UNKNOWN");++i;std::string value;size_t nt=0;
   while(i<ts.size()&&!delim(i,';')&&!delim(i,'}')){require(!delim(i,'{'),"CANVAS_AUTHORED_CSS_UNKNOWN");auto t=ts[i++];
@@ -45,6 +47,7 @@ inline void authored_declarations(const std::string& s){
   if(key=="display")require(value!="contents","CANVAS_LAYOUT_PROFILE_UNSUPPORTED");
   if(key=="position")require(value!="sticky","CANVAS_LAYOUT_PROFILE_UNSUPPORTED");
   if(key=="align-items"||key=="align-self")require(value!="baseline"&&value!="firstbaseline"&&value!="lastbaseline","CANVAS_LAYOUT_PROFILE_UNSUPPORTED");
+  }catch(Failure f){f.begin=declaration_begin;f.end=i?ts[std::min(i,ts.size())-1].end:declaration_begin;throw f;}
  }
 }
 inline void authored(const std::string& s,bool sheet,h5::WorkBudget* shared=nullptr){
@@ -52,9 +55,11 @@ inline void authored(const std::string& s,bool sheet,h5::WorkBudget* shared=null
  // H5 owns rule structure and H7 owns keyframe semantics. Only original
  // declaration ranges flow into the canvas restrictions; execution sees s.
  const auto analysis=h5::analyze(s,true,shared);
- require(analysis.valid,"CANVAS_AUTHORED_CSS_UNKNOWN");
+ if(!analysis.valid)throw Failure{"CANVAS_AUTHORED_CSS_UNKNOWN",analysis.failure_begin,analysis.failure_end,analysis.failure_selector_begin,analysis.failure_selector_end};
  for(const auto& span:analysis.declarations)
-  authored_declarations(s.substr(span.begin,span.end-span.begin));
+  try{authored_declarations(s.substr(span.begin,span.end-span.begin));}
+  catch(Failure f){if(f.begin!=SIZE_MAX){f.begin+=span.begin;f.end+=span.begin;}
+   else {f.begin=span.begin;f.end=span.end;}f.selector_begin=span.selector_begin;f.selector_end=span.selector_end;throw f;}
 }
 struct Style {
  aether_computed_style_t value{};

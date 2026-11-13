@@ -86,7 +86,8 @@ bool Proof::absent(const std::string& source){
  for(const auto& s:selectors)for(auto* n:elements){++queries;if(selector_match(s,n))return false;}
  return true;
 }
-std::string Proof::retained(const std::string& sheet){
+std::string Proof::retained(const std::string& sheet, SourceMap* provenance){
+ if(provenance)*provenance=SourceMap{};
  std::vector<css_variable_token> ts;if(!tokens(sheet,ts))return sheet;
  struct Rule{size_t first,open,last;bool ordinary;};std::vector<Rule> rules;
  // Parse all boundaries before omitting anything. At-rules are opaque and
@@ -117,9 +118,11 @@ std::string Proof::retained(const std::string& sheet){
  if(rules.size()>rules_left)return sheet;
  rules_left-=rules.size();
  std::string kept;
+ if(provenance)provenance->identity=false;
  for(const auto& r:rules){
   const size_t b=ts[r.first].begin,e=ts[r.last].end;
   if(r.ordinary&&absent(sheet.substr(b,ts[r.open].begin-b))){++omitted;continue;}
+  if(provenance)provenance->ranges[provenance->count++]={kept.size(),b,e-b};
   kept.append(sheet,b,e-b);kept+='\n';
  }
  return kept;
