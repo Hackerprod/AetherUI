@@ -4,6 +4,7 @@
 #include <span>
 #include "../border_groups.h"
 #include "../native_paint_list.h"
+#include "../display_list_types.h"
 #include <algorithm>
 #include "native_text_validation.h"
 
@@ -25,7 +26,7 @@ std::optional<std::size_t> bounded_length(const char* text, std::size_t capacity
 }
 using CopyResult = std::variant<Command, ErrorCode>;
 CopyResult copy_command(const aether_paint_command_t& source, std::size_t string_bytes,
- std::span<const NativeScrollState> scroll, bool native_scroll) {
+ std::span<const NativeScrollState> scroll, bool native_scroll, bool trusted_gradient) {
  const auto lookup=[&](std::int64_t id)->const NativeScrollState* {
   const auto it=std::lower_bound(scroll.begin(),scroll.end(),id,[](const auto& a,auto key){return a.id<key;});
   return it!=scroll.end()&&it->id==id?&*it:nullptr;
@@ -70,7 +71,17 @@ CopyResult copy_command(const aether_paint_command_t& source, std::size_t string
   const auto& p = source.data.draw_box_shadow;
   return Command{BoxShadow{p.rect,p.radii,p.shadow}};
  }
- case AETHER_PAINT_FILL_ROUNDED_RECT_GRADIENT:
+ case AETHER_PAINT_FILL_ROUNDED_RECT_GRADIENT: {
+  if(!trusted_gradient)return ErrorCode::UNSUPPORTED_TAG;
+  const auto& p=source.data.fill_rounded_rect_gradient;
+  if(p.gradient.stop_count<2 || std::size_t(p.gradient.stop_count)>max_gradient_stops || !p.gradient.stops)return ErrorCode::LIMIT_EXCEEDED;
+  LinearGradientFill g;
+  g.rect=p.rect;g.gradient_rect=p.gradient_rect;g.radii=p.radii;
+  g.direction_x=p.gradient.direction_x;g.direction_y=p.gradient.direction_y;g.opacity=p.opacity;
+  g.stops.reserve(p.gradient.stop_count);
+  for(std::size_t i=0;i<std::size_t(p.gradient.stop_count);++i)g.stops.push_back({p.gradient.stops[i].offset,p.gradient.stops[i].color});
+  return Command{std::move(g)};
+ }
  case AETHER_PAINT_DRAW_TEXT_GRADIENT:
  case AETHER_PAINT_FILL_BORDER_SIDE:
  case AETHER_PAINT_DRAW_TEXT_SHADOW:
@@ -98,7 +109,7 @@ CopyResult copy_command(const aether_paint_command_t& source, std::size_t string
 } // namespace
 
 SnapshotResult snapshot_with_border_groups(const AetherApi& api, aether_display_list_t list,
-                                 std::span<const aether_border_group_range> groups, Cancellation* cancellation, std::span<const NativeScrollState> scroll, bool native_scroll, std::span<const NativeTextEntry> text_runs, bool native_text) noexcept {
+                                 std::span<const aether_border_group_range> groups, Cancellation* cancellation, std::span<const NativeScrollState> scroll, bool native_scroll, std::span<const NativeTextEntry> text_runs, bool native_text, bool native_gradients) noexcept {
  std::optional<std::size_t> index;
  std::optional<int> tag;
  try {
@@ -114,6 +125,21 @@ SnapshotResult snapshot_with_border_groups(const AetherApi& api, aether_display_
   const auto count = api.get_count(list);
   if (count < 0 || static_cast<std::size_t>(count) > max_commands)
    return Error{ErrorCode::COMMAND_COUNT};
+  // Inspect the original native owned commands, not cloned ABI pointers and
+  // not an index-only evidence sidecar. Bound clone work before get_command.
+  if(native_gradients) {
+   if(list->native_gradient_unproven)return Error{ErrorCode::UNSUPPORTED_TAG};
+   std::size_t stops=0;
+   for(const auto& item:list->commands) {
+    if(cancelled(cancellation))return Error{ErrorCode::CANCELLED};
+    if(item.tag!=AETHER_PAINT_FILL_ROUNDED_RECT_GRADIENT)continue;
+    const auto& g=item.data.fill_rounded_rect_gradient.gradient;
+    if(g.stop_count<2 || std::size_t(g.stop_count)>max_gradient_stops || std::size_t(g.stop_count)>max_frame_gradient_stops-stops)
+     return Error{ErrorCode::LIMIT_EXCEEDED};
+    if(!g.stops || !list->native_srgb_gradients.contains(g.stops))return Error{ErrorCode::UNSUPPORTED_TAG};
+    stops+=g.stop_count;
+   }
+  }
   std::size_t previous_end=0;
   for(const auto& g:groups) {
    if(!g.count || g.count>4 || g.first<previous_end || g.first>std::size_t(count) || g.count>std::size_t(count)-g.first)
@@ -165,7 +191,7 @@ SnapshotResult snapshot_with_border_groups(const AetherApi& api, aether_display_
    const CommandGuard guard{api, source};
    tag = static_cast<int>(source.tag);
    if (cancelled(cancellation)) return Error{ErrorCode::CANCELLED, index, tag};
-   auto copied = copy_command(source, string_bytes,scroll,native_scroll);
+   auto copied = copy_command(source, string_bytes,scroll,native_scroll,native_gradients && source.tag==AETHER_PAINT_FILL_ROUNDED_RECT_GRADIENT);
    if (const auto* error = std::get_if<ErrorCode>(&copied)) return Error{*error, index, tag};
    auto& command = std::get<Command>(copied);
    if(native_text) {
@@ -189,6 +215,6 @@ SnapshotResult snapshot_with_border_groups(const AetherApi& api, aether_display_
  }
 }
 SnapshotResult snapshot_commands(const AetherApi& api,aether_display_list_t list,Cancellation* c) noexcept {
- return snapshot_with_border_groups(api,list,{},c,{},false,{},false);
+ return snapshot_with_border_groups(api,list,{},c,{},false,{},false,false);
 }
 } // namespace aether::rendering::preparation

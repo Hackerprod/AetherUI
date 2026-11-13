@@ -23,6 +23,8 @@ struct aether_background_image_geometry_context_s {
     float root_font_size = 16.f;
     float viewport_width = 0.f;
     float viewport_height = 0.f;
+    // Zero preserves the legacy path; native capture supplies a bounded work budget.
+    size_t max_tiles = 0;
 };
 
 struct aether_background_image_tile_s {

@@ -248,6 +248,9 @@ AETHER_SIDECAR_COMPARATOR(parent_font_size) {
 AETHER_SIDECAR_COMPARATOR(self_font_size) {
     sidecar_changed<StyleSidecar::self_font_size>(result, input.previous.scalars().self_font_size != input.candidate.self_font_size);
 } AETHER_SIDECAR_END
+AETHER_SIDECAR_COMPARATOR(background_gradient) {
+    sidecar_changed<StyleSidecar::background_gradient>(result, input.previous.scalars().background_gradient != input.candidate.background_gradient);
+} AETHER_SIDECAR_END
 AETHER_SIDECAR_COMPARATOR(writing_mode) {
     sidecar_changed<StyleSidecar::writing_mode>(result, input.previous.scalars().writing_mode != input.candidate.writing_mode);
 } AETHER_SIDECAR_END

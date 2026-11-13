@@ -1,5 +1,6 @@
 #pragma once
 #include "intrinsic_size_keyword.h"
+#include "gradient_evidence.h"
 #include "style_read_view.h"
 #include <memory>
 #include <unordered_map>
@@ -91,6 +92,7 @@ struct MeasureScalarValues {
     int32_t flex_order = 0;
     bool direction_rtl = false;
     int32_t writing_mode = 0; // 0 horizontal-tb, 1 vertical-rl, 2 vertical-lr
+    aether::css::GradientEvidence background_gradient = aether::css::GradientEvidence::unproven;
 };
 struct MeasureBackgroundPosition { aether_css_length x{}, y{}; };
 struct MeasureBackgroundSize { int32_t kind = 0; aether_css_length x{}, y{}; };

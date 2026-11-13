@@ -29,6 +29,11 @@ using Radii = aether_corner_radii;
 using Color = aether_color_rgba;
 using Matrix = aether_transform_matrix;
 inline constexpr Matrix identity{1,0,0,1,0,0};
+inline constexpr std::size_t max_gradient_stops = 64;
+inline constexpr std::size_t max_frame_gradient_stops = 65536;
+struct GradientStop { float offset{}; Color color{}; };
+// Owning private payload: only the trusted native adapter admits CSS evidence.
+struct LinearGradientFill { Rect rect{}, gradient_rect{}; Radii radii{}; float direction_x{}, direction_y{}, opacity{1}; std::vector<GradientStop> stops; };
 struct Fill { Rect rect{}; Radii radii{}; Color color{}; };
 struct Stroke { Rect rect{}; Radii radii{}; float stroke_width{}; Color color{}; };
 struct NativeText {
@@ -52,7 +57,7 @@ struct PushScroll { std::int64_t id{}; double x{},y{}; };
 struct PopScroll {};
 struct ScrollChrome { aether_scrollbar_geometry_t geometry{}; };
 using Command = std::variant<Fill, Stroke, Text, PushClip, PopClip, PushTransform,
- PopTransform, BeginChunk, EndChunk, BoxShadow, BorderGroup, BeginOpacity, EndOpacity, PushScroll, PopScroll, ScrollChrome>;
+ PopTransform, BeginChunk, EndChunk, BoxShadow, BorderGroup, BeginOpacity, EndOpacity, PushScroll, PopScroll, ScrollChrome, LinearGradientFill>;
 struct Snapshot { std::vector<Command> commands; bool native_text_required{}; };
 int command_tag(const Command&) noexcept;
 // Shared field validation; updates string budget only on success. Does not check scopes.

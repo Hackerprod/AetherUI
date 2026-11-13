@@ -197,10 +197,32 @@ bool aether_linear_gradient_try_parse(const char* source, aether_linear_gradient
     float y = 1.f;
     size_t first_stop = 0;
     bool uses_fixed_corner_direction = false;
-    const auto direction = try_parse_direction(parts.front(), x, y, uses_fixed_corner_direction);
+    // Preserve explicit interpolation-space evidence separately from the flat ABI.
+    auto prelude = parts.front();
+    bool explicit_srgb = false;
+    bool valid_components = false;
+    auto components = css_split_components(prelude, &valid_components);
+    if (!valid_components) return false;
+    for (size_t i = 0; i < components.size(); ++i) {
+        if (lowercase(components[i]) != "in") continue;
+        if (explicit_srgb || i + 1 >= components.size() || lowercase(components[i+1]) != "srgb") return false;
+        // The interpolation clause may precede or follow the direction,
+        // but cannot split its tokens (e.g. to in srgb right).
+        if (i != 0 && i + 2 != components.size()) return false;
+        explicit_srgb = true;
+        components.erase(components.begin()+i, components.begin()+i+2);
+        break;
+    }
+    if (explicit_srgb) {
+        prelude.clear();
+        for (const auto& c : components) { if (!prelude.empty()) prelude += ' '; prelude += c; }
+    }
+    const auto direction = explicit_srgb && prelude.empty() ? direction_result::valid
+        : try_parse_direction(prelude, x, y, uses_fixed_corner_direction);
     if (direction == direction_result::invalid) return false;
     if (direction == direction_result::valid) first_stop = 1;
     if (parts.size() - first_stop < 2) return false;
+    if (explicit_srgb && parts.size() - first_stop > 64) return false;
 
     std::vector<aether_gradient_stop> stops(parts.size() - first_stop);
     for (size_t index = 0; index < stops.size(); ++index) {
@@ -211,7 +233,7 @@ bool aether_linear_gradient_try_parse(const char* source, aether_linear_gradient
     if (!owned_stops) throw std::bad_alloc();
     std::memcpy(owned_stops, stops.data(), sizeof(aether_gradient_stop) * stops.size());
     *out_gradient = {x, y, owned_stops, static_cast<int32_t>(stops.size())};
-    if (out_info) out_info->uses_fixed_corner_direction = uses_fixed_corner_direction;
+    if (out_info) { out_info->uses_fixed_corner_direction = uses_fixed_corner_direction; out_info->explicit_srgb = explicit_srgb; }
     return true;
 }
 
@@ -256,4 +278,40 @@ bool aether_linear_gradient_resolve(const aether_linear_gradient& source,
         source.direction_x, source.direction_y,
         std::span<const aether_gradient_stop>(source.stops, static_cast<size_t>(source.stop_count))),
         context, out_gradient);
+}
+
+bool aether_linear_gradient_resolve_native_srgb(aether::rendering::GradientKernelReadView source,
+    const aether_linear_gradient_resolution_context_s& context, aether_linear_gradient* out) {
+    if (!out || source.stops.size()<2 || source.stops.size()>64) return false;
+    // Match the legacy resolver's float line exactly: comparing its rounded
+    // 100% length against a separately evaluated double line falsely rejected
+    // valid oblique endpoints. Original percentages are checked before resolve.
+    const float line = std::abs(context.gradient_rect.width*source.direction_x) +
+                       std::abs(context.gradient_rect.height*source.direction_y);
+    if (!std::isfinite(line) || line<=0) return false;
+    for (size_t i=0; i<source.stops.size(); ++i) {
+        const auto& stop=source.stops[i];
+        if (!stop.has_position) continue;
+        const float length=aether_css_length_resolve(stop.position,float(line),context.font_size,
+            context.root_font_size,context.viewport_width,context.viewport_height);
+        if (!std::isfinite(length) || length<0 || length>line) return false;
+    }
+    return aether_linear_gradient_resolve(source, context, out);
+}
+
+bool aether_linear_gradient_g1_source_supported(const char* source) {
+    aether_linear_gradient g{}; aether_linear_gradient_parse_info_s info{};
+    if (!aether_linear_gradient_try_parse(source, &g, &info)) return false;
+    struct Free { aether_linear_gradient& g; ~Free(){ aether_linear_gradient_free(&g); } } free{g};
+    if (!info.explicit_srgb || info.uses_fixed_corner_direction || g.stop_count<2 || g.stop_count>64) return false;
+    for (int i=0;i<g.stop_count;++i) {
+        const auto& p=g.stops[i].position;
+        if (!g.stops[i].has_position) continue;
+        // Context-free exclusions precede the later geometry-dependent length check.
+        if (!std::isfinite(p.value) || p.value<0) return false;
+        if (p.unit==AETHER_CSS_UNIT_PERCENT && p.value>100) return false;
+        // G1 excludes calc/mixed-unit stop positions rather than guessing their range.
+        if (p.unit==AETHER_CSS_UNIT_LINEAR) return false;
+    }
+    return true;
 }

@@ -1376,6 +1376,16 @@ void builtin_properties_register(style_property_registry_s* reg) {
             return bi_apply_background_image(st, v);
         });
 
+    reg->definitions.back().apply_with_context_checked = [](property_apply_context_s& c, const std::string& v) {
+        const auto result = bi_apply_background_image(c.style, v);
+        if (!result.success || !c.measures) return result;
+        auto evidence = aether::css::GradientEvidence::unproven;
+        if (aether_linear_gradient_g1_source_supported(v.c_str()))
+            evidence = aether::css::GradientEvidence::explicit_srgb_cardinal_angle;
+        c.measures->set_background_gradient(evidence);
+        return result;
+    };
+
     // These list-valued longhands deliberately apply after background-image.
     // CSS repeats the supplied list modulo its length when there are more layers.
     reg->register_property_checked("background-position", false, STYLE_IMPACT_PAINT,
@@ -1942,6 +1952,7 @@ void builtin_properties_register(style_property_registry_s* reg) {
             else if (name == "border-bottom-left-radius") s.border_radii.bottom_left = p.border_radii.bottom_left;
             else if (name == "border-bottom-right-radius") s.border_radii.bottom_right = p.border_radii.bottom_right;
             else if (name == "background-image") {
+                c.measures->set_background_gradient(pm ? pm->background_gradient() : aether::css::GradientEvidence::unproven);
                 aether_background_layer_list copied{};
                 if (copy_builder_backgrounds(pv, &copied)!=AETHER_OK) throw std::bad_alloc();
                 // Only the image payload inherits. Position, size and repeat

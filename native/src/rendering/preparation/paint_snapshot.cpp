@@ -51,9 +51,9 @@ std::optional<Matrix> compose(Matrix m, Matrix c) noexcept {
 }
 }
 int command_tag(const Command& command) noexcept {
- constexpr std::array<int,16> tags{AETHER_PAINT_FILL_ROUNDED_RECT,AETHER_PAINT_STROKE_ROUNDED_RECT,
+ constexpr std::array<int,17> tags{AETHER_PAINT_FILL_ROUNDED_RECT,AETHER_PAINT_STROKE_ROUNDED_RECT,
  AETHER_PAINT_DRAW_TEXT,AETHER_PAINT_PUSH_CLIP,AETHER_PAINT_POP_CLIP,AETHER_PAINT_PUSH_TRANSFORM,
- AETHER_PAINT_POP_TRANSFORM,AETHER_PAINT_BEGIN_PAINT_CHUNK,AETHER_PAINT_END_PAINT_CHUNK,AETHER_PAINT_DRAW_BOX_SHADOW,AETHER_PAINT_FILL_BORDER_SIDE,-100,-101,AETHER_PAINT_PUSH_SCROLL_OFFSET,AETHER_PAINT_POP_SCROLL_OFFSET,AETHER_PAINT_DRAW_SCROLLBAR_CHROME};
+ AETHER_PAINT_POP_TRANSFORM,AETHER_PAINT_BEGIN_PAINT_CHUNK,AETHER_PAINT_END_PAINT_CHUNK,AETHER_PAINT_DRAW_BOX_SHADOW,AETHER_PAINT_FILL_BORDER_SIDE,-100,-101,AETHER_PAINT_PUSH_SCROLL_OFFSET,AETHER_PAINT_POP_SCROLL_OFFSET,AETHER_PAINT_DRAW_SCROLLBAR_CHROME,AETHER_PAINT_FILL_ROUNDED_RECT_GRADIENT};
  return command.valueless_by_exception() ? -1 : tags[command.index()];
 }
 std::optional<ErrorCode> validate_text(const Text& value, std::size_t& bytes) noexcept {
@@ -85,6 +85,19 @@ std::optional<ErrorCode> validate_command(const Command& command, std::size_t& b
    if(!value.id || !nonnegative(value.opacity)||value.opacity>1)return ErrorCode::INVALID_PAYLOAD;
   } else if constexpr (std::is_same_v<T,EndOpacity>) {
    if(!value.id)return ErrorCode::INVALID_PAYLOAD;
+  } else if constexpr (std::is_same_v<T,LinearGradientFill>) {
+   if(value.stops.size()<2 || value.stops.size()>max_gradient_stops)return ErrorCode::LIMIT_EXCEEDED;
+   const auto bounded=[](Rect r){return valid(r)&&std::abs(double(r.x))<=65536&&std::abs(double(r.y))<=65536&&std::abs(double(r.x)+r.width)<=65536&&std::abs(double(r.y)+r.height)<=65536;};
+   const double norm=std::hypot(double(value.direction_x),double(value.direction_y));
+   if(!bounded(value.rect)||!bounded(value.gradient_rect)||!valid(value.radii)||
+      value.gradient_rect.width<=0||value.gradient_rect.height<=0||
+      !std::isfinite(norm)||norm<.9999||norm>1.0001||
+      !nonnegative(value.opacity)||value.opacity>1)return ErrorCode::INVALID_PAYLOAD;
+   float previous=0;
+   for(const auto& stop:value.stops) {
+    if(!nonnegative(stop.offset)||stop.offset>1||stop.offset<previous||!valid(stop.color))return ErrorCode::INVALID_PAYLOAD;
+    previous=stop.offset;
+   }
   } else if constexpr (std::is_same_v<T,Fill>) {
    if (!valid(value.rect) || !valid(value.radii) || !valid(value.color)) return ErrorCode::INVALID_PAYLOAD;
   } else if constexpr (std::is_same_v<T,Stroke>) {
@@ -121,6 +134,15 @@ PrepareResult prepare(const Snapshot& snapshot, Cancellation* cancellation) noex
  try {
   if (cancelled(cancellation)) return error(ErrorCode::CANCELLED);
   if (snapshot.commands.size() > max_commands) return error(ErrorCode::COMMAND_COUNT);
+  // Bound the total deep-copy work before allocating/copying any event payload.
+  std::size_t stop_count=0;
+  for(const auto& command:snapshot.commands) {
+   if(cancelled(cancellation))return error(ErrorCode::CANCELLED);
+   if(const auto* g=std::get_if<LinearGradientFill>(&command)) {
+    if(g->stops.size()>max_gradient_stops || g->stops.size()>max_frame_gradient_stops-stop_count)return error(ErrorCode::LIMIT_EXCEEDED);
+    stop_count+=g->stops.size();
+   }
+  }
   std::vector<PreparedEvent> events;
   events.reserve(snapshot.commands.size());
   std::vector<Matrix> transforms;

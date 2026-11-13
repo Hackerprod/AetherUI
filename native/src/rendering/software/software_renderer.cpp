@@ -15,7 +15,7 @@ constexpr std::uint64_t max_work = 50000000;
 struct Rect { double l, t, r, b; };
 struct CurvedClip { Rect original{}; double radius{}; };
 struct ClipState { Rect bounds; CurvedClip curve; };
-struct Draw { Rect rect; Rect inner; prep::Color color; std::size_t index; Rect original{}; double radius{}; Rect inner_original{}; double inner_radius{}; CurvedClip clip{}; bool shadow{}; Rect source{}; Rect excluded{}; double sigma{}; const prep::BorderGroup* border{}; int layer_event{}; float layer_opacity{1}; double scroll_x{},scroll_y{}; std::shared_ptr<const text::GlyphMaskA8> mask; };
+struct Draw { Rect rect; Rect inner; prep::Color color; std::size_t index; Rect original{}; double radius{}; Rect inner_original{}; double inner_radius{}; CurvedClip clip{}; bool shadow{}; Rect source{}; Rect excluded{}; double sigma{}; const prep::BorderGroup* border{}; int layer_event{}; float layer_opacity{1}; double scroll_x{},scroll_y{}; std::shared_ptr<const text::GlyphMaskA8> mask; const prep::LinearGradientFill* gradient{}; Rect gradient_rect{}; };
 Rect intersect(Rect a, Rect b) noexcept {
  return {std::max(a.l,b.l),std::max(a.t,b.t),std::min(a.r,b.r),std::min(a.b,b.b)};
 }
@@ -50,6 +50,21 @@ bool contains(Rect o,double r,double x,double y) noexcept {
  if(r==0) return true;
  const double dx=x-std::clamp(x,o.l+r,o.r-r),dy=y-std::clamp(y,o.t+r,o.b-r);
  return dx*dx+dy*dy<=r*r;
+}
+// Evaluate the immutable ramp in its own coordinate system, not the clipped
+// coverage rectangle. upper_bound picks the LAST coincident stop at a hard edge.
+void gradient_sample(const prep::LinearGradientFill& g,Rect r,double x,double y,double* out) noexcept {
+ const double length=(r.r-r.l)*std::abs(g.direction_x)+(r.b-r.t)*std::abs(g.direction_y);
+ const double t=.5+((x-(r.l+r.r)*.5)*g.direction_x+(y-(r.t+r.b)*.5)*g.direction_y)/length;
+ const auto upper=std::upper_bound(g.stops.begin(),g.stops.end(),t,[](double t,const auto& stop){return t<stop.offset;});
+ const auto& a=upper==g.stops.begin()?g.stops.front():*(upper-1);
+ const auto& b=upper==g.stops.end()?g.stops.back():*upper;
+ const double u=upper==g.stops.begin()||upper==g.stops.end()?0:(t-a.offset)/(b.offset-a.offset);
+ const double aa=a.color.a,ba=b.color.a;
+ out[0]=(a.color.b*aa+(b.color.b*ba-a.color.b*aa)*u)*g.opacity;
+ out[1]=(a.color.g*aa+(b.color.g*ba-a.color.g*aa)*u)*g.opacity;
+ out[2]=(a.color.r*aa+(b.color.r*ba-a.color.r*aa)*u)*g.opacity;
+ out[3]=(aa+(ba-aa)*u)*g.opacity;
 }
 bool central(Rect b,CurvedClip c) noexcept {
  return (b.l>=c.original.l+c.radius && b.r<=c.original.r-c.radius) ||
@@ -147,6 +162,7 @@ static Result render_impl(FrameStore& store,const prep::PreparedFrame& frame,
    const auto bounded=[](Rect r){return std::isfinite(r.l)&&std::isfinite(r.t)&&std::isfinite(r.r)&&std::isfinite(r.b)&&std::abs(r.l)<=65536&&std::abs(r.t)<=65536&&std::abs(r.r)<=65536&&std::abs(r.b)<=65536;};
    const bool translated_ok=std::visit([&](const auto& c){using T=std::decay_t<decltype(c)>;
     if constexpr(std::is_same_v<T,prep::Fill>||std::is_same_v<T,prep::Stroke>||std::is_same_v<T,prep::BoxShadow>||std::is_same_v<T,prep::PushClip>)return bounded(translated(c.rect));
+    else if constexpr(std::is_same_v<T,prep::LinearGradientFill>)return bounded(translated(c.rect))&&bounded(translated(c.gradient_rect));
     else if constexpr(std::is_same_v<T,prep::BorderGroup>)return bounded(translated(c.outer))&&bounded(translated(c.inner));
     else return true;
    },command);
@@ -159,6 +175,19 @@ static Result render_impl(FrameStore& store,const prep::PreparedFrame& frame,
     Draw d{};d.index=index;d.layer_event=1;d.layer_opacity=begin->opacity;draws.push_back(d);
    } else if(std::holds_alternative<prep::EndOpacity>(command)) {
     --layer_depth;Draw d{};d.index=index;d.layer_event=-1;draws.push_back(d);
+   } else if(const auto* fill=std::get_if<prep::LinearGradientFill>(&command)) {
+    const double radius=fill->radii.top_left_x;
+    if(!uniform(fill->radii) || (radius>0 &&
+       (fill->rect.width<=0 || fill->rect.height<=0 || 2*radius>std::min(fill->rect.width,fill->rect.height))))
+     return {Status::unsupported,FrameStatus::ok,index,work};
+    const auto original=translated(fill->rect),r=intersect(current,original);
+    // 256 samples, bounded binary stop lookup (<=7 comparisons) and blend.
+    // Charged before candidate allocation; solid draws retain their fast path.
+    if(!charge(work,pixel_count(r),256*8))return {Status::limit_exceeded,FrameStatus::ok,index,work};
+    if(!empty(r)) {
+     Draw d{};d.rect=r;d.index=index;d.original=original;d.radius=radius;d.clip=curve;
+     d.gradient=fill;d.gradient_rect=translated(fill->gradient_rect);draws.push_back(d);
+    }
    } else if(const auto* fill=std::get_if<prep::Fill>(&command)) {
     const double radius=fill->radii.top_left_x;
     if(!uniform(fill->radii) || (radius>0 &&
@@ -412,6 +441,21 @@ static Result render_impl(FrameStore& store,const prep::PreparedFrame& frame,
      if(cancelled(cancel)) return {Status::cancelled,FrameStatus::ok,index,work};
      for(int x=x0;x<x1;++x) {
       const auto b=intersect(r,{double(x),double(y),double(x)+1,double(y)+1});
+      if(draw.gradient) {
+       double sums[4]{};
+       for(int sy=0;sy<16;++sy)for(int sx=0;sx<16;++sx) {
+        const double px=b.l+(sx+.5)*(b.r-b.l)/16,py=b.t+(sy+.5)*(b.b-b.t)/16;
+        if(!contains(draw.original,draw.radius,px,py) ||
+           (draw.clip.radius>0&&!contains(draw.clip.original,draw.clip.radius,px,py)))continue;
+        double sample[4];gradient_sample(*draw.gradient,draw.gradient_rect,px,py,sample);
+        for(int c=0;c<4;++c)sums[c]+=sample[c];
+       }
+       const double scale=(b.r-b.l)*(b.b-b.t)/256;
+       const unsigned sa=byte(std::clamp(sums[3]*scale,0.0,1.0)),inv=255-sa;
+       auto* p=pixels.data()+std::size_t(y)*stride+std::size_t(x)*4;
+       for(int c=0;c<3;++c)p[c]=std::uint8_t(std::min(sa,byte(std::clamp(sums[c]*scale,0.0,1.0)))+mul(p[c],inv));
+       p[3]=std::uint8_t(sa+mul(p[3],inv));continue;
+      }
       if(draw.mask) {
        const auto& m=*draw.mask;
        const auto mx=std::size_t(double(x)-draw.original.l),my=std::size_t(double(y)-draw.original.t);

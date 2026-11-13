@@ -29,6 +29,7 @@ struct FrozenPayloadMeasures {
     const int32_t flex_order;
     const bool direction_rtl;
     const int32_t writing_mode;
+    const aether::css::GradientEvidence background_gradient;
     const float parent_font_size, self_font_size;
     const measure_line_height_s line_height;
     const aether_css_length row_gap, column_gap;
@@ -49,7 +50,7 @@ private:
     }
 public:
     explicit FrozenPayloadMeasures(const measure_state_s& s)
-        : flex_order(s.flex_order), direction_rtl(s.direction_rtl), writing_mode(s.writing_mode),
+        : flex_order(s.flex_order), direction_rtl(s.direction_rtl), writing_mode(s.writing_mode), background_gradient(s.background_gradient),
           parent_font_size(s.parent_font_size), self_font_size(s.self_font_size), line_height(s.line_height),
           row_gap(s.row_gap), column_gap(s.column_gap), background_positions(s.background_positions),
           background_sizes(s.background_sizes), dependencies(s.dependencies),

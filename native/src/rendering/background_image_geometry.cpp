@@ -73,7 +73,7 @@ bool resolve_image_size(const aether_background_image_geometry_context_s& contex
 }
 
 std::vector<axis_tile_s> resolve_axis(float area_start, float area_length, float image_length,
-                                      float positioned_start, int32_t repeat) {
+                                      float positioned_start, int32_t repeat, size_t work_limit) {
     std::vector<axis_tile_s> result;
     if (!(area_length > 0.f && image_length > 0.f)) return result;
     const float area_end = area_start + area_length;
@@ -104,7 +104,9 @@ std::vector<axis_tile_s> resolve_axis(float area_start, float area_length, float
     }
 
     const int first = static_cast<int>(std::floor((area_start - positioned_start) / image_length));
+    size_t iterations=0;
     for (float start = positioned_start + first * image_length; start < area_end; start += image_length) {
+        if (work_limit && (++iterations>work_limit || !(start+image_length>start))) return {};
         if (start + image_length > area_start) result.push_back({start, image_length});
     }
     return result;
@@ -134,10 +136,29 @@ bool aether_background_image_resolve_geometry(
         context.position_y, context.paint_rect.height - image_height, context.paint_rect.height, context);
     if (!std::isfinite(positioned_x) || !std::isfinite(positioned_y)) return false;
 
+    if (context.max_tiles) {
+        const auto bound = [&](float start,float length,float image,float position,int repeat)->double {
+            if (!std::isfinite(start) || !std::isfinite(length) || !std::isfinite(image) ||
+                !(length>0 && image>0) || !std::isfinite(start+length)) return 0;
+            if (repeat==AETHER_BACKGROUND_NO_REPEAT) return 1;
+            if (repeat!=AETHER_BACKGROUND_REPEAT && repeat!=AETHER_BACKGROUND_SPACE && repeat!=AETHER_BACKGROUND_ROUND) return 0;
+            const double ratio=double(length)/image;
+            const double first=std::floor((double(start)-position)/image);
+            if (!std::isfinite(ratio) || ratio>double(context.max_tiles) || !std::isfinite(first) ||
+                first<std::numeric_limits<int>::min()+1.0 || first>std::numeric_limits<int>::max()-1.0 ||
+                !(position+image>position) || !(start+image>start) || !(start+length+image>start+length)) return 0;
+            return std::ceil(ratio)+2; // Conservative boundary tiles, prior to any axis allocation.
+        };
+        const double nx=bound(context.paint_rect.x,context.paint_rect.width,image_width,positioned_x,context.repeat_x);
+        const double ny=bound(context.paint_rect.y,context.paint_rect.height,image_height,positioned_y,context.repeat_y);
+        if (nx<=0 || ny<=0 || nx>double(context.max_tiles)/ny) return false;
+    }
+
     const auto horizontal = resolve_axis(context.paint_rect.x, context.paint_rect.width, image_width,
-                                         positioned_x, context.repeat_x);
+                                         positioned_x, context.repeat_x, context.max_tiles);
     const auto vertical = resolve_axis(context.paint_rect.y, context.paint_rect.height, image_height,
-                                       positioned_y, context.repeat_y);
+                                       positioned_y, context.repeat_y, context.max_tiles);
+    if (context.max_tiles && (horizontal.empty() || vertical.empty() || horizontal.size()>context.max_tiles/vertical.size())) return false;
     for (const auto& y : vertical) {
         float clipped_y = 0.f;
         float clipped_height = 0.f;

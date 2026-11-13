@@ -3,6 +3,7 @@
 #include "../animations/transition_runtime.h"
 #include "../layout/layout_types.h"
 #include <vector>
+#include <unordered_set>
 #include "border_groups.h"
 #include "native_paint_list.h"
 
@@ -20,6 +21,7 @@ struct paint_context_s {
 };
 
 struct aether_display_list_builder_s {
+    aether_display_list_s* native_gradient_output = nullptr;
     std::vector<aether::rendering::OpacityEvent>* opacity_events = nullptr;
     std::vector<aether::rendering::NativeTextEntry>* native_text_runs = nullptr;
     std::size_t native_scroll_depth = 0;
@@ -48,6 +50,10 @@ struct aether_display_list_builder_s {
 
 struct aether_display_list_s {
     std::vector<aether_paint_command_t> commands;
+    // Identity follows the command-owned allocation, not a shifting vector index.
+    std::unordered_set<const aether_gradient_stop*> native_srgb_gradients;
+    bool native_gradient_unproven = false;
+    std::size_t native_gradient_stop_count = 0;
     std::vector<aether_border_group_range> border_groups;
 
     ~aether_display_list_s() {

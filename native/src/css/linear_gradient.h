@@ -7,6 +7,7 @@ struct aether_linear_gradient_parse_info_s {
     // The ABI stores only a fixed direction vector. Keyword corner directions
     // need the final paint rectangle for fully CSS-accurate geometry.
     bool uses_fixed_corner_direction = false;
+    bool explicit_srgb = false;
 };
 
 /* CSS Images resolves color-stop <length-percentage>s only after the painted
@@ -32,3 +33,9 @@ bool aether_linear_gradient_resolve(const aether_linear_gradient& source,
 bool aether_linear_gradient_resolve(aether::rendering::GradientKernelReadView source,
     const aether_linear_gradient_resolution_context_s& context,
     aether_linear_gradient* out_gradient);
+
+// Strict native G1 resolver rejects original out-of-range positions before legacy clamping.
+bool aether_linear_gradient_resolve_native_srgb(aether::rendering::GradientKernelReadView,
+    const aether_linear_gradient_resolution_context_s&, aether_linear_gradient*);
+
+bool aether_linear_gradient_g1_source_supported(const char*);

@@ -86,7 +86,9 @@ static bool resolve_gradient_for_paint(const aether_display_list_builder_s* buil
     context.root_font_size = builder->root_font_size;
     context.viewport_width = builder->viewport.width;
     context.viewport_height = builder->viewport.height;
-    return aether_linear_gradient_resolve(GradientKernelReadView(source), context, resolved);
+    return builder->opacity_events
+        ? aether_linear_gradient_resolve_native_srgb(GradientKernelReadView(source), context, resolved)
+        : aether_linear_gradient_resolve(GradientKernelReadView(source), context, resolved);
 }
 
 /* ── command emitters ─────────────────────────────────────────────── */
@@ -588,6 +590,7 @@ static void paint_box_shadows(aether_display_list_builder_s* builder,
 
 static void paint_background_layers(aether_display_list_builder_s* builder,
                                     ComputedStyleReadView view,
+                                    const aether_node_s* evidence_node,
                                     const aether_rectf& paint_rect,
                                     const aether_corner_radii& radii,
                                     const paint_context_s& ctx,
@@ -609,9 +612,17 @@ static void paint_background_layers(aether_display_list_builder_s* builder,
             const auto layer_view = layers[index].view();
             const auto& layer = layer_view.scalars;
             if (layer.kind == AETHER_BACKGROUND_LAYER_LINEAR_GRADIENT) {
+                if (builder->opacity_events) {
+                    const auto measures=builder->style_pin->lookup().lookup_measures(evidence_node);
+                    if (layers.size()!=1 || !measures || measures->background_gradient()!=aether::css::GradientEvidence::explicit_srgb_cardinal_angle) {
+                        builder->native_gradient_output->native_gradient_unproven=true;
+                        continue;
+                    }
+                }
                 aether_background_image_geometry_context_s context{};
                 context.paint_rect = paint_rect;
                 context.has_intrinsic_size = false;
+                if (builder->opacity_events) context.max_tiles=65536/layer_view.gradient.stops.size();
                 context.position_x = layer.position_x;
                 context.position_y = layer.position_y;
                 context.size_kind = layer.size_kind;
@@ -624,16 +635,30 @@ static void paint_background_layers(aether_display_list_builder_s* builder,
                 context.viewport_width = builder->viewport.width;
                 context.viewport_height = builder->viewport.height;
                 std::vector<aether_background_image_tile_s> tiles;
-                if (aether_background_image_resolve_geometry(context, tiles)) {
+                if (aether_background_image_resolve_geometry(context, tiles) && !tiles.empty()) {
                     for (const auto& tile : tiles) {
+                        if (builder->native_gradient_output) {
+                            const size_t n=layer_view.gradient.stops.size();
+                            auto& used=builder->native_gradient_output->native_gradient_stop_count;
+                            if (n<2 || n>64 || used>65536 || n>65536-used)
+                                throw std::runtime_error("native gradient stop budget");
+                            used+=n;
+                        }
                         aether_linear_gradient gradient{};
                 paint_gradient_guard_s gradient_guard{gradient};
                         if (!resolve_gradient_for_paint(builder, layer_view.gradient, tile.tile_rect,
-                                                        style.font_size, &gradient)) continue;
+                                                        style.font_size, &gradient)) {
+                            if (builder->native_gradient_output) builder->native_gradient_output->native_gradient_unproven=true;
+                            continue;
+                        }
                         emit_fill_rounded_rect_gradient(cmds, tile.destination, {}, gradient,
                                                         ctx.effective_opacity, tile.tile_rect);
+                        if (builder->native_gradient_output) builder->native_gradient_output->native_srgb_gradients.insert(
+                            cmds.back().data.fill_rounded_rect_gradient.gradient.stops);
                         /* resolved gradient owned by its scope */
                     }
+                } else if (builder->native_gradient_output) {
+                    builder->native_gradient_output->native_gradient_unproven=true;
                 }
             } else if (layer.kind == AETHER_BACKGROUND_LAYER_IMAGE_URL && layer_view.image_source.present()) {
                 aether_sizef image_size{};
@@ -685,7 +710,7 @@ static void paint_background_and_border(aether_display_list_builder_s* builder, 
     // painted before this box, never its own background, border, or descendants.
     emit_apply_backdrop_filter(cmds, box->border_box, radii, view.backdrop_filters());
     if (!suppress_background) {
-        paint_background_layers(builder, view, box->border_box, radii, ctx, cmds);
+        paint_background_layers(builder, view, box->element, box->border_box, radii, ctx, cmds);
     }
 
     const auto border_begin = cmds.size();
@@ -708,6 +733,56 @@ static const aether_node_s* document_element_for(const aether_node_s* body) {
         if (node->type == AETHER_NODE_ELEMENT && node->tag_name == "html") return node;
     }
     return nullptr;
+}
+
+// Validate the effective gradient domain before visibility/opacity can suppress commands.
+// This intentionally rejects unlaid-out gradient nodes, rather than silently blessing them.
+static void validate_native_gradient_domain(aether_display_list_builder_s* builder,
+                                           const aether_node_s* root) {
+    if (!builder->opacity_events || !root) return;
+    std::vector<const aether_node_s*> pending{root};
+    size_t visited=0, total_stops=0;
+    while (!pending.empty()) {
+        if (++visited>65536) throw std::runtime_error("native gradient node budget");
+        const auto* node=pending.back(); pending.pop_back();
+        for (const auto* child:node->children) {
+            if (pending.size()>=65536) throw std::runtime_error("native gradient node budget");
+            pending.push_back(child);
+        }
+        if (node->type!=AETHER_NODE_ELEMENT) continue;
+        const auto view=builder->style_pin->lookup().lookup_node(node);
+        if (!view) continue;
+        const auto layers=view->background_layers();
+        for (const auto& entry:layers) {
+            const auto layer=entry.view();
+            if (layer.scalars.kind!=AETHER_BACKGROUND_LAYER_LINEAR_GRADIENT) continue;
+            const auto measures=builder->style_pin->lookup().lookup_measures(node);
+            const auto* box=builder->layout->find_primary_box(const_cast<aether_node_s*>(node));
+            if (layers.size()!=1 || !measures || !box ||
+                measures->background_gradient()!=aether::css::GradientEvidence::explicit_srgb_cardinal_angle ||
+                layer.gradient.stops.size()<2 || layer.gradient.stops.size()>64)
+                throw std::runtime_error("native gradient provenance unsupported");
+            aether_background_image_geometry_context_s geometry{};
+            geometry.paint_rect=box->border_box; geometry.has_intrinsic_size=false;
+            geometry.max_tiles=(65536-total_stops)/layer.gradient.stops.size();
+            if (!geometry.max_tiles) throw std::runtime_error("native gradient stop budget");
+            geometry.position_x=layer.scalars.position_x; geometry.position_y=layer.scalars.position_y;
+            geometry.size_kind=layer.scalars.size_kind; geometry.size_x=layer.scalars.size_x; geometry.size_y=layer.scalars.size_y;
+            geometry.repeat_x=layer.scalars.repeat_x; geometry.repeat_y=layer.scalars.repeat_y;
+            geometry.font_size=view->scalars().font_size; geometry.root_font_size=builder->root_font_size;
+            geometry.viewport_width=builder->viewport.width; geometry.viewport_height=builder->viewport.height;
+            std::vector<aether_background_image_tile_s> tiles;
+            if (!aether_background_image_resolve_geometry(geometry,tiles) || tiles.empty() ||
+                tiles.size()>(65536-total_stops)/layer.gradient.stops.size())
+                throw std::runtime_error("native gradient geometry unsupported");
+            total_stops+=tiles.size()*layer.gradient.stops.size();
+            for (const auto& tile:tiles) {
+                aether_linear_gradient gradient{}; paint_gradient_guard_s guard{gradient};
+                if (!resolve_gradient_for_paint(builder,layer.gradient,tile.tile_rect,view->scalars().font_size,&gradient))
+                    throw std::runtime_error("native gradient stop range unsupported");
+            }
+        }
+    }
 }
 
 static void validate_native_root(aether_display_list_builder_s* builder,const aether_layout_result_s* layout) {
@@ -755,7 +830,7 @@ static void paint_canvas_background(aether_display_list_builder_s* builder,
     // an element box, so transition overrides never apply here.
     paint_context_s ctx;
     ctx.effective_opacity = source_style->scalars().opacity;
-    paint_background_layers(builder, *source_style, canvas, square, ctx, cmds);
+    paint_background_layers(builder, *source_style, source_node, canvas, square, ctx, cmds);
     builder->canvas_background_source = source_node == body ? source_node : nullptr;
 }
 
@@ -893,7 +968,7 @@ AETHER_API aether_status_t aether_display_list_build_with_styles(
     const aether::layout::CallbackEpochGuard document_epoch(style_pin.document_lifetime());
     struct build_scope_s {
         aether_display_list_builder_s* builder;
-        ~build_scope_s() { builder->border_groups = nullptr; builder->canvas_background_source = nullptr; builder->style_pin = nullptr; builder->layout = nullptr; }
+        ~build_scope_s() { builder->border_groups = nullptr; builder->native_gradient_output = nullptr; builder->canvas_background_source = nullptr; builder->style_pin = nullptr; builder->layout = nullptr; }
     } scope{builder};
     builder->viewport = layout->viewport;
     builder->root_font_size = layout->root_font_size;
@@ -906,7 +981,9 @@ AETHER_API aether_status_t aether_display_list_build_with_styles(
 
     try {
     validate_native_root(builder,layout);
+    validate_native_gradient_domain(builder,layout->root->element);
     builder->border_groups = &list->border_groups;
+    builder->native_gradient_output = builder->opacity_events ? list : nullptr;
     builder->canvas_background_source = nullptr;
     paint_canvas_background(builder, layout, list->commands);
     paint_box(builder, layout->root, focused_element, paint_context_s{}, list->commands);
@@ -941,7 +1018,7 @@ AETHER_API aether_status_t aether_display_list_build_node_with_styles(
     const aether::layout::CallbackEpochGuard document_epoch(style_pin.document_lifetime());
     struct build_scope_s {
         aether_display_list_builder_s* builder;
-        ~build_scope_s() { builder->border_groups = nullptr; builder->canvas_background_source = nullptr; builder->style_pin = nullptr; builder->layout = nullptr; }
+        ~build_scope_s() { builder->border_groups = nullptr; builder->native_gradient_output = nullptr; builder->canvas_background_source = nullptr; builder->style_pin = nullptr; builder->layout = nullptr; }
     } scope{builder};
     builder->viewport = layout->viewport;
     builder->root_font_size = layout->root_font_size;
@@ -963,7 +1040,9 @@ AETHER_API aether_status_t aether_display_list_build_node_with_styles(
     if(builder->opacity_events && (element==layout->root->element ||
        element==document_element_for(layout->root->element) || element->type==AETHER_NODE_DOCUMENT))
         return AETHER_ERROR_INVALID_STATE;
+    validate_native_gradient_domain(builder,element);
     builder->border_groups = &list->border_groups;
+    builder->native_gradient_output = builder->opacity_events ? list : nullptr;
     if (auto* box = layout->find_primary_box(element)) {
         paint_box(builder, box, focused_element, paint_context_s{}, list->commands);
     }

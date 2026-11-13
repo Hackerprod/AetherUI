@@ -2,6 +2,7 @@
 #include <aether/aether.h>
 #include "contextual_math.h"
 #include "intrinsic_size_keyword.h"
+#include "gradient_evidence.h"
 #include <memory>
 #include <unordered_map>
 #include <string>
@@ -40,6 +41,7 @@ struct measure_background_size_s {
 struct measure_state_s {
     int32_t flex_order = 0;
     bool direction_rtl = false;
+    aether::css::GradientEvidence background_gradient = aether::css::GradientEvidence::unproven;
     int32_t writing_mode = 0; // 0 horizontal-tb, 1 vertical-rl, 2 vertical-lr
     std::shared_ptr<const document_measure_context_s> document;
     float parent_font_size = 16, self_font_size = 16;
@@ -86,6 +88,7 @@ struct measure_property_delta_s {
     std::optional<int32_t> flex_order;
     std::optional<bool> direction_rtl;
     std::optional<int32_t> writing_mode;
+    std::optional<aether::css::GradientEvidence> background_gradient;
     std::optional<float> self_font_size;
     std::optional<measure_line_height_s> line_height;
     std::optional<aether_css_length> row_gap, column_gap;
@@ -122,6 +125,9 @@ public:
             if (i != delta_->intrinsic_keywords.end()) return i->second; }
         const auto i = base_->intrinsic_keywords.find(name);
         return i == base_->intrinsic_keywords.end() ? aether::css::intrinsic_size_keyword::none : i->second;
+    }
+    aether::css::GradientEvidence background_gradient() const noexcept {
+        return delta_ && delta_->background_gradient ? *delta_->background_gradient : base_->background_gradient;
     }
     int32_t writing_mode() const noexcept {
         return delta_ && delta_->writing_mode ? *delta_->writing_mode : base_->writing_mode;
@@ -201,6 +207,9 @@ public:
     }
     void set_line_height(measure_line_height_s value) noexcept {
         if (target_) target_->line_height = value; else delta_->line_height = value;
+    }
+    void set_background_gradient(aether::css::GradientEvidence value) noexcept {
+        if (target_) target_->background_gradient = value; else delta_->background_gradient = value;
     }
     void set_writing_mode(int32_t value) noexcept {
         if (target_) target_->writing_mode = value; else delta_->writing_mode = value;
