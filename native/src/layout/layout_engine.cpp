@@ -1454,7 +1454,7 @@ float layout_inline_items(
             for (int index = line_start_index; index < end; ++index) {
                 auto* child = parent_box->children[index];
                 if (child->kind != LAYOUT_BOX_TEXT) continue;
-                const auto metrics = engine_measure_text(engine, child->text.c_str(), &child->style, 0.f, child->element);
+                const auto metrics = layout_fragment_metrics(engine, *child);
                 ascent = std::max(ascent, metrics.baseline);
                 descent = std::max(descent, std::max(0.f, metrics.height - metrics.baseline));
             }
@@ -1463,7 +1463,7 @@ float layout_inline_items(
                 for (int index = line_start_index; index < end; ++index) {
                     auto* child = parent_box->children[index];
                     if (child->kind != LAYOUT_BOX_TEXT) continue;
-                    const auto metrics = engine_measure_text(engine, child->text.c_str(), &child->style, 0.f, child->element);
+                    const auto metrics = layout_fragment_metrics(engine, *child);
                     offset_box(child, 0.f, std::max(0.f, ascent - metrics.baseline));
                 }
             }

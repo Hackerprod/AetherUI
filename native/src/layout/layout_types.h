@@ -489,3 +489,21 @@ inline aether::rendering::text::Measurement engine_measure_text_transport(
     const BoxStyleSnapshot* style, float width, aether_node_s* node=nullptr) {
     return {engine_measure_text(e,text,style,width,node), {}};
 }
+
+// Baseline alignment consumes retained shaping metrics. Never ask a legacy
+// callback to describe a native run: it may select a different font or shape.
+// The caller supplies a fragment; CSS line-height remains a separate quantity.
+inline aether_text_metrics_t layout_fragment_metrics(
+    const aether_layout_engine_s* engine, const aether_layout_box_s& fragment)
+{
+    const auto& placement = fragment.native_text;
+    if (!placement.run)
+        return engine_measure_text(engine, fragment.text.c_str(), &fragment.style, 0.f, fragment.element);
+    const auto& run = *placement.run;
+    if (!run.font || run.source != fragment.text ||
+        !std::isfinite(placement.baseline) || placement.baseline != run.metrics.baseline ||
+        !std::isfinite(fragment.style.font_size) ||
+        float(run.font->size_26_6) / 64.f != fragment.style.font_size)
+        throw std::invalid_argument("incoherent retained fragment metrics");
+    return run.metrics;
+}

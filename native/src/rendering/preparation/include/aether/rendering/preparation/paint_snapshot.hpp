@@ -4,10 +4,12 @@
 #include <array>
 #include <cstdint>
 #include <optional>
+#include <memory>
 #include <string>
 #include <variant>
 #include <vector>
 
+namespace aether::rendering::text { class ShapedRun; }
 namespace aether::rendering::preparation {
 inline constexpr std::size_t max_commands = 65536;
 inline constexpr std::size_t max_scope_depth = 256;
@@ -29,8 +31,12 @@ using Matrix = aether_transform_matrix;
 inline constexpr Matrix identity{1,0,0,1,0,0};
 struct Fill { Rect rect{}; Radii radii{}; Color color{}; };
 struct Stroke { Rect rect{}; Radii radii{}; float stroke_width{}; Color color{}; };
+struct NativeText {
+ std::shared_ptr<const aether::rendering::text::ShapedRun> run;
+ float baseline{}; // absolute content-space Y, before transforms and scroll
+};
 struct Text { std::string text; Rect rect{}; std::string font_family; float font_size{};
- std::int32_t font_weight{}; std::int32_t text_align{}; Color color{}; aether_bool_t wrap{}; };
+ std::int32_t font_weight{}; std::int32_t text_align{}; Color color{}; aether_bool_t wrap{}; std::optional<NativeText> native; };
 struct BorderSide { bool present{}; int style{}; Color color{}; };
 struct BorderGroup { Rect outer{}, inner{}; Radii outer_radii{}, inner_radii{}; std::array<BorderSide,4> sides{}; };
 struct BoxShadow { Rect rect{}; Radii radii{}; aether_shadow shadow{}; };
@@ -47,7 +53,7 @@ struct PopScroll {};
 struct ScrollChrome { aether_scrollbar_geometry_t geometry{}; };
 using Command = std::variant<Fill, Stroke, Text, PushClip, PopClip, PushTransform,
  PopTransform, BeginChunk, EndChunk, BoxShadow, BorderGroup, BeginOpacity, EndOpacity, PushScroll, PopScroll, ScrollChrome>;
-struct Snapshot { std::vector<Command> commands; };
+struct Snapshot { std::vector<Command> commands; bool native_text_required{}; };
 int command_tag(const Command&) noexcept;
 // Shared field validation; updates string budget only on success. Does not check scopes.
 std::optional<ErrorCode> validate_text(const Text&, std::size_t& string_bytes) noexcept;

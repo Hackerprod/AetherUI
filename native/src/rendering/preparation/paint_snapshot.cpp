@@ -7,6 +7,7 @@
 #include <new>
 #include <type_traits>
 #include <utility>
+#include "native_text_validation.h"
 
 namespace aether::rendering::preparation {
 namespace {
@@ -64,6 +65,7 @@ std::optional<ErrorCode> validate_text(const Text& value, std::size_t& bytes) no
        value.font_size <= 0 || value.font_weight < 1 || value.font_weight > 1000 ||
        !align_valid(value.text_align) || !valid(value.color) ||
        (value.wrap != AETHER_TRUE && value.wrap != AETHER_FALSE)) return ErrorCode::INVALID_PAYLOAD;
+   if(auto e=validate_native_text(value))return e;
    const auto size = value.text.size() + value.font_family.size();
    if (bytes > max_string_bytes || size > max_string_bytes - bytes) return ErrorCode::LIMIT_EXCEEDED;
    bytes += size;
@@ -131,12 +133,17 @@ PrepareResult prepare(const Snapshot& snapshot, Cancellation* cancellation) noex
   std::uint64_t last_id=0;
   Matrix current = identity;
   std::size_t bytes = 0;
+  NativeTextBudget native_budget;
   for (std::size_t i=0; i<snapshot.commands.size(); ++i) {
    index = i;
    const auto& command = snapshot.commands[i];
    tag = command_tag(command);
    if (cancelled(cancellation)) return error(ErrorCode::CANCELLED);
    if (auto e = validate_command(command,bytes)) return error(*e);
+   if(const auto* t=std::get_if<Text>(&command)) {
+    if(snapshot.native_text_required && !t->native)return error(ErrorCode::INVALID_PAYLOAD);
+    if(auto e=native_budget.add(*t))return error(*e);
+   }
    const bool pushes = std::holds_alternative<PushTransform>(command) ||
     std::holds_alternative<PushClip>(command) || std::holds_alternative<BeginChunk>(command) || std::holds_alternative<PushScroll>(command);
    if (pushes && transforms.size()+clips.size()+chunks.size()+scrolls.size() >= max_scope_depth) return error(ErrorCode::LIMIT_EXCEEDED);

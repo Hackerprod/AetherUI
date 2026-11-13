@@ -5,6 +5,7 @@
 #include "../border_groups.h"
 #include "../native_paint_list.h"
 #include <algorithm>
+#include "native_text_validation.h"
 
 namespace aether::rendering::preparation {
 namespace {
@@ -97,7 +98,7 @@ CopyResult copy_command(const aether_paint_command_t& source, std::size_t string
 } // namespace
 
 SnapshotResult snapshot_with_border_groups(const AetherApi& api, aether_display_list_t list,
-                                 std::span<const aether_border_group_range> groups, Cancellation* cancellation, std::span<const NativeScrollState> scroll, bool native_scroll) noexcept {
+                                 std::span<const aether_border_group_range> groups, Cancellation* cancellation, std::span<const NativeScrollState> scroll, bool native_scroll, std::span<const NativeTextEntry> text_runs, bool native_text) noexcept {
  std::optional<std::size_t> index;
  std::optional<int> tag;
  try {
@@ -119,8 +120,20 @@ SnapshotResult snapshot_with_border_groups(const AetherApi& api, aether_display_
     return Error{ErrorCode::INVALID_PAYLOAD};
    previous_end=g.first+g.count;
   }
+  std::size_t previous_text=0;
+  bool first_text=true;
+  std::size_t text_group=0;
+  for(const auto& entry:text_runs) {
+   if(entry.command_index>=std::size_t(count) || (!first_text && entry.command_index<=previous_text))return Error{ErrorCode::INVALID_PAYLOAD};
+   first_text=false;previous_text=entry.command_index;
+   while(text_group<groups.size() && groups[text_group].first+groups[text_group].count<=entry.command_index)++text_group;
+   if(text_group<groups.size() && entry.command_index>=groups[text_group].first)return Error{ErrorCode::INVALID_PAYLOAD};
+  }
+  std::size_t text_index=0;
+  NativeTextBudget native_budget;
   std::size_t group_index=0;
   Snapshot snapshot;
+  snapshot.native_text_required=native_text;
   snapshot.commands.reserve(static_cast<std::size_t>(count));
   std::size_t string_bytes = 0;
   for (std::int32_t i = 0; i < count; ++i) {
@@ -155,16 +168,27 @@ SnapshotResult snapshot_with_border_groups(const AetherApi& api, aether_display_
    auto copied = copy_command(source, string_bytes,scroll,native_scroll);
    if (const auto* error = std::get_if<ErrorCode>(&copied)) return Error{*error, index, tag};
    auto& command = std::get<Command>(copied);
+   if(native_text) {
+    const bool has_entry=text_index<text_runs.size() && text_runs[text_index].command_index==std::size_t(i);
+    auto* t=std::get_if<Text>(&command);
+    if(bool(t)!=has_entry)return Error{ErrorCode::INVALID_PAYLOAD,index,tag};
+    if(t) {
+     const auto& placement=text_runs[text_index++].placement;
+     t->native=NativeText{placement.run,placement.baseline};
+     if(auto e=native_budget.add(*t))return Error{*e,index,tag};
+    }
+   }
    if (const auto error = validate_command(command, string_bytes)) return Error{*error, index, tag};
    snapshot.commands.push_back(std::move(command));
   }
   if (cancelled(cancellation)) return Error{ErrorCode::CANCELLED, index, tag};
+  if(text_index!=text_runs.size())return Error{ErrorCode::INVALID_PAYLOAD,index,tag};
   return snapshot;
  } catch (const std::bad_alloc&) {
   return Error{ErrorCode::OUT_OF_MEMORY, index, tag};
  }
 }
 SnapshotResult snapshot_commands(const AetherApi& api,aether_display_list_t list,Cancellation* c) noexcept {
- return snapshot_with_border_groups(api,list,{},c,{},false);
+ return snapshot_with_border_groups(api,list,{},c,{},false,{},false);
 }
 } // namespace aether::rendering::preparation
