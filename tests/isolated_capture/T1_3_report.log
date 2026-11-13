@@ -1,0 +1,65 @@
+T1.3 SYNTHETIC A8 COMPOSITOR ONLY
+build=manual Linux C++ clean build (CMake unavailable, no install attempted)
+final_header_cleanup=recompiled raster and reran synthetic suite
+public_abi=UNCHANGED
+native_font_provider=NOT_IMPLEMENTED
+html_text_gate=CLOSED
+chromium=NOT_RUN
+font_shaping=NOT_RUN
+outline_rasterization=NOT_RUN
+comparison_to_chrome=NOT_RUN
+rss_and_cpu_synthetic_suite=NOT_MEASURED
+
+[a8]
+SYNTHETIC_A8_ONLY checks=680 allocation_failure_points=11 cancellation_points=78 suite_us=89178
+provider=NOT_RUN font_verified=false shaping=NOT_RUN font_load=NOT_RUN glyph_rasterization=NOT_RUN chromium=NOT_RUN
+mask_count=1 mask_bytes=6 glyph_uses=1 visible_mask_pixel_visits=6 preparation_ns=1873852 composition_ns=27542
+[t1_transport]
+T1 transport checks=37 provider=NOT_RUN raster=NOT_RUN
+[t12_fragment]
+T1.2 fragment metrics PASS checks=16 callback_calls=2
+[t12_snapshot]
+snapshot checks=237
+[h20_core]
+H20 layout checks=4857 OOM=45 fallback=0
+[h21_core]
+H21 layout checks=28802 coordinate_scenes=1200 OOM=96 fallback=0
+[h21_style]
+H21 style checks=1475 OOM=222
+[h20-gate]
+H20 CLI checks 1219
+[h21-gate]
+H21 capture checks: 46
+[raster]
+test_software_renderer PASS
+PASS opacity nesting/clip/zero validation/limits/cancellation
+test_software_opacity PASS
+PASS frozen scroll fractional/nested/restoration/clip/opacity/scopes/bounds
+test_software_scroll PASS
+coverage_max_error=0.00784686 reference_convergence=4.18652e-07
+test_software_rounded PASS
+coverage_max_error=0.00195897 reference_convergence=5.44936e-07
+test_software_shadow PASS
+coverage_max_error=0.0156901 reference_convergence=0.000976562
+test_software_border_group PASS
+[legacy]
+flex-text-sequences: 90378 checks passed
+test_flex_text_sequences PASS
+
+[original flexbox_runtime_validation.html unchanged]
+blocker=CANVAS_AUTHORED_CSS_UNKNOWN
+blocker=CANVAS_DIRECTION_UNPROVEN
+blocker=CANVAS_WRITING_UNPROVEN
+blocker=CSS_AT_RULE_UNSUPPORTED
+blocker=CSS_FUNCTION_UNSUPPORTED
+blocker=DIRECTION_AUTHORED_PROFILE_UNPROVEN
+blocker=RESOURCE_OR_SCRIPT_ELEMENT_UNSUPPORTED
+blocker=TEXT_RENDERER_UNAVAILABLE
+blocker=WRITING_AUTHORED_PROFILE_UNPROVEN
+worker_status=REJECTED
+reason=PREFLIGHT_UNSUPPORTED
+supervisor_status=FAILED_OR_REJECTED
+no_aether_png=true
+synthetic_png=synthetic-a8-coverage-NOT-HTML.png
+synthetic_png_dimensions=16x12
+synthetic_png_reopened=PASS (coverage pattern, not text)

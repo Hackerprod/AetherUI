@@ -5,13 +5,17 @@
 #include <cmath>
 #include <new>
 #include <vector>
+#include <map>
+#include <set>
+#include <tuple>
+#include <chrono>
 namespace aether::rendering::software {
 namespace {
 constexpr std::uint64_t max_work = 50000000;
 struct Rect { double l, t, r, b; };
 struct CurvedClip { Rect original{}; double radius{}; };
 struct ClipState { Rect bounds; CurvedClip curve; };
-struct Draw { Rect rect; Rect inner; prep::Color color; std::size_t index; Rect original{}; double radius{}; Rect inner_original{}; double inner_radius{}; CurvedClip clip{}; bool shadow{}; Rect source{}; Rect excluded{}; double sigma{}; const prep::BorderGroup* border{}; int layer_event{}; float layer_opacity{1}; double scroll_x{},scroll_y{}; };
+struct Draw { Rect rect; Rect inner; prep::Color color; std::size_t index; Rect original{}; double radius{}; Rect inner_original{}; double inner_radius{}; CurvedClip clip{}; bool shadow{}; Rect source{}; Rect excluded{}; double sigma{}; const prep::BorderGroup* border{}; int layer_event{}; float layer_opacity{1}; double scroll_x{},scroll_y{}; std::shared_ptr<const text::GlyphMaskA8> mask; };
 Rect intersect(Rect a, Rect b) noexcept {
  return {std::max(a.l,b.l),std::max(a.t,b.t),std::min(a.r,b.r),std::min(a.b,b.b)};
 }
@@ -95,22 +99,46 @@ struct Guard {
  ~Guard() {if(active) (void)store.discard(token);}
 };
 }
-Result render(FrameStore& store,const prep::PreparedFrame& frame,prep::Cancellation* cancel) noexcept {
+static Result render_impl(FrameStore& store,const prep::PreparedFrame& frame,
+ const std::span<const std::shared_ptr<const text::GlyphMaskA8>>* masks, prep::Cancellation* cancel) noexcept {
+ const auto started=std::chrono::steady_clock::now();
  Viewport v;
  if(auto s=store.current_viewport(v);s!=FrameStatus::ok) return failed(s);
  if(v.dpi!=1) return {Status::unsupported};
  if(!v.width || !v.height) return failed(FrameStatus::suspended);
  // FrameStore owns validation of viewport and its 64 MiB per-surface limit.
  std::uint64_t work=std::uint64_t(v.width)*std::uint64_t(v.height);
+ if(work>max_work) return {Status::limit_exceeded};
  std::size_t index=0;
+ std::uint64_t mask_bytes=0,glyph_uses=0,mask_pixels=0,metadata_bytes=0;
  std::uint64_t corner_pixels=0,sampled_pixels=0,inner_corner_pixels=0,inner_sampled_pixels=0,clip_corner_pixels=0,joint_sampled_pixels=0;
  try {
   if(cancelled(cancel)) return {Status::cancelled};
+  using Key=std::tuple<std::uintptr_t,std::uint32_t,std::uint32_t,unsigned,unsigned>;
+  const auto key=[](const text::FontInstance* f,std::uint32_t id,std::uint32_t flags,unsigned x,unsigned y){return Key{reinterpret_cast<std::uintptr_t>(f),id,flags,x,y};};
+  std::map<Key,std::shared_ptr<const text::GlyphMaskA8>> lookup;
+  std::set<const text::FontInstance*> fonts;
+  if(masks) {
+   if(masks->size()>text::max_frame_glyphs) return {Status::limit_exceeded};
+   for(const auto& m:*masks) {
+    if(cancelled(cancel))return {Status::cancelled};
+    if(!m) return {Status::invalid_mask};
+    if(m->bytes.size()>text::max_mask_bytes-mask_bytes) return {Status::limit_exceeded};
+    mask_bytes+=m->bytes.size();
+    // Conservative metadata reservation covers map nodes and shared ownership.
+    metadata_bytes+=sizeof(text::GlyphMaskA8)+256;
+    if(fonts.insert(m->font.get()).second)metadata_bytes+=m->font->bytes.size();
+    if(metadata_bytes>text::max_mask_bytes-mask_bytes) return {Status::limit_exceeded};
+    if(!lookup.emplace(key(m->font.get(),m->glyph_id,m->flags,m->phase_x,m->phase_y),m).second)
+     return {Status::invalid_mask};
+   }
+  }
   std::vector<Draw> draws;
   std::vector<ClipState> clips;
   CurvedClip curve;
   std::size_t layer_depth=0,max_layer_depth=0;
   const auto surface_bytes=std::uint64_t(v.width)*std::uint64_t(v.height)*4;
+  if(masks && mask_bytes+metadata_bytes+surface_bytes>text::max_mask_bytes)return {Status::limit_exceeded};
   Rect current{0,0,double(v.width),double(v.height)};
   for(const auto& event:frame.events()) {
    if(cancelled(cancel)) return {Status::cancelled,FrameStatus::ok,index,work};
@@ -126,7 +154,7 @@ Result render(FrameStore& store,const prep::PreparedFrame& frame,prep::Cancellat
    if(!identity(event.matrix)) return {Status::unsupported,FrameStatus::ok,index,work};
    if(const auto* begin=std::get_if<prep::BeginOpacity>(&command)) {
     ++layer_depth;max_layer_depth=std::max(layer_depth,max_layer_depth);
-    if(layer_depth>8 || surface_bytes*layer_depth>64u*1024u*1024u || !charge(work,surface_bytes/4,2))
+    if(layer_depth>8 || surface_bytes*(layer_depth+(masks?1:0))+mask_bytes+metadata_bytes>64u*1024u*1024u || !charge(work,surface_bytes/4,2))
      return {Status::limit_exceeded,FrameStatus::ok,index,work};
     Draw d{};d.index=index;d.layer_event=1;d.layer_opacity=begin->opacity;draws.push_back(d);
    } else if(std::holds_alternative<prep::EndOpacity>(command)) {
@@ -234,8 +262,56 @@ Result render(FrameStore& store,const prep::PreparedFrame& frame,prep::Cancellat
       Draw d{r,{},s.color,index};d.shadow=true;d.source=source;d.excluded=box;d.sigma=sigma;draws.push_back(d);
      }
     }
+   } else if(const auto* t=std::get_if<prep::Text>(&command)) {
+    if(!masks || !t->native || !t->native->run) return {Status::unsupported,FrameStatus::ok,index,work};
+    if(curve.radius!=0 || std::floor(current.l)!=current.l || std::floor(current.t)!=current.t ||
+       std::floor(current.r)!=current.r || std::floor(current.b)!=current.b)
+     return {Status::unsupported,FrameStatus::ok,index,work};
+    const auto& run=*t->native->run;
+    // Reject off-grid inputs instead of silently quantizing. This also bounds
+    // the conversion before any integer cast. 26.6 pen uses checked int64.
+    const auto grid=[](double n,std::int64_t& out){
+     if(!std::isfinite(n)||std::abs(n)>65536||std::floor(n*64)!=n*64)return false;
+     out=static_cast<std::int64_t>(n*64);return true;
+    };
+    std::int64_t bx,by;
+    if(!grid(double(t->rect.x)+event.scroll_x,bx) || !grid(double(t->native->baseline)+event.scroll_y,by))
+     return {Status::unsupported,FrameStatus::ok,index,work};
+    std::int64_t pen_x=0,pen_y=0;
+    for(const auto& g:run.glyphs) {
+     if(cancelled(cancel))return {Status::cancelled,FrameStatus::ok,index,work};
+     if(++glyph_uses>text::max_frame_glyphs)return {Status::limit_exceeded,FrameStatus::ok,index,work};
+     metadata_bytes+=sizeof(Draw)*2; // vector growth and per-use ownership
+     if(metadata_bytes+mask_bytes+surface_bytes*(max_layer_depth+1)>text::max_mask_bytes)
+      return {Status::limit_exceeded,FrameStatus::ok,index,work};
+     const auto x=bx+pen_x+g.offset_x,y=by-pen_y-g.offset_y;
+     const auto floor64=[](std::int64_t n){return n/64-(n%64<0);};
+     const auto ix=floor64(x),iy=floor64(y);
+     const auto found=lookup.find(key(run.font.get(),g.id,run.font->raster_flags,unsigned(x-ix*64),unsigned(y-iy*64)));
+     if(found==lookup.end())return {Status::missing_mask,FrameStatus::ok,index,work};
+     const auto& m=found->second;
+     const auto left=ix+m->bearing_left,top=iy-m->bearing_top;
+     // All sums are < 2^40: per-glyph components and glyph count are bounded
+     // by immutable ShapedRun, and pen checked on every iteration below.
+     const Rect original{double(left),double(top),double(left+m->width),double(top+m->height)};
+     const auto r=intersect(current,original);
+     const auto count=pixel_count(r);
+     if(count>text::max_mask_operations-mask_pixels || !charge(work,count,1))
+      return {Status::limit_exceeded,FrameStatus::ok,index,work};
+     mask_pixels+=count;
+     if(!empty(r)){Draw d{r,{},t->color,index};d.original=original;d.mask=m;draws.push_back(std::move(d));}
+     pen_x+=g.advance_x;pen_y+=g.advance_y;
+     if(std::abs(pen_x)>(std::int64_t(1)<<40)||std::abs(pen_y)>(std::int64_t(1)<<40))
+      return {Status::limit_exceeded,FrameStatus::ok,index,work};
+    }
    } else if(const auto* clip=std::get_if<prep::PushClip>(&command)) {
     const double radius=clip->radii.top_left_x;
+    if(masks) {
+     const auto r=translated(clip->rect);
+     if(radius!=0 || !uniform(clip->radii) || std::floor(r.l)!=r.l || std::floor(r.t)!=r.t ||
+        std::floor(r.r)!=r.r || std::floor(r.b)!=r.b)
+      return {Status::unsupported,FrameStatus::ok,index,work};
+    }
     if(!uniform(clip->radii) || (radius>0 && (curve.radius>0 ||
        clip->rect.width<=0 || clip->rect.height<=0 ||
        2*radius>std::min(clip->rect.width,clip->rect.height))))
@@ -269,6 +345,7 @@ Result render(FrameStore& store,const prep::PreparedFrame& frame,prep::Cancellat
    if(cancelled(cancel))return {Status::cancelled,FrameStatus::ok,index,work};
    layer.resize(std::size_t(surface_bytes));
   }
+  const auto prepared_at=std::chrono::steady_clock::now();
   FrameStore::Token token;
   if(auto s=store.prepare(token);s!=FrameStatus::ok) return failed(s);
   Guard guard{store,token};
@@ -335,6 +412,14 @@ Result render(FrameStore& store,const prep::PreparedFrame& frame,prep::Cancellat
      if(cancelled(cancel)) return {Status::cancelled,FrameStatus::ok,index,work};
      for(int x=x0;x<x1;++x) {
       const auto b=intersect(r,{double(x),double(y),double(x)+1,double(y)+1});
+      if(draw.mask) {
+       const auto& m=*draw.mask;
+       const auto mx=std::size_t(double(x)-draw.original.l),my=std::size_t(double(y)-draw.original.t);
+       const unsigned sa=mul(alpha,m.bytes[my*m.stride+mx]),inv=255-sa;
+       auto* p=pixels.data()+std::size_t(y)*stride+std::size_t(x)*4;
+       for(int c=0;c<3;++c)p[c]=std::uint8_t(mul(channels[c],sa)+mul(p[c],inv));
+       p[3]=std::uint8_t(sa+mul(p[3],inv));continue;
+      }
       if(draw.border) {
        if(b.l>=draw.inner_original.l && b.r<=draw.inner_original.r && b.t>=draw.inner_original.t && b.b<=draw.inner_original.b)continue;
        double sums[4]{};
@@ -379,7 +464,16 @@ Result render(FrameStore& store,const prep::PreparedFrame& frame,prep::Cancellat
   if(cancelled(cancel)) return {Status::cancelled,FrameStatus::ok,index,work};
   if(auto s=store.commit(token);s!=FrameStatus::ok) return failed(s);
   guard.active=false;
-  return {Status::ok,FrameStatus::ok,0,work,corner_pixels,sampled_pixels,inner_corner_pixels,inner_sampled_pixels,clip_corner_pixels,joint_sampled_pixels};
+  return {Status::ok,FrameStatus::ok,0,work,corner_pixels,sampled_pixels,inner_corner_pixels,inner_sampled_pixels,clip_corner_pixels,joint_sampled_pixels,lookup.size(),mask_bytes,glyph_uses,mask_pixels,
+   std::uint64_t(std::chrono::duration_cast<std::chrono::nanoseconds>(prepared_at-started).count()),
+   std::uint64_t(std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now()-prepared_at).count())};
  } catch(const std::bad_alloc&) {return {Status::allocation_failed,FrameStatus::ok,index,work};}
+}
+Result render(FrameStore& store,const prep::PreparedFrame& frame,prep::Cancellation* cancel) noexcept {
+ return render_impl(store,frame,nullptr,cancel);
+}
+Result render_a8(FrameStore& store,const prep::PreparedFrame& frame,
+ std::span<const std::shared_ptr<const text::GlyphMaskA8>> masks,prep::Cancellation* cancel) noexcept {
+ return render_impl(store,frame,&masks,cancel);
 }
 }

@@ -1,9 +1,10 @@
 #pragma once
 #include "../native_frame.h"
+#include "../text/glyph_mask_a8.h"
 #include <aether/rendering/preparation/paint_snapshot.hpp>
 namespace aether::rendering::software {
 namespace prep = aether::rendering::preparation;
-enum class Status { ok, unsupported, limit_exceeded, cancelled, allocation_failed, frame_failed, numeric_error };
+enum class Status { ok, unsupported, limit_exceeded, cancelled, allocation_failed, frame_failed, numeric_error, missing_mask, invalid_mask };
 struct Result {
  Status status{Status::ok};
  FrameStatus frame_status{FrameStatus::ok};
@@ -15,10 +16,16 @@ struct Result {
  std::uint64_t inner_sampled_pixels{};
  std::uint64_t clip_corner_pixel_bound{};
  std::uint64_t joint_sampled_pixels{};
+ std::uint64_t mask_count{}, mask_bytes{}, glyph_uses{}, mask_pixel_visits{};
+ std::uint64_t preparation_ns{}, composition_ns{}; // measured only for successful render
 };
 // R11: uniform circular rounded fills (central bands + grid16x16), uniform rounded strokes, one active uniform rounded clip plus rectangle clips; DPI=1.
 // Owner-thread synchronous call. No reentry or store mutation by callbacks.
 // Unsupported commands reject the whole frame before candidate allocation.
 // Allocation and all failures preserve the confirmed frame.
 Result render(FrameStore&, const prep::PreparedFrame&, prep::Cancellation* = nullptr) noexcept;
+// Explicit synthetic/precomputed A8 input only. Ordinary render still rejects text.
+// No provider registration, HTML gate, or public ABI change.
+Result render_a8(FrameStore&, const prep::PreparedFrame&,
+ std::span<const std::shared_ptr<const text::GlyphMaskA8>>, prep::Cancellation* = nullptr) noexcept;
 }
