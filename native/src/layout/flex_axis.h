@@ -2,18 +2,19 @@
 
 #include <aether/aether.h>
 
-// Geometry supported here is horizontal-tb/LTR. Keep physical axis, main
-// reversal and wrapping independent; numeric enum order has no semantics.
+// horizontal-tb: writing direction and flex reversal are independent.
+// Physical margins are never swapped; reflect entire margin boxes.
 struct flex_axis_s {
     bool horizontal;
     bool reverse;
+    bool logical_reverse;
+    bool cross_reverse;
 };
 
-inline flex_axis_s flex_axis(int32_t direction) {
-    return {
-        direction != AETHER_FLEX_DIRECTION_COLUMN && direction != AETHER_FLEX_DIRECTION_COLUMN_REVERSE,
-        direction == AETHER_FLEX_DIRECTION_ROW_REVERSE || direction == AETHER_FLEX_DIRECTION_COLUMN_REVERSE
-    };
+inline flex_axis_s flex_axis(int32_t direction, bool rtl = false) {
+    const bool horizontal = direction != AETHER_FLEX_DIRECTION_COLUMN && direction != AETHER_FLEX_DIRECTION_COLUMN_REVERSE;
+    const bool logical_reverse = direction == AETHER_FLEX_DIRECTION_ROW_REVERSE || direction == AETHER_FLEX_DIRECTION_COLUMN_REVERSE;
+    return {horizontal, logical_reverse != (horizontal && rtl), logical_reverse, !horizontal && rtl};
 }
 
 // Distance from flex main-start. Negative free space is deliberate overflow.

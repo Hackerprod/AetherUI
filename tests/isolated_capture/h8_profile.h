@@ -1,5 +1,6 @@
 #pragma once
 #include "h4_profile.h"
+#include "h20_source.h"
 namespace h8 {
 inline bool intrinsic(const std::string& value) {
  css_component_cursor cursor(value);css_component_value c,next;
@@ -8,10 +9,11 @@ inline bool intrinsic(const std::string& value) {
  return id=="min-content"||id=="max-content"||id=="fit-content";
 }
 // Source checks are deliberately conservative, including inactive declarations.
-// Core does not retain writing-mode/direction. Never infer horizontal authorship
+// Core now retains direction; H20 owns its bounded geometry proof. Never infer horizontal authorship
 // from its computed fallback. This is CLI admission, not general CSS support.
 inline bool declaration(const std::string& property,const std::string& value) {
- if(property=="direction"||property=="writing-mode")return false;
+ if(property=="writing-mode")return false;
+ if(property=="direction")return h20::direction(value);
  const bool sized=property=="width"||property=="min-width"||property=="max-width"||property=="flex-basis"||property=="flex";
  if(!sized) {
   if(property=="height"||property=="min-height"||property=="max-height") {

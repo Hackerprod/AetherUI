@@ -12,7 +12,7 @@ namespace h5 {
 // Shared traversal returns original declaration spans; never executable flattened CSS.
 struct DeclarationRange { size_t begin,end; bool keyframe; unsigned depth; size_t selector_begin=SIZE_MAX,selector_end=SIZE_MAX; };
 struct WorkBudget { size_t bytes=2*1024*1024, tokens=524288, rules=65536, steps=32*1024*1024; };
-struct Analysis { std::vector<DeclarationRange> declarations; std::set<size_t> functions, at_rules; bool valid=true; bool variables=false; bool h19_display_unproven=false; size_t failure_begin=SIZE_MAX,failure_end=SIZE_MAX,failure_selector_begin=SIZE_MAX,failure_selector_end=SIZE_MAX; bool limit_failure=false,lexical_failure=false; };
+struct Analysis { std::vector<DeclarationRange> declarations; std::set<size_t> functions, at_rules; bool valid=true; bool variables=false; bool h19_display_unproven=false; bool h20_direction=false,h20_unproven=false; size_t failure_begin=SIZE_MAX,failure_end=SIZE_MAX,failure_selector_begin=SIZE_MAX,failure_selector_end=SIZE_MAX; bool limit_failure=false,lexical_failure=false; };
 struct Scanner {
  explicit Scanner(const std::string& source):s(source){}
  const std::string& s; std::vector<css_variable_token> ts; Analysis out;
@@ -39,7 +39,7 @@ struct Scanner {
   out.declarations.push_back({b,e,keyframe,depth,selector_begin,selector_end});
   auto math=h4::admitted_functions(s.substr(b,e-b),false);for(auto p:math)out.functions.insert(b+p);
   size_t i=a;
-  while(i<z){if(!step())return;if(d(i,';')){++i;continue;}current_begin=ts[i].begin;current_end=e;if(ts[i].kind!=css_variable_token_kind::ident){invalid();return;}auto property=ident(i++);
+  while(i<z){if(!step())return;if(d(i,';')){++i;continue;}current_begin=ts[i].begin;current_end=e;if(ts[i].kind!=css_variable_token_kind::ident){invalid();return;}auto raw_property=s.substr(ts[i].begin,ts[i].end-ts[i].begin);auto property=ident(i++);
    if(!d(i,':')){invalid();return;}++i;size_t start=i;
    while(i<z&&!d(i,';')){if(!step())return;if(d(i,'{')||d(i,'}')){invalid();return;}
     if(ts[i].kind==css_variable_token_kind::function||ts[i].kind==css_variable_token_kind::open){size_t close;if(!pair(i,z,close)){invalid();return;}i=close+1;}
@@ -52,6 +52,8 @@ struct Scanner {
    // parser silently discards a later valid-but-unimplemented display syntax.
    // Restrict its proof to an explicit native-supported single-keyword subset.
    // Other profiles retain their existing behavior; this flag is H19-scoped.
+   if(property=="direction")out.h20_direction=true;
+   if(raw_property!=property||!h20::source(property,value))out.h20_unproven=true;
    if(property=="all")out.h19_display_unproven=true;
    if(property=="display") {
     const auto word=end==start+1&&ts[start].kind==css_variable_token_kind::ident?ident(start):std::string{};

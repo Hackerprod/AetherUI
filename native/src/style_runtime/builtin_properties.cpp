@@ -1126,6 +1126,21 @@ void builtin_properties_register(style_property_registry_s* reg) {
             st->gap = aether_css_length_resolve(l, 0.0f, 16.0f, 16.0f, 1920.0f, 1080.0f);
         });
 
+    // H20: inherited direction lives in owned internal measures; the flat ABI
+    // intentionally has no field. Flat export of RTL fails rather than losing it.
+    reg->register_property("direction", true, STYLE_IMPACT_LAYOUT | STYLE_IMPACT_PAINT | STYLE_IMPACT_HITTEST, "ltr",
+        [](const char* source, std::string& out) {
+            return source && css_single_identifier(source, out) && (out == "ltr" || out == "rtl");
+        }, [](aether_computed_style_t*, const std::string&) {});
+    reg->definitions.back().css_wide = bi_origin_css_wide;
+    reg->definitions.back().apply_with_context = [](property_apply_context_s& context, const std::string& value) {
+        if (context.measures) context.measures->set_direction_rtl(value == "rtl");
+    };
+    reg->definitions.back().inherit_context = [](property_apply_context_s& context, ComputedStyleReadView,
+                                                const MeasuresReadView* parent) {
+        if (context.measures) context.measures->set_direction_rtl(parent && parent->direction_rtl());
+    };
+
     // order
     reg->register_property("order", false, STYLE_IMPACT_LAYOUT | STYLE_IMPACT_PAINT | STYLE_IMPACT_HITTEST, "0",
         [](const char* source, std::string& out) {

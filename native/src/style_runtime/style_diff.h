@@ -112,6 +112,7 @@ AETHER_STYLE_PAYLOAD_POLICIES(AETHER_PAYLOAD_POLICY)
     X(self_font_size) \
     X(line_height) \
     X(flex_order) \
+    X(direction_rtl) \
     X(row_gap) \
     X(column_gap) \
     X(background_positions) \
@@ -141,6 +142,7 @@ AETHER_SIDECAR_POLICY(parent_font_size, metadata, 0, false)
 AETHER_SIDECAR_POLICY(self_font_size, metadata, 0, false)
 AETHER_SIDECAR_POLICY(line_height, value, 81, true)
 AETHER_SIDECAR_POLICY(flex_order, value, 7, false)
+AETHER_SIDECAR_POLICY(direction_rtl, value, 7, true)
 AETHER_SIDECAR_POLICY(row_gap, value, 17, false)
 AETHER_SIDECAR_POLICY(column_gap, value, 17, false)
 AETHER_SIDECAR_POLICY(background_positions, metadata, 0, false)

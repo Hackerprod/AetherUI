@@ -797,13 +797,16 @@ void place_flex_children(const StyleLookup* styles,
     if (!plan.children) return;
     const auto& children = *plan.children;
     const auto& style = parent_box->style;
-    const auto axis = flex_axis(style.flex_direction);
+    const auto direction = styles ? styles->lookup_measures(parent_box->element) : std::nullopt;
+    const auto axis = flex_axis(style.flex_direction, direction && direction->direction_rtl());
     const bool horizontal = axis.horizontal;
     // A numeric final size is enough for placement/auto margins. It is never
     // fed back into percentage or basis definiteness during item sizing.
     const float main_extent = horizontal ? final_content.width : final_content.height;
     const float main_origin = horizontal ? final_content.x : final_content.y;
-    float cross_cursor = horizontal ? final_content.y : final_content.x;
+    const float cross_origin = horizontal ? final_content.y : final_content.x;
+    const float total_cross_extent = horizontal ? final_content.height : final_content.width;
+    float cross_distance = 0.f;
     for (size_t line_index = 0; line_index < plan.lines.size(); ++line_index) {
         const auto& line = plan.lines[line_index];
         const float cross_extent = plan.cross_extents[line_index];
@@ -812,7 +815,7 @@ void place_flex_children(const StyleLookup* styles,
             main_extent, used_main_size);
         const float free = main_extent - used_main_size;
         float spacing = plan.gap;
-        float distance = flex_main_alignment_offset(style.justify_content, free, axis.reverse);
+        float distance = flex_main_alignment_offset(style.justify_content, free, axis.logical_reverse);
         if (style.justify_content == AETHER_JUSTIFY_SPACE_BETWEEN && line.item_indices.size() > 1) {
             spacing += std::max(0.f, free) / static_cast<float>(line.item_indices.size() - 1);
         }
@@ -821,13 +824,15 @@ void place_flex_children(const StyleLookup* styles,
             const auto child_style = get_style(styles, children[index]);
             const bool has_cross_auto_margins = consume_flex_cross_auto_margins(
                 child_box, child_style, !horizontal, cross_extent);
-            float cross_position = cross_cursor;
+            float item_cross_distance = 0.f;
             if (!has_cross_auto_margins) {
                 const float cross_free = cross_extent - flex_box_cross_size(child_box, horizontal);
                 const int32_t alignment = flex_cross_alignment(style, child_style);
-                if (alignment == AETHER_ALIGN_CENTER) cross_position += cross_free / 2.f;
-                else if (alignment == AETHER_ALIGN_END) cross_position += cross_free;
+                if (alignment == AETHER_ALIGN_CENTER) item_cross_distance += cross_free / 2.f;
+                else if (alignment == AETHER_ALIGN_END) item_cross_distance += cross_free;
             }
+            const float cross_position = flex_main_position(cross_origin, total_cross_extent,
+                cross_distance + item_cross_distance, flex_box_cross_size(child_box, horizontal), axis.cross_reverse);
             // Reflect the margin box, retaining physical margins and the
             // item's own relative translation. Descendants translate, not mirror.
             const float outer_main = flex_box_outer_main_size(child_box, horizontal);
@@ -839,6 +844,6 @@ void place_flex_children(const StyleLookup* styles,
                 (horizontal ? cross_position : main_position) - flow_margin.y);
             distance += outer_main + spacing;
         }
-        cross_cursor += cross_extent + plan.cross_gap;
+        cross_distance += cross_extent + plan.cross_gap;
     }
 }

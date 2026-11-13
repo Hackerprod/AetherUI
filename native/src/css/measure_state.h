@@ -39,6 +39,7 @@ struct measure_background_size_s {
 };
 struct measure_state_s {
     int32_t flex_order = 0;
+    bool direction_rtl = false;
     std::shared_ptr<const document_measure_context_s> document;
     float parent_font_size = 16, self_font_size = 16;
     measure_line_height_s line_height;
@@ -82,6 +83,7 @@ inline void measure_recompute_dependencies(measure_state_s& state) noexcept {
 // probe. Only the selected property's writes become owned local output.
 struct measure_property_delta_s {
     std::optional<int32_t> flex_order;
+    std::optional<bool> direction_rtl;
     std::optional<float> self_font_size;
     std::optional<measure_line_height_s> line_height;
     std::optional<aether_css_length> row_gap, column_gap;
@@ -118,6 +120,9 @@ public:
             if (i != delta_->intrinsic_keywords.end()) return i->second; }
         const auto i = base_->intrinsic_keywords.find(name);
         return i == base_->intrinsic_keywords.end() ? aether::css::intrinsic_size_keyword::none : i->second;
+    }
+    bool direction_rtl() const noexcept {
+        return delta_ && delta_->direction_rtl ? *delta_->direction_rtl : base_->direction_rtl;
     }
     int32_t flex_order() const noexcept {
         return delta_ && delta_->flex_order ? *delta_->flex_order : base_->flex_order;
@@ -191,6 +196,9 @@ public:
     }
     void set_line_height(measure_line_height_s value) noexcept {
         if (target_) target_->line_height = value; else delta_->line_height = value;
+    }
+    void set_direction_rtl(bool value) noexcept {
+        if (target_) target_->direction_rtl = value; else delta_->direction_rtl = value;
     }
     void set_flex_order(int32_t value) noexcept {
         if (target_) target_->flex_order = value; else delta_->flex_order = value;

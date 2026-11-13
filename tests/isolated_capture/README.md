@@ -355,3 +355,17 @@ unchanged. See `H19_EVIDENCE.md` for scope, budgets and verification.
 sh tests/isolated_capture/run_h19_core.sh /tmp/h19-build
 python3 tests/isolated_capture/test_h19.py /tmp/h19-build/aether_capture /tmp/h19-results
 ```
+
+## H20: inherited direction and horizontal-tb flex geometry
+
+Native direction lives in immutable measure metadata, without extending the flat
+public style ABI. Flex main/cross placement separates physical reflection from
+logical start/end and reverse flow. The CLI admits a conservative geometry-only
+RTL subset; text bidi, vertical writing, positioned/scrolling/contents and
+intrinsic-size interactions are not claimed. See `H20_EVIDENCE.md`.
+
+```sh
+sh tests/isolated_capture/run_h20_core.sh BUILD_DIRECTORY
+sh tests/isolated_capture/run_h20_style.sh BUILD_DIRECTORY
+python3 tests/isolated_capture/test_h20.py BUILD_DIRECTORY/aether_capture OUTPUT_DIRECTORY
+```
