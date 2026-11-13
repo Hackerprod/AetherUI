@@ -1,6 +1,7 @@
 #pragma once
 #include "aether/rendering/preparation/paint_snapshot.hpp"
 #include "../text/shaped_run.h"
+#include "../text/native_inline_paragraph.h"
 #include <unordered_set>
 #include <cmath>
 namespace aether::rendering::preparation {
@@ -15,6 +16,12 @@ inline std::optional<ErrorCode> validate_native_text(const Text& t) noexcept {
     n.baseline!=t.rect.y+n.run->metrics.baseline ||
     float(n.run->font->size_26_6)/64.f!=t.font_size)
   return ErrorCode::INVALID_PAYLOAD;
+ if(n.run->paragraph) {
+  try {
+   text::validate_contextual_measurement(n.run->paragraph,
+     {n.run->paragraph,0,n.run->source.size(),{n.run->metrics,n.run}});
+  } catch(...) {return ErrorCode::INVALID_PAYLOAD;}
+ }
  return {};
 }
 struct NativeTextBudget {

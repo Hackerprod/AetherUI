@@ -24,6 +24,7 @@ using aether::layout::CallbackEpochGuard;
 #include "../rendering/stacking.h"
 #include "../rendering/text/shaped_run.h"
 #include "../rendering/text/measurement_provider.h"
+#include "synthetic_text_policy.h"
 
 /* ── Internal layout types (mirrors C# LayoutBox/LayoutResult) ──── */
 
@@ -407,6 +408,12 @@ private:
 struct initial_canvas_dimensions { float width, height; };
 struct aether_layout_engine_s {
 private:
+    friend class aether::layout::SyntheticTextTestIssuer;
+    friend class aether::layout::NativeTextAccess;
+    friend class aether::layout::NativeTextTransaction;
+    std::shared_ptr<const int> synthetic_session_;
+    std::shared_ptr<const aether::layout::SyntheticTextPolicy> synthetic_text_policy_;
+    std::shared_ptr<aether::layout::NativeTextTransaction> native_text_transaction_;
     std::shared_ptr<const aether::rendering::text::MeasurementSelection> text_selection_;
 public:
     // Internal setter rejects mutation during a layout; ownership is retained.

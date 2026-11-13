@@ -1,6 +1,8 @@
 #include "initial_canvas.h"
 /* ── Layout Engine — core box layout, flow, inline, and intrinsic sizing ─ */
 #include "layout_internal.h"
+#include "native_text_transaction.h"
+using aether::layout::NativeTextAccess;
 #include "layout_scroll_bounds.h"
 #include "inline_line_resolver.h"
 #include <aether/aether_contextual_transitions.h>
@@ -918,6 +920,19 @@ float layout_flow_children(
     const BoxStyleSnapshot& parent_style,
     aether_layout_result_s* result)
 {
+    if (NativeTextAccess::owns(engine,parent)) {
+        const auto measured=NativeTextAccess::measure(engine,parent,parent_style);
+        if(!measured.run) return 0.f;
+        auto* fragment=result->create_box();
+        fragment->kind=LAYOUT_BOX_TEXT; fragment->element=parent;
+        fragment->style=parent_style; fragment->text=measured.run->source;
+        fragment->native_text={measured.run,measured.metrics.baseline};
+        fragment->content_box={content.x,content.y,measured.metrics.width,measured.metrics.height};
+        fragment->padding_box=fragment->border_box=fragment->margin_box=fragment->content_box;
+        parent_box->add_child(fragment);
+        if(result->records_boxes) result->paint_order.push_back(fragment);
+        return std::max(measured.metrics.height,layout_used_line_height(engine,parent,parent_style));
+    }
     float cursor_y = content.y;
     std::vector<inline_item_s> inline_items;
     inline_capitalization_context_s context;
@@ -1754,6 +1769,10 @@ intrinsic_widths_s measure_intrinsic_widths(
     intrinsic_width_request_s request)
 {
     const float decoration = aether_thicknessf_horizontal(padding) + aether_thicknessf_horizontal(border);
+    if(NativeTextAccess::owns(engine,element)) {
+        const float width=NativeTextAccess::measure(engine,element,style).metrics.width+decoration;
+        return {width,width};
+    }
     if(initial_canvas_for(engine,element)) { const auto size=canvas_size(engine,element,style,padding,border,maximum); return {size.width+decoration,size.width+decoration}; }
     if (is_opaque_single_line_control(element)) {
         const float preferred = std::min(maximum, 180.f + decoration);
@@ -1860,6 +1879,11 @@ float measure_intrinsic_height(
     aether_thicknessf padding, aether_thicknessf border,
     float available_width)
 {
+    if(NativeTextAccess::owns(engine,element)) {
+        const auto m=NativeTextAccess::measure(engine,element,style);
+        return (m.run ? std::max(m.metrics.height,layout_used_line_height(engine,element,style)) : 0.f)
+            +aether_thicknessf_vertical(padding)+aether_thicknessf_vertical(border);
+    }
     if(initial_canvas_for(engine,element)) return canvas_size(engine,element,style,padding,border,available_width).height+aether_thicknessf_vertical(padding)+aether_thicknessf_vertical(border);
     const float content_width = std::max(0.f, available_width -
         aether_thicknessf_horizontal(padding) - aether_thicknessf_horizontal(border));
@@ -2416,7 +2440,7 @@ AETHER_API aether_status_t aether_layout_layout(
     if (!result) return AETHER_ERROR_OUT_OF_MEMORY;
     result->viewport = {viewport_width, viewport_height};
     result->abandoned = true;
-    struct measure_scope_s { aether_layout_engine_s* e; ~measure_scope_s() { e->measure_styles = nullptr; e->measure_document.reset(); } } measure_scope{engine};
+    struct measure_scope_s { aether_layout_engine_s* e; ~measure_scope_s() { NativeTextAccess::clear(e); e->measure_styles = nullptr; e->measure_document.reset(); } } measure_scope{engine};
     try {
     const auto text_selection = engine->text_selection();
     if(text_selection && ((text_selection->mode==aether::rendering::text::MeasurementMode::native &&
@@ -2435,6 +2459,7 @@ AETHER_API aether_status_t aether_layout_layout(
     const auto* styles = &build_lookup;
     engine->measure_styles = styles;
     engine->measure_document = document_identity;
+    NativeTextAccess::begin(engine,doc,*styles);
     validate_contents_wrappers(styles);
     prepare_initial_canvas(engine,doc);
     if (version && version->contextual()) {
@@ -2503,6 +2528,8 @@ AETHER_API aether_status_t aether_layout_layout(
     if (!aether::style::structure_valid(version.get()) || !operation_guard.valid()) {
         delete result; return AETHER_ERROR_INVALID_STATE;
     }
+    NativeTextAccess::finish(engine);
+    NativeTextAccess::clear(engine);
     freeze_assets();
     if (version && version->contextual()) {
         const auto status = aether_contextual_transition_finalize_layout(result, nullptr);

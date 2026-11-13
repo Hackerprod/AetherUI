@@ -51,5 +51,5 @@ int main() {
   aether_layout_result_destroy(previous);aether_style_map_destroy(map);
   aether_style_runtime_destroy(rt);aether_doc_destroy(doc);
  }
- std::cout<<"T1.6 prerequisite closure PASS checks="<<checks<<" provider_calls="<<provider->calls<<"; admitted native layout NOT_IMPLEMENTED\n";
+ std::cout<<"T1.6 prerequisite closure PASS checks="<<checks<<" provider_calls="<<provider->calls<<"; context-free native selection remains CLOSED\n";
 }

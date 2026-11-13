@@ -46,15 +46,19 @@ struct Glyph {
  std::uint32_t id{}, cluster{};
  std::int32_t advance_x{}, advance_y{}, offset_x{}, offset_y{};
 };
+class NativeInlineParagraph;
 class ShapedRun final {
 public:
  const std::shared_ptr<const FontInstance> font;
  const std::string source;
  const std::vector<Glyph> glyphs;
  const aether_text_metrics_t metrics;
+ // Optional synthetic paragraph contains only immutable provenance/resource values.
+ const std::shared_ptr<const NativeInlineParagraph> paragraph;
  ShapedRun(std::shared_ptr<const FontInstance> f, std::string s,
-           std::vector<Glyph> g, aether_text_metrics_t m)
- : font(std::move(f)), source(std::move(s)), glyphs(std::move(g)), metrics(m) {
+           std::vector<Glyph> g, aether_text_metrics_t m,
+           std::shared_ptr<const NativeInlineParagraph> p = {})
+ : font(std::move(f)), source(std::move(s)), glyphs(std::move(g)), metrics(m), paragraph(std::move(p)) {
   if(!font || source.empty() || source.size()>max_text_bytes ||
      (glyphs.empty() && source.find_first_not_of(' ')!=std::string::npos) || glyphs.size()>max_glyphs ||
      !std::isfinite(m.width)||!std::isfinite(m.height)||!std::isfinite(m.baseline)||
