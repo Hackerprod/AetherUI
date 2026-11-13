@@ -26,6 +26,12 @@
 #if AETHER_REUSABLE_PAYLOAD_CAPTURE
 #include "reusable_payload.h"
 #endif
+#ifndef AETHER_EFFECT_CAPTURE
+#define AETHER_EFFECT_CAPTURE 0
+#endif
+#if AETHER_EFFECT_CAPTURE
+#include "effect_capture.h"
+#endif
 #include "css_variable_tokens.h"
 #include "custom_property_scope_internal.h"
 #include "typography_scope_probe.h"
@@ -108,6 +114,10 @@ struct aether_style_runtime_s {
 #if AETHER_REUSABLE_PAYLOAD_CAPTURE
     ReusablePayloadSnapshotRef reusable_payload; // Capture only, never read by resolver.
 #endif
+#if AETHER_EFFECT_CAPTURE
+    std::unique_ptr<CapturedEffects> effect_builder; // candidate only
+    CapturedEffectsRef effects; // immutable committed evidence, never consumed
+#endif
     uint64_t generation = 0;
     uint64_t sheet_epoch = 0;
     bool preparing = false;
@@ -149,9 +159,15 @@ struct aether_style_revision_handle_s { std::shared_ptr<const style_revision_s> 
 // owns its batch and captures its recipient, so callbacks may add/remove sheets
 // without invalidating candidate handles/IDs or redirecting an existing batch.
 struct stylesheet_diagnostics_s {
+#if AETHER_EFFECT_CAPTURE
+    using message_s = CapturedDiagnostic;
+    std::shared_ptr<const CapturedDiagnostics> frozen;
+    void freeze() { if(callback) frozen=std::make_shared<const CapturedDiagnostics>(std::move(messages)); }
+#else
     struct message_s {
         std::optional<std::string> code, property, value, message;
     };
+#endif
     aether_style_diagnostic_fn callback;
     void* user_data;
     std::vector<message_s> messages;
@@ -172,7 +188,12 @@ struct stylesheet_diagnostics_s {
     }
     void replay() const {
         if (!callback) return;
-        for (const auto& entry : messages) {
+#if AETHER_EFFECT_CAPTURE
+        const auto& replay_messages = frozen ? *frozen : messages;
+#else
+        const auto& replay_messages = messages;
+#endif
+        for (const auto& entry : replay_messages) {
             callback(entry.code ? entry.code->c_str() : nullptr,
                      entry.property ? entry.property->c_str() : nullptr,
                      entry.value ? entry.value->c_str() : nullptr,
@@ -180,6 +201,24 @@ struct stylesheet_diagnostics_s {
         }
     }
 };
+
+#if AETHER_EFFECT_CAPTURE
+static size_t effect_begin(aether_style_runtime_s* r, CapturedEffectKind kind, aether_node_s* node=nullptr) {
+    auto& events=r->effect_builder->events;
+    CapturedEffect e; e.kind=kind; e.sequence=events.size();
+    if(node) { e.host=(node->is_generated?node->style_origin:node)->identity; e.pseudo=node->pseudo_element; }
+    e.accounting_before=r->source_accounting; e.budget_before=r->source_budget;
+    e.diagnostics_captured=r->diag_cb!=nullptr;
+    if(r->diag_cb) e.diagnostic_begin=static_cast<stylesheet_diagnostics_s*>(r->diag_user_data)->messages.size();
+    events.push_back(std::move(e)); return events.size()-1;
+}
+static void effect_end(aether_style_runtime_s* r,size_t index) {
+    auto& e=r->effect_builder->events[index];
+    e.accounting_after=r->source_accounting; e.budget_after=r->source_budget;
+    e.diagnostic_end=r->diag_cb?static_cast<stylesheet_diagnostics_s*>(r->diag_user_data)->messages.size():0;
+    e.completed=true;
+}
+#endif
 
 static constexpr uint32_t STYLE_IMPACT_ALL_BITS =
     static_cast<uint32_t>(STYLE_IMPACT_LAYOUT) |
@@ -353,6 +392,9 @@ static PreparedNodeResult* compute_node(aether_style_runtime_s* runtime, aether_
                                           uint32_t& impact, uint32_t& inherited_change_impact,
                                           selector_match_context_s& selector_context,
                                           std::optional<std::string>* generated_content = nullptr) {
+#if AETHER_EFFECT_CAPTURE
+    const size_t effect_index=effect_begin(runtime,CapturedEffectKind::compute_attempt,node);
+#endif
     aether::hover_probe::Scope cascade_probe(aether::hover_probe::cascade);
     if (node->is_generated) { AETHER_HP_ADD(compute_pseudo,1); }
     else { AETHER_HP_ADD(compute_original,1); }
@@ -458,9 +500,18 @@ static PreparedNodeResult* compute_node(aether_style_runtime_s* runtime, aether_
     if (!node->is_generated) if (auto it = node->attributes.find("style"); it != node->attributes.end()) {
         AETHER_HP_ADD(inline_compiles,1);
         style_source_accounting_s inline_accounting;
+#if AETHER_EFFECT_CAPTURE
+        auto& inline_effect=runtime->effect_builder->events[effect_index];
+        inline_effect.inline_present=true;
+        inline_effect.inline_budget_before=runtime->source_budget;
+#endif
         const auto inline_status=style_source_compile_inline(it->second.c_str(), inline_properties, inline_custom, inline_shorthands,
                                     runtime->diag_cb, runtime->diag_user_data, &typography_discarded_inline, &inline_accounting, &runtime->source_budget);
         require_style_status(inline_status);
+#if AETHER_EFFECT_CAPTURE
+        inline_effect.inline_local=inline_accounting;
+        inline_effect.inline_budget_after=runtime->source_budget;
+#endif
         runtime->source_accounting.merge(inline_accounting);
         typography_discarded = typography_discarded || typography_discarded_inline;
         for (const auto& declaration : inline_properties) {
@@ -904,6 +955,11 @@ static PreparedNodeResult* compute_node(aether_style_runtime_s* runtime, aether_
     auto* result = state.get();
     state->impact=impact;
     runtime->prepared[node] = std::move(state);
+#if AETHER_EFFECT_CAPTURE
+    runtime->effect_builder->events[effect_index].generated_content_present=
+        generated_content && generated_content->has_value();
+    effect_end(runtime,effect_index);
+#endif
     return result;
 }
 
@@ -952,8 +1008,14 @@ static void prepare_tree(aether_style_runtime_s* staged, aether_node_s* node,
         // DOM sources are not correlated with add_stylesheet handles. Never infer
         // that a link/style was fetched/compiled from an unrelated sheet epoch.
         if (node->tag_name=="link" || node->tag_name=="style") {
+#if AETHER_EFFECT_CAPTURE
+            const auto global_effect=effect_begin(staged,node->tag_name=="link"?CapturedEffectKind::link:CapturedEffectKind::style,node);
+#endif
             staged->source_accounting.external_pending=true;
             staged->source_accounting.incomplete(style_source_loss::external_source);
+#if AETHER_EFFECT_CAPTURE
+            effect_end(staged,global_effect);
+#endif
         }
         uint32_t impact = 0;
         next_parent = compute_node(staged, node, parent, inherited_parent, impact, next_inherited, selector_context);
@@ -1166,7 +1228,14 @@ static aether_status_t prepare_revision_impl(
         staged.options = runtime->options; staged.environment = requested_environment;
         if (isolate_legacy_root && root != document && root->parent && root->parent->type != AETHER_NODE_DOCUMENT)
             staged.legacy_inheritance_root = root;
+#if AETHER_EFFECT_CAPTURE
+        staged.effect_builder=std::make_unique<CapturedEffects>();
+        const auto sheets_effect=effect_begin(&staged,CapturedEffectKind::sheet_aggregate);
+#endif
         staged.copy_index_for_preparation(*runtime);
+#if AETHER_EFFECT_CAPTURE
+        effect_end(&staged,sheets_effect);
+#endif
         staged.document_measures = std::make_shared<document_measure_context_s>();
         staged.document_measures->viewport_width = requested_environment.viewport_width;
         staged.document_measures->viewport_height = requested_environment.viewport_height;
@@ -1235,7 +1304,15 @@ static aether_status_t prepare_revision_impl(
             if (!pieces.empty() && freeze_paragraph_diagnostic(pieces,text_epochs,text_budget,
                 staged.prepared.at(node)->text_diagnostic)!=ParagraphDiagnosticStatus::prepared) text_limited=true;
         }
-        if (text_limited) staged.source_accounting.incomplete(style_source_loss::budget);
+        if (text_limited) {
+#if AETHER_EFFECT_CAPTURE
+            const auto text_effect=effect_begin(&staged,CapturedEffectKind::text_limited);
+#endif
+            staged.source_accounting.incomplete(style_source_loss::budget);
+#if AETHER_EFFECT_CAPTURE
+            effect_end(&staged,text_effect);
+#endif
+        }
         const auto source_accounting=std::make_shared<const style_source_accounting_s>(staged.source_accounting);
 #if AETHER_REUSABLE_PAYLOAD_CAPTURE
         auto payload_snapshot=std::make_shared<ReusablePayloadSnapshot>();
@@ -1333,6 +1410,21 @@ static aether_status_t prepare_revision_impl(
             runtime->generation != transaction->base_generation || runtime->sheet_epoch != transaction->base_sheet_epoch ||
             document->identity->style_tree_epoch != transaction->base_style_tree_epoch)
             return AETHER_ERROR_INVALID_STATE;
+#if AETHER_EFFECT_CAPTURE
+        staged.effect_builder->source_generation=transaction->base_generation;
+        staged.effect_builder->published_generation=revision->generation();
+        staged.effect_builder->input_epoch=transaction->input_epoch;
+        staged.effect_builder->sheet_epoch=transaction->base_sheet_epoch;
+        staged.effect_builder->structure_epoch=revision->structure_epoch();
+        staged.effect_builder->style_tree_epoch=revision->style_tree_epoch();
+        staged.effect_builder->document=document->identity;
+        staged.effect_builder->root=root->identity;
+        transaction->diagnostics->freeze();
+        staged.effect_builder->diagnostics=transaction->diagnostics->frozen;
+        staged.effect_builder->capture_finished=true;
+        staged.effects=std::make_shared<const CapturedEffects>(std::move(*staged.effect_builder));
+        staged.effect_builder.reset();
+#endif
         *out_transaction = transaction.release();
         return AETHER_OK;
     } catch (const std::bad_alloc&) { return AETHER_ERROR_OUT_OF_MEMORY; }
@@ -1368,6 +1460,9 @@ AETHER_API aether_status_t aether_style_runtime_commit_revision(
     runtime->hover_provenance.swap(transaction->candidate->hover_provenance);
 #if AETHER_REUSABLE_PAYLOAD_CAPTURE
     runtime->reusable_payload.swap(transaction->candidate->reusable_payload);
+#endif
+#if AETHER_EFFECT_CAPTURE
+    runtime->effects.swap(transaction->candidate->effects);
 #endif
     runtime->states.swap(transaction->candidate->states);
     runtime->document_measures.swap(transaction->candidate->document_measures);

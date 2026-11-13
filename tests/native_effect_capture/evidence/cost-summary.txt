@@ -1,0 +1,37 @@
+Native diagnostic only; requested bytes, not RSS. 9 samples; nearest-rank p95. Probe=1. No reuse.
+cards=18 phase=0 (cold=0 nochange=1 hover=2)
+ base-0: median_ms=0.686 p95_ms=1.092; allocation_calls=2784, requested_bytes=818004, live_delta=133160, peak_above_start=256540, compute_original=39
+ off: median_ms=0.642 p95_ms=5.591; allocation_calls=2784, requested_bytes=818004, live_delta=133160, peak_above_start=256540, compute_original=39
+ base-1: median_ms=0.923 p95_ms=3.373; allocation_calls=3017, requested_bytes=872432, live_delta=187572, peak_above_start=310968, compute_original=39
+ effect: median_ms=0.739 p95_ms=2.385; allocation_calls=2794, requested_bytes=896588, live_delta=172768, peak_above_start=296132, compute_original=39
+ both: median_ms=0.785 p95_ms=1.214; allocation_calls=3027, requested_bytes=951016, live_delta=227180, peak_above_start=350560, compute_original=39
+cards=18 phase=1 (cold=0 nochange=1 hover=2)
+ base-0: median_ms=0.506 p95_ms=0.674; allocation_calls=2701, requested_bytes=707348, live_delta=72784, peak_above_start=147316, compute_original=39
+ off: median_ms=0.596 p95_ms=1.296; allocation_calls=2701, requested_bytes=707348, live_delta=72784, peak_above_start=147316, compute_original=39
+ base-1: median_ms=0.521 p95_ms=1.511; allocation_calls=2934, requested_bytes=761776, live_delta=72784, peak_above_start=201744, compute_original=39
+ effect: median_ms=0.586 p95_ms=1.631; allocation_calls=2711, requested_bytes=785932, live_delta=72784, peak_above_start=186908, compute_original=39
+ both: median_ms=0.640 p95_ms=1.122; allocation_calls=2944, requested_bytes=840360, live_delta=72784, peak_above_start=241336, compute_original=39
+cards=18 phase=2 (cold=0 nochange=1 hover=2)
+ base-0: median_ms=0.466 p95_ms=0.714; allocation_calls=2706, requested_bytes=710220, live_delta=74176, peak_above_start=149228, compute_original=39
+ off: median_ms=0.448 p95_ms=0.934; allocation_calls=2706, requested_bytes=710220, live_delta=74176, peak_above_start=149228, compute_original=39
+ base-1: median_ms=0.534 p95_ms=0.756; allocation_calls=2939, requested_bytes=764648, live_delta=74176, peak_above_start=203656, compute_original=39
+ effect: median_ms=0.485 p95_ms=1.564; allocation_calls=2716, requested_bytes=788804, live_delta=74176, peak_above_start=188820, compute_original=39
+ both: median_ms=0.588 p95_ms=1.167; allocation_calls=2949, requested_bytes=843232, live_delta=74176, peak_above_start=243248, compute_original=39
+cards=1800 phase=0 (cold=0 nochange=1 hover=2)
+ base-0: median_ms=66.492 p95_ms=99.010; allocation_calls=252318, requested_bytes=75056716, live_delta=12201984, peak_above_start=23358932, compute_original=3603
+ off: median_ms=71.151 p95_ms=112.347; allocation_calls=252318, requested_bytes=75056716, live_delta=12201984, peak_above_start=23358932, compute_original=3603
+ base-1: median_ms=72.974 p95_ms=82.082; allocation_calls=273935, requested_bytes=80086488, live_delta=17231740, peak_above_start=28388704, compute_original=3603
+ effect: median_ms=70.270 p95_ms=82.434; allocation_calls=252334, requested_bytes=80102724, live_delta=14725304, peak_above_start=25882236, compute_original=3603
+ both: median_ms=68.285 p95_ms=77.451; allocation_calls=273951, requested_bytes=85132496, live_delta=19755060, peak_above_start=30912008, compute_original=3603
+cards=1800 phase=1 (cold=0 nochange=1 hover=2)
+ base-0: median_ms=61.663 p95_ms=71.897; allocation_calls=245107, requested_bytes=64864124, live_delta=6695768, peak_above_start=13279548, compute_original=3603
+ off: median_ms=60.697 p95_ms=97.528; allocation_calls=245107, requested_bytes=64864124, live_delta=6695768, peak_above_start=13279548, compute_original=3603
+ base-1: median_ms=73.367 p95_ms=81.869; allocation_calls=266724, requested_bytes=69893896, live_delta=6695768, peak_above_start=18309320, compute_original=3603
+ effect: median_ms=62.404 p95_ms=78.907; allocation_calls=245123, requested_bytes=69910132, live_delta=6695768, peak_above_start=15802852, compute_original=3603
+ both: median_ms=74.066 p95_ms=129.811; allocation_calls=266740, requested_bytes=74939904, live_delta=6695768, peak_above_start=20832624, compute_original=3603
+cards=1800 phase=2 (cold=0 nochange=1 hover=2)
+ base-0: median_ms=54.092 p95_ms=69.826; allocation_calls=245112, requested_bytes=64866996, live_delta=6697160, peak_above_start=13280940, compute_original=3603
+ off: median_ms=58.383 p95_ms=65.764; allocation_calls=245112, requested_bytes=64866996, live_delta=6697160, peak_above_start=13280940, compute_original=3603
+ base-1: median_ms=65.975 p95_ms=70.391; allocation_calls=266729, requested_bytes=69896768, live_delta=6697160, peak_above_start=18310712, compute_original=3603
+ effect: median_ms=62.205 p95_ms=131.843; allocation_calls=245128, requested_bytes=69913004, live_delta=6697160, peak_above_start=15804244, compute_original=3603
+ both: median_ms=67.995 p95_ms=172.995; allocation_calls=266745, requested_bytes=74942776, live_delta=6697160, peak_above_start=20834016, compute_original=3603

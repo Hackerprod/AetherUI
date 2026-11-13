@@ -1,0 +1,1 @@
+PASS 21 fixture scenarios, ordered canonical outputs identical OFF/ON (initial, transition, nochange, retained, diagnostics, budget rejection)

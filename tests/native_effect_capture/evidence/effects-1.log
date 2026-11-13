@@ -1,0 +1,2 @@
+CALLBACK_TRACE qqqqqqwwpwpwpswwwqvwpabjivwpfacdqq
+PASS effects capture ownership/pseudo discard/inline/global/null callback/reentry/destroy; ordinary OOM points=1075

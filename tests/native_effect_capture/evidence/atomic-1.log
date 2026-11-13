@@ -1,0 +1,3 @@
+char PMR fault contract: aligned new, ownership and payload OOM verified
+runtime allocation coverage: ordinary calls=272652 failures=726, aligned calls=4488 failures=16
+style revision atomic: 5435 checks passed, 22 aligned failures

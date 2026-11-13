@@ -1,0 +1,9 @@
+char PMR fault contract: aligned new, ownership and payload OOM verified
+runtime allocation coverage: ordinary calls=268227 failures=720, aligned calls=4464 failures=16
+style revision atomic: 5389 checks passed, 22 aligned failures
+PASS hover provenance; OOM points=289; incomplete-list legacy, mixed, partial mutation, replacement, reentry, saturation
+char PMR fault contract: aligned new, ownership and payload OOM verified
+runtime allocation coverage: ordinary calls=272652 failures=726, aligned calls=4488 failures=16
+style revision atomic: 5435 checks passed, 22 aligned failures
+PASS hover provenance; OOM points=296; incomplete-list legacy, mixed, partial mutation, replacement, reentry, saturation
+PASS 21 fixture scenarios: canonical OFF/ON equality

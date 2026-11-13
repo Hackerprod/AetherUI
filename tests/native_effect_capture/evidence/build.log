@@ -1,0 +1,5 @@
+Base local commit: 45ca4bb580561bf3c7453231c9d5203161aa1d85 (published main a6c1941 tree equivalent)
+Clean build: 70 core objects, 71 sources including runtime; C++20 O1; no CMake configure.
+c++ (Debian 14.2.0-19) 14.2.0
+OFF/ON verify and focused test runners passed. Costs probe=1; 9 alternating samples per variant/size.
+No public header changes; no publish; no Actions; no Chromium/host rendering claim.

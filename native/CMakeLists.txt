@@ -94,6 +94,11 @@ target_include_directories(aether_core
 )
 
 target_compile_definitions(aether_core PRIVATE AETHER_EXPORTS)
+# Evidence collection only; no resolver reuse/fastpath. Production stays OFF.
+option(AETHER_EFFECT_CAPTURE "Capture experimental R0c preparation effects" OFF)
+if(AETHER_EFFECT_CAPTURE)
+    target_compile_definitions(aether_core PRIVATE AETHER_EFFECT_CAPTURE=1)
+endif()
 
 set_target_properties(aether_core PROPERTIES
     EXPORT_NAME Core
