@@ -12,6 +12,31 @@
 #include <string_view>
 #include <cctype>
 
+namespace {
+struct source_budget_exhausted {};
+static void source_charge(size_t& used, size_t amount, size_t limit) {
+    if (used > limit || amount > limit - used) throw source_budget_exhausted{};
+    used += amount;
+}
+static void source_work_add(size_t& used, size_t amount) noexcept {
+    const size_t maximum = static_cast<size_t>(-1);
+    used = amount > maximum - used ? maximum : used + amount;
+}
+static size_t source_charge_bytes(const char* source, style_source_budget_s& budget) {
+    if (budget.source_bytes > budget.source_bytes_limit) throw source_budget_exhausted{};
+    size_t remaining = budget.source_bytes_limit - budget.source_bytes;
+    // Preserve the compiler's signed byte-coordinate range even with custom limits.
+    if (remaining > static_cast<size_t>(INT32_MAX)) remaining = INT32_MAX;
+    size_t size = 0;
+    while (source[size]) {
+        if (size == remaining) throw source_budget_exhausted{};
+        ++size;
+    }
+    source_charge(budget.source_bytes, size, budget.source_bytes_limit);
+    return size;
+}
+}
+
 // ═══ Comment removal (port of TextSplitter.RemoveComments) ════════════
 
 std::string text_splitter_remove_comments(const std::string& source) {
@@ -38,6 +63,39 @@ struct declaration_compilation_result {
     std::vector<compiled_content_declaration_s> content;
     std::vector<compiled_shorthand_declaration_s> shorthands;
 };
+
+// Checked admission of the retained selector/declaration expansion. Source
+// units do not bound this product. Include structures and all copied strings.
+static size_t source_product(size_t a,size_t b) {
+    size_t result=0;
+    if (!style_source_expansion_product(a,b,result)) throw source_budget_exhausted{};
+    return result;
+}
+static void charge_expansion(const declaration_compilation_result& d,size_t selectors,
+    bool rules,style_source_budget_s& budget,style_source_accounting_s& accounting) {
+    size_t count=0,bytes=0;
+    auto add=[&](size_t n){source_charge(bytes,n,static_cast<size_t>(-1));};
+    auto str=[&](const std::string& v){add(v.size());add(1);};
+    auto entries=[&](size_t n,size_t width){source_charge(count,n,static_cast<size_t>(-1));add(source_product(n,width));};
+    entries(d.properties.size(),sizeof(compiled_property_declaration_s));
+    for(const auto& v:d.properties){str(v.value.typed_value);str(v.value.typography_source);str(v.value.deferred_source);}
+    entries(d.custom.size(),sizeof(custom_property_declaration_s));
+    for(const auto& v:d.custom){str(v.name);str(v.source);if(v.original_source)str(*v.original_source);}
+    entries(d.content.size(),sizeof(compiled_content_declaration_s));for(const auto& v:d.content)str(v.source);
+    entries(d.shorthands.size(),sizeof(compiled_shorthand_declaration_s));for(const auto& v:d.shorthands){str(v.name);str(v.source);}
+    const auto expanded=source_product(count,selectors);
+    size_t retained=source_product(bytes,selectors);
+    if(rules)source_charge(retained,source_product(selectors,sizeof(compiled_rule_s)),static_cast<size_t>(-1));
+    // Caller supplies a staged budget; rejection cannot mutate published usage.
+    source_charge(budget.compiled_rules,rules?selectors:0,
+        budget.compiled_rules_limit<budget.rules_limit?budget.compiled_rules_limit:budget.rules_limit);
+    source_charge(budget.expanded_declarations,expanded,
+        budget.expanded_declarations_limit<budget.declarations_limit?budget.expanded_declarations_limit:budget.declarations_limit);
+    source_charge(budget.compiled_bytes,retained,budget.compiled_bytes_limit);
+    accounting.compiled_rules+=rules?selectors:0;
+    accounting.expanded_declarations+=expanded;
+    accounting.compiled_bytes+=retained;
+}
 
 // ═══ Internal helpers ═══════════════════════════════════════════════════
 
@@ -92,7 +150,7 @@ struct declaration_span {
     size_t begin = 0, end = 0, colon = std::string::npos;
     bool valid = true;
 };
-static std::vector<declaration_span> declaration_spans(const std::string& source) {
+static std::vector<declaration_span> declaration_spans(const std::string& source, style_source_budget_s& budget, style_source_work_s* work) {
     // Delimit only source tokens. Punctuation decoded from a name is data,
     // never a colon/semicolon/brace to be interpreted a second time.
     css_component_lexer lexer(source.data(), source.size());
@@ -104,7 +162,14 @@ static std::vector<declaration_span> declaration_spans(const std::string& source
         if (token.kind == css_variable_token_kind::end ||
             (blocks.empty() && token.delimiter == ';')) {
             current.end = token.begin;
-            spans.push_back(current);
+            bool nonempty = false;
+            for (size_t i = current.begin; i < current.end; ++i)
+                if (!std::isspace(static_cast<unsigned char>(source[i]))) { nonempty = true; break; }
+            if (nonempty) {
+                source_charge(budget.declarations, 1, budget.declarations_limit);
+                if (work) source_work_add(work->work_declaration_spans, 1);
+                spans.push_back(current);
+            }
             if (token.kind == css_variable_token_kind::end) return spans;
             current = declaration_span{};
             current.begin = token.end;
@@ -253,18 +318,25 @@ static declaration_compilation_result compile_declarations(
     const std::string& original,
     style_property_registry_s* registry,
     aether_style_diagnostic_fn diagnostics_callback,
-    void* diagnostics_user_data)
+    void* diagnostics_user_data, style_source_accounting_s& accounting,
+    style_source_budget_s& budget, style_source_work_s* work)
 {
     declaration_compilation_result result;
     int32_t declaration_order = 0;
 
-    for (const auto& segment : declaration_spans(source)) {
-        if (!segment.valid || segment.colon == std::string::npos) continue;
+    for (const auto& segment : declaration_spans(source, budget, work)) {
+        // Empty/comment-only segments carry no discarded declaration.
+        bool nonempty = false;
+        for (size_t i = segment.begin; i < segment.end; ++i)
+            if (!std::isspace(static_cast<unsigned char>(source[i]))) { nonempty = true; break; }
+        if (!nonempty) continue;
+        accounting.add(accounting.declarations, 1, accounting.max_declarations);
+        if (!segment.valid || segment.colon == std::string::npos) { accounting.loss(style_source_loss::malformed_declaration); continue; }
         std::string name;
-        if (!declaration_name(source, segment, name)) continue;
+        if (!declaration_name(source, segment, name)) { accounting.loss(style_source_loss::malformed_declaration); continue; }
         std::string value = source.substr(segment.colon + 1, segment.end - segment.colon - 1);
         const bool important = css_strip_important(value);
-        if (name.empty()) continue;
+        if (name.empty()) { accounting.loss(style_source_loss::malformed_declaration); continue; }
         // Empty custom properties are valid and must not trigger var() fallback.
 
         if (name.size() > 2 && name[0] == '-' && name[1] == '-') {
@@ -280,7 +352,7 @@ static declaration_compilation_result compile_declarations(
             continue;
         }
 
-        if (value.empty()) continue;
+        if (value.empty()) { accounting.loss(style_source_loss::rejected_declaration); continue; }
         name = str_to_lower(name);
         if (name == "font" || name == "all" || name == "font-stretch" ||
             name == "font-feature-settings" || name == "font-variation-settings" ||
@@ -306,14 +378,16 @@ static declaration_compilation_result compile_declarations(
                 // variables or testing the eventual property-specific grammar.
                 if (validate_pending_declaration_value(value) && !shorthand->target_ids.empty())
                     result.shorthands.push_back({name, value, important, order});
+                else accounting.loss(style_source_loss::rejected_declaration);
                 continue;
             }
-            style_source_compile_shorthand(*shorthand, value, important, order, registry,
-                result.properties, diagnostics_callback, diagnostics_user_data);
+            if (!style_source_compile_shorthand(*shorthand, value, important, order, registry,
+                result.properties, diagnostics_callback, diagnostics_user_data)) accounting.loss(style_source_loss::rejected_declaration);
             continue;
         }
 
         if (!registry->try_get(name.c_str())) {
+            accounting.loss(style_source_loss::unknown_declaration);
             continue;
         }
 
@@ -321,9 +395,12 @@ static declaration_compilation_result compile_declarations(
         if (try_compile_longhand(name, value, important, declaration_order++, registry, compiled,
                                  diagnostics_callback, diagnostics_user_data))
             result.properties.push_back(std::move(compiled));
-        else if (name == "font-family" || name == "font-style" || name == "letter-spacing" ||
+        else {
+          accounting.loss(style_source_loss::rejected_declaration);
+          if (name == "font-family" || name == "font-style" || name == "letter-spacing" ||
         name == "font-size" || name == "font-weight" || name == "line-height")
             result.typography_discarded = true;
+        }
     }
 
     return result;
@@ -457,7 +534,8 @@ static aether_status_t compile_range(
     std::vector<compiled_rule_s>& out_rules,
     aether_style_diagnostic_fn diagnostics_callback,
     void* diagnostics_user_data,
-    media_condition_allocation_scope_s& media_scope)
+    media_condition_allocation_scope_s& media_scope, style_source_accounting_s& accounting,
+    style_source_budget_s& budget, style_source_work_s* work)
 {
     struct frame_s {
         int32_t index;
@@ -479,27 +557,34 @@ static aether_status_t compile_range(
             continue;
         }
 
+        source_charge(budget.rules, 1, budget.rules_limit);
+        accounting.add(accounting.rules, 1, accounting.max_rules);
+        if (work) source_work_add(work->work_rule_starts, 1);
         if (source[index] == '@') {
+            accounting.loss(style_source_loss::at_rule);
             int32_t at_offset = index;
             index++;
             css_component_lexer at_lexer(original.data(),static_cast<size_t>(end),static_cast<size_t>(index));
             const auto name_token=at_lexer.next();
-            if(name_token.kind!=css_variable_token_kind::ident && name_token.kind!=css_variable_token_kind::function){index=end;continue;}
+            if(name_token.kind!=css_variable_token_kind::ident && name_token.kind!=css_variable_token_kind::function){accounting.incomplete(style_source_loss::incomplete_parse);index=end;continue;}
             // @media(...) has no whitespace between its at-keyword and prelude.
             // The component lexer groups the following '(' with the name; keep
             // that punctuation in the prelude rather than dropping the rule.
             const size_t name_end=name_token.end-(name_token.kind==css_variable_token_kind::function?1:0);
             std::string name;
-            if(!css_single_identifier(original.substr(name_token.begin,name_end-name_token.begin),name)){index=end;continue;}
+            if(!css_single_identifier(original.substr(name_token.begin,name_end-name_token.begin),name)){accounting.incomplete(style_source_loss::incomplete_parse);index=end;continue;}
             index=static_cast<int32_t>(name_end);
             skip_whitespace(source, index, end);
 
             int32_t delimiter = find_at_rule_delimiter(source, index, end);
             if (delimiter < 0) {
+                accounting.incomplete(style_source_loss::incomplete_parse);
                 index = end;
                 continue;
             }
 
+            if (str_iequals(name, "import") || str_iequals(name, "font-face")) { accounting.external_pending = true; accounting.incomplete(style_source_loss::external_source); }
+            if (name == "media" || name == "supports") accounting.loss(style_source_loss::conditional_source);
             if (source[delimiter] == ';') {
                 index = delimiter + 1;
                 continue;
@@ -525,6 +610,7 @@ static aether_status_t compile_range(
                 if(keyframes->limit_exceeded)return source_limit_error(diagnostics_callback,diagnostics_user_data,"Keyframes limit exceeded.");
                 if(frame.active && !keyframes->name.empty()) {
                     if(!style_rule_ids_fit(rule_id_counter,1))return source_limit_error(diagnostics_callback,diagnostics_user_data,"Keyframes rule ID exhausted.");
+                    charge_expansion({},1,true,budget,accounting);
                     compiled_rule_s rule;rule.rule_id=rule_id_counter++;rule.source_order=rule.rule_id;
                     rule.sheet_handle=sheet_handle;rule.layer=layer;rule.condition=frame.condition;
                     rule.keyframes=std::move(keyframes);out_rules.push_back(std::move(rule));
@@ -540,6 +626,7 @@ static aether_status_t compile_range(
 
         int32_t opening = find_open_brace(source, index, end);
         if (opening < 0) {
+            accounting.incomplete(style_source_loss::incomplete_parse);
             frames.pop_back();
             continue;
         }
@@ -553,12 +640,15 @@ static aether_status_t compile_range(
 
         std::vector<compiled_selector_s> selectors;
         if (!selector_text.empty()) {
-            selector_parse_list(selector_text.c_str(), selectors);
+            bool discarded = false;
+            const bool valid = selector_parse_list(selector_text.c_str(), selectors, &discarded);
+            if (!valid || discarded) accounting.loss(style_source_loss::selector);
         }
+        if (selectors.empty()) accounting.loss(style_source_loss::selector);
 
         auto declarations = compile_declarations(declaration_text,
             original.substr(opening + 1, extent->body_end - opening - 1),
-            registry, diagnostics_callback, diagnostics_user_data);
+            registry, diagnostics_callback, diagnostics_user_data, accounting, budget, work);
 
         if (frame.active && !selectors.empty() &&
             (!declarations.properties.empty() || !declarations.custom.empty() || !declarations.content.empty() ||
@@ -568,6 +658,7 @@ static aether_status_t compile_range(
             if (!style_rule_ids_fit(rule_id_counter, selectors.size()))
                 return source_limit_error(diagnostics_callback, diagnostics_user_data,
                     "The cumulative stylesheet rule ID capacity is exhausted.");
+            charge_expansion(declarations,selectors.size(),true,budget,accounting);
             int32_t source_order = rule_id_counter;
             for (auto& sel : selectors) {
                 compiled_rule_s rule;
@@ -581,6 +672,8 @@ static aether_status_t compile_range(
                 rule.custom_declarations = declarations.custom;
                 rule.content_declarations = declarations.content;
                 rule.shorthand_declarations = declarations.shorthands;
+                if(work) source_work_add(work->work_expanded_declaration_copies,
+                    declarations.properties.size()+declarations.custom.size()+declarations.content.size()+declarations.shorthands.size());
                 rule.source_order = source_order;
                 out_rules.push_back(std::move(rule));
             }
@@ -600,12 +693,12 @@ aether_status_t style_source_compile(
     std::vector<compiled_rule_s>& out_rules,
     int32_t& out_rule_id_counter,
     aether_style_diagnostic_fn diagnostics_callback,
-    void* diagnostics_user_data)
-{
+    void* diagnostics_user_data, style_source_accounting_s* accounting,
+    style_source_budget_s* budget, style_source_work_s* work)
+try {
     if (!source) return AETHER_ERROR_NULL_ARG;
-    if (!style_source_size_fits(std::strlen(source)))
-        return source_limit_error(diagnostics_callback, diagnostics_user_data,
-            "The stylesheet source exceeds the 32-bit byte limit.");
+    style_source_budget_s staged_budget = budget ? *budget : style_source_budget_s{};
+    const size_t source_size = source_charge_bytes(source, staged_budget);
     if (!style_rule_ids_fit(out_rule_id_counter, 0))
         return source_limit_error(diagnostics_callback, diagnostics_user_data,
             "The next stylesheet rule ID is invalid.");
@@ -615,8 +708,12 @@ aether_status_t style_source_compile(
 
     // Both views have identical byte offsets. Selectors and the focal backdrop
     // consumer retain original tokens; other consumers keep the legacy view.
-    const std::string original(source);
+    style_source_accounting_s staged_accounting;
+    staged_accounting.add(staged_accounting.source_bytes, source_size, staged_accounting.max_source_bytes);
+    const std::string original(source, source_size);
+    if (work) source_work_add(work->work_source_bytes_copied, source_size);
     const std::string cleaned = text_splitter_remove_comments(original);
+    if (work) source_work_add(work->work_source_bytes_copied, source_size);
     if (cleaned.size() != original.size()) return AETHER_ERROR_INVALID_STATE;
 
     style_sheet_layer sheet_layer = static_cast<style_sheet_layer>(layer);
@@ -638,7 +735,7 @@ aether_status_t style_source_compile(
         staged,
         diagnostics_callback,
         diagnostics_user_data,
-        media_scope);
+        media_scope, staged_accounting, staged_budget, work);
     if (status != AETHER_OK) return status;
 
     // All potentially allocating preparation precedes publication. The arena
@@ -652,8 +749,15 @@ aether_status_t style_source_compile(
     for (auto& rule : staged) out_rules.push_back(std::move(rule));
     out_rule_id_counter = next_rule_id;
     media_scope.release_reachable(reached);
+    if (accounting) *accounting = staged_accounting;
+    if (budget) *budget = staged_budget;
 
     return AETHER_OK;
+}
+
+catch (const source_budget_exhausted&) {
+    return source_limit_error(diagnostics_callback, diagnostics_user_data,
+        "The cumulative stylesheet input budget is exhausted.");
 }
 
 // ═══ Public API: inline style compilation ══════════════════════════════
@@ -664,24 +768,36 @@ aether_status_t style_source_compile_inline(
     std::vector<custom_property_declaration_s>& out_custom,
     std::vector<compiled_shorthand_declaration_s>& out_shorthands,
     aether_style_diagnostic_fn diagnostics_callback,
-    void* diagnostics_user_data, bool* typography_discarded)
-{
+    void* diagnostics_user_data, bool* typography_discarded, style_source_accounting_s* accounting,
+    style_source_budget_s* budget, style_source_work_s* work)
+try {
     if (!source) return AETHER_ERROR_NULL_ARG;
-    if (!style_source_size_fits(std::strlen(source)))
-        return source_limit_error(diagnostics_callback, diagnostics_user_data,
-            "The entire inline style was ignored because it exceeds the 32-bit byte limit.");
+    style_source_budget_s staged_budget = budget ? *budget : style_source_budget_s{};
+    const size_t source_size = source_charge_bytes(source, staged_budget);
 
     auto* registry = style_property_registry_get_global();
     if (!registry) return AETHER_ERROR_INVALID_STATE;
 
-    const std::string original(source);
+    style_source_accounting_s staged_accounting;
+    staged_accounting.add(staged_accounting.source_bytes, source_size, staged_accounting.max_source_bytes);
+    const std::string original(source, source_size);
+    if (work) source_work_add(work->work_source_bytes_copied, source_size);
     const std::string cleaned = text_splitter_remove_comments(original);
-    auto result = compile_declarations(cleaned, original, registry, diagnostics_callback, diagnostics_user_data);
+    if (work) source_work_add(work->work_source_bytes_copied, source_size);
+    auto result = compile_declarations(cleaned, original, registry, diagnostics_callback, diagnostics_user_data, staged_accounting, staged_budget, work);
 
+    charge_expansion(result,1,false,staged_budget,staged_accounting);
     if (typography_discarded) *typography_discarded = result.typography_discarded;
     out_properties = std::move(result.properties);
     out_custom = std::move(result.custom);
     out_shorthands = std::move(result.shorthands);
+    if (accounting) *accounting = staged_accounting;
+    if (budget) *budget = staged_budget;
 
     return AETHER_OK;
+}
+
+catch (const source_budget_exhausted&) {
+    return source_limit_error(diagnostics_callback, diagnostics_user_data,
+        "The cumulative inline input budget is exhausted.");
 }

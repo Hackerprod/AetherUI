@@ -19,6 +19,7 @@
 #include "css_variable_tokens.h"
 #include "custom_property_scope_internal.h"
 #include "typography_scope_probe.h"
+#include "typography_context.h"
 #include "frozen_runtime_metadata.h"
 #include "value_audit_internal.h"
 #include "paused_keyframes.h"
@@ -40,6 +41,7 @@ using namespace aether::style;
 // Private preparation data, never a public handle or final record.
 struct PreparedNodeResult {
     TypographyEvidence typography;
+    aether::rendering::text::ParagraphDiagnosticRef text_diagnostic;
     FrozenStyleRef style;
     std::shared_ptr<measure_state_s> measures;
     FrozenScopeRef custom_properties;
@@ -95,6 +97,8 @@ struct aether_style_runtime_s {
     uint64_t generation = 0;
     uint64_t sheet_epoch = 0;
     bool preparing = false;
+    style_source_budget_s source_budget;
+    style_source_accounting_s source_accounting; // transaction-local document aggregate
     aether_node_s* legacy_inheritance_root = nullptr; // Candidate-only compatibility boundary.
     std::thread::id owner_thread = std::this_thread::get_id();
     rule_index_s index;
@@ -103,6 +107,13 @@ struct aether_style_runtime_s {
     std::vector<const compiled_rule_s*> paused_rules;
     void copy_index_for_preparation(const aether_style_runtime_s& source) {
         index = source.index;
+        for (const auto& sheet : source.sheets) source_accounting.merge(sheet.second->accounting);
+        source_budget.source_bytes=source_accounting.source_bytes;
+        source_budget.declarations=source_accounting.declarations;
+        source_budget.rules=source_accounting.rules;
+        source_budget.compiled_rules=source_accounting.compiled_rules;
+        source_budget.expanded_declarations=source_accounting.expanded_declarations;
+        source_budget.compiled_bytes=source_accounting.compiled_bytes;
         for(const auto& sheet:source.sheets)for(const auto& rule:sheet.second->rules)
             if(rule.keyframes)paused_rules.push_back(&rule);
         // Unlike a generic copy, synchronous preparation borrows only stable,
@@ -426,8 +437,11 @@ static PreparedNodeResult* compute_node(aether_style_runtime_s* runtime, aether_
     // Generated pseudo-elements retain host attributes for selector matching, but
     // the host's inline declaration block does not cascade onto ::before/::after.
     if (!node->is_generated) if (auto it = node->attributes.find("style"); it != node->attributes.end()) {
-        style_source_compile_inline(it->second.c_str(), inline_properties, inline_custom, inline_shorthands,
-                                    runtime->diag_cb, runtime->diag_user_data, &typography_discarded_inline);
+        style_source_accounting_s inline_accounting;
+        const auto inline_status=style_source_compile_inline(it->second.c_str(), inline_properties, inline_custom, inline_shorthands,
+                                    runtime->diag_cb, runtime->diag_user_data, &typography_discarded_inline, &inline_accounting, &runtime->source_budget);
+        require_style_status(inline_status);
+        runtime->source_accounting.merge(inline_accounting);
         typography_discarded = typography_discarded || typography_discarded_inline;
         for (const auto& declaration : inline_properties) {
             cascade_priority_t priority{
@@ -915,6 +929,12 @@ static void prepare_tree(aether_style_runtime_s* staged, aether_node_s* node,
     auto* next_parent = parent;
     uint32_t next_inherited = inherited_parent;
     if (node->type == AETHER_NODE_ELEMENT) {
+        // DOM sources are not correlated with add_stylesheet handles. Never infer
+        // that a link/style was fetched/compiled from an unrelated sheet epoch.
+        if (node->tag_name=="link" || node->tag_name=="style") {
+            staged->source_accounting.external_pending=true;
+            staged->source_accounting.incomplete(style_source_loss::external_source);
+        }
         uint32_t impact = 0;
         next_parent = compute_node(staged, node, parent, inherited_parent, impact, next_inherited, selector_context);
         order.push_back(node);
@@ -984,8 +1004,19 @@ AETHER_API aether_status_t aether_style_runtime_add_stylesheet(
         sheet->handle = handle;
         sheet->layer = static_cast<style_sheet_layer>(layer);
         sheet->source_name = source_name ? source_name : "";
+        // The new sheet shares the document source budget with all live sheets.
+        // No source copying/parsing happens before the compiler reserves it.
+        style_source_accounting_s existing;
+        for (const auto& entry : runtime->sheets) existing.merge(entry.second->accounting);
+        style_source_budget_s budget;
+        budget.source_bytes=existing.source_bytes;
+        budget.declarations=existing.declarations;
+        budget.rules=existing.rules;
+        budget.compiled_rules=existing.compiled_rules;
+        budget.expanded_declarations=existing.expanded_declarations;
+        budget.compiled_bytes=existing.compiled_bytes;
         const auto result = style_source_compile(source, handle, layer, sheet->rules, next_rule_id,
-                                                collector, &diagnostics);
+                                                collector, &diagnostics, &sheet->accounting, &budget);
         if (result != AETHER_OK) return result;
         // Preserve the compiler's global positions, including the shared position
         // of selectors in one list. ID capacity already bounds this narrowing.
@@ -1162,6 +1193,27 @@ static aether_status_t prepare_revision_impl(
         for(const auto& link:transaction->links)for(const auto& leaf:link.storage)leaves.emplace(leaf.get(),leaf);
         BackingBuildInput backing;
         std::unordered_map<aether_node_s*,FrozenNodeRef> next_states;
+        // Raw direct text only: no CSS normalization, grouping, font or geometry.
+        // One document budget, compact range per text node, checked before copies.
+        using namespace aether::rendering::text;
+        ParagraphDiagnosticBudget text_budget;
+        bool text_limited=false;
+        const ParagraphDiagnosticEpochs text_epochs{revision_input.document_identity,
+            revision_input.generation, revision_input.input_epoch, revision_input.structure_epoch,
+            revision_input.style_tree_epoch, revision_input.sheet_epoch};
+        for (auto* node : order) {
+            if (text_limited) break;
+            std::vector<ParagraphDiagnosticPiece> pieces;
+            for (auto* child : node->children) if (!child->is_generated && child->type==AETHER_NODE_TEXT) {
+                if (pieces.size()>=text_budget.limits.ranges-text_budget.ranges) {text_limited=true;break;}
+                pieces.push_back({aether_node_identity(child),child->text});
+            }
+            if (text_limited) break;
+            if (!pieces.empty() && freeze_paragraph_diagnostic(pieces,text_epochs,text_budget,
+                staged.prepared.at(node)->text_diagnostic)!=ParagraphDiagnosticStatus::prepared) text_limited=true;
+        }
+        if (text_limited) staged.source_accounting.incomplete(style_source_loss::budget);
+        const auto source_accounting=std::make_shared<const style_source_accounting_s>(staged.source_accounting);
         revision_input.entries.reserve(order.size());
         for(auto* node:order) {
             const auto& prepared=*staged.prepared.at(node);
@@ -1169,6 +1221,10 @@ static aether_status_t prepare_revision_impl(
             input.origin=RecordOrigin::runtime; input.node=node; input.style=prepared.style;
             auto typography_record=std::make_shared<TypographyRecord>();
             typography_record->evidence=prepared.typography;
+            typography_record->inputs=source_accounting;
+            typography_record->text_diagnostic=prepared.text_diagnostic;
+            if (source_accounting->losses || !source_accounting->inputs_accounted)
+                typography_record->evidence.coverage_gaps |= 4;
             typography_record->generation=revision_input.generation;
             typography_record->document_identity=revision_input.document_identity;
             typography_record->input_epoch=revision_input.input_epoch;
@@ -1368,4 +1424,13 @@ AETHER_API void aether_style_runtime_clear_cache(aether_style_runtime_t runtime)
 void style_runtime_set_value_audit(aether_style_runtime_t runtime,const style_value_audit_s* audit) {
     if(runtime&&!runtime->preparing&&runtime->owner_thread==std::this_thread::get_id())
         runtime->value_audit=audit;
+}
+
+// Operational consumers must check this both before and after any callback.
+// Immutable historical descriptors remain readable but cannot prove currency.
+bool aether::style::typography_inputs_current(aether_style_runtime_t runtime, const MapVersionRef& version) noexcept {
+    if (!runtime || runtime->owner_thread!=std::this_thread::get_id() || runtime->preparing ||
+        !version || !version->contextual() || !version->revision() ||
+        runtime->revision!=version->revision() || runtime->sheet_epoch!=version->revision()->sheet_epoch()) return false;
+    return version->document_lifetime() && structure_valid(version.get()) && inputs_current(version.get());
 }

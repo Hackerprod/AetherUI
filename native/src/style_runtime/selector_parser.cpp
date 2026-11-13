@@ -253,6 +253,7 @@ static std::vector<std::string_view> split_top_level(std::string_view source, ch
 /* ── Parser state ─────────────────────────────────────────────────── */
 
 struct selector_parse_context_s {
+    bool* discarded = nullptr; // private diagnostic observer; shared through nested list contexts
     bool disallow_pseudo_elements = false;
     bool strict_profile = false;
     bool nested_selector_argument = false;
@@ -747,6 +748,7 @@ static bool selector_parse_list_view(std::string_view source, std::vector<compil
         const bool valid = !part.empty() && selector_parse_core(sub, sel);
         sub.skip_trivia();
         if (!valid || !sub.eof()) {
+            if (context.discarded) *context.discarded = true;
             if (policy == selector_list_policy_t::StrictNonEmpty) return false;
             continue;
         }
@@ -770,11 +772,14 @@ bool selector_parse(const char* source, compiled_selector_s& out) {
     return true;
 }
 
-bool selector_parse_list(const char* source, std::vector<compiled_selector_s>& out) {
+bool selector_parse_list(const char* source, std::vector<compiled_selector_s>& out, bool* discarded) {
+    if (discarded) *discarded = false;
     if (!source) return false;
     std::string_view sv(source);
     if (sv.empty()) return false;
-    return selector_parse_list_view(sv, out, selector_list_policy_t::ForgivingNonEmpty, {});
+    selector_parse_context_s context;
+    context.discarded = discarded;
+    return selector_parse_list_view(sv, out, selector_list_policy_t::ForgivingNonEmpty, context);
 }
 
 // This opt-in harness wrapper does not alter the forgiving runtime API.

@@ -5,6 +5,9 @@
 #include "../css/style_revision.h"
 #include <utility>
 namespace aether::style {
+// Historical valid() is ownership consistency only. For operations, check
+// current runtime/document/thread/epochs before and after callbacks. No authority.
+bool typography_inputs_current(aether_style_runtime_t, const MapVersionRef&) noexcept;
 enum class TypographyComparison { different, equal_for_tracked_fields, unproven };
 class TypographyContext final {
     const MapVersionRef version_;

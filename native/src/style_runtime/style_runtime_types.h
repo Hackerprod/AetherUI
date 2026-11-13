@@ -2,6 +2,7 @@
 #include "../dom/pseudo_element.h"
 #include "style_string_utils_internal.h"
 #include "attribute_value_policy.h"
+#include "style_source_accounting.h"
 
 #include <aether/aether.h>
 #include <string>
@@ -437,6 +438,7 @@ struct compiled_rule_s {
 };
 
 struct compiled_style_sheet_s {
+    style_source_accounting_s accounting;
     int64_t handle = 0;
     style_sheet_layer layer = style_sheet_layer::author;
     std::string source_name;
@@ -562,7 +564,7 @@ void rule_index_get_candidates(const rule_index_s* idx, const node_style_info_s*
 // ═══ Selector parser public API ═══════════════════════════════════════
 
 bool selector_parse(const char* source, compiled_selector_s& out);
-bool selector_parse_list(const char* source, std::vector<compiled_selector_s>& out);
+bool selector_parse_list(const char* source, std::vector<compiled_selector_s>& out, bool* discarded = nullptr);
 bool selector_match(const compiled_selector_s& selector, aether_node_s* element);
 
 aether_status_t style_source_compile(
@@ -572,7 +574,8 @@ aether_status_t style_source_compile(
     std::vector<compiled_rule_s>& out_rules,
     int32_t& out_rule_id_counter,
     aether_style_diagnostic_fn diagnostics_callback,
-    void* diagnostics_user_data);
+    void* diagnostics_user_data, style_source_accounting_s* accounting = nullptr,
+    style_source_budget_s* budget = nullptr, style_source_work_s* work = nullptr);
 
 aether_status_t style_source_compile_inline(
     const char* source,
@@ -580,7 +583,8 @@ aether_status_t style_source_compile_inline(
     std::vector<custom_property_declaration_s>& out_custom,
     std::vector<compiled_shorthand_declaration_s>& out_shorthands,
     aether_style_diagnostic_fn diagnostics_callback,
-    void* diagnostics_user_data, bool* typography_discarded = nullptr);
+    void* diagnostics_user_data, bool* typography_discarded = nullptr, style_source_accounting_s* accounting = nullptr,
+    style_source_budget_s* budget = nullptr, style_source_work_s* work = nullptr);
 
 // Internal transactional compiler shared by stylesheet, inline and substitution.
 struct style_shorthand_definition_s;
