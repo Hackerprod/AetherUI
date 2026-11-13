@@ -5,7 +5,7 @@
 
 using namespace aether::style;
 style_revision_s::style_revision_s(const StyleRevisionInput& in) :
-    contextual_(in.contextual), generation_(in.generation), document_identity_(in.document_identity),
+    contextual_(in.contextual), sheet_epoch_(in.sheet_epoch), generation_(in.generation), document_identity_(in.document_identity),
     input_epoch_(in.input_epoch), structure_epoch_(in.structure_epoch), style_tree_epoch_(in.style_tree_epoch),
     environment_(in.environment), document_(in.document), document_lifetime_(in.document_lifetime), backing_(in.backing),
     entries_(ImmutableArray<FrozenRevisionEntry>::generate(in.entries.size(), [&](size_t i) {
@@ -38,6 +38,8 @@ aether_status_t freeze_style_revision(const StyleRevisionInput& in, StyleRevisio
     if (static_cast<const aether_node_s*>(in.document_lifetime->owner)->identity != in.document_lifetime)
         return AETHER_ERROR_INVALID_STATE;
     try {
+        bool has_typography=false;
+        for (const auto& entry:in.entries) if (entry.record && entry.record->typography()) has_typography=true;
         std::unordered_set<const aether_node_s*> seen;
         seen.reserve(in.entries.size() + in.retired.size());
         for (const auto& entry : in.entries) {
@@ -48,6 +50,15 @@ aether_status_t freeze_style_revision(const StyleRevisionInput& in, StyleRevisio
                 !same_owner(r->document_lifetime(), in.document_lifetime) || r->document_identity() != in.document_identity ||
                 !r->measures() || !same_owner(r->measures()->document_owner(), in.document))
                 return AETHER_ERROR_INVALID_STATE;
+            // Evidence cannot migrate independently from its exact revision.
+            if (has_typography && !r->typography()) return AETHER_ERROR_INVALID_STATE;
+            if (r->typography()) {
+                const auto& t=*r->typography();
+                if (t.generation != in.generation || t.document_identity != in.document_identity ||
+                    t.input_epoch != in.input_epoch || t.structure_epoch != in.structure_epoch ||
+                    t.style_tree_epoch != in.style_tree_epoch || t.sheet_epoch != in.sheet_epoch || t.registry_version != 1)
+                    return AETHER_ERROR_INVALID_STATE;
+            }
             if (entry.node->identity != r->node_lifetime()) return AETHER_ERROR_INVALID_STATE;
         }
         for (const auto& retired : in.retired) {

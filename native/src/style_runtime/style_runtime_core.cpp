@@ -38,6 +38,7 @@ using namespace aether::style;
 
 // Private preparation data, never a public handle or final record.
 struct PreparedNodeResult {
+    TypographyEvidence typography;
     FrozenStyleRef style;
     std::shared_ptr<measure_state_s> measures;
     FrozenScopeRef custom_properties;
@@ -350,6 +351,19 @@ static PreparedNodeResult* compute_node(aether_style_runtime_s* runtime, aether_
     const bool document_element = !node->is_generated && node->type == AETHER_NODE_ELEMENT &&
         ((!node->parent) || (node->parent->type == AETHER_NODE_DOCUMENT &&
           aether_doc_get_document_element(static_cast<aether_doc_s*>(node->parent)) == node));
+    TypographyEvidence typography = parent ? parent->typography : TypographyEvidence{};
+    if (parent) for (auto& origin:typography.provenance) origin.inherited=true;
+    bool typography_discarded = false;
+    auto typography_set = [&](const std::string& name, const std::string& source) {
+        if (name == "font-family") typography_parse_family(source, typography);
+        else if (name == "font-style") typography_parse_style(source, typography);
+        else if (name == "letter-spacing") typography_parse_spacing(source, typography);
+    };
+    auto typography_reset = [&](const std::string& name) {
+        if (name == "font-family") { typography.family_state=TypographyFieldState::unknown; typography.families.clear(); }
+        else if (name == "font-style") { typography.style_state=TypographyFieldState::unknown; typography.font_style.clear(); }
+        else if (name == "letter-spacing") { typography.spacing_state=TypographyFieldState::unknown; typography.spacing_normal=false; typography.spacing_px=0; }
+    };
     std::vector<cascade_entry_s> cascade(static_cast<size_t>(registry->property_count()));
     struct custom_winner_s {
         cascade_priority_t priority{};
@@ -372,6 +386,7 @@ static PreparedNodeResult* compute_node(aether_style_runtime_s* runtime, aether_
         if (rule->selector.pseudo_element != node->pseudo_element) continue;
         if (!media_condition_matches(rule->condition, &runtime->environment) ||
             !selector_match(rule->selector, node, selector_context)) continue;
+        typography_discarded = typography_discarded || rule->typography_discarded;
         for (const auto& declaration : rule->declarations) {
             cascade_priority_t priority{
                 declaration.important, false, rule->layer, rule->selector.specificity,
@@ -397,6 +412,7 @@ static PreparedNodeResult* compute_node(aether_style_runtime_s* runtime, aether_
         }
     }
 
+    bool typography_discarded_inline=false;
     std::vector<compiled_property_declaration_s> inline_properties;
     std::vector<custom_property_declaration_s> inline_custom;
     std::vector<compiled_shorthand_declaration_s> inline_shorthands;
@@ -404,7 +420,8 @@ static PreparedNodeResult* compute_node(aether_style_runtime_s* runtime, aether_
     // the host's inline declaration block does not cascade onto ::before/::after.
     if (!node->is_generated) if (auto it = node->attributes.find("style"); it != node->attributes.end()) {
         style_source_compile_inline(it->second.c_str(), inline_properties, inline_custom, inline_shorthands,
-                                    runtime->diag_cb, runtime->diag_user_data);
+                                    runtime->diag_cb, runtime->diag_user_data, &typography_discarded_inline);
+        typography_discarded = typography_discarded || typography_discarded_inline;
         for (const auto& declaration : inline_properties) {
             cascade_priority_t priority{
                 declaration.important, true, style_sheet_layer::author,
@@ -564,28 +581,50 @@ static PreparedNodeResult* compute_node(aether_style_runtime_s* runtime, aether_
         color_references.text_shadow_uses_current_color =
             copy_text_color_flags(*parent->color_references);
     }
+    bool typography_scope_uncertain=false;
+    for (auto* current=scope.get(); current; current=current->parent())
+        for (const auto& terminal:current->local_entries())
+            if (terminal.status()!=custom_property_status::valid) typography_scope_uncertain=true;
     auto apply_definition = [&](size_t i) {
         if (!cascade[i].is_set) return false;
         const auto& definition = registry->definitions[i];
         const auto& compiled = cascade[i].value;
+        const int typography_index=definition.name=="font-family"?0:definition.name=="font-style"?1:definition.name=="letter-spacing"?2:-1;
+        if (typography_index>=0) {
+            auto& origin=typography.provenance[static_cast<size_t>(typography_index)];
+            origin.declaration=true;
+            origin.inherited=parent && (compiled.mode==compiled_value_mode::inherit ||
+                (compiled.mode==compiled_value_mode::unset && definition.inherited));
+            origin.important=cascade[i].priority.important; origin.inline_style=cascade[i].priority.inline_;
+            origin.layer=static_cast<int32_t>(cascade[i].priority.layer);
+            origin.source_order=cascade[i].priority.source_order; origin.declaration_order=cascade[i].priority.decl_order;
+            origin.accepted_source=compiled.typography_source.size()<=65536?compiled.typography_source:std::string{};
+        }
+        if (typography_index>=0 && compiled.mode==compiled_value_mode::deferred && typography_scope_uncertain) {
+            typography_reset(definition.name); typography.coverage_gaps |= 2;
+        }
         const std::string initial_value = definition.name == "font-size" ?
             std::to_string(measures->document->initial_font_size) + "px" : definition.initial_value;
         std::string value;
         bool explicit_inherit = false;
         switch (compiled.mode) {
         case compiled_value_mode::value:
+            typography_set(definition.name, compiled.typography_source);
             value = compiled.typed_value;
             break;
         case compiled_value_mode::initial:
+            typography_reset(definition.name);
             value = initial_value;
             break;
         case compiled_value_mode::inherit:
+            if (!parent) typography_reset(definition.name);
             if (!definition.inherit_explicit && !definition.inherit_context) return false;
             explicit_inherit = parent != nullptr;
             value = initial_value;
             break;
         case compiled_value_mode::unset:
             if (definition.inherited && parent) return false;
+            typography_reset(definition.name);
             value = initial_value;
             break;
         case compiled_value_mode::deferred: {
@@ -597,6 +636,13 @@ static PreparedNodeResult* compute_node(aether_style_runtime_s* runtime, aether_
             if(runtime->value_audit && runtime->value_audit->value)
                 runtime->value_audit->value(runtime->value_audit->context,node,definition.name,compiled.deferred_source,substituted?&value:nullptr);
             if (!substituted) {
+                if (typography_index>=0) {
+                    // Missing/cyclic and expansion-budget failures are not
+                    // distinguished here. Never convert uncertainty to known.
+                    typography_reset(definition.name);
+                    typography.provenance[static_cast<size_t>(typography_index)].inherited=false;
+                    typography.coverage_gaps |= 2;
+                }
                 report(runtime, "AETHER-CSS-VAR", definition.name.c_str(),
                        compiled.deferred_source.c_str(), "Unable to resolve CSS variable.");
                 if (!definition.css_wide || (definition.inherited && parent)) return false;
@@ -607,13 +653,34 @@ static PreparedNodeResult* compute_node(aether_style_runtime_s* runtime, aether_
             }
             const auto css_wide = definition.css_wide ? definition.css_wide(value) : property_css_wide_e::none;
             if (css_wide != property_css_wide_e::none) {
+                if (typography_index>=0 && parent && (css_wide==property_css_wide_e::inherit || css_wide==property_css_wide_e::unset))
+                    typography.provenance[static_cast<size_t>(typography_index)].inherited=true;
+                if (css_wide == property_css_wide_e::initial || !parent) typography_reset(definition.name);
                 if (css_wide == property_css_wide_e::unset && definition.inherited && parent) return false;
                 explicit_inherit = css_wide == property_css_wide_e::inherit &&
                     parent && (definition.inherit_explicit || definition.inherit_context);
                 value = initial_value;
                 break;
             }
+            const std::string typography_resolved_source=value;
+            std::string typography_keyword;
+            if (css_single_identifier(value,typography_keyword)) typography_keyword=typography_ascii_lower(typography_keyword);
+            const bool typography_initial_wide=typography_keyword=="initial" || typography_keyword=="revert" || typography_keyword=="revert-layer";
+            if (typography_index>=0) {
+                if (typography_initial_wide) typography_reset(definition.name);
+                else if (typography_keyword=="inherit" || typography_keyword=="unset") {
+                    typography.provenance[static_cast<size_t>(typography_index)].inherited=parent!=nullptr;
+                    if (!parent) typography_reset(definition.name);
+                }
+            }
             if (!definition.parse(value.c_str(), value)) {
+                if (typography_index>=0 && !typography_css_wide(typography_keyword)) {
+                    // Legacy parse rejection is not proof that a valid but
+                    // unimplemented computed value is the parent's normal/zero.
+                    typography_reset(definition.name);
+                    typography.provenance[static_cast<size_t>(typography_index)].inherited=false;
+                    typography.coverage_gaps |= 2;
+                }
                 const auto failure = definition.parse_failure ? definition.parse_failure(value.c_str()) : property_apply_result_s{};
                 report(runtime,
                        failure.diagnostic_code ? failure.diagnostic_code :
@@ -625,6 +692,8 @@ static PreparedNodeResult* compute_node(aether_style_runtime_s* runtime, aether_
                                : "Resolved CSS value is invalid.");
                 if (!definition.css_wide || (definition.inherited && parent)) return false;
                 value = initial_value;
+            } else {
+                if (!typography_scope_uncertain && !typography_css_wide(typography_keyword)) typography_set(definition.name, typography_resolved_source);
             }
             break;
         }
@@ -727,11 +796,19 @@ static PreparedNodeResult* compute_node(aether_style_runtime_s* runtime, aether_
         diff = classify_style_diff(previous.style_view(), *previous.measures(),
             *previous.color_references(), next, *measures, color_references);
     }
+    // A no-op legacy callback must not hide a semantic evidence change.
+    if (typography_discarded) { typography=TypographyEvidence{}; typography.coverage_gaps |= 2; }
+    if (!is_new_node && (!found->second->typography() ||
+        found->second->typography()->evidence != typography)) {
+        diff.own_impact |= STYLE_IMPACT_TEXT_LAYOUT | STYLE_IMPACT_LAYOUT | STYLE_IMPACT_PAINT;
+        diff.inherited_value_impact |= STYLE_IMPACT_TEXT_LAYOUT | STYLE_IMPACT_LAYOUT | STYLE_IMPACT_PAINT;
+    }
     impact = diff.own_impact;
     inherited_change_impact = diff.inherited_value_impact;
     auto state = std::make_unique<PreparedNodeResult>();
     if (diff.style_storage_equivalent) state->style = found->second->style();
     else require_style_status(freeze_style(next, state->style));
+    state->typography=std::move(typography);
     state->measures = measures;
     state->custom_properties = std::move(scope);
     state->backdrop_custom_properties = std::move(backdrop_scope);
@@ -1027,6 +1104,7 @@ static aether_status_t prepare_revision_impl(
         revision_input.contextual=staged.legacy_inheritance_root==nullptr;
         const auto& d=*staged.document_measures;
         require_style_status(freeze_document({d.viewport_width,d.viewport_height,d.initial_font_size,d.root_font_size,d.generation,d.identity},revision_input.document));
+        revision_input.sheet_epoch=transaction->base_sheet_epoch;
         revision_input.generation=d.generation; revision_input.document_identity=d.identity;
         revision_input.input_epoch=transaction->input_epoch;
         revision_input.structure_epoch=document->identity->structure_epoch;
@@ -1041,6 +1119,15 @@ static aether_status_t prepare_revision_impl(
             const auto& prepared=*staged.prepared.at(node);
             NodeRecordInput input;
             input.origin=RecordOrigin::runtime; input.node=node; input.style=prepared.style;
+            auto typography_record=std::make_shared<TypographyRecord>();
+            typography_record->evidence=prepared.typography;
+            typography_record->generation=revision_input.generation;
+            typography_record->document_identity=revision_input.document_identity;
+            typography_record->input_epoch=revision_input.input_epoch;
+            typography_record->structure_epoch=revision_input.structure_epoch;
+            typography_record->style_tree_epoch=revision_input.style_tree_epoch;
+            typography_record->sheet_epoch=transaction->base_sheet_epoch;
+            input.typography=std::move(typography_record);
             require_style_status(freeze_runtime_measures(*prepared.measures,revision_input.document,input.measures));
             input.custom_properties=prepared.custom_properties;input.color_references=prepared.color_references;
             input.declared_impact=prepared.declared_impact;input.declared_inherited_impact=prepared.declared_inherited_impact;

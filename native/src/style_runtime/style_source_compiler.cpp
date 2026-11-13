@@ -32,6 +32,7 @@ std::string text_splitter_remove_comments(const std::string& source) {
 // ═══ Internal compilation result ═══════════════════════════════════════
 
 struct declaration_compilation_result {
+    bool typography_discarded = false;
     std::vector<compiled_property_declaration_s> properties;
     std::vector<custom_property_declaration_s> custom;
     std::vector<compiled_content_declaration_s> content;
@@ -167,6 +168,8 @@ static bool try_compile_longhand(
         if (css_single_identifier(value, ident)) wide_keyword = std::move(ident);
     }
     compiled_style_value_s compiled;
+    if (name == "font-family" || name == "font-style" || name == "letter-spacing")
+        compiled.typography_source = normalized;
 
     const auto css_wide = def->css_wide ? def->css_wide(wide_keyword) : property_css_wide_e::none;
     if (css_wide == property_css_wide_e::initial || str_iequals(wide_keyword, "initial") || str_iequals(wide_keyword, "revert")) {
@@ -278,6 +281,9 @@ static declaration_compilation_result compile_declarations(
 
         if (value.empty()) continue;
         name = str_to_lower(name);
+        if (name == "font" || name == "all" || name == "font-stretch" ||
+            name == "font-feature-settings" || name == "font-variation-settings" ||
+            name == "word-spacing" || name == "unicode-bidi") result.typography_discarded = true;
         if (name == "backdrop-filter" || name == "-webkit-backdrop-filter") {
             value = original.substr(segment.colon + 1, segment.end - segment.colon - 1);
             css_strip_important(value);
@@ -314,6 +320,8 @@ static declaration_compilation_result compile_declarations(
         if (try_compile_longhand(name, value, important, declaration_order++, registry, compiled,
                                  diagnostics_callback, diagnostics_user_data))
             result.properties.push_back(std::move(compiled));
+        else if (name == "font-family" || name == "font-style" || name == "letter-spacing")
+            result.typography_discarded = true;
     }
 
     return result;
@@ -552,7 +560,7 @@ static aether_status_t compile_range(
 
         if (frame.active && !selectors.empty() &&
             (!declarations.properties.empty() || !declarations.custom.empty() || !declarations.content.empty() ||
-             !declarations.shorthands.empty()))
+             !declarations.shorthands.empty() || declarations.typography_discarded))
         {
             // Reserve the whole selector group before incrementing any ID.
             if (!style_rule_ids_fit(rule_id_counter, selectors.size()))
@@ -566,6 +574,7 @@ static aether_status_t compile_range(
                 rule.layer = layer;
                 rule.selector = std::move(sel);
                 rule.condition = frame.condition;
+                rule.typography_discarded = declarations.typography_discarded;
                 rule.declarations = declarations.properties;
                 rule.custom_declarations = declarations.custom;
                 rule.content_declarations = declarations.content;
@@ -653,7 +662,7 @@ aether_status_t style_source_compile_inline(
     std::vector<custom_property_declaration_s>& out_custom,
     std::vector<compiled_shorthand_declaration_s>& out_shorthands,
     aether_style_diagnostic_fn diagnostics_callback,
-    void* diagnostics_user_data)
+    void* diagnostics_user_data, bool* typography_discarded)
 {
     if (!source) return AETHER_ERROR_NULL_ARG;
     if (!style_source_size_fits(std::strlen(source)))
@@ -667,6 +676,7 @@ aether_status_t style_source_compile_inline(
     const std::string cleaned = text_splitter_remove_comments(original);
     auto result = compile_declarations(cleaned, original, registry, diagnostics_callback, diagnostics_user_data);
 
+    if (typography_discarded) *typography_discarded = result.typography_discarded;
     out_properties = std::move(result.properties);
     out_custom = std::move(result.custom);
     out_shorthands = std::move(result.shorthands);

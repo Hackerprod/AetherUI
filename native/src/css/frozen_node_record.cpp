@@ -5,6 +5,7 @@ FrozenNodeRecord::FrozenNodeRecord(const NodeRecordInput& in) :
     origin_(in.origin),
     node_(in.node),
     style_(in.style),
+    typography_(in.typography),
     measures_(in.measures),
     custom_properties_(in.custom_properties),
     color_references_(in.color_references),

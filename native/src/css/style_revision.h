@@ -35,6 +35,7 @@ public:
 };
 struct StyleRevisionInput {
     bool contextual = true;
+    uint64_t sheet_epoch = 0;
     uint64_t generation = 0, document_identity = 0, input_epoch = 0, structure_epoch = 0, style_tree_epoch = 0;
     aether_style_environment_t environment{};
     FrozenDocumentRef document;
@@ -48,6 +49,7 @@ aether_status_t freeze_style_revision(const StyleRevisionInput&, StyleRevisionRe
 
 class style_revision_s final {
     const bool contextual_;
+    const uint64_t sheet_epoch_;
     const uint64_t generation_, document_identity_, input_epoch_, structure_epoch_, style_tree_epoch_;
     const aether_style_environment_t environment_;
     const aether::style::FrozenDocumentRef document_;
@@ -58,6 +60,7 @@ class style_revision_s final {
     explicit style_revision_s(const aether::style::StyleRevisionInput&);
     friend aether_status_t aether::style::freeze_style_revision(const aether::style::StyleRevisionInput&, aether::style::StyleRevisionRef&) noexcept;
 public:
+    uint64_t sheet_epoch() const noexcept { return sheet_epoch_; }
     bool contextual() const noexcept { return contextual_; }
     uint64_t generation() const noexcept { return generation_; }
     uint64_t document_identity() const noexcept { return document_identity_; }

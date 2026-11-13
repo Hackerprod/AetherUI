@@ -1,5 +1,6 @@
 #pragma once
 #include "frozen_style.h"
+#include "../style_runtime/typography_record.h"
 #include "../dom/node_identity.h"
 struct aether_node_s;
 namespace aether::style {
@@ -17,6 +18,7 @@ struct NodeRecordInput {
     RecordOrigin origin = RecordOrigin::legacy;
     aether_node_s* node = nullptr;
     FrozenStyleRef style = {};
+    TypographyRecordRef typography = {};
     FrozenMeasuresRef measures = {};
     FrozenScopeRef custom_properties = {};
     FrozenColorRef color_references = {};
@@ -36,6 +38,7 @@ class FrozenNodeRecord {
     const RecordOrigin origin_;
     aether_node_s* const node_;
     const FrozenStyleRef style_;
+    const TypographyRecordRef typography_;
     const FrozenMeasuresRef measures_;
     const FrozenScopeRef custom_properties_;
     const FrozenColorRef color_references_;
@@ -53,6 +56,7 @@ public:
     const RecordOrigin& origin() const noexcept { return origin_; }
     aether_node_s* node() const noexcept { return node_; }
     const FrozenStyleRef& style() const noexcept { return style_; }
+    const TypographyRecordRef& typography() const noexcept { return typography_; }
     const FrozenMeasuresRef& measures() const noexcept { return measures_; }
     const FrozenScopeRef& custom_properties() const noexcept { return custom_properties_; }
     const FrozenColorRef& color_references() const noexcept { return color_references_; }

@@ -295,6 +295,8 @@ enum class compiled_value_mode : uint8_t {
 struct compiled_style_value_s {
     compiled_value_mode mode = compiled_value_mode::value;
     std::string typed_value;
+    // Original accepted longhand tokens, before lossy legacy projection.
+    std::string typography_source;
     std::string deferred_source;
 };
 
@@ -419,6 +421,7 @@ media_condition_s* media_condition_parse(const char* source, aether_style_diagno
 
 struct paused_keyframes_s;
 struct compiled_rule_s {
+    bool typography_discarded = false;
     std::shared_ptr<const paused_keyframes_s> keyframes;
     int32_t  rule_id = 0;
     int64_t  sheet_handle = 0;
@@ -577,7 +580,7 @@ aether_status_t style_source_compile_inline(
     std::vector<custom_property_declaration_s>& out_custom,
     std::vector<compiled_shorthand_declaration_s>& out_shorthands,
     aether_style_diagnostic_fn diagnostics_callback,
-    void* diagnostics_user_data);
+    void* diagnostics_user_data, bool* typography_discarded = nullptr);
 
 // Internal transactional compiler shared by stylesheet, inline and substitution.
 struct style_shorthand_definition_s;
