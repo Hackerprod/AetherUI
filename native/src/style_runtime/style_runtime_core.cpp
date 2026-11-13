@@ -18,6 +18,14 @@
 #include "style_diff.h"
 #include "hover_probe.h"
 #include "hover_provenance.h"
+// Experimental evidence collection has no consumer yet. Production defaults
+// to the R0a path: no payload objects, allocations, or additional failure points.
+#ifndef AETHER_REUSABLE_PAYLOAD_CAPTURE
+#define AETHER_REUSABLE_PAYLOAD_CAPTURE 0
+#endif
+#if AETHER_REUSABLE_PAYLOAD_CAPTURE
+#include "reusable_payload.h"
+#endif
 #include "css_variable_tokens.h"
 #include "custom_property_scope_internal.h"
 #include "typography_scope_probe.h"
@@ -97,6 +105,9 @@ struct aether_style_runtime_s {
     std::shared_ptr<document_measure_context_s> document_measures;
     std::shared_ptr<const style_revision_s> revision;
     HoverProvenance hover_provenance; // Evidence only; R0a has no reuse path.
+#if AETHER_REUSABLE_PAYLOAD_CAPTURE
+    ReusablePayloadSnapshotRef reusable_payload; // Capture only, never read by resolver.
+#endif
     uint64_t generation = 0;
     uint64_t sheet_epoch = 0;
     bool preparing = false;
@@ -1226,9 +1237,37 @@ static aether_status_t prepare_revision_impl(
         }
         if (text_limited) staged.source_accounting.incomplete(style_source_loss::budget);
         const auto source_accounting=std::make_shared<const style_source_accounting_s>(staged.source_accounting);
+#if AETHER_REUSABLE_PAYLOAD_CAPTURE
+        auto payload_snapshot=std::make_shared<ReusablePayloadSnapshot>();
+        payload_snapshot->document=document->identity;
+        payload_snapshot->root=root->identity;
+        payload_snapshot->source_generation=transaction->base_generation;
+        payload_snapshot->published_generation=revision_input.generation;
+        payload_snapshot->source_input_epoch=transaction->input_epoch;
+        payload_snapshot->source_structure_epoch=revision_input.structure_epoch;
+        payload_snapshot->source_style_tree_epoch=transaction->base_style_tree_epoch;
+        payload_snapshot->published_style_tree_epoch=revision_input.style_tree_epoch;
+        payload_snapshot->sheet_epoch=transaction->base_sheet_epoch;
+        payload_snapshot->non_state_epoch=staged.hover_provenance.non_state_epoch;
+        payload_snapshot->non_state_exhausted=staged.hover_provenance.exhausted;
+        payload_snapshot->contextual=revision_input.contextual;
+        payload_snapshot->environment=requested_environment;
+        payload_snapshot->options=staged.options;
+        payload_snapshot->entries.reserve(order.size());
+#endif
         revision_input.entries.reserve(order.size());
         for(auto* node:order) {
             const auto& prepared=*staged.prepared.at(node);
+#if AETHER_REUSABLE_PAYLOAD_CAPTURE
+            const bool document_element = !node->is_generated && node->type == AETHER_NODE_ELEMENT &&
+                ((!node->parent) || (node->parent->type == AETHER_NODE_DOCUMENT &&
+                  aether_doc_get_document_element(static_cast<aether_doc_s*>(node->parent)) == node));
+            payload_snapshot->entries.push_back({node->identity,
+                node->parent ? node->parent->identity : nullptr,
+                std::make_shared<const FrozenReusableNodePayload>(prepared.style,
+                    prepared.custom_properties,prepared.backdrop_custom_properties,
+                    prepared.color_references,prepared.typography,*prepared.measures,document_element)});
+#endif
             NodeRecordInput input;
             input.origin=RecordOrigin::runtime; input.node=node; input.style=prepared.style;
             auto typography_record=std::make_shared<TypographyRecord>();
@@ -1276,6 +1315,9 @@ static aether_status_t prepare_revision_impl(
             update->current.node_lifetime=record->node_lifetime();update->current.document_lifetime=record->document_lifetime();
             transaction->updates.push_back(std::move(update));
         }
+#if AETHER_REUSABLE_PAYLOAD_CAPTURE
+        staged.reusable_payload=std::move(payload_snapshot);
+#endif
         staged.states.swap(next_states);staged.prepared.clear();
         if(transaction->updates.size()>static_cast<size_t>(INT32_MAX))return AETHER_ERROR_INVALID_STATE;
         // Reserve the last outward allocation before publishing any state.
@@ -1324,6 +1366,9 @@ AETHER_API aether_status_t aether_style_runtime_commit_revision(
     }
     transaction->document_lifetime->style_tree_epoch = transaction->revision->style_tree_epoch();
     runtime->hover_provenance.swap(transaction->candidate->hover_provenance);
+#if AETHER_REUSABLE_PAYLOAD_CAPTURE
+    runtime->reusable_payload.swap(transaction->candidate->reusable_payload);
+#endif
     runtime->states.swap(transaction->candidate->states);
     runtime->document_measures.swap(transaction->candidate->document_measures);
     runtime->environment = transaction->revision->environment();

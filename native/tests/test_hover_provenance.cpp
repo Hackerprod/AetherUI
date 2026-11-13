@@ -1,3 +1,6 @@
+#ifndef AETHER_REUSABLE_PAYLOAD_CAPTURE
+#define AETHER_REUSABLE_PAYLOAD_CAPTURE 1
+#endif
 #include "../src/style_runtime/style_runtime_core.cpp"
 #include <cstdio>
 #include <cstdlib>
@@ -31,11 +34,22 @@ int main(){
  bool saw_focus=false;for(auto& e:x.rt->hover_provenance.entries)if(e.identity==b->identity){CHECK(e.bits==AETHER_STATE_FOCUS);saw_focus=true;}CHECK(saw_focus);
  aether_element_set_state(b,0);resolve(x.rt,d);
  auto committed=x.rt->hover_provenance;auto generation=x.rt->generation;
+#if AETHER_REUSABLE_PAYLOAD_CAPTURE
+ auto committed_payload=x.rt->reusable_payload;CHECK(committed_payload);CHECK(committed_payload->published_generation==generation);CHECK(committed_payload->source_style_tree_epoch+1==committed_payload->published_style_tree_epoch);
+#endif
  // Every allocation in a complete preparation is faulted in turn. Publication
  // evidence must remain at the prior committed snapshot until a successful commit.
- int failed=0;for(int i=0;i<5000;++i){aether_style_transaction_t t=nullptr;fail_after=i;auto status=aether_style_runtime_prepare_revision(x.rt,d,nullptr,&t);fail_after=-1;CHECK(x.rt->generation==generation);CHECK(x.rt->hover_provenance.entries.size()==committed.entries.size());CHECK(x.rt->hover_provenance.non_state_epoch==committed.non_state_epoch);for(size_t j=0;j<committed.entries.size();++j){CHECK(x.rt->hover_provenance.entries[j].identity==committed.entries[j].identity);CHECK(x.rt->hover_provenance.entries[j].bits==committed.entries[j].bits);}if(status==AETHER_OK){aether_style_transaction_destroy(t);break;}CHECK(status==AETHER_ERROR_OUT_OF_MEMORY);CHECK(!t);++failed;}CHECK(failed>10&&failed<4999);
+ int failed=0;for(int i=0;i<5000;++i){aether_style_transaction_t t=nullptr;fail_after=i;auto status=aether_style_runtime_prepare_revision(x.rt,d,nullptr,&t);fail_after=-1;CHECK(x.rt->generation==generation);
+#if AETHER_REUSABLE_PAYLOAD_CAPTURE
+CHECK(x.rt->reusable_payload==committed_payload);
+#endif
+CHECK(x.rt->hover_provenance.entries.size()==committed.entries.size());CHECK(x.rt->hover_provenance.non_state_epoch==committed.non_state_epoch);for(size_t j=0;j<committed.entries.size();++j){CHECK(x.rt->hover_provenance.entries[j].identity==committed.entries[j].identity);CHECK(x.rt->hover_provenance.entries[j].bits==committed.entries[j].bits);}if(status==AETHER_OK){aether_style_transaction_destroy(t);break;}CHECK(status==AETHER_ERROR_OUT_OF_MEMORY);CHECK(!t);++failed;}CHECK(failed>10&&failed<4999);
  aether_style_transaction_t t=nullptr;CHECK(aether_style_runtime_prepare_revision(x.rt,d,nullptr,&t)==AETHER_OK);CHECK(aether_element_set_attribute(a,"class","changed")==AETHER_OK);aether_style_revision_t rev=nullptr;CHECK(aether_style_runtime_commit_revision(x.rt,t,&rev)==AETHER_ERROR_INVALID_STATE);CHECK(!rev);aether_style_transaction_destroy(t);CHECK(x.rt->generation==generation);
- CHECK(aether_element_set_attribute(a,"style","color:red;unknown-property:1; width:calc(1px +)")==AETHER_OK);aether_element_set_state(a,0);x.armed=true;resolve(x.rt,d);CHECK(x.done);CHECK(x.rt->hover_provenance.only_hover_delta_from(HoverProvenance::capture(d)));
+ CHECK(aether_element_set_attribute(a,"style","color:red;unknown-property:1; width:calc(1px +)")==AETHER_OK);aether_element_set_state(a,0);x.armed=true;resolve(x.rt,d);CHECK(x.done);
+#if AETHER_REUSABLE_PAYLOAD_CAPTURE
+CHECK(x.rt->reusable_payload->published_generation==x.rt->generation);
+#endif
+CHECK(x.rt->hover_provenance.only_hover_delta_from(HoverProvenance::capture(d)));
  bool found=false;for(auto& e:x.rt->hover_provenance.entries)if(e.identity==a->identity){CHECK(e.bits==AETHER_STATE_HOVER);found=true;}CHECK(found);
  // Cross-document reparent invalidates both roots and retains node identity.
  aether_doc_t other{};CHECK(aether_doc_create(&other)==AETHER_OK);CHECK(aether_doc_parse_html(other,"<main></main>")==AETHER_OK);
@@ -43,7 +57,11 @@ int main(){
  CHECK(aether_node_append_child(aether_doc_get_document_element(other),b)==AETHER_OK);
  CHECK(b->identity==same_b);CHECK(!HoverProvenance::capture(d).only_hover_delta_from(old_d));CHECK(!HoverProvenance::capture(other).only_hover_delta_from(old_other));
  CHECK(aether_node_append_child(parent,b)==AETHER_OK);aether_doc_destroy(other);
- d->identity->non_state_epoch=UINT64_MAX-1;aether_node_touch(d);CHECK(d->identity->non_state_exhausted);base=HoverProvenance::capture(d);resolve(x.rt,d);CHECK(!x.rt->hover_provenance.only_hover_delta_from(base));aether_node_touch(d);CHECK(d->identity->non_state_epoch==UINT64_MAX);CHECK(d->identity->non_state_exhausted);
+ d->identity->non_state_epoch=UINT64_MAX-1;aether_node_touch(d);CHECK(d->identity->non_state_exhausted);base=HoverProvenance::capture(d);resolve(x.rt,d);CHECK(!x.rt->hover_provenance.only_hover_delta_from(base));
+#if AETHER_REUSABLE_PAYLOAD_CAPTURE
+CHECK(x.rt->reusable_payload->non_state_exhausted);
+#endif
+aether_node_touch(d);CHECK(d->identity->non_state_epoch==UINT64_MAX);CHECK(d->identity->non_state_exhausted);
  // Once saturated, failed attribute mutation cannot change the extra epoch.
  // Legacy transaction semantics may still commit; reuse MUST remain forbidden.
  t=nullptr;CHECK(aether_style_runtime_prepare_revision(x.rt,d,nullptr,&t)==AETHER_OK);

@@ -1,0 +1,54 @@
+cards=18 mode=0 phase=0 (0=cold 1=nochange 2=transition)
+ r0a ms median=0.631 min=0.610 max=0.827; allocation_calls=2784, requested_bytes=818004, live_delta=133160, peak_above_start=256540, compute_original=0
+ r0b ms median=0.726 min=0.600 max=0.823; allocation_calls=3017, requested_bytes=872432, live_delta=187572, peak_above_start=310968, compute_original=0
+cards=18 mode=0 phase=1 (0=cold 1=nochange 2=transition)
+ r0a ms median=0.513 min=0.468 max=0.616; allocation_calls=2701, requested_bytes=707348, live_delta=72784, peak_above_start=147316, compute_original=0
+ r0b ms median=0.505 min=0.461 max=1.143; allocation_calls=2934, requested_bytes=761776, live_delta=72784, peak_above_start=201744, compute_original=0
+cards=18 mode=0 phase=2 (0=cold 1=nochange 2=transition)
+ r0a ms median=0.485 min=0.452 max=0.493; allocation_calls=2706, requested_bytes=710220, live_delta=74176, peak_above_start=149228, compute_original=0
+ r0b ms median=0.499 min=0.444 max=0.567; allocation_calls=2939, requested_bytes=764648, live_delta=74176, peak_above_start=203656, compute_original=0
+cards=18 mode=1 phase=0 (0=cold 1=nochange 2=transition)
+ r0a ms median=0.594 min=0.540 max=0.913; allocation_calls=2784, requested_bytes=818004, live_delta=133160, peak_above_start=256540, compute_original=39
+ r0b ms median=0.621 min=0.566 max=0.681; allocation_calls=3017, requested_bytes=872432, live_delta=187572, peak_above_start=310968, compute_original=39
+cards=18 mode=1 phase=1 (0=cold 1=nochange 2=transition)
+ r0a ms median=0.549 min=0.473 max=0.588; allocation_calls=2701, requested_bytes=707348, live_delta=72784, peak_above_start=147316, compute_original=39
+ r0b ms median=0.495 min=0.457 max=0.601; allocation_calls=2934, requested_bytes=761776, live_delta=72784, peak_above_start=201744, compute_original=39
+cards=18 mode=1 phase=2 (0=cold 1=nochange 2=transition)
+ r0a ms median=0.536 min=0.474 max=0.633; allocation_calls=2706, requested_bytes=710220, live_delta=74176, peak_above_start=149228, compute_original=39
+ r0b ms median=0.493 min=0.441 max=0.562; allocation_calls=2939, requested_bytes=764648, live_delta=74176, peak_above_start=203656, compute_original=39
+cards=18 mode=2 phase=0 (0=cold 1=nochange 2=transition)
+ r0a ms median=0.594 min=0.549 max=0.682; allocation_calls=2784, requested_bytes=818004, live_delta=133160, peak_above_start=256540, compute_original=39
+ r0b ms median=0.606 min=0.564 max=1.058; allocation_calls=3017, requested_bytes=872432, live_delta=187572, peak_above_start=310968, compute_original=39
+cards=18 mode=2 phase=1 (0=cold 1=nochange 2=transition)
+ r0a ms median=0.561 min=0.485 max=0.668; allocation_calls=2701, requested_bytes=707348, live_delta=72784, peak_above_start=147316, compute_original=39
+ r0b ms median=0.483 min=0.445 max=0.926; allocation_calls=2934, requested_bytes=761776, live_delta=72784, peak_above_start=201744, compute_original=39
+cards=18 mode=2 phase=2 (0=cold 1=nochange 2=transition)
+ r0a ms median=0.455 min=0.447 max=0.559; allocation_calls=2706, requested_bytes=710220, live_delta=74176, peak_above_start=149228, compute_original=39
+ r0b ms median=0.572 min=0.453 max=1.060; allocation_calls=2939, requested_bytes=764648, live_delta=74176, peak_above_start=203656, compute_original=39
+cards=1800 mode=0 phase=0 (0=cold 1=nochange 2=transition)
+ r0a ms median=59.398 min=56.128 max=143.305; allocation_calls=252318, requested_bytes=75056716, live_delta=12201984, peak_above_start=23358932, compute_original=0
+ r0b ms median=60.504 min=57.640 max=121.625; allocation_calls=273935, requested_bytes=80086488, live_delta=17231740, peak_above_start=28388704, compute_original=0
+cards=1800 mode=0 phase=1 (0=cold 1=nochange 2=transition)
+ r0a ms median=61.778 min=54.189 max=67.481; allocation_calls=245107, requested_bytes=64864124, live_delta=6695768, peak_above_start=13279548, compute_original=0
+ r0b ms median=57.863 min=57.221 max=58.776; allocation_calls=266724, requested_bytes=69893896, live_delta=6695768, peak_above_start=18309320, compute_original=0
+cards=1800 mode=0 phase=2 (0=cold 1=nochange 2=transition)
+ r0a ms median=56.293 min=50.968 max=88.634; allocation_calls=245112, requested_bytes=64866996, live_delta=6697160, peak_above_start=13280940, compute_original=0
+ r0b ms median=54.614 min=53.179 max=54.872; allocation_calls=266729, requested_bytes=69896768, live_delta=6697160, peak_above_start=18310712, compute_original=0
+cards=1800 mode=1 phase=0 (0=cold 1=nochange 2=transition)
+ r0a ms median=57.850 min=57.640 max=68.993; allocation_calls=252318, requested_bytes=75056716, live_delta=12201984, peak_above_start=23358932, compute_original=3603
+ r0b ms median=57.248 min=56.273 max=71.753; allocation_calls=273935, requested_bytes=80086488, live_delta=17231740, peak_above_start=28388704, compute_original=3603
+cards=1800 mode=1 phase=1 (0=cold 1=nochange 2=transition)
+ r0a ms median=53.645 min=52.657 max=62.626; allocation_calls=245107, requested_bytes=64864124, live_delta=6695768, peak_above_start=13279548, compute_original=3603
+ r0b ms median=60.452 min=59.334 max=81.237; allocation_calls=266724, requested_bytes=69893896, live_delta=6695768, peak_above_start=18309320, compute_original=3603
+cards=1800 mode=1 phase=2 (0=cold 1=nochange 2=transition)
+ r0a ms median=50.858 min=49.331 max=80.933; allocation_calls=245112, requested_bytes=64866996, live_delta=6697160, peak_above_start=13280940, compute_original=3603
+ r0b ms median=57.036 min=54.141 max=61.811; allocation_calls=266729, requested_bytes=69896768, live_delta=6697160, peak_above_start=18310712, compute_original=3603
+cards=1800 mode=2 phase=0 (0=cold 1=nochange 2=transition)
+ r0a ms median=62.687 min=57.290 max=82.881; allocation_calls=252318, requested_bytes=75056716, live_delta=12201984, peak_above_start=23358932, compute_original=3603
+ r0b ms median=56.549 min=49.924 max=59.704; allocation_calls=273935, requested_bytes=80086488, live_delta=17231740, peak_above_start=28388704, compute_original=3603
+cards=1800 mode=2 phase=1 (0=cold 1=nochange 2=transition)
+ r0a ms median=56.749 min=53.348 max=57.284; allocation_calls=245107, requested_bytes=64864124, live_delta=6695768, peak_above_start=13279548, compute_original=3603
+ r0b ms median=58.272 min=55.970 max=60.574; allocation_calls=266724, requested_bytes=69893896, live_delta=6695768, peak_above_start=18309320, compute_original=3603
+cards=1800 mode=2 phase=2 (0=cold 1=nochange 2=transition)
+ r0a ms median=50.466 min=49.839 max=51.077; allocation_calls=245112, requested_bytes=64866996, live_delta=6697160, peak_above_start=13280940, compute_original=3603
+ r0b ms median=54.791 min=53.943 max=55.770; allocation_calls=266729, requested_bytes=69896768, live_delta=6697160, peak_above_start=18310712, compute_original=3603
