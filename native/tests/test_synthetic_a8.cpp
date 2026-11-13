@@ -64,7 +64,7 @@ int main(int argc,char** argv){
  rejected(frame,{},s::Status::missing_mask);rejected(frame,{mask(font())},s::Status::missing_mask);rejected(frame,{ms[0],ms[0]},s::Status::invalid_mask);rejected(frame,{nullptr},s::Status::invalid_mask);
  auto fractional=prep({p::PushClip{{100.5,100,2,2},{}},t,p::PopClip{}});rejected(fractional,ms,s::Status::unsupported);
  auto curved=prep({p::PushClip{{100,100,4,4},{1,1,1,1,1,1,1,1}},t,p::PopClip{}});rejected(curved,ms,s::Status::unsupported);
- auto transformed=prep({p::PushTransform{{1,0,0,1,1,0}},t,p::PopTransform{}});rejected(transformed,ms,s::Status::unsupported);
+ auto transformed=prep({p::PushTransform{{2,0,0,1,1,0}},t,p::PopTransform{}});rejected(transformed,ms,s::Status::unsupported);
  auto offgrid=textcmd(f,.1f,1);auto og=prep({offgrid});rejected(og,ms,s::Status::unsupported);
  // Full allocation and cancellation sweep: no partial frame commits.
  int oom=0;for(int n=0;n<200;++n){fail_after=n;auto r=s::render_a8(store,nested,ms);fail_after=-1;if(r.status==s::Status::ok)break;CK(r.status==s::Status::allocation_failed);++oom;CK(read(store).sequence==before.sequence);}CK(oom>0);

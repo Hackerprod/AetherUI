@@ -46,7 +46,7 @@ int main() {
  auto rounded=fill(0,0,1,1);rounded.radii.top_left_x=1;
  assert(s::render(store,prepare({rounded})).status==s::Status::unsupported);
  assert(s::render(store,prepare({p::PushClip{{0,0,1,1},rounded.radii},p::PopClip{}})).status==s::Status::unsupported);
- auto trans=p::identity;trans.dx=1;
+ auto trans=p::identity;trans.m11=2; // G2 permits translations, not scale.
  assert(s::render(store,prepare({p::PushTransform{trans},p::PopTransform{}})).status==s::Status::unsupported);
  assert(store.resize({4,4,2})==FrameStatus::ok);assert(s::render(store,integer).status==s::Status::unsupported);
  assert(store.resize({4,4,1})==FrameStatus::ok);

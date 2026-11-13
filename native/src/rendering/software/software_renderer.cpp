@@ -15,7 +15,7 @@ constexpr std::uint64_t max_work = 50000000;
 struct Rect { double l, t, r, b; };
 struct CurvedClip { Rect original{}; double radius{}; };
 struct ClipState { Rect bounds; CurvedClip curve; };
-struct Draw { Rect rect; Rect inner; prep::Color color; std::size_t index; Rect original{}; double radius{}; Rect inner_original{}; double inner_radius{}; CurvedClip clip{}; bool shadow{}; Rect source{}; Rect excluded{}; double sigma{}; const prep::BorderGroup* border{}; int layer_event{}; float layer_opacity{1}; double scroll_x{},scroll_y{}; std::shared_ptr<const text::GlyphMaskA8> mask; const prep::LinearGradientFill* gradient{}; Rect gradient_rect{}; };
+struct Draw { Rect rect; Rect inner; prep::Color color; std::size_t index; Rect original{}; double radius{}; Rect inner_original{}; double inner_radius{}; CurvedClip clip{}; bool shadow{}; Rect source{}; Rect excluded{}; double sigma{}; const prep::BorderGroup* border{}; int layer_event{}; float layer_opacity{1}; double displacement_x{},displacement_y{}; std::shared_ptr<const text::GlyphMaskA8> mask; const prep::LinearGradientFill* gradient{}; Rect gradient_rect{}; };
 Rect intersect(Rect a, Rect b) noexcept {
  return {std::max(a.l,b.l),std::max(a.t,b.t),std::min(a.r,b.r),std::min(a.b,b.b)};
 }
@@ -97,7 +97,8 @@ bool charge(std::uint64_t& total,std::uint64_t count,std::uint64_t factor) noexc
  if(count>(max_work-total)/factor) return false;
  total+=count*factor;return true;
 }
-bool identity(prep::Matrix m) noexcept {return m.m11==1 && m.m12==0 && m.m21==0 && m.m22==1 && m.dx==0 && m.dy==0;}
+bool translation(prep::Matrix m) noexcept {return m.m11==1 && m.m12==0 && m.m21==0 && m.m22==1 && std::isfinite(m.dx) && std::isfinite(m.dy);}
+bool bounded_offset(double n) noexcept {return std::isfinite(n) && std::abs(n)<=65536;}
 bool cancelled(prep::Cancellation* c) noexcept {return c && c->cancelled();}
 double area(Rect r, int x, int y) noexcept {
  const double w=std::max(0.0,std::min(r.r,double(x)+1)-std::max(r.l,double(x)));
@@ -150,6 +151,10 @@ static Result render_impl(FrameStore& store,const prep::PreparedFrame& frame,
   }
   std::vector<Draw> draws;
   std::vector<ClipState> clips;
+  // Local ABI matrices retain fractions lost by the prepared float product.
+  // Keep this state independent of clips and opacity; clips are device-space.
+  std::vector<std::pair<double,double>> transforms;
+  double transform_x=0,transform_y=0;
   CurvedClip curve;
   std::size_t layer_depth=0,max_layer_depth=0;
   const auto surface_bytes=std::uint64_t(v.width)*std::uint64_t(v.height)*4;
@@ -158,7 +163,22 @@ static Result render_impl(FrameStore& store,const prep::PreparedFrame& frame,
   for(const auto& event:frame.events()) {
    if(cancelled(cancel)) return {Status::cancelled,FrameStatus::ok,index,work};
    const auto& command=event.command;
-   const auto translated=[&](prep::Rect r){auto v=rect(r);return Rect{v.l+event.scroll_x,v.t+event.scroll_y,v.r+event.scroll_x,v.b+event.scroll_y};};
+   if(const auto* push=std::get_if<prep::PushTransform>(&command)) {
+    const auto& m=push->matrix;
+    if(!translation(m) || !bounded_offset(m.dx) || !bounded_offset(m.dy) ||
+       !bounded_offset(transform_x+double(m.dx)) || !bounded_offset(transform_y+double(m.dy)))
+     return {Status::unsupported,FrameStatus::ok,index,work};
+    transforms.emplace_back(transform_x,transform_y);
+    transform_x+=double(m.dx);transform_y+=double(m.dy);
+   } else if(std::holds_alternative<prep::PopTransform>(command)) {
+    // PreparedFrame owns scope validation; local restore avoids float drift.
+    transform_x=transforms.back().first;transform_y=transforms.back().second;transforms.pop_back();
+   }
+   const double displacement_x=transform_x+event.scroll_x,displacement_y=transform_y+event.scroll_y;
+   if(!bounded_offset(displacement_x)||!bounded_offset(displacement_y))
+    return {Status::unsupported,FrameStatus::ok,index,work};
+   const bool displaced=!transforms.empty()||event.scroll_depth>0||displacement_x!=0||displacement_y!=0;
+   const auto translated=[&](prep::Rect r){auto v=rect(r);return Rect{v.l+displacement_x,v.t+displacement_y,v.r+displacement_x,v.b+displacement_y};};
    const auto bounded=[](Rect r){return std::isfinite(r.l)&&std::isfinite(r.t)&&std::isfinite(r.r)&&std::isfinite(r.b)&&std::abs(r.l)<=65536&&std::abs(r.t)<=65536&&std::abs(r.r)<=65536&&std::abs(r.b)<=65536;};
    const bool translated_ok=std::visit([&](const auto& c){using T=std::decay_t<decltype(c)>;
     if constexpr(std::is_same_v<T,prep::Fill>||std::is_same_v<T,prep::Stroke>||std::is_same_v<T,prep::BoxShadow>||std::is_same_v<T,prep::PushClip>)return bounded(translated(c.rect));
@@ -166,8 +186,7 @@ static Result render_impl(FrameStore& store,const prep::PreparedFrame& frame,
     else if constexpr(std::is_same_v<T,prep::BorderGroup>)return bounded(translated(c.outer))&&bounded(translated(c.inner));
     else return true;
    },command);
-   if((event.scroll_depth>0||event.scroll_x!=0||event.scroll_y!=0) && !translated_ok)return {Status::unsupported,FrameStatus::ok,index,work};
-   if(!identity(event.matrix)) return {Status::unsupported,FrameStatus::ok,index,work};
+   if(displaced && !translated_ok)return {Status::unsupported,FrameStatus::ok,index,work};
    if(const auto* begin=std::get_if<prep::BeginOpacity>(&command)) {
     ++layer_depth;max_layer_depth=std::max(layer_depth,max_layer_depth);
     if(layer_depth>8 || surface_bytes*(layer_depth+(masks?1:0))+mask_bytes+metadata_bytes>64u*1024u*1024u || !charge(work,surface_bytes/4,2))
@@ -221,6 +240,8 @@ static Result render_impl(FrameStore& store,const prep::PreparedFrame& frame,
      const double half=double(stroke->stroke_width)/2;
      const Rect original{center.l-half,center.t-half,center.r+half,center.b+half};
      const Rect inner_original{center.l+half,center.t+half,center.r-half,center.b-half};
+     if(displaced && (!bounded(original)||!bounded(inner_original)))
+      return {Status::unsupported,FrameStatus::ok,index,work};
      auto outer=intersect(current,original);
      auto inner=intersect(current,inner_original);
      if(!empty(outer)) {
@@ -266,7 +287,7 @@ static Result render_impl(FrameStore& store,const prep::PreparedFrame& frame,
      const auto whole_height=std::max(0.0,std::floor(clipped_inner.b)-std::ceil(clipped_inner.t));
      const auto n=pixel_count(r),inside=std::uint64_t(whole_width)*std::uint64_t(whole_height);
      if(!charge(work,n,1) || !charge(work,n-inside,1024))return {Status::limit_exceeded,FrameStatus::ok,index,work};
-     Draw d{r,intersect(current,in),{},index};d.original=o;d.inner_original=in;d.border=group;d.scroll_x=event.scroll_x;d.scroll_y=event.scroll_y;draws.push_back(d);
+     Draw d{r,intersect(current,in),{},index};d.original=o;d.inner_original=in;d.border=group;d.displacement_x=displacement_x;d.displacement_y=displacement_y;draws.push_back(d);
     }
    } else if(const auto* shadow=std::get_if<prep::BoxShadow>(&command)) {
     const auto& s=shadow->shadow;
@@ -304,7 +325,7 @@ static Result render_impl(FrameStore& store,const prep::PreparedFrame& frame,
      out=static_cast<std::int64_t>(n*64);return true;
     };
     std::int64_t bx,by;
-    if(!grid(double(t->rect.x)+event.scroll_x,bx) || !grid(double(t->native->baseline)+event.scroll_y,by))
+    if(!grid(double(t->rect.x)+displacement_x,bx) || !grid(double(t->native->baseline)+displacement_y,by))
      return {Status::unsupported,FrameStatus::ok,index,work};
     std::int64_t pen_x=0,pen_y=0;
     for(const auto& g:run.glyphs) {
@@ -323,6 +344,7 @@ static Result render_impl(FrameStore& store,const prep::PreparedFrame& frame,
      // All sums are < 2^40: per-glyph components and glyph count are bounded
      // by immutable ShapedRun, and pen checked on every iteration below.
      const Rect original{double(left),double(top),double(left+m->width),double(top+m->height)};
+     if(displaced && !bounded(original))return {Status::unsupported,FrameStatus::ok,index,work};
      const auto r=intersect(current,original);
      const auto count=pixel_count(r);
      if(count>text::max_mask_operations-mask_pixels || !charge(work,count,1))
@@ -350,9 +372,8 @@ static Result render_impl(FrameStore& store,const prep::PreparedFrame& frame,
    } else if(std::holds_alternative<prep::PopClip>(command)) {
     // PreparedFrame guarantees balanced scopes and validated finite payloads.
     current=clips.back().bounds;curve=clips.back().curve;clips.pop_back();
-   } else if(const auto* push=std::get_if<prep::PushTransform>(&command)) {
-    if(!identity(push->matrix)) return {Status::unsupported,FrameStatus::ok,index,work};
-   } else if(!std::holds_alternative<prep::PushScroll>(command) &&
+   } else if(!std::holds_alternative<prep::PushTransform>(command) &&
+             !std::holds_alternative<prep::PushScroll>(command) &&
              !std::holds_alternative<prep::PopScroll>(command) &&
              !std::holds_alternative<prep::PopTransform>(command) &&
              !std::holds_alternative<prep::BeginChunk>(command) &&
@@ -470,10 +491,10 @@ static Result render_impl(FrameStore& store,const prep::PreparedFrame& frame,
        for(int sy=0;sy<16;++sy)for(int sx=0;sx<16;++sx){
         const double px=b.l+(sx+.5)*(b.r-b.l)/16,py=b.t+(sy+.5)*(b.b-b.t)/16;
         if(contains(draw.inner_original,0,px,py))continue;
-        const auto side=border_math::owner(*draw.border,px-draw.scroll_x,py-draw.scroll_y);
+        const auto side=border_math::owner(*draw.border,px-draw.displacement_x,py-draw.displacement_y);
         if(side<0 || !draw.border->sides[side].present)continue;
         const auto& s=draw.border->sides[side];
-        if(s.style==AETHER_BORDER_STYLE_DASHED && !border_math::dash(*draw.border,side,px-draw.scroll_x,py-draw.scroll_y))continue;
+        if(s.style==AETHER_BORDER_STYLE_DASHED && !border_math::dash(*draw.border,side,px-draw.displacement_x,py-draw.displacement_y))continue;
         const double a=s.color.a;sums[0]+=s.color.b*a;sums[1]+=s.color.g*a;sums[2]+=s.color.r*a;sums[3]+=a;
        }
        const double scale=(b.r-b.l)*(b.b-b.t)/256;

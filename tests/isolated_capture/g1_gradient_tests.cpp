@@ -89,7 +89,7 @@ int main(){
  // Unsupported geometry rejects even outside the viewport (no visibility gate).
  invalid=gradient({1000,1000,10,10});invalid.radii.top_left_x=2;
  ck(s::render(store,prepared({invalid})).status==s::Status::unsupported);ck(frame(store).sequence==before.sequence);
- auto matrix=p::identity;matrix.dx=1;
+ auto matrix=p::identity;matrix.m11=2;
  ck(s::render(store,prepared({p::PushTransform{matrix},gradient(),p::PopTransform{}})).status==s::Status::unsupported);ck(frame(store).sequence==before.sequence);
  // Total stop budget checked before deep copies into prepared events.
  p::Snapshot excessive;auto many=gradient();many.stops.resize(64,{1,{0,0,1,1}});
