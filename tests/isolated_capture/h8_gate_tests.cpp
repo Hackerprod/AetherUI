@@ -14,10 +14,11 @@ int main(){style_property_registry_init();size_t checks=0;
  for(auto value:{"min-content","max-content","fit-content","0 1 min-content","2 3 max-content","0 1 fit-content"})check("div{flex:"+std::string(value)+"}",true);
  for(auto property:{"width","min-width","max-width","flex-basis","flex"})for(auto value:{"min-content junk","max-content 2px","fit-content(150px)","calc-size(min-content,size)","min-content max-content"})check("div{"+std::string(property)+":"+value+"}",false);
  for(auto value:{"1 min-content","1 2 3 fit-content","-1 1 min-content"})check("div{flex:"+std::string(value)+"}",false);
- for(auto decl:{"writing-mode:vertical-rl","writing-mode:horizontal-tb",R"(wr\69 ting-mode:vertical-rl)"}){
+ for(auto decl:{"writing-mode:sideways-rl","writing-mode:vertical-rl junk",R"(wr\69 ting-mode:vertical-rl)"}){
   check("div{"+std::string(decl)+"}",false);check("@media print{div{"+std::string(decl)+"}}",false);
   check("@supports not (display:flex){div{"+std::string(decl)+"}}",false);
  }
+ for(auto value:{"horizontal-tb","vertical-rl","vertical-lr"})check("div{writing-mode:"+std::string(value)+"}",true);
  // H20 admits only exact direction keywords; resolved geometry is audited separately.
  for(auto decl:{"direction:ltr","direction:rtl",R"(d\69 rection:rtl)","direction:inherit","direction:unset","direction:initial"})check("div{"+std::string(decl)+"}",true);
  for(auto value:{"rtl junk","var(--d)","revert","auto"})check("div{direction:"+std::string(value)+"}",false);

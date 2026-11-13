@@ -45,6 +45,7 @@ aether_text_metrics_t no_text(const char*,const aether_computed_style_t*,float,v
 #include "h18_profile.h"
 #include "h19_profile.h"
 #include "h20_profile.h"
+#include "h21_profile.h"
 void check_css(const std::string& s,const h5::Analysis& analysis){
  css_variable_budget budget{max_bytes*4,false};css_variable_lexer lexer(s.data(),s.size(),0,&budget);
  for(;;){auto t=lexer.next();if(t.kind==css_variable_token_kind::end)break;
@@ -78,7 +79,7 @@ int capture(const char* input,const std::string& out,int width,int height,bool g
   Objects o;require(aether_doc_create(&o.doc)==AETHER_OK,"DOC_CREATE_FAILED");
   {Stage s("parse");require(aether_doc_parse_html(o.doc,html.c_str())==AETHER_OK,"PARSE_FAILED");}
   h19::Gate first_letter_gate;
-  bool variable_profile=false, h19_display_unproven=false, direction_profile=false, direction_unproven=false; h5::WorkBudget css_work;
+  bool variable_profile=false, h19_display_unproven=false, writing_profile=false, direction_profile=false, direction_unproven=false; h5::WorkBudget css_work;
   std::vector<std::string> sheets, inline_sheets,inline_sources;std::set<std::string> blockers;
   std::vector<aether_node_s*> canvases, inert_scripts;
   {Stage s("dom_preflight");
@@ -92,19 +93,21 @@ int capture(const char* input,const std::string& out,int width,int height,bool g
     if(tag=="style") {std::string css;for(auto* c:n->children){if(c->type!=AETHER_NODE_TEXT)blockers.insert("STYLE_CONTENT_UNSUPPORTED");else css+=c->text;}sheets.push_back(std::move(css));}
     if((tag=="script"&&!h3::json(n))||tag=="link"||tag=="img"||tag=="svg"||tag=="video"||tag=="audio"||tag=="object"||tag=="iframe"||tag=="embed"||tag=="base"){blockers.insert("RESOURCE_OR_SCRIPT_ELEMENT_UNSUPPORTED");diagnostic::element(n,count);}
     if(n->type==AETHER_NODE_TEXT&&!meta&&n->text.find_first_not_of(" \t\r\n\f")!=std::string::npos)blockers.insert("TEXT_RENDERER_UNAVAILABLE");
-    for(const auto& [key,value]:n->attributes){if(h3::lower(key).starts_with("on"))blockers.insert("EVENT_HANDLER_UNSUPPORTED");if(key=="style"){inline_sheets.push_back(value);inline_sources.push_back("inline-dom-"+std::to_string(count));auto analysis=h5::analyze(value,false,&css_work);variable_profile|=analysis.variables;h19_display_unproven|=analysis.h19_display_unproven;direction_profile|=analysis.h20_direction;direction_unproven|=analysis.h20_unproven;diagnostic::css(value,"inline-dom-"+std::to_string(count),blockers,analysis);try{check_css(value,analysis);}catch(Failure f){blockers.insert(f.reason);h16::failure(inline_sources.back(),value,f,nullptr,&analysis);}}if(key=="dir")blockers.insert("HTML_DIR_UNSUPPORTED");}
+    for(const auto& [key,value]:n->attributes){if(h3::lower(key).starts_with("on"))blockers.insert("EVENT_HANDLER_UNSUPPORTED");if(key=="style"){inline_sheets.push_back(value);inline_sources.push_back("inline-dom-"+std::to_string(count));auto analysis=h5::analyze(value,false,&css_work);variable_profile|=analysis.variables;h19_display_unproven|=analysis.h19_display_unproven;writing_profile|=analysis.h21_writing;direction_profile|=analysis.h20_direction;direction_unproven|=analysis.h20_unproven;diagnostic::css(value,"inline-dom-"+std::to_string(count),blockers,analysis);try{check_css(value,analysis);}catch(Failure f){blockers.insert(f.reason);h16::failure(inline_sources.back(),value,f,nullptr,&analysis);}}if(key=="dir")blockers.insert("HTML_DIR_UNSUPPORTED");}
     for(auto it=n->children.rbegin();it!=n->children.rend();++it)todo.push_back({*it,depth+1,meta});
    }
    logstream<<"dom_nodes="<<count<<"\nstyle_blocks="<<sheets.size()<<std::endl;
-   size_t sheet_index=0;for(const auto& css:sheets){auto analysis=h5::analyze(css,true,&css_work);variable_profile|=analysis.variables;h19_display_unproven|=analysis.h19_display_unproven;direction_profile|=analysis.h20_direction;direction_unproven|=analysis.h20_unproven;diagnostic::css(css,"style-block-"+std::to_string(sheet_index++),blockers,analysis);try{check_css(css,analysis);}catch(Failure f){blockers.insert(f.reason);h16::failure("style-block-"+std::to_string(sheet_index-1),css,f,nullptr,&analysis);}}
+   size_t sheet_index=0;for(const auto& css:sheets){auto analysis=h5::analyze(css,true,&css_work);variable_profile|=analysis.variables;h19_display_unproven|=analysis.h19_display_unproven;writing_profile|=analysis.h21_writing;direction_profile|=analysis.h20_direction;direction_unproven|=analysis.h20_unproven;diagnostic::css(css,"style-block-"+std::to_string(sheet_index++),blockers,analysis);try{check_css(css,analysis);}catch(Failure f){blockers.insert(f.reason);h16::failure("style-block-"+std::to_string(sheet_index-1),css,f,nullptr,&analysis);}}
    for(const auto& css:sheets){const auto analysis=h5::analyze(css,true);if(analysis.valid)for(const auto& span:analysis.declarations)if(!span.keyframe&&span.selector_begin!=SIZE_MAX){
     require(first_letter_gate.add(std::string_view(css).substr(span.selector_begin,span.selector_end-span.selector_begin)),"FIRST_LETTER_SELECTOR_PROFILE_UNSUPPORTED");
    }}
    require(!first_letter_gate.needed()||!h19_display_unproven,"FIRST_LETTER_DISPLAY_SYNTAX_UNPROVEN");
+   if(writing_profile&&direction_unproven)blockers.insert("WRITING_AUTHORED_PROFILE_UNPROVEN");
    if(direction_profile&&direction_unproven)blockers.insert("DIRECTION_AUTHORED_PROFILE_UNPROVEN");
    if(canvases.size()>256)blockers.insert("CANVAS_COUNT_LIMIT");
    if(!canvases.empty()){
     if(direction_profile)blockers.insert("CANVAS_DIRECTION_UNPROVEN");
+    if(writing_profile)blockers.insert("CANVAS_WRITING_UNPROVEN");
     // Only the H3 admission view is filtered; global diagnostics above and
     // the original stylesheet passed to the runtime below remain unchanged.
     h11::Proof proof(o.doc); h5::WorkBudget canvas_css_work;
@@ -128,7 +131,7 @@ int capture(const char* input,const std::string& out,int width,int height,bool g
    const char* ua=aether_style_runtime_defaults_css();logstream<<"ua_sha256="<<avc::sha256(ua)<<std::endl;
    int64_t handle{};int32_t nr{};require(aether_style_runtime_add_stylesheet(o.runtime,ua,0,"builtin-UA",&handle,&nr)==AETHER_OK,"UA_FAILED");
    size_t index=0;for(const auto& css:sheets){logstream<<"style_"<<index++<<"_compiled_bytes_sha256="<<avc::sha256(css)<<std::endl;require(aether_style_runtime_add_stylesheet(o.runtime,css.c_str(),1,"DOM-style",&handle,&nr)==AETHER_OK,"SHEET_FAILED");}
-   if(variable_profile||first_letter_gate.needed()||direction_profile){
+   if(variable_profile||first_letter_gate.needed()||direction_profile||writing_profile){
     aether_style_transaction_t tx{};
     const auto prepared=aether_style_runtime_prepare_revision(o.runtime,aether_doc_get_body(o.doc),&env,&tx);
     std::unique_ptr<aether_style_transaction_s,decltype(&aether_style_transaction_destroy)> owner(tx,aether_style_transaction_destroy);
@@ -162,6 +165,7 @@ int capture(const char* input,const std::string& out,int width,int height,bool g
   require(first_letter_gate.check(o.doc,o.styles),"FIRST_LETTER_APPLICABILITY_UNPROVEN");
   h18::before(o.styles);
   h20::before(o.styles);
+  if(writing_profile)h21::before(o.styles);
   h3::scripts(o.styles,inert_scripts);auto expected=h3::before(o.styles,canvases);
   {Stage s("layout");require(aether_layout_create(no_text,&text_requested,&o.engine)==AETHER_OK,"LAYOUT_CREATE_FAILED");set_initial_canvas_mode(o.engine,true);aether_bool_t changed{};require(aether_layout_prepare_transition_context(o.engine,nullptr,o.styles,nullptr,&changed)==AETHER_OK,"LAYOUT_CONTEXT_FAILED");require(aether_layout_layout(o.engine,o.doc,o.styles,width,height,nullptr,nullptr,&o.layout)==AETHER_OK,"LAYOUT_FAILED");require(!text_requested,"TEXT_MEASURE_REQUESTED_UNSUPPORTED");}
   h3::after(o.layout,o.styles,expected);

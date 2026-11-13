@@ -1861,7 +1861,8 @@ float measure_intrinsic_height(
     }
 
     const bool flex = style.display == AETHER_DISPLAY_FLEX;
-    const bool row = flex && flex_axis(style.flex_direction).horizontal;
+    const auto writing = layout_measures(styles, element);
+    const bool row = flex && flex_axis(style.flex_direction, false, writing ? writing->writing_mode() : 0).horizontal;
     float content_height = 0.f;
     const auto add_height = [&](float height) {
         if (row) content_height = std::max(content_height, height);
@@ -1891,7 +1892,7 @@ float measure_intrinsic_height(
         const auto& children = collect_flex_items(styles, result, element, style);
         for (auto* child : children) measure_child(child);
         if (!row && !children.empty()) {
-            content_height += (children.size() - 1) * layout_used_gap(styles, element, style, true, 0.f, false);
+            content_height += (children.size() - 1) * layout_used_gap(styles, element, style, style.flex_direction == AETHER_FLEX_DIRECTION_COLUMN || style.flex_direction == AETHER_FLEX_DIRECTION_COLUMN_REVERSE, 0.f, false);
         }
     } else {
         std::vector<inline_item_s> inline_items;
@@ -2252,7 +2253,8 @@ static intrinsic_widths_s measure_intrinsic_flex_widths(
     aether_thicknessf padding, aether_thicknessf border, float maximum,
     aether_layout_result_s* result, intrinsic_width_request_s request)
 {
-    const bool column = !flex_axis(style.flex_direction).horizontal;
+    const auto writing = layout_measures(styles, element);
+    const bool column = !flex_axis(style.flex_direction, false, writing ? writing->writing_mode() : 0).horizontal;
     const bool wrap_row = !column && style.flex_wrap;
     // A wrapping maximum has an independent, natural min-content floor. Never
     // derive that floor from H, or run a second recursive walk at each level.
@@ -2280,7 +2282,7 @@ static intrinsic_widths_s measure_intrinsic_flex_widths(
         }
     }
     intrinsic_widths_s widths;
-    const float gap = layout_used_gap(styles, element, style, false, 0.f, false);
+    const float gap = layout_used_gap(styles, element, style, style.flex_direction == AETHER_FLEX_DIRECTION_COLUMN || style.flex_direction == AETHER_FLEX_DIRECTION_COLUMN_REVERSE, 0.f, false);
     if (request.minimum) widths.min_content = aether_intrinsic_flex_main_contribution(
         minimums, column, style.flex_wrap, gap, aether_intrinsic_size_mode_e::min_content);
     if (request.maximum) widths.max_content = aether_intrinsic_flex_main_contribution(

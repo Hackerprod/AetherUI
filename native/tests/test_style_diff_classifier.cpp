@@ -177,7 +177,7 @@ void payloads() {
 }
 // Independent policy checks plus member mutations below cover the complete
 // sidecar inventory. A new inventory entry requires an explicit test decision.
-static_assert(static_cast<size_t>(StyleSidecar::count) == 18);
+static_assert(static_cast<size_t>(StyleSidecar::count) == 19);
 static_assert(static_cast<size_t>(StylePayload::count) == 6);
 #define CHECK_SIDECAR(name, expected_kind, mask, inherit) \
     static_assert(StyleSidecarPolicy<StyleSidecar::name>::kind == SidecarPolicyKind::expected_kind); \
@@ -192,6 +192,7 @@ CHECK_SIDECAR(self_font_size, metadata, 0, false)
 CHECK_SIDECAR(line_height, value, 81, true)
 CHECK_SIDECAR(flex_order, value, 7, false)
 CHECK_SIDECAR(direction_rtl, value, 7, true)
+CHECK_SIDECAR(writing_mode, value, 7, true)
 CHECK_SIDECAR(row_gap, value, 17, false)
 CHECK_SIDECAR(column_gap, value, 17, false)
 CHECK_SIDECAR(background_positions, metadata, 0, false)
@@ -236,6 +237,8 @@ void sidecars() {
             f.freeze(); f.expect(0,0,true,false);
         }
     }
+    f.measures.writing_mode = 1; f.expect(7,7,true,true);
+    f.measures.writing_mode = 2; f.expect(7,7,true,true); f.measures.writing_mode = 0;
     f.measures.direction_rtl = true; f.expect(7,7,true,true); f.measures.direction_rtl = false;
     f.measures.flex_order = -2; f.expect(7,0,true,true); f.measures.flex_order = 0;
     mutations(f,f.measures.row_gap,17,false,true,true);mutations(f,f.measures.column_gap,17,false,true,true);

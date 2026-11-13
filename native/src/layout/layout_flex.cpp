@@ -565,7 +565,8 @@ static resolved_flex_children_s resolve_flex_children(
         ? (horizontal ? content.width : content.height)
         : NAN;
     output.resolution = aether_resolve_flexible_lengths({
-        &inputs, available_main_size, layout_used_gap(styles, parent, parent_style, !horizontal, horizontal ? content.width : content.height, horizontal || containing_height.has_value()),
+        &inputs, available_main_size, layout_used_gap(styles, parent, parent_style,
+            parent_style.flex_direction == AETHER_FLEX_DIRECTION_COLUMN || parent_style.flex_direction == AETHER_FLEX_DIRECTION_COLUMN_REVERSE, horizontal ? content.width : content.height, horizontal || containing_height.has_value()),
         parent_style.flex_wrap && main_size_is_definite
     });
 
@@ -721,7 +722,11 @@ float layout_flex_children(
     // sequences. Never reconstruct discarded text through an inline fallback.
     if (children.empty()) return 0.f;
 
-    const bool horizontal = flex_axis(style.flex_direction).horizontal;
+    const auto writing = styles ? styles->lookup_measures(parent) : std::nullopt;
+    const bool horizontal = flex_axis(style.flex_direction, writing && writing->direction_rtl(),
+        writing ? writing->writing_mode() : 0).horizontal;
+    const bool column = style.flex_direction == AETHER_FLEX_DIRECTION_COLUMN ||
+        style.flex_direction == AETHER_FLEX_DIRECTION_COLUMN_REVERSE;
     const bool main_size_is_definite = horizontal || has_definite_height;
     const bool cross_size_is_definite = !horizontal || containing_height.has_value();
     const bool intrinsic_height = intrinsic_measurement &&
@@ -743,9 +748,9 @@ float layout_flex_children(
                 ? std::optional<float>(used_cross_size_for_height(content.height)) : std::nullopt;
     auto resolved = resolve_flex_children(engine, styles, children, parent, content, containing_height, style,
         horizontal, main_size_is_definite, cross_size_is_definite, definite_line_cross_size.has_value(), result);
-    const float gap = layout_used_gap(styles, parent, style, !horizontal,
+    const float gap = layout_used_gap(styles, parent, style, column,
         horizontal ? content.width : content.height, horizontal || containing_height.has_value());
-    const float cross_gap = layout_used_gap(styles, parent, style, horizontal,
+    const float cross_gap = layout_used_gap(styles, parent, style, !column,
         horizontal ? content.height : content.width, !horizontal || containing_height.has_value());
 
     // Measure all natural line sizes before any box consumes auto margins or
@@ -798,7 +803,7 @@ void place_flex_children(const StyleLookup* styles,
     const auto& children = *plan.children;
     const auto& style = parent_box->style;
     const auto direction = styles ? styles->lookup_measures(parent_box->element) : std::nullopt;
-    const auto axis = flex_axis(style.flex_direction, direction && direction->direction_rtl());
+    const auto axis = flex_axis(style.flex_direction, direction && direction->direction_rtl(), direction ? direction->writing_mode() : 0);
     const bool horizontal = axis.horizontal;
     // A numeric final size is enough for placement/auto margins. It is never
     // fed back into percentage or basis definiteness during item sizing.

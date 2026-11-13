@@ -344,6 +344,7 @@ static PreparedNodeResult* compute_node(aether_style_runtime_s* runtime, aether_
     if (parent && parent->measures) {
         measures->line_height = parent->measures->line_height;
         measures->direction_rtl = parent->measures->direction_rtl;
+        measures->writing_mode = parent->measures->writing_mode;
         measure_set_property_dependencies(*measures, "line-height", MEASURE_PARENT);
     }
     const bool document_element = !node->is_generated && node->type == AETHER_NODE_ELEMENT &&

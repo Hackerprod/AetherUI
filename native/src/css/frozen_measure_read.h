@@ -20,6 +20,7 @@ public:
     measure_line_height_s line_height() const;
     int32_t flex_order() const;
     bool direction_rtl() const;
+    int32_t writing_mode() const;
     aether::css::intrinsic_size_keyword intrinsic_keyword(const std::string& name) const;
     aether_css_length row_gap() const;
     aether_css_length column_gap() const;

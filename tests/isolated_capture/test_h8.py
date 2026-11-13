@@ -49,7 +49,7 @@ same('.box{width:20px;min-width:max-content;max-width:min-content}', '.box{width
 same(r'.box{width:m\69 n-content}', '.box{width:60px}')
 for direction in ['column','column-reverse']:
  run('.outer{display:flex;flex-direction:'+direction+'}.box{flex-basis:min-content}',False)
-for css in ['.box{width:min-content junk}', '.box{width:fit-content(80px)}','.box{width:calc-size(min-content,size)}',r'.box{wr\69 ting-mode:vertical-rl;width:min-content}',r'.box{d\69 rection:rtl;width:min-content}','@media print{.box{writing-mode:vertical-rl}}']:
+for css in ['.box{width:min-content junk}', '.box{width:fit-content(80px)}','.box{width:calc-size(min-content,size)}',r'.box{wr\69 ting-mode:vertical-rl;width:min-content}',r'.box{d\69 rection:rtl;width:min-content}','@media print{.box{writing-mode:sideways-rl}}']:
  run(css,False)
 # No substitution of the full original by this text-free geometry fixture.
 original=pathlib.Path('tests/visual_compare/fixtures/flexbox_runtime_validation.html')

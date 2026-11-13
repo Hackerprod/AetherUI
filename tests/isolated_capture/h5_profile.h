@@ -12,7 +12,7 @@ namespace h5 {
 // Shared traversal returns original declaration spans; never executable flattened CSS.
 struct DeclarationRange { size_t begin,end; bool keyframe; unsigned depth; size_t selector_begin=SIZE_MAX,selector_end=SIZE_MAX; };
 struct WorkBudget { size_t bytes=2*1024*1024, tokens=524288, rules=65536, steps=32*1024*1024; };
-struct Analysis { std::vector<DeclarationRange> declarations; std::set<size_t> functions, at_rules; bool valid=true; bool variables=false; bool h19_display_unproven=false; bool h20_direction=false,h20_unproven=false; size_t failure_begin=SIZE_MAX,failure_end=SIZE_MAX,failure_selector_begin=SIZE_MAX,failure_selector_end=SIZE_MAX; bool limit_failure=false,lexical_failure=false; };
+struct Analysis { std::vector<DeclarationRange> declarations; std::set<size_t> functions, at_rules; bool valid=true; bool variables=false; bool h19_display_unproven=false; bool h21_writing=false; bool h20_direction=false,h20_unproven=false; size_t failure_begin=SIZE_MAX,failure_end=SIZE_MAX,failure_selector_begin=SIZE_MAX,failure_selector_end=SIZE_MAX; bool limit_failure=false,lexical_failure=false; };
 struct Scanner {
  explicit Scanner(const std::string& source):s(source){}
  const std::string& s; std::vector<css_variable_token> ts; Analysis out;
@@ -53,6 +53,7 @@ struct Scanner {
    // Restrict its proof to an explicit native-supported single-keyword subset.
    // Other profiles retain their existing behavior; this flag is H19-scoped.
    if(property=="direction")out.h20_direction=true;
+   if(property=="writing-mode")out.h21_writing=true;
    if(raw_property!=property||!h20::source(property,value))out.h20_unproven=true;
    if(property=="all")out.h19_display_unproven=true;
    if(property=="display") {
@@ -64,7 +65,7 @@ struct Scanner {
     const auto keyword=ts[start].kind==css_variable_token_kind::ident&&end==start+1?ident(start):std::string{};
     if(keyword!=(property=="transform-style"?"flat":"none") && keyword!="initial" && keyword!="unset")invalid();
    }
-   if(!h7::declaration(property,value)||!h8::declaration(property,value))invalid();
+   if(!h7::declaration(property,value)||!(property=="writing-mode"?(raw_property==property&&h20::source(property,value)):h8::declaration(property,value)))invalid();
    if(h5_rgba_declaration_supported(property,value))for(size_t j=start;j<end;++j)if(ts[j].kind==css_variable_token_kind::function)out.functions.insert(ts[j].begin);
   }
  }

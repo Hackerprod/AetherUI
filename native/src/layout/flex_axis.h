@@ -2,7 +2,7 @@
 
 #include <aether/aether.h>
 
-// horizontal-tb: writing direction and flex reversal are independent.
+// Writing mode, writing direction and flex reversal are independent.
 // Physical margins are never swapped; reflect entire margin boxes.
 struct flex_axis_s {
     bool horizontal;
@@ -11,10 +11,14 @@ struct flex_axis_s {
     bool cross_reverse;
 };
 
-inline flex_axis_s flex_axis(int32_t direction, bool rtl = false) {
-    const bool horizontal = direction != AETHER_FLEX_DIRECTION_COLUMN && direction != AETHER_FLEX_DIRECTION_COLUMN_REVERSE;
+inline flex_axis_s flex_axis(int32_t direction, bool rtl = false, int writing_mode = 0) {
+    const bool column = direction == AETHER_FLEX_DIRECTION_COLUMN || direction == AETHER_FLEX_DIRECTION_COLUMN_REVERSE;
+    const bool vertical = writing_mode != 0;
+    const bool vertical_rl = writing_mode == 1;
     const bool logical_reverse = direction == AETHER_FLEX_DIRECTION_ROW_REVERSE || direction == AETHER_FLEX_DIRECTION_COLUMN_REVERSE;
-    return {horizontal, logical_reverse != (horizontal && rtl), logical_reverse, !horizontal && rtl};
+    const bool main_start_reversed = column ? (vertical && vertical_rl) : rtl;
+    return {column == vertical, logical_reverse != main_start_reversed,
+            logical_reverse, column ? rtl : (vertical && vertical_rl)};
 }
 
 // Distance from flex main-start. Negative free space is deliberate overflow.

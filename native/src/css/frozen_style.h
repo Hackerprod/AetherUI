@@ -90,6 +90,7 @@ struct MeasureScalarValues {
     uint32_t dependencies = 0;
     int32_t flex_order = 0;
     bool direction_rtl = false;
+    int32_t writing_mode = 0; // 0 horizontal-tb, 1 vertical-rl, 2 vertical-lr
 };
 struct MeasureBackgroundPosition { aether_css_length x{}, y{}; };
 struct MeasureBackgroundSize { int32_t kind = 0; aether_css_length x{}, y{}; };

@@ -44,6 +44,7 @@ inline bool source(const std::string& property,const std::string& value){
  // serialization is proved for any non-custom consumer, even if CSS-valid.
  if(value.find('\\')!=std::string::npos||value.find('/')!=std::string::npos)return false;
  if(property=="direction")return direction(value);
+ if(property=="writing-mode")return keyword(value,{"horizontal-tb","vertical-rl","vertical-lr"});
  if(property=="display")return keyword(value,{"block","flex","none","initial","inherit","unset"});
  if(property=="flex-direction")return keyword(value,{"row","row-reverse","column","column-reverse","initial","inherit","unset"});
  if(property=="flex-wrap")return keyword(value,{"nowrap","wrap","initial"});

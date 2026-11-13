@@ -1126,6 +1126,21 @@ void builtin_properties_register(style_property_registry_s* reg) {
             st->gap = aether_css_length_resolve(l, 0.0f, 16.0f, 16.0f, 1920.0f, 1080.0f);
         });
 
+    // H21: inherited writing-mode is internal and cannot be flattened losslessly.
+    reg->register_property("writing-mode", true, STYLE_IMPACT_LAYOUT | STYLE_IMPACT_PAINT | STYLE_IMPACT_HITTEST, "horizontal-tb",
+        [](const char* source, std::string& out) {
+            return source && css_single_identifier(source, out) &&
+                (out == "horizontal-tb" || out == "vertical-rl" || out == "vertical-lr");
+        }, [](aether_computed_style_t*, const std::string&) {});
+    reg->definitions.back().css_wide = bi_origin_css_wide;
+    reg->definitions.back().apply_with_context = [](property_apply_context_s& context, const std::string& value) {
+        if (context.measures) context.measures->set_writing_mode(value == "vertical-rl" ? 1 : value == "vertical-lr" ? 2 : 0);
+    };
+    reg->definitions.back().inherit_context = [](property_apply_context_s& context, ComputedStyleReadView,
+                                                const MeasuresReadView* parent) {
+        if (context.measures) context.measures->set_writing_mode(parent ? parent->writing_mode() : 0);
+    };
+
     // H20: inherited direction lives in owned internal measures; the flat ABI
     // intentionally has no field. Flat export of RTL fails rather than losing it.
     reg->register_property("direction", true, STYLE_IMPACT_LAYOUT | STYLE_IMPACT_PAINT | STYLE_IMPACT_HITTEST, "ltr",
