@@ -353,7 +353,9 @@ typedef enum {
     AETHER_DISPLAY_LINE_BREAK,
     AETHER_DISPLAY_TABLE,
     AETHER_DISPLAY_TABLE_ROW,
-    AETHER_DISPLAY_TABLE_CELL
+    AETHER_DISPLAY_TABLE_CELL,
+    // Appended for ABI stability. Bounded HTML flex-wrapper profile.
+    AETHER_DISPLAY_CONTENTS
 } aether_display_kind_t;
 
 typedef enum {
@@ -772,6 +774,7 @@ AETHER_API aether_status_t aether_layout_layout(
 AETHER_API void aether_layout_result_destroy(aether_layout_result_t result);
 
 AETHER_API aether_layout_box_t aether_layout_result_get_root(aether_layout_result_t result);
+// Returns null for an element without a generated box (including admitted display:contents).
 AETHER_API aether_layout_box_t aether_layout_result_find_primary_box(aether_layout_result_t result, aether_node_t element);
 /* DOM hit queries use each eligible owner's BorderBox (border, padding and
    content), excluding margins. Rect edges remain inclusive. Descendants may

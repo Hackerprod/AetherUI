@@ -44,7 +44,7 @@ inline void authored_declarations(const std::string& s){
   require(key!="direction"&&key!="writing-mode"&&key!="aspect-ratio"&&key!="all"&&!logical,"CANVAS_AUTHORED_PROPERTY_UNSUPPORTED");
   if(key=="min-width"||key=="min-height")require(literal_limit(value,nt),"CANVAS_LAYOUT_PROFILE_UNSUPPORTED");
   if(key=="max-width"||key=="max-height")require(value=="none"||literal_limit(value,nt),"CANVAS_LAYOUT_PROFILE_UNSUPPORTED");
-  if(key=="display")require(value!="contents","CANVAS_LAYOUT_PROFILE_UNSUPPORTED");
+  // H18 owns resolved display:contents admission; canvas itself remains direct.
   if(key=="position")require(value!="sticky","CANVAS_LAYOUT_PROFILE_UNSUPPORTED");
   if(key=="align-items"||key=="align-self")require(value!="baseline"&&value!="firstbaseline"&&value!="lastbaseline","CANVAS_LAYOUT_PROFILE_UNSUPPORTED");
   }catch(Failure f){f.begin=declaration_begin;f.end=i?ts[std::min(i,ts.size())-1].end:declaration_begin;throw f;}

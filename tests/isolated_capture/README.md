@@ -326,3 +326,17 @@ python3 tests/isolated_capture/test_h15.py /tmp/h15-build/aether_capture /tmp/h1
 
 See `H15_EVIDENCE.md`. This is not general CSS support or a complete rendering
 of the original flexbox fixture. Chromium was not executed.
+
+## H18: box-less HTML flex wrappers
+
+`display:contents` now promotes admitted HTML children into the native flex box
+sequence without changing DOM selector/inheritance relationships. Geometry
+queries return no box for the wrapper. The capture gate rejects unsupported
+text, generated/replaced contexts, effects and oversized expansions before PNG.
+See `H18_EVIDENCE.md` for the precise subset, dynamic/OOM tests and limitations.
+This does not make the original flexbox fixture fully supported.
+
+```sh
+sh tests/isolated_capture/run_h18_core.sh /tmp/h18-build
+python3 tests/isolated_capture/test_h18.py /tmp/h18-build/aether_capture /tmp/h18-results
+```

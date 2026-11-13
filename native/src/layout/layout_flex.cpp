@@ -99,6 +99,74 @@ static aether_node_s* create_anonymous_flex_item(
     return anonymous;
 }
 
+namespace {
+constexpr size_t contents_depth_limit = 64;
+constexpr size_t contents_node_limit = 50000;
+bool contents_html_wrapper(const aether_node_s* n) {
+    // HTML only. Replaced, table, SVG/XML and custom/unknown semantics are
+    // deliberately not promoted by this first bounded profile.
+    for (const char* tag : {"div", "span", "section", "article", "main", "aside",
+                            "nav", "header", "footer", "figure", "figcaption"})
+        if (n->tag_name == tag) return true;
+    return false;
+}
+bool contents_plain_context(const BoxStyleSnapshot& s) {
+    return s.position == AETHER_POSITION_STATIC && s.opacity == 1.f &&
+        s.overflow_x == AETHER_OVERFLOW_VISIBLE && s.overflow_y == AETHER_OVERFLOW_VISIBLE &&
+        s.view().transforms().empty() && s.view().backdrop_filters().empty() &&
+        s.transition_properties == 0;
+}
+}
+
+void validate_contents_wrappers(const StyleLookup* styles) {
+    if (!styles || !styles->base_version()) return;
+    size_t visited = 0;
+    for (const auto& entry : styles->base_version()->backing()->entries()) {
+        const auto& record = entry.second;
+        auto* n = record->node();
+        if (!n || n->type != AETHER_NODE_ELEMENT ||
+            record->style_view().scalars().display != AETHER_DISPLAY_CONTENTS) continue;
+        const auto& identity = record->node_lifetime();
+        if (identity && (!identity->alive || !identity->attached || identity->owner != n)) continue;
+        aether_node_s* effective_parent = nullptr;
+        bool suppressed = false;
+        size_t depth = 0;
+        // Also detect suppression above the effective flex parent. No boxes
+        // are generated in a display:none subtree.
+        for (auto* p = n->parent; p && p->type != AETHER_NODE_DOCUMENT; p = p->parent) {
+            if (++depth > contents_depth_limit || ++visited > contents_node_limit)
+                throw std::length_error("CONTENTS_EXPANSION_LIMIT");
+            const auto ps = get_style(styles,p);
+            if (ps.display == AETHER_DISPLAY_NONE) { suppressed = true; break; }
+            if (!effective_parent && ps.display != AETHER_DISPLAY_CONTENTS) effective_parent = p;
+        }
+        if (suppressed) continue;
+        if (!contents_html_wrapper(n) || n->is_generated || n->anonymous_flex_owner ||
+            !effective_parent || get_style(styles,effective_parent).display != AETHER_DISPLAY_FLEX ||
+            !contents_plain_context(get_style(styles,n)))
+            throw std::invalid_argument("CONTENTS_CONTEXT_UNSUPPORTED");
+        for (auto* child : n->children) {
+            if (++visited > contents_node_limit) throw std::length_error("CONTENTS_EXPANSION_LIMIT");
+            if (child->type == AETHER_NODE_COMMENT) continue;
+            if (child->type == AETHER_NODE_TEXT) {
+                for (unsigned char c : child->text)
+                    if (!aether::presentation_space_byte(c))
+                        throw std::invalid_argument("CONTENTS_TEXT_UNSUPPORTED");
+                continue;
+            }
+            if (child->type != AETHER_NODE_ELEMENT) throw std::invalid_argument("CONTENTS_NODE_UNSUPPORTED");
+            const auto cs = get_style(styles,child);
+            if (cs.display == AETHER_DISPLAY_NONE) continue;
+            if (child->is_generated || child->anonymous_flex_owner || !contents_html_wrapper(child) ||
+                !contents_plain_context(cs) ||
+                (cs.display != AETHER_DISPLAY_BLOCK && cs.display != AETHER_DISPLAY_FLEX &&
+                 cs.display != AETHER_DISPLAY_INLINE && cs.display != AETHER_DISPLAY_INLINE_BLOCK &&
+                 cs.display != AETHER_DISPLAY_CONTENTS))
+                throw std::invalid_argument("CONTENTS_CHILD_UNSUPPORTED");
+        }
+    }
+}
+
 const std::vector<aether_node_s*>& collect_flex_items(
     const StyleLookup* styles,
     aether_layout_result_s* result,
@@ -122,22 +190,33 @@ const std::vector<aether_node_s*>& collect_flex_items(
         direct_text_run.clear();
     };
 
-    for (auto* node : parent->children) {
+    // Expand only box-less wrappers, never mutate DOM links. The resulting
+    // item sequence creates parent_box children below, so painting, snapshots
+    // and hit testing consume this same effective box tree.
+    struct cursor { aether_node_s* owner; size_t next; size_t depth; };
+    std::vector<cursor> traversal{{parent,0,0}};
+    size_t visited = 0;
+    while (!traversal.empty()) {
+        auto& cursor = traversal.back();
+        if (cursor.next == cursor.owner->children.size()) { traversal.pop_back(); continue; }
+        auto* node = cursor.owner->children[cursor.next++];
+        if (++visited > contents_node_limit) throw std::length_error("CONTENTS_EXPANSION_LIMIT");
         if (node->type == AETHER_NODE_TEXT) {
             direct_text_run.push_back(node);
             continue;
         }
-        // Comments and boxes suppressed by display:none do not interrupt the
-        // CSS text sequence. Visible out-of-flow boxes do form a boundary.
         if (node->type != AETHER_NODE_ELEMENT) continue;
         const auto child_style = get_style(styles, node);
         if (child_style.display == AETHER_DISPLAY_NONE) continue;
+        if (child_style.display == AETHER_DISPLAY_CONTENTS) {
+            if (cursor.depth == contents_depth_limit) throw std::length_error("CONTENTS_EXPANSION_LIMIT");
+            traversal.push_back({node,0,cursor.depth+1});
+            continue;
+        }
         flush_direct_text();
         const bool out_of_flow = child_style.position == AETHER_POSITION_ABSOLUTE ||
             child_style.position == AETHER_POSITION_FIXED;
-        if (!out_of_flow) {
-            items.push_back(node);
-        }
+        if (!out_of_flow) items.push_back(node);
     }
     flush_direct_text();
     // CSS order-modified document order. Only the layout-owned item sequence

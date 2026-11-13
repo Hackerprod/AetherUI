@@ -353,3 +353,6 @@ inline float layout_used_gap(const StyleLookup* styles, aether_node_s* element,
     if (result.kind == measure_used_kind_e::invalid) throw std::overflow_error("Invalid used gap");
     return result.kind == measure_used_kind_e::resolved ? std::max(0.f, result.px) : 0.f;
 }
+
+// H18 bounded box-tree promotion; DOM parents and style inheritance stay unchanged.
+void validate_contents_wrappers(const StyleLookup* styles);

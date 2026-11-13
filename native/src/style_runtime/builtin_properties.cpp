@@ -741,11 +741,11 @@ void builtin_properties_register(style_property_registry_s* reg) {
     // display
     {
         static const char* kw[] = { "none", "block", "inline", "inline-block", "flex", "line-break",
-                                    "table", "table-row", "table-cell" };
+                                    "table", "table-row", "table-cell", "contents" };
         static const int32_t vals[] = {
             AETHER_DISPLAY_NONE, AETHER_DISPLAY_BLOCK, AETHER_DISPLAY_INLINE,
             AETHER_DISPLAY_INLINE_BLOCK, AETHER_DISPLAY_FLEX, AETHER_DISPLAY_LINE_BREAK,
-            AETHER_DISPLAY_TABLE, AETHER_DISPLAY_TABLE_ROW, AETHER_DISPLAY_TABLE_CELL
+            AETHER_DISPLAY_TABLE, AETHER_DISPLAY_TABLE_ROW, AETHER_DISPLAY_TABLE_CELL, AETHER_DISPLAY_CONTENTS
         };
         reg->register_property("display", false,
             STYLE_IMPACT_LAYOUT | STYLE_IMPACT_PAINT | STYLE_IMPACT_HITTEST,
@@ -753,7 +753,7 @@ void builtin_properties_register(style_property_registry_s* reg) {
             [](const char* s, std::string& o) -> bool {
                 std::string v;
                 if (!s || !css_single_identifier(s, v)) return false;
-                for (int i = 0; i < 9; ++i)
+                for (size_t i = 0; i < sizeof(vals)/sizeof(vals[0]); ++i)
                     if (str_iequals(v, kw[i])) { o = std::to_string(vals[i]); return true; }
                 return false;
             },

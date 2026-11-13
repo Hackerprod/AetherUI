@@ -13,6 +13,7 @@ public enum DisplayKind : byte
     Table,
     TableRow,
     TableCell,
+    Contents,
 }
 
 public enum PositionKind : byte

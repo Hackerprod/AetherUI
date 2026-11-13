@@ -42,6 +42,7 @@ aether_text_metrics_t no_text(const char*,const aether_computed_style_t*,float,v
 #include "h4_profile.h"
 #include "h11_profile.h"
 #include "h16_diagnostic.h"
+#include "h18_profile.h"
 void check_css(const std::string& s,const h5::Analysis& analysis){
  css_variable_budget budget{max_bytes*4,false};css_variable_lexer lexer(s.data(),s.size(),0,&budget);
  for(;;){auto t=lexer.next();if(t.kind==css_variable_token_kind::end)break;
@@ -149,6 +150,7 @@ int capture(const char* input,const std::string& out,int width,int height,bool g
                 "IDENTITY_TRANSFORM_FLEX_Z_UNSUPPORTED");}
     }
   }
+  h18::before(o.styles);
   h3::scripts(o.styles,inert_scripts);auto expected=h3::before(o.styles,canvases);
   {Stage s("layout");require(aether_layout_create(no_text,&text_requested,&o.engine)==AETHER_OK,"LAYOUT_CREATE_FAILED");set_initial_canvas_mode(o.engine,true);aether_bool_t changed{};require(aether_layout_prepare_transition_context(o.engine,nullptr,o.styles,nullptr,&changed)==AETHER_OK,"LAYOUT_CONTEXT_FAILED");require(aether_layout_layout(o.engine,o.doc,o.styles,width,height,nullptr,nullptr,&o.layout)==AETHER_OK,"LAYOUT_FAILED");require(!text_requested,"TEXT_MEASURE_REQUESTED_UNSUPPORTED");}
   h3::after(o.layout,o.styles,expected);

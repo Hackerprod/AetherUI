@@ -454,6 +454,8 @@ aether_layout_box_s* layout_element(
     float intrinsic_available_width)
 {
     auto style = get_style(styles, element);
+    if (style.display == AETHER_DISPLAY_CONTENTS)
+        throw std::invalid_argument("CONTENTS_BOX_CONTEXT_UNSUPPORTED");
     const bool intrinsic_width = intrinsic_measurement &&
         intrinsic_measurement->ignores(element, intrinsic_axis_e::width);
     const bool intrinsic_height = intrinsic_measurement &&
@@ -2416,6 +2418,7 @@ AETHER_API aether_status_t aether_layout_layout(
     const auto* styles = &build_lookup;
     engine->measure_styles = styles;
     engine->measure_document = document_identity;
+    validate_contents_wrappers(styles);
     prepare_initial_canvas(engine,doc);
     if (version && version->contextual()) {
         for (const auto& entry : version->backing()->entries()) {

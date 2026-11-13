@@ -48,9 +48,7 @@ struct Scanner {
    if(start==end){if(property.starts_with("--"))continue;invalid();return;}
    auto value=s.substr(ts[start].begin,ts[end-1].end-ts[start].begin);
    if(h14::variable_source(property,value)){out.variables=true;for(size_t j=start;j<end;++j)if(ts[j].kind==css_variable_token_kind::function)out.functions.insert(ts[j].begin);}
-   // display:contents is not represented by this geometry profile. Do not
-   // silently turn a non-transformable authored box into a fallback block.
-   if(property=="display" && ts[start].kind==css_variable_token_kind::ident && ident(start)=="contents")invalid();
+   // H18 validates display:contents using resolved native styles before layout.
    if(property=="perspective" || property=="transform-style" || property=="rotate" || property=="scale" || property=="translate") {
     const auto keyword=ts[start].kind==css_variable_token_kind::ident&&end==start+1?ident(start):std::string{};
     if(keyword!=(property=="transform-style"?"flat":"none") && keyword!="initial" && keyword!="unset")invalid();
