@@ -501,16 +501,9 @@ inline aether::rendering::text::Measurement engine_measure_text_transport(
     if(selection && selection->mode==aether::rendering::text::MeasurementMode::native) {
         if(e->text_measurer || e->contextual_text_measurer)
             throw std::invalid_argument("native and callback measurement conflict");
-        const auto lifetime=e->measure_document;
-        const CallbackEpochGuard guard(lifetime);
-        std::shared_ptr<node_identity_s> identity;
-        if(node && e->measure_styles)
-            if(const auto* record=e->measure_styles->lookup_record(node)) identity=record->node_lifetime();
-        const auto valid_node=[&](){return !identity || (identity->owner==node && identity->alive && identity->attached);};
-        if(!valid_node()) throw std::runtime_error("retired native measurement node");
-        auto measured=aether::rendering::text::native_measure(*selection,text,style->font_size,width);
-        if(!guard.valid() || !valid_node()) throw std::runtime_error("DOM mutated during native measurement");
-        return measured;
+        // T1.5: this boundary lacks complete shaping context and node grouping.
+        // A selected font is not evidence of family/weight/language/features.
+        throw std::invalid_argument("native layout shaping context unavailable");
     }
     if(selection && (selection->provider || selection->font))
         throw std::invalid_argument("native resources in legacy selection");

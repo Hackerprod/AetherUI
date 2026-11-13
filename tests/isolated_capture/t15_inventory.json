@@ -1,0 +1,52 @@
+{
+  "source_bytes": 474495,
+  "sha256": "eab17055687df3296d8b911b0217dfb0429c306a6aa57ab49895937a6a34b837",
+  "readiness": "Unknown",
+  "eligibility": "Unknown",
+  "scope": "raw-source inventory only; declarations may be overridden or unsupported",
+  "declarations": {
+    "font-family": [
+      "Arial, Helvetica, sans-serif"
+    ],
+    "font-size": [
+      "12px",
+      "13px",
+      "14px",
+      "18px",
+      "19px",
+      "20px",
+      "28px",
+      "30px",
+      "34px",
+      "38px",
+      "40px"
+    ],
+    "font-weight": [],
+    "font-style": [],
+    "white-space": [
+      "normal",
+      "nowrap",
+      "pre-wrap"
+    ],
+    "direction": [
+      "rtl"
+    ],
+    "writing-mode": [
+      "vertical-lr",
+      "vertical-rl"
+    ],
+    "font-feature-settings": [],
+    "font-variation-settings": []
+  },
+  "first_letter_mentions": 8,
+  "blockers": [
+    "No complete computed shaping context or CSS provenance",
+    "No SDK/provider capability certificate",
+    "No cross-node grouping integrated into layout",
+    "No resolved source font for Arial/Helvetica/sans-serif"
+  ],
+  "shaping": "NOT_RUN",
+  "png": "NOT_RUN",
+  "chromium": "NOT_RUN",
+  "timing_ms": "NOT_MEASURED"
+}

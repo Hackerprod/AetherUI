@@ -12,8 +12,9 @@ static int checks=0,calls=0;
 void ck(bool b){assert(b);++checks;}
 static aether_text_metrics_t legacy(const char*,const aether_computed_style_t*,float,void*){++calls;return {7,16,12};}
 struct TestOnlyProvider final:MeasurementProvider {
- mutable int calls=0; int fault=0; aether_node_t parent{},child{}; aether_layout_engine_s* engine=nullptr;
- Measurement measure(std::string_view s,std::shared_ptr<const FontInstance> f,float)const override{
+ mutable int calls=0; mutable float width=-1; int fault=0; aether_node_t parent{},child{}; aether_layout_engine_s* engine=nullptr;
+ Measurement measure(std::string_view s,std::shared_ptr<const FontInstance> f,float w)const override{
+  width=w;
   ++calls;
   if(engine) ck(!engine->select_text_measurement({}));
   if(fault==1)throw std::bad_alloc();
@@ -41,11 +42,12 @@ int main(){
  auto p=std::make_shared<TestOnlyProvider>();
  auto selection=std::make_shared<const MeasurementSelection>(MeasurementMode::native,p,font);
  ck(e.select_text_measurement(selection));
- auto rejects=[&](const char* text="x"){bool bad=false;try{engine_measure_text_transport(&e,text,&style,0);}catch(const std::invalid_argument&){bad=true;}ck(bad);};
- rejects();ck(calls==1);e.text_measurer=nullptr;
- auto m=engine_measure_text_transport(&e,"x",&style,0);ck(m.run&&m.metrics.width==1);
- ck(!engine_measure_text_transport(&e,"",&style,0).run&&p->calls==1);
- auto space=engine_measure_text_transport(&e,"  ",&style,0);ck(space.run->glyphs.empty()&&space.metrics.width==2);
+ auto rejects=[&](const char* text="x"){bool bad=false;try{native_measure(*e.text_selection(),text,style.font_size,0);}catch(const std::invalid_argument&){bad=true;}ck(bad);};
+ bool blocked=false;try{engine_measure_text_transport(&e,"x",&style,0);}catch(const std::invalid_argument&){blocked=true;}ck(blocked&&calls==1);e.text_measurer=nullptr;
+ auto m=native_measure(*selection,"x",style.font_size,0);ck(m.run&&m.metrics.width==1&&p->width==0);
+ for(float width:{-1.f,std::numeric_limits<float>::infinity(),std::numeric_limits<float>::quiet_NaN()}){bool bad=false;try{native_measure(*selection,"x",16,width);}catch(const std::invalid_argument&){bad=true;}ck(bad);}
+ ck(!native_measure(*selection,"",style.font_size,0).run&&p->calls==1);
+ auto space=native_measure(*selection,"  ",style.font_size,0);ck(space.run->glyphs.empty()&&space.metrics.width==2);
  style.font_size=17;rejects();style.font_size=16;
  std::string oversized(max_text_bytes+1,'x');rejects(oversized.c_str());
  ck(e.select_text_measurement(std::make_shared<const MeasurementSelection>(MeasurementMode::legacy,p,font)));rejects();
@@ -62,16 +64,10 @@ int main(){
  aether_style_update_t* u{};int n=aether_style_runtime_resolve_subtree(rt,aether_doc_get_body(doc),&u);ck(n>=0);aether_style_updates_free(u,n);
  ck(aether_style_runtime_create_resolved_style_map(rt,doc,&map)==AETHER_OK);
  aether_layout_result_t result{};p->engine=&e;
- ck(aether_layout_layout(&e,doc,map,400,300,nullptr,nullptr,&result)==AETHER_OK);
- ck(result&&p->calls>2);
- auto previous=result;
- for(int fault:{1,2,3,4,5}){p->fault=fault;ck(aether_layout_layout(&e,doc,map,400,300,nullptr,nullptr,&result)==(fault==1?AETHER_ERROR_OUT_OF_MEMORY:AETHER_ERROR_INVALID_STATE));ck(result==previous&&!e.layout_in_progress);}
- p->fault=0;
- ck(e.select_text_measurement(std::make_shared<const MeasurementSelection>(MeasurementMode::native)));
- ck(aether_layout_layout(&e,doc,map,400,300,nullptr,nullptr,&result)==AETHER_ERROR_INVALID_STATE&&result==previous);
- ck(e.select_text_measurement(selection));p->fault=6;
- p->parent=aether_doc_get_element_by_id(doc,"parent");p->child=aether_doc_get_element_by_id(doc,"child");
- ck(aether_layout_layout(&e,doc,map,400,300,nullptr,nullptr,&result)==AETHER_ERROR_INVALID_STATE&&result==previous);
+ // Context unavailable: fail before invoking provider, leave output untouched.
+ int before=p->calls;
+ ck(aether_layout_layout(&e,doc,map,400,300,nullptr,nullptr,&result)==AETHER_ERROR_INVALID_STATE);
+ ck(result==nullptr && p->calls==before && !e.layout_in_progress);
  // Config/provider destruction cannot retire retained run/font/source.
  e.select_text_measurement({});selection.reset();p.reset();font.reset();ck(m.run->font->bytes.size()==2&&m.run->source=="x");
  aether_layout_result_destroy(result);aether_style_map_destroy(map);aether_style_runtime_destroy(rt);aether_doc_destroy(doc);

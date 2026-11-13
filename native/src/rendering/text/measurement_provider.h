@@ -7,6 +7,8 @@ namespace aether::rendering::text {
 class MeasurementProvider {
 public:
  virtual ~MeasurementProvider() = default;
+ // max_width == 0 means unbounded measurement; layout owns wrapping.
+ // Positive values are constraints; negative/nonfinite values are invalid.
  virtual Measurement measure(std::string_view source,
      std::shared_ptr<const FontInstance> font, float max_width) const = 0;
 };
@@ -25,7 +27,7 @@ public:
 };
 inline Measurement native_measure(const MeasurementSelection& selection,
                                   const char* text, float size, float width) {
- if(!selection.provider || !selection.font || !text || !std::isfinite(size) ||
+ if(selection.mode!=MeasurementMode::native || !selection.provider || !selection.font || !text || !std::isfinite(size) ||
     size != float(selection.font->size_26_6)/64.f || !std::isfinite(width) || width<0)
    throw std::invalid_argument("native measurement configuration");
  std::size_t length=0;
