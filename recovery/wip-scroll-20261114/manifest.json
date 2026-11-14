@@ -1,0 +1,27 @@
+{
+  "base": "abab3e8bfa42f5d7108c8c7413e16c6ad8a5695d",
+  "state": "WIP NOT VALIDATED",
+  "files": {
+    "native/CMakeLists.txt": "1d0ee2b61324cc36cbf2900a2d34f35e9cb8e97daebefb20f2e4e7c79da4bb45",
+    "native/src/layout/layout_box.cpp": "7ed4aa0289f0a13ac84dff3de8f3ecdca20ad4eda8e0092bd5fd23492269e26e",
+    "native/src/layout/layout_scroll.cpp": "6c2c71f784f2b9797df87573c126301e60b3ced923198ccd2a71c8cbfa1bfd01",
+    "native/src/layout/layout_scroll_bounds.h": "3b31556b7dc4b488a52928d57f8280675b599bcb993ab97f4deebcba38a1b89c",
+    "native/src/layout/layout_types.h": "643e1b5b57358c86f24da6fb925d6cdbadb5270d26d15fb5046b35767cbc1029",
+    "native/src/rendering/display_list_builder.cpp": "350962faab8e0bdd6afa328125eb9c2b0d516d44483e6c587abe833d1abb13cf",
+    "native/src/rendering/display_list_types.h": "9bee476dfc6a64552f97f54c5584a6f5ea799b7788f9ba33ed11ac3b64bae022",
+    "native/src/rendering/document_scope_plan.cpp": "09c5f24e8e7653619605025f55576a9d314acb8ade603ab25d0ffc031a252836",
+    "native/src/rendering/document_scope_plan.h": "3ca1e7bdb24770c370913c578ec94702027a600d236145d445cf59acdf2f9939",
+    "native/src/rendering/document_scroll_bounds.cpp": "2be69b3d04fcb0fcea941b26a7c6429effa6022d0ed888e4e4a3b7c4ced0c458",
+    "native/src/rendering/document_scroll_bounds.h": "ad32c42526aec2e709b4e44348b053350ccd344cce78c9c954271d20572ae896",
+    "native/src/rendering/document_scroll_requests.cpp": "276d3a950b108f913fe5192cf7a53781028fb71bd068c33568d1efce3703bf38",
+    "native/src/rendering/document_scroll_requests.h": "47e53c2a7b3ef7015650c17ca15e9c43d0fda4b65972339ab39c44f8b78f5b42",
+    "native/src/rendering/document_scroll_resolution.cpp": "3468fcf3d91469c38496bfa98f34e4572d51b6bbaffe2d0e106e85785fa79784",
+    "native/src/rendering/document_scroll_resolution.h": "572d95cbb6899e495909ac4bd4196eb7e95f9951e097b97396f67a4b1f1fdcc1",
+    "native/src/rendering/document_shadow_plan.cpp": "400155dc88eddec7e3fa7e1c0afa54ee6bc3715d6b784ead63afd345891b6d94",
+    "native/src/rendering/document_shadow_plan.h": "b4ffd9ff18a9a831802d5eaca4325daf46359236fac2d41b3f84cacc0445071c",
+    "native/src/rendering/document_viewport_capture.cpp": "3709562c4f928a930be37038dc38676c8cc4378b01e4c27060fc2943ad63df62",
+    "native/src/rendering/document_viewport_capture.h": "f00359820df17718871fccae4dea74a7badb24cd36b0cd79916f993cd3781e2d",
+    "native/src/rendering/native_paint_list.h": "cc6759193f31b57e06d87efe0645ad4349596f34c38cf1908be72019777433be",
+    "native/tests/test_document_shadows.cpp": "be97bc53fae4495a91532e1b597312b65a031d27de464fb4a074478a16418d71"
+  }
+}
