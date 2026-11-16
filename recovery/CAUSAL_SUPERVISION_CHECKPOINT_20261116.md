@@ -1,0 +1,9 @@
+# Causal investigation and supervision checkpoint (not release)
+
+Incremental companion to cmake-checkpoint-v2-20261116.zip at parent c84f2a2afe8f60837bae29d5ba57f90eab9687c4. Archive SHA256: fec35cbf6c28f13ab557f2165ff2f3594ee5d8a0b8fd9483bc61383a34fbe917. MANIFEST.json covers 112 stable files: causal plans/reviews/proposals, static harness versions 01–04 and their policy/custody, bounded structured results, and CTest continuation evidence summaries. Each file was read twice identically and ZIP roundtrip checked.
+
+Source restoration uses the prior 64-file overlay for candidate J and original Git base 22fba13df2dc7775d4e091dac432c3e4b2960c46 for H. The archived adapter-A.patch/prepare_static.py and source manifests describe Hc and exact custody. Historical binary/build artifacts and H-head.tar are deliberately omitted: rebuilds, path relocation and renewed verification are required after restoration. Archived manifest references to omitted artifacts do not assert those artifacts are present. This is recoverable source/harness/documentation, not a replay-ready preservation of the original execution environment.
+
+Cut includes proposal v5 high_descriptors observation, NOT approval or execution of it. CTest diagnostic combined result: 266 PASS, 19 FAIL, 1 TIMEOUT, 1 ABORT; G1 NOT_PASSED. Subsequent causal/supervision work does not establish product acceptance. Synthetic -04: rotation_1500 PASS, high_descriptors FAIL CHILD_EXIT_NOT_OBSERVED, remaining cases NOT_RUN. Preserve failures; do not infer cause from the proposed hypothesis or rerun automatically. Further reviews/results after this cut are not covered.
+
+Excluded build outputs, stdout/stderr logs, large runtime ledgers, credentials and private records. No live processes modified, main integration, workflow changes or history rewriting.
