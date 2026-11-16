@@ -602,7 +602,9 @@ void boundaries_and_structure() {
 }
 void protected_contexts() {
     // HTML4 name2codepoint golden corpus, excluding unsupported sube.
+    // Q2c intentionally adds apos; keep its four-context decoder expectations.
     const std::pair<std::string, std::string> named[] = {
+        {"&apos;", "\x27"},
         {"&AElig;", "\xC3\x86"},
         {"&Aacute;", "\xC3\x81"},
         {"&Acirc;", "\xC3\x82"},
@@ -856,8 +858,20 @@ void protected_contexts() {
         {"&zwnj;", "\xE2\x80\x8C"},
     };
     for (const auto& row : named) matrix("named/" + row.first, row.first, row.second);
-    for (const std::string literal : {"&unknown;", "&apos;", "&Tab;", "&NewLine;", "&AMP;", "&amp", "&copy=", "&notit;"})
+    for (const std::string literal : {"&unknown;", "&apos", "&APOS;", "&aposX;", "&Tab;", "&NewLine;", "&AMP;", "&amp", "&copy=", "&notit;"})
         matrix("named-literal/" + literal, literal, literal);
+    // Independent byte oracle: named, decimal and hexadecimal spellings all
+    // decode to U+0027, including inside single-quoted attribute syntax.
+    matrix("apos-equivalence/decimal", "&#39;", "\x27");
+    matrix("apos-equivalence/hex", "&#x27;", "\x27");
+    matrix("apos-equivalence/joined", "&apos;&#39;&#x27;", "\x27\x27\x27");
+    const std::string apostrophes = "&apos;&#39;&#x27;&APOS;&aposX;&apos";
+    for (const std::string tag : {"script", "style"})
+        run("apos-raw/" + tag, "<body><" + tag + " id=raw>" + apostrophes + "</" + tag +
+            "><p id=after>tail</p></body>",
+            {element(tag, {{"id", "raw"}}, {text(apostrophes)}), after()});
+    run("apos-comment", "<body><!--" + apostrophes + "--><p id=after>tail</p></body>",
+        {{"#comment", apostrophes, {}, {}}, after()});
     const std::string payload = "&#0;&#xD800;&#65tail;";
     for (const std::string tag : {"script", "style"})
         run("raw/" + tag, "<body><" + tag + " id=raw data-v='&#0;'>" + payload + "</" + tag +

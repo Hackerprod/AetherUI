@@ -1,5 +1,7 @@
+#include "document_text_context.h"
 /* ── Flex layout — anonymous items, §9 resolution, lines and alignment ─ */
 #include "layout_internal.h"
+#include "document_text_context.h"
 
 #include <algorithm>
 #include "../primitives/presentation_text.h"
@@ -32,7 +34,7 @@ static std::string normalize_whitespace(const std::string& value) {
 // authored DOM nodes; this preserves DOM order without exposing a synthetic
 // element through the public DOM ABI.
 static aether_node_s* create_anonymous_flex_item(
-    const StyleLookup* styles,
+    const aether_layout_engine_s* engine,const StyleLookup* styles,
     aether_layout_result_s* result,
     aether_node_s* parent,
     const BoxStyleSnapshot& parent_style,
@@ -47,7 +49,10 @@ static aether_node_s* create_anonymous_flex_item(
         }
     }
     // A whitespace-only anonymous flex item is discarded by Flexbox §4.
-    if (!has_non_collapsible_content || !styles || !result) return nullptr;
+    if (!has_non_collapsible_content || !styles || !result) {
+        if(!has_non_collapsible_content&&styles&&result&&aether::layout::DocumentTextAccess::active(engine))document_text_discard_flex_sources(engine,parent,parent_style,text_nodes);
+        return nullptr;
+    }
 
     using namespace aether::style;
     auto anonymous_owner = std::make_shared<aether_node_s>();
@@ -118,12 +123,14 @@ bool contents_plain_context(const BoxStyleSnapshot& s) {
 }
 }
 
-void validate_contents_wrappers(const StyleLookup* styles) {
+void validate_contents_wrappers(const StyleLookup* styles,
+    const std::unordered_set<aether_node_s*>* selected_scope) {
     if (!styles || !styles->base_version()) return;
     size_t visited = 0;
     for (const auto& entry : styles->base_version()->backing()->entries()) {
         const auto& record = entry.second;
         auto* n = record->node();
+        if (selected_scope && !selected_scope->contains(n)) continue;
         if (!n || n->type != AETHER_NODE_ELEMENT ||
             record->style_view().scalars().display != AETHER_DISPLAY_CONTENTS) continue;
         const auto& identity = record->node_lifetime();
@@ -168,7 +175,7 @@ void validate_contents_wrappers(const StyleLookup* styles) {
 }
 
 const std::vector<aether_node_s*>& collect_flex_items(
-    const StyleLookup* styles,
+    const aether_layout_engine_s* engine,const StyleLookup* styles,
     aether_layout_result_s* result,
     aether_node_s* parent,
     const BoxStyleSnapshot& parent_style)
@@ -184,7 +191,7 @@ const std::vector<aether_node_s*>& collect_flex_items(
     std::vector<aether_node_s*> direct_text_run;
     const auto flush_direct_text = [&]() {
         if (auto* anonymous = create_anonymous_flex_item(
-                styles, result, parent, parent_style, direct_text_run)) {
+                engine,styles, result, parent, parent_style, direct_text_run)) {
             items.push_back(anonymous);
         }
         direct_text_run.clear();
@@ -201,7 +208,7 @@ const std::vector<aether_node_s*>& collect_flex_items(
         if (cursor.next == cursor.owner->children.size()) { traversal.pop_back(); continue; }
         auto* node = cursor.owner->children[cursor.next++];
         if (++visited > contents_node_limit) throw std::length_error("CONTENTS_EXPANSION_LIMIT");
-        if (node->type == AETHER_NODE_TEXT) {
+        if (node->type == AETHER_NODE_TEXT || (node->type==AETHER_NODE_COMMENT&&aether::layout::DocumentTextAccess::active(engine))) {
             direct_text_run.push_back(node);
             continue;
         }
@@ -570,7 +577,7 @@ static resolved_flex_children_s resolve_flex_children(
         parent_style.flex_wrap && main_size_is_definite
     });
 
-    for (auto* base_box : base_boxes) delete base_box;
+    for (auto* base_box : base_boxes) { aether::layout::DocumentTextAccess::discard_drawing_geometry(engine,base_box); delete base_box; }
     base_boxes.clear();
 
     for (size_t index = 0; index < children.size(); ++index) {
@@ -656,6 +663,7 @@ static void stretch_flex_line_items(
         if (pending && (!std::isfinite(cross_margins) || !std::isfinite(available_border_cross_size)))
             throw std::overflow_error("Non-finite deferred flex stretch size");
         const float forced_border_cross_size = std::max(0.f, available_border_cross_size);
+        aether::layout::DocumentTextAccess::discard_drawing_geometry(engine,previous);
         delete previous;
 
         resolved.boxes[index] = layout_element(engine, styles, children[index],
@@ -716,8 +724,25 @@ float layout_flex_children(
     aether_layout_result_s* result,
     const intrinsic_measurement_s* intrinsic_measurement)
 {
-    const auto& children = collect_flex_items(styles, result, parent, style);
+    const auto wrap_measures=layout_measures(styles,parent);
+    const bool wrap_reverse=wrap_measures&&wrap_measures->flex_wrap_mode()==2;
+    const int packing=wrap_reverse?wrap_measures->flex_align_content():0;
+    if(wrap_reverse&&(!style.flex_wrap||wrap_measures->writing_mode()!=0||wrap_measures->direction_rtl()||packing==4||
+        (wrap_measures->flex_alignment_unproven()&4)))
+        throw std::invalid_argument("FLEX_WRAP_REVERSE_UNSUPPORTED");
+    const auto& children = collect_flex_items(engine,styles, result, parent, style);
 
+    // Audit the actual winning item alignment before sizing or auto-margin
+    // resolution. Public enum aliases are not evidence of CSS semantics.
+    if(wrap_reverse)for(auto* child:children){
+        const auto child_style=get_style(styles,child);const auto cm=layout_measures(styles,child);
+        // An uncertain winner can project to AUTO. It is not an authentic
+        // auto value and must not borrow the container's proven alignment.
+        const bool unsupported=(cm&&(cm->flex_alignment_unproven()&2)!=0)||
+            (child_style.align_self==AETHER_ALIGN_SELF_AUTO&&
+             (wrap_measures->flex_alignment_unproven()&1)!=0);
+        if(unsupported)throw std::invalid_argument("FLEX_WRAP_REVERSE_ALIGNMENT_UNSUPPORTED");
+    }
     // The collector is authoritative, including suppression of whitespace-only
     // sequences. Never reconstruct discarded text through an inline fallback.
     if (children.empty()) return 0.f;
@@ -768,7 +793,7 @@ float layout_flex_children(
         ? *definite_line_cross_size : used_cross_size_for_height(natural_cross_height);
     // Only the effective initial/stretch policy is represented by the style.
     // A wrapping container keeps natural lines on overflow, even for one line.
-    const float line_stretch = style.flex_wrap
+    const float line_stretch = style.flex_wrap && (packing==0||packing==4)
         ? std::max(0.f, used_cross_size - natural_cross_size) / static_cast<float>(lines.empty() ? 1 : lines.size())
         : 0.f;
 
@@ -803,7 +828,9 @@ void place_flex_children(const StyleLookup* styles,
     const auto& children = *plan.children;
     const auto& style = parent_box->style;
     const auto direction = styles ? styles->lookup_measures(parent_box->element) : std::nullopt;
-    const auto axis = flex_axis(style.flex_direction, direction && direction->direction_rtl(), direction ? direction->writing_mode() : 0);
+    auto axis = flex_axis(style.flex_direction, direction && direction->direction_rtl(), direction ? direction->writing_mode() : 0);
+    const bool wrap_reverse=direction&&direction->flex_wrap_mode()==2;
+    if(wrap_reverse)axis.cross_reverse=!axis.cross_reverse;
     const bool horizontal = axis.horizontal;
     // A numeric final size is enough for placement/auto margins. It is never
     // fed back into percentage or basis definiteness during item sizing.
@@ -811,7 +838,11 @@ void place_flex_children(const StyleLookup* styles,
     const float main_origin = horizontal ? final_content.x : final_content.y;
     const float cross_origin = horizontal ? final_content.y : final_content.x;
     const float total_cross_extent = horizontal ? final_content.height : final_content.width;
-    float cross_distance = 0.f;
+    float packed=plan.cross_gap*static_cast<float>(plan.lines.empty()?0:plan.lines.size()-1);
+    for(float extent:plan.cross_extents)packed+=extent;
+    const int packing=wrap_reverse?direction->flex_align_content():0;
+    const float cross_free=total_cross_extent-packed;
+    float cross_distance=style.flex_wrap?(packing==2?cross_free:packing==3?cross_free/2.f:0.f):0.f;
     for (size_t line_index = 0; line_index < plan.lines.size(); ++line_index) {
         const auto& line = plan.lines[line_index];
         const float cross_extent = plan.cross_extents[line_index];
@@ -827,6 +858,8 @@ void place_flex_children(const StyleLookup* styles,
         for (const size_t index : line.item_indices) {
             auto* child_box = plan.boxes[index];
             const auto child_style = get_style(styles, children[index]);
+            if(wrap_reverse&&flex_cross_margins_are_auto(child_style,horizontal)&&flex_box_cross_size(child_box,horizontal)>cross_extent)
+                throw std::invalid_argument("FLEX_WRAP_REVERSE_AUTO_MARGIN_OVERFLOW_UNSUPPORTED");
             const bool has_cross_auto_margins = consume_flex_cross_auto_margins(
                 child_box, child_style, !horizontal, cross_extent);
             float item_cross_distance = 0.f;

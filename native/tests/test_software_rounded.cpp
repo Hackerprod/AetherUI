@@ -1,3 +1,4 @@
+#include "elliptic_t5_transition.h"
 #ifdef NDEBUG
 #error Assertions required
 #endif
@@ -65,6 +66,9 @@ int main(){
  f=get(store);assert(f.pixels[4*f.stride+4*4]==255 && f.pixels[4*f.stride+4*4+2]==0);
  auto old=f;
  auto bad=rounded;bad.radii.top_left_x=2;
+ {namespace o=elliptic_composition_oracle;const o::Shape uniform{1,1,9,9,{{{3,3},{3,3},{3,3},{3,3}}}},elliptic{1,1,9,9,{{{2,3},{3,3},{3,3},{3,3}}}};elliptic_transition::check("rounded-former-reject",12,12,{rounded,bad},o::render(12,12,{{uniform,{},{0,0,1,.5L}},{elliptic,{},{0,0,1,.5L}}}));}
+ // New profile admits the former payload; retain rejection with a real side-sum violation.
+ bad.radii.top_left_x=9;
  assert(s::render(store,prepare({rounded,bad})).status==s::Status::unsupported);
  bad=rounded;bad.radii=radii(5);assert(s::render(store,prepare({bad})).status==s::Status::unsupported);
  bad=rounded;bad.rect.width=0;assert(s::render(store,prepare({bad})).status==s::Status::unsupported);

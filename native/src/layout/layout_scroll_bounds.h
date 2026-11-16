@@ -1,6 +1,7 @@
 #pragma once
 #include "layout_types.h"
 #include <limits>
+#include <algorithm>
 #include <stdexcept>
 
 // A closed segment is not empty. In particular, hanging text can have no
@@ -38,3 +39,29 @@ inline layout_scroll_bounds_s aether_scroll_own_bounds(const aether_layout_box_s
     const auto& rect = positioned ? box->border_box : box->margin_box;
     return {rect.x, rect.y, double(rect.x) + rect.width, double(rect.y) + rect.height, false};
 }
+
+// Shared exact contextual operations; legacy selection and traversal unchanged.
+inline void aether_scroll_unite(layout_scroll_bounds_s& result, const layout_scroll_bounds_s& contribution) {
+    if (contribution.empty) return;
+    if (result.empty) { result = contribution; return; }
+    result.left = std::min(result.left, contribution.left);
+    result.top = std::min(result.top, contribution.top);
+    result.right = std::max(result.right, contribution.right);
+    result.bottom = std::max(result.bottom, contribution.bottom);
+}
+
+inline layout_scroll_bounds_s aether_scroll_clip_descendant(layout_scroll_bounds_s bounds, const aether_rectf& clip,int overflow_x,int overflow_y) {
+    if (bounds.empty) return bounds;
+    if (overflow_x != AETHER_OVERFLOW_VISIBLE) {
+        bounds.left = std::max(bounds.left, double(clip.x));
+        bounds.right = std::min(bounds.right, double(clip.x) + clip.width);
+    }
+    if (overflow_y != AETHER_OVERFLOW_VISIBLE) {
+        bounds.top = std::max(bounds.top, double(clip.y));
+        bounds.bottom = std::min(bounds.bottom, double(clip.y) + clip.height);
+    }
+    bounds.empty = bounds.right < bounds.left || bounds.bottom < bounds.top;
+    return bounds;
+}
+
+inline layout_scroll_bounds_s aether_scroll_clip_descendant(layout_scroll_bounds_s bounds,const aether_layout_box_s* owner){return aether_scroll_clip_descendant(bounds,owner->padding_box,owner->style.overflow_x,owner->style.overflow_y); }

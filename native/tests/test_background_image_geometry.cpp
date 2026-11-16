@@ -4,6 +4,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <vector>
+#include <limits>
 
 static void require(bool value, const char* message) {
     if (!value) { std::fprintf(stderr, "FAIL: %s\n", message); std::exit(1); }
@@ -94,5 +95,42 @@ int main() {
         require(!aether_background_image_resolve_geometry(context, tiles) && tiles.empty(),
             "unknown intrinsic dimensions must not fabricate image geometry");
     }
+    for (int repeat : {AETHER_BACKGROUND_REPEAT, AETHER_BACKGROUND_SPACE, AETHER_BACKGROUND_ROUND}) {
+        auto context = base_context();
+        context.repeat_x = repeat;
+        context.image_size.width = 1e-30f;
+        require(!aether_background_image_resolve_geometry(context, tiles) && tiles.empty(),
+            "default budget must reject explosive counts before int cast or iteration");
+        context.max_tiles = (std::numeric_limits<size_t>::max)();
+        require(!aether_background_image_resolve_geometry(context, tiles),
+            "caller cannot bypass hard work ceiling");
+    }
+    {
+        auto context = base_context();
+        context.repeat_x = AETHER_BACKGROUND_REPEAT;
+        context.paint_rect.x = 1e20f;
+        context.image_size.width = 1.f;
+        require(!aether_background_image_resolve_geometry(context, tiles), "non-progressing float step rejected");
+        context = base_context();
+        context.paint_rect.x = std::numeric_limits<float>::infinity();
+        require(!aether_background_image_resolve_geometry(context, tiles), "infinite paint geometry rejected");
+        context = base_context();
+        context.repeat_x = context.repeat_y = AETHER_BACKGROUND_REPEAT;
+        context.image_size = {1, 1};
+        context.max_tiles = 64;
+        require(!aether_background_image_resolve_geometry(context, tiles), "two-dimensional work budget rejected");
+        context = base_context();
+        context.repeat_x = AETHER_BACKGROUND_REPEAT;
+        context.position_x = px(1e30f);
+        require(!aether_background_image_resolve_geometry(context, tiles), "overflowing first index rejected");
+    }
+    {
+        auto context = base_context();
+        context.image_size.width = std::numeric_limits<float>::infinity();
+        context.size_x = context.size_y = px(100);
+        require(!aether_background_image_resolve_geometry(context, tiles) && tiles.empty(),
+            "nonfinite intrinsic source rejected even with explicit size");
+    }
+    std::puts("OK: background image geometry and budget checks passed");
     return 0;
 }

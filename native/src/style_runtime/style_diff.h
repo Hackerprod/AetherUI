@@ -114,6 +114,11 @@ AETHER_STYLE_PAYLOAD_POLICIES(AETHER_PAYLOAD_POLICY)
     X(flex_order) \
     X(direction_rtl) \
     X(writing_mode) \
+    X(word_break) \
+    X(overflow_wrap) \
+    X(flex_wrap_mode) \
+    X(flex_align_content) \
+    X(flex_alignment_unproven) \
     X(background_gradient) \
     X(row_gap) \
     X(column_gap) \
@@ -146,6 +151,12 @@ AETHER_SIDECAR_POLICY(line_height, value, 81, true)
 AETHER_SIDECAR_POLICY(flex_order, value, 7, false)
 AETHER_SIDECAR_POLICY(direction_rtl, value, 7, true)
 AETHER_SIDECAR_POLICY(writing_mode, value, 7, true)
+AETHER_SIDECAR_POLICY(word_break, value, 81, true)
+AETHER_SIDECAR_POLICY(overflow_wrap, value, 81, true)
+AETHER_SIDECAR_POLICY(flex_wrap_mode, value, 7, false)
+AETHER_SIDECAR_POLICY(flex_align_content, value, 7, false)
+AETHER_SIDECAR_POLICY(flex_alignment_unproven, value, 7, false)
+
 AETHER_SIDECAR_POLICY(background_gradient, value, 2, false)
 AETHER_SIDECAR_POLICY(row_gap, value, 17, false)
 AETHER_SIDECAR_POLICY(column_gap, value, 17, false)
@@ -175,7 +186,7 @@ inline constexpr auto style_dependency_catalog = std::to_array<StyleDependencyPo
     {"-webkit-backdrop-filter", DependencyPercentagePolicy::metadata, PropertyStatePolicy::alias},
     {"-webkit-background-clip", DependencyPercentagePolicy::metadata, PropertyStatePolicy::alias},
     {"-webkit-text-fill-color", DependencyPercentagePolicy::metadata, PropertyStatePolicy::alias},
-    {"align-content", DependencyPercentagePolicy::metadata, PropertyStatePolicy::no_op},
+    {"align-content", DependencyPercentagePolicy::metadata, PropertyStatePolicy::stored},
     {"align-items", DependencyPercentagePolicy::metadata, PropertyStatePolicy::stored},
     {"align-self", DependencyPercentagePolicy::metadata, PropertyStatePolicy::stored},
     // Parameters are resolved before layout; sampled target fields carry the visual diff.

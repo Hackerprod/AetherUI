@@ -23,7 +23,7 @@ struct aether_background_image_geometry_context_s {
     float root_font_size = 16.f;
     float viewport_width = 0.f;
     float viewport_height = 0.f;
-    // Zero preserves the legacy path; native capture supplies a bounded work budget.
+    // Zero selects the default hard ceiling (65536); callers can impose a smaller budget.
     size_t max_tiles = 0;
 };
 
@@ -35,7 +35,7 @@ struct aether_background_image_tile_s {
     aether_rectf tile_rect{};
 };
 
-// Returns false only when sizing or the painting area are invalid. On success, tiles are clipped
+// Returns false for invalid/non-finite geometry or exceeded work budget. On success, tiles are clipped
 // to paint_rect, source coordinates are adjusted to the clipped portion, and tile_rect retains
 // each original un-clipped tile.
 bool aether_background_image_resolve_geometry(

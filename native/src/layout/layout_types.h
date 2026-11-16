@@ -1,9 +1,12 @@
 #pragma once
 #include <aether/aether.h>
+#include "../css/border_radii.h"
 #include <aether/aether_contextual_layout.h>
 #include <cassert>
 #include <cmath>
 #include <cstddef>
+#include <cstdint>
+#include <limits>
 #include <algorithm>
 #include <memory>
 #include <string>
@@ -25,6 +28,7 @@ using aether::layout::CallbackEpochGuard;
 #include "../rendering/text/shaped_run.h"
 #include "../rendering/text/measurement_provider.h"
 #include "synthetic_text_policy.h"
+namespace aether::layout { class DocumentTextNormalizer; class DocumentTextSource; class DocumentAtomicInlineEvent; class DocumentConstructionInterval; class DocumentTextInterval; class DocumentTextFragment; class DocumentTextAccess; class DocumentTextTransaction; class RealSimpleTextAccess; class RealSimpleTextPolicy; class RealHtmlTextTestAccess; class DocumentTextTestAccess; }
 
 /* ── Internal layout types (mirrors C# LayoutBox/LayoutResult) ──── */
 
@@ -70,11 +74,22 @@ public:
     iterator begin() const noexcept { return iterator(head_); }
     iterator end() const noexcept { return iterator(nullptr); }
     bool empty() const noexcept { return head_ == nullptr; }
+    // Per-result identity plus this revision defeats allocation-address reuse.
+    // Terminal value is permanently invalid, including for future issuers.
+    std::uint64_t allocation_revision() const noexcept { return revision_; }
+    bool allocation_revision_valid() const noexcept {
+        return revision_ != std::numeric_limits<std::uint64_t>::max();
+    }
 private:
     friend struct aether_layout_result_s;
+    friend class aether::layout::DocumentTextTestAccess;
     void link(aether_layout_box_s* box) noexcept;
     void unlink(aether_layout_box_s* box) noexcept;
+    void advance_revision() noexcept {
+        if (allocation_revision_valid()) ++revision_;
+    }
     aether_layout_box_s* head_ = nullptr;
+    std::uint64_t revision_ = 0;
 };
 
 // Flow-construction state only: offsets refer to the explicit flow content origin.
@@ -96,18 +111,33 @@ struct layout_scroll_proxy_s {
     bool valid = false;
 };
 
+struct document_atomic_widths_s {
+ double content{},border{},margin{};
+ bool operator==(const document_atomic_widths_s&)const=default;
+};
 struct aether_layout_box_s {
     aether_layout_result_s* owner = nullptr;
     layout_box_kind_t kind = LAYOUT_BOX_ELEMENT;
     aether_node_s*    element = nullptr;
     BoxStyleSnapshot style{};
     aether_node_s* presentation_owner = nullptr;
+    std::shared_ptr<const aether::layout::DocumentTextSource> document_source;
     std::vector<aether_layout_box_s*> children;
     // Cleared by positioned completion, including deferred table-cell completion.
     // Published snapshots and clones never contain logical construction records.
     std::vector<block_static_anchor_s> block_static_anchors;
     std::string text;
     aether::rendering::text::Placement native_text;
+    // Inactive construction provenance; never a final placement certificate.
+    std::shared_ptr<const aether::layout::DocumentTextInterval> document_interval;
+    std::shared_ptr<const aether::layout::DocumentConstructionInterval> document_construction;
+    // Relative to this content-box origin, hence invariant under subtree offsets.
+    // Only actual document line emission writes this; no bottom-edge fallback.
+    std::optional<document_atomic_widths_s> document_atomic_widths;
+    bool document_has_last_line = false;
+    double document_last_line_baseline = 0.;
+    std::uint64_t document_layout_attempt = 0;
+    std::shared_ptr<const aether::layout::DocumentAtomicInlineEvent> document_atomic_inline;
     bool  is_atomic_control = false;
     bool is_initial_canvas = false;
     std::string control_display_text;
@@ -157,6 +187,9 @@ struct aether_layout_box_s {
     }
 private:
     friend class LayoutBoxRegistry;
+    friend class aether::layout::DocumentTextNormalizer;
+    friend class aether::layout::DocumentTextAccess;
+    std::uint64_t registry_birth_ = 0;
     aether_layout_box_s* registry_prev_ = nullptr;
     aether_layout_box_s* registry_next_ = nullptr;
 };
@@ -233,7 +266,7 @@ inline std::vector<aether::stacking::stack_item_t> layout_children_paint_order(
         const auto classification = classify(child);
         stack_item_t item;
         item.dom_index = static_cast<int32_t>(index);
-        item.is_inline_content = child->kind == LAYOUT_BOX_TEXT || child->is_atomic_control;
+        item.is_inline_content = child->kind == LAYOUT_BOX_TEXT || child->is_atomic_control || bool(child->document_atomic_inline);
         item.cls = classification.cls;
         item.z_value = classification.z_value;
         item.has_explicit_z_index = classification.has_explicit_z_index;
@@ -281,6 +314,7 @@ struct inline_item_s {
     aether_node_s*        element = nullptr;
     BoxStyleSnapshot style{};
     aether_node_s* presentation_owner = nullptr;
+    std::shared_ptr<const aether::layout::DocumentTextSource> document_source;
     std::string           text;
     bool is_atomic = false;
     bool is_line_break = false;
@@ -289,6 +323,8 @@ struct inline_item_s {
     bool hanging_barrier = false;
     // Admission evidence and formerly discarded whitespace are retained for
     // the homogeneous source-unit path, but invisible to every legacy path.
+    enum class MarkerKind { none, admission_only };
+    MarkerKind marker_kind=MarkerKind::none; // only retain_unit_admission emits this
     bool legacy_ignored = false;
     bool unit_barrier = false;
     // Only the final flow collector creates these zero-consumption markers.
@@ -323,6 +359,22 @@ struct inline_item_s {
         return i;
     }
 };
+
+// Circular hidden padding clip: same resolved shape as document admission.
+inline bool layout_hidden_round_clip_contains(const aether_layout_box_s* b,const aether::style::StyleScalars& s,float x,float y,bool padding=true){
+ if(s.overflow_x!=AETHER_OVERFLOW_HIDDEN||s.overflow_y!=AETHER_OVERFLOW_HIDDEN)return true;
+ for(auto c:{s.border_radii.top_left,s.border_radii.top_right,s.border_radii.bottom_right,s.border_radii.bottom_left})for(auto v:{c.horizontal,c.vertical})if(v.unit!=AETHER_CSS_UNIT_PX)return true;
+ const auto outer=aether_border_radii_resolve(s.border_radii,b->border_box,s.font_size);
+ const auto q=padding?aether_corner_radii_inset(outer,b->padding_box.x-b->border_box.x,b->padding_box.y-b->border_box.y,b->border_box.x+b->border_box.width-(b->padding_box.x+b->padding_box.width),b->border_box.y+b->border_box.height-(b->padding_box.y+b->padding_box.height)):outer;
+ const double r=q.top_left_x;
+ if(r==0)return true;
+ if(r!=q.top_left_y||r!=q.top_right_x||r!=q.top_right_y||r!=q.bottom_right_x||r!=q.bottom_right_y||r!=q.bottom_left_x||r!=q.bottom_left_y)return true;
+ const auto rect=padding?b->padding_box:b->border_box;
+ const double l=rect.x,t=rect.y,right=l+rect.width,bottom=t+rect.height;
+ if(right<=l||bottom<=t||2*r>std::min(right-l,bottom-t))return false;
+ const double dx=double(x)-std::clamp(double(x),l+r,right-r),dy=double(y)-std::clamp(double(y),t+r,bottom-r);
+ return dx*dx+dy*dy<=r*r;
+}
 
 struct aether_layout_result_s {
     // Built once from the finalized reachable tree. Clones deliberately default
@@ -417,7 +469,7 @@ private:
         const bool clips_children =
             style.overflow_x != AETHER_OVERFLOW_VISIBLE ||
             style.overflow_y != AETHER_OVERFLOW_VISIBLE;
-        if (!clips_children || ((style.overflow_x == AETHER_OVERFLOW_VISIBLE || (x >= box->padding_box.x && x <= box->padding_box.x + box->padding_box.width)) && (style.overflow_y == AETHER_OVERFLOW_VISIBLE || (y >= box->padding_box.y && y <= box->padding_box.y + box->padding_box.height)))) {
+        if (layout_hidden_round_clip_contains(box,style,x,y)&&(!clips_children || ((style.overflow_x == AETHER_OVERFLOW_VISIBLE || ((style.overflow_x != AETHER_OVERFLOW_HIDDEN || box->padding_box.width > 0) && x >= box->padding_box.x && (style.overflow_x == AETHER_OVERFLOW_HIDDEN ? x < box->padding_box.x + box->padding_box.width : x <= box->padding_box.x + box->padding_box.width))) && (style.overflow_y == AETHER_OVERFLOW_VISIBLE || ((style.overflow_y != AETHER_OVERFLOW_HIDDEN || box->padding_box.height > 0) && y >= box->padding_box.y && (style.overflow_y == AETHER_OVERFLOW_HIDDEN ? y < box->padding_box.y + box->padding_box.height : y <= box->padding_box.y + box->padding_box.height)))))) {
             const auto order = layout_hit_order(box, styles, policy);
             if (order.empty()) {
                 for (auto it = box->children.rbegin(); it != box->children.rend(); ++it) {
@@ -430,7 +482,7 @@ private:
             }
         }
         if (presentation.visible && presentation.pointer_events != AETHER_POINTER_EVENTS_NONE &&
-            layout_box_contains_own_content(box, x, y)) return layout_box_hit_owner(box);
+            layout_box_contains_own_content(box, x, y)&&layout_hidden_round_clip_contains(box,style,x,y,false)) return layout_box_hit_owner(box);
         return nullptr;
     }
 };
@@ -487,8 +539,14 @@ struct initial_canvas_dimensions { float width, height; };
 struct aether_layout_engine_s {
 private:
     friend class aether::layout::SyntheticTextTestIssuer;
+    friend class aether::layout::RealHtmlTextTestAccess;
+    friend class aether::layout::DocumentTextTestAccess; // Independent private-state boundary tests only.
+    friend class aether::layout::RealSimpleTextAccess;
+    friend class aether::layout::DocumentTextAccess;
     friend class aether::layout::NativeTextAccess;
     friend class aether::layout::NativeTextTransaction;
+    std::shared_ptr<aether::layout::RealSimpleTextPolicy> real_text_policy_;
+    std::shared_ptr<aether::layout::DocumentTextTransaction> document_text_transaction_;
     std::shared_ptr<const int> synthetic_session_;
     std::shared_ptr<const aether::layout::SyntheticTextPolicy> synthetic_text_policy_;
     std::shared_ptr<aether::layout::NativeTextTransaction> native_text_transaction_;
@@ -496,10 +554,11 @@ private:
 public:
     // Internal setter rejects mutation during a layout; ownership is retained.
     bool select_text_measurement(std::shared_ptr<const aether::rendering::text::MeasurementSelection> s) {
-        if(layout_in_progress) return false;
+        if(layout_in_progress || real_text_policy_ || document_text_transaction_) return false;
         text_selection_=std::move(s); return true;
     }
     const auto& text_selection() const { return text_selection_; }
+    bool has_document_text_context() const noexcept { return bool(document_text_transaction_); }
     bool initial_canvas_mode = false;
     std::unordered_map<aether_node_s*, initial_canvas_dimensions> initial_canvas_entries;
     bool layout_in_progress = false;
@@ -546,6 +605,7 @@ inline aether_text_metrics_t engine_measure_text(
     const aether_layout_engine_s* e, const char* text,
     const BoxStyleSnapshot* style, float max_width, aether_node_s* node = nullptr)
 {
+    if (e && e->has_document_text_context()) throw std::invalid_argument("DOCUMENT_TEXT_UNAUTHENTICATED_MEASUREMENT");
     if (!e || (!e->contextual_text_measurer && !e->text_measurer)) return {0.f, 0.f, 0.f};
     const auto lifetime = e->measure_document;
     const CallbackEpochGuard guard(lifetime);

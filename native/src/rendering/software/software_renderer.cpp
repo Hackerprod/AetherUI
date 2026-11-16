@@ -1,5 +1,7 @@
 #include "software_renderer.h"
+#include "image_exact_lattice.h"
 #include "shadow_math.h"
+#include "uniform_transform.h"
 #include "border_math.h"
 #include <algorithm>
 #include <cmath>
@@ -13,9 +15,11 @@ namespace aether::rendering::software {
 namespace {
 constexpr std::uint64_t max_work = 50000000;
 struct Rect { double l, t, r, b; };
-struct CurvedClip { Rect original{}; double radius{}; };
-struct ClipState { Rect bounds; CurvedClip curve; };
-struct Draw { Rect rect; Rect inner; prep::Color color; std::size_t index; Rect original{}; double radius{}; Rect inner_original{}; double inner_radius{}; CurvedClip clip{}; bool shadow{}; Rect source{}; Rect excluded{}; double sigma{}; const prep::BorderGroup* border{}; int layer_event{}; float layer_opacity{1}; double displacement_x{},displacement_y{}; std::shared_ptr<const text::GlyphMaskA8> mask; const prep::LinearGradientFill* gradient{}; Rect gradient_rect{}; };
+struct CurvedClip { Rect original{}; double radius{}; double scale{1}; };
+constexpr std::size_t no_clip = std::size_t(-1);
+struct ClipNode { CurvedClip curve; std::size_t parent{no_clip}, depth{}; };
+struct ClipState { Rect bounds; CurvedClip curve; std::size_t head{no_clip}, depth{}; };
+struct Draw { Rect rect; Rect inner; prep::Color color; std::size_t index; Rect original{}; double radius{}; Rect inner_original{}; double inner_radius{}; bool shadow{}; Rect source{}; Rect excluded{}; double sigma{}; const prep::BorderGroup* border{}; int layer_event{}; float layer_opacity{1}; double displacement_x{},displacement_y{}; std::shared_ptr<const text::GlyphMaskA8> mask; const prep::LinearGradientFill* gradient{}; Rect gradient_rect{}; const prep::Image* image{}; std::size_t clip_head{no_clip}, clip_depth{}; double scale{1}; };
 Rect intersect(Rect a, Rect b) noexcept {
  return {std::max(a.l,b.l),std::max(a.t,b.t),std::min(a.r,b.r),std::min(a.b,b.b)};
 }
@@ -25,6 +29,37 @@ bool uniform(prep::Radii r) noexcept {
  return r.top_left_x==r.top_left_y && r.top_left_x==r.top_right_x &&
  r.top_left_x==r.top_right_y && r.top_left_x==r.bottom_left_x &&
  r.top_left_x==r.bottom_left_y && r.top_left_x==r.bottom_right_x && r.top_left_x==r.bottom_right_y;
+}
+// radius >= 0 retains the exact legacy circular path. A negative value is
+// -(event_index + 1), an exact integer <= 65536 referencing immutable prepared
+// Fill/LinearGradientFill/PushClip radii. Geometric scale is stored separately;
+// immutable event references must never be multiplied by that scale.
+bool independent_radii(prep::Radii r,prep::Rect box) noexcept {
+ const double rx[]{r.top_left_x,r.top_right_x,r.bottom_right_x,r.bottom_left_x};
+ const double ry[]{r.top_left_y,r.top_right_y,r.bottom_right_y,r.bottom_left_y};
+ double x[4]{},y[4]{};
+ for(unsigned i=0;i<4;++i){
+  if(!std::isfinite(rx[i])||!std::isfinite(ry[i])||rx[i]<0||ry[i]<0)return false;
+  if(rx[i]>0&&ry[i]>0){x[i]=rx[i];y[i]=ry[i];}
+ }
+ return x[0]+x[1]<=double(box.width)&&x[3]+x[2]<=double(box.width)&&
+        y[0]+y[3]<=double(box.height)&&y[1]+y[2]<=double(box.height);
+}
+bool admitted_radii(prep::Radii r,prep::Rect box) noexcept {
+ if(uniform(r))return !(r.top_left_x>0&&(box.width<=0||box.height<=0||2*double(r.top_left_x)>std::min(box.width,box.height)));
+ return independent_radii(r,box);
+}
+double radius_reference(prep::Radii r,std::size_t event_index) noexcept {
+ if(uniform(r))return r.top_left_x;
+ if(!(r.top_left_x>0&&r.top_left_y>0)&&!(r.top_right_x>0&&r.top_right_y>0)&&
+    !(r.bottom_right_x>0&&r.bottom_right_y>0)&&!(r.bottom_left_x>0&&r.bottom_left_y>0))return 0;
+ return -double(event_index+1);
+}
+const prep::Radii& referenced_radii(double reference,const prep::PreparedFrame& frame) noexcept {
+ const auto& command=frame.events()[std::size_t(-reference)-1].command;
+ if(const auto* fill=std::get_if<prep::Fill>(&command))return fill->radii;
+ if(const auto* gradient=std::get_if<prep::LinearGradientFill>(&command))return gradient->radii;
+ return std::get<prep::PushClip>(command).radii;
 }
 // Shape centers always use original geometry, never its clipped bounding box.
 double rounded_area(Rect clipped,Rect original,double radius,int x,int y,std::uint64_t& sampled) noexcept {
@@ -51,6 +86,25 @@ bool contains(Rect o,double r,double x,double y) noexcept {
  const double dx=x-std::clamp(x,o.l+r,o.r-r),dy=y-std::clamp(y,o.t+r,o.b-r);
  return dx*dx+dy*dy<=r*r;
 }
+bool contains_shape(Rect o,double reference,double x,double y,const prep::PreparedFrame& frame,double scale) noexcept {
+ if(reference>=0)return contains(o,reference,x,y);
+ if(empty(o)||x<o.l||x>o.r||y<o.t||y>o.b)return false;
+ const auto& r=referenced_radii(reference,frame);
+ const long double rx[]{double(r.top_left_x)*scale,double(r.top_right_x)*scale,double(r.bottom_right_x)*scale,double(r.bottom_left_x)*scale};
+ const long double ry[]{double(r.top_left_y)*scale,double(r.top_right_y)*scale,double(r.bottom_right_y)*scale,double(r.bottom_left_y)*scale};
+ for(unsigned i=0;i<4;++i){
+  if(rx[i]==0||ry[i]==0)continue;
+  const bool left=i==0||i==3,top=i<2;
+  const long double cx=left?static_cast<long double>(o.l)+rx[i]:static_cast<long double>(o.r)-rx[i];
+  const long double cy=top?static_cast<long double>(o.t)+ry[i]:static_cast<long double>(o.b)-ry[i];
+  // Every applicable influence box contributes, including diagonal overlaps.
+  if((left?x<=cx:x>=cx)&&(top?y<=cy:y>=cy)){
+   const long double dx=(static_cast<long double>(x)-cx)/rx[i],dy=(static_cast<long double>(y)-cy)/ry[i];
+   if(dx*dx+dy*dy>1)return false;
+  }
+ }
+ return true;
+}
 // Evaluate the immutable ramp in its own coordinate system, not the clipped
 // coverage rectangle. upper_bound picks the LAST coincident stop at a hard edge.
 void gradient_sample(const prep::LinearGradientFill& g,Rect r,double x,double y,double* out) noexcept {
@@ -66,16 +120,53 @@ void gradient_sample(const prep::LinearGradientFill& g,Rect r,double x,double y,
  out[2]=(a.color.r*aa+(b.color.r*ba-a.color.r*aa)*u)*g.opacity;
  out[3]=(aa+(ba-aa)*u)*g.opacity;
 }
+// Fixed device pixel center: clipping changes coverage, never image coordinates.
+// StrictCrop clamps taps to an integer subimage; FullResource clamps to the
+// resource edges, never to a fractional UV window (which is not a clip).
+void image_sample(const prep::Image& i, Rect destination, double x,double y,double* out) noexcept {
+ const auto& resource=*i.resource; const auto src=rect(i.source);
+ const bool full=i.sampling_bounds==prep::ImageSamplingBounds::FullResource;
+ const double left=full?0:src.l, top=full?0:src.t;
+ const double right=full?double(resource.width())-1:src.r-1;
+ const double bottom=full?double(resource.height())-1:src.b-1;
+ const double u=std::clamp(src.l+(x-destination.l)/(destination.r-destination.l)*(src.r-src.l)-.5,left,right);
+ const double v=std::clamp(src.t+(y-destination.t)/(destination.b-destination.t)*(src.b-src.t)-.5,top,bottom);
+ const auto x0=std::size_t(std::floor(u)),y0=std::size_t(std::floor(v));
+ const auto x1=std::min(x0+1,std::size_t(right)),y1=std::min(y0+1,std::size_t(bottom));
+ const double fx=u-x0,fy=v-y0; const auto bytes=resource.pixels();
+ for(int c=0;c<4;++c) {
+  const double top=bytes[y0*resource.stride()+x0*4+c]*(1-fx)+bytes[y0*resource.stride()+x1*4+c]*fx;
+  const double bottom=bytes[y1*resource.stride()+x0*4+c]*(1-fx)+bytes[y1*resource.stride()+x1*4+c]*fx;
+  out[c]=(top*(1-fy)+bottom*fy)*i.opacity/255;
+ }
+}
 bool central(Rect b,CurvedClip c) noexcept {
+ if(c.radius<0)return false; // new profile: sample conservatively, no unproved interior shortcut
  return (b.l>=c.original.l+c.radius && b.r<=c.original.r-c.radius) ||
         (b.t>=c.original.t+c.radius && b.b<=c.original.b-c.radius);
 }
-double joint_area(const Draw& d,Rect b,std::uint64_t& sampled) noexcept {
+bool all_clips_central(Rect b,std::size_t head,const std::vector<ClipNode>& nodes,
+ std::uint64_t& tests,std::uint64_t& visits) noexcept {
+ for(auto id=head;id!=no_clip;id=nodes[id].parent) {
+  ++tests;++visits;if(!central(b,nodes[id].curve))return false;
+ }
+ return true;
+}
+bool all_clips_contain(double x,double y,std::size_t head,const std::vector<ClipNode>& nodes,
+ std::uint64_t& tests,std::uint64_t& visits,const prep::PreparedFrame& frame) noexcept {
+ for(auto id=head;id!=no_clip;id=nodes[id].parent) {
+  ++tests;++visits;const auto& c=nodes[id].curve;
+  if(!contains_shape(c.original,c.radius,x,y,frame,c.scale))return false;
+ }
+ return true;
+}
+double joint_area(const Draw& d,Rect b,std::uint64_t& sampled,const std::vector<ClipNode>& nodes,
+ std::uint64_t& tests,std::uint64_t& visits,const prep::PreparedFrame& frame) noexcept {
  ++sampled;unsigned count=0;
  for(int sy=0;sy<16;++sy)for(int sx=0;sx<16;++sx){
   const double x=b.l+(sx+.5)*(b.r-b.l)/16,y=b.t+(sy+.5)*(b.b-b.t)/16;
-  if(contains(d.original,d.radius,x,y) && !contains(d.inner_original,d.inner_radius,x,y) &&
-     contains(d.clip.original,d.clip.radius,x,y)) ++count;
+  if(contains_shape(d.original,d.radius,x,y,frame,d.scale) && !contains(d.inner_original,d.inner_radius,x,y) &&
+     all_clips_contain(x,y,d.clip_head,nodes,tests,visits,frame)) ++count;
  }
  return (b.r-b.l)*(b.b-b.t)*count/256;
 }
@@ -86,6 +177,7 @@ std::uint64_t pixel_count(Rect r) noexcept {
         std::uint64_t(std::ceil(r.b)-std::floor(r.t));
 }
 std::uint64_t corner_bound(Rect original,Rect clipped,double radius) noexcept {
+ if(radius<0)return pixel_count(clipped);
  const auto o=original; const double r=radius;
  const Rect corners[]{{o.l,o.t,o.l+r,o.t+r},{o.r-r,o.t,o.r,o.t+r},
                       {o.l,o.b-r,o.l+r,o.b},{o.r-r,o.b-r,o.r,o.b}};
@@ -97,7 +189,6 @@ bool charge(std::uint64_t& total,std::uint64_t count,std::uint64_t factor) noexc
  if(count>(max_work-total)/factor) return false;
  total+=count*factor;return true;
 }
-bool translation(prep::Matrix m) noexcept {return m.m11==1 && m.m12==0 && m.m21==0 && m.m22==1 && std::isfinite(m.dx) && std::isfinite(m.dy);}
 bool bounded_offset(double n) noexcept {return std::isfinite(n) && std::abs(n)<=65536;}
 bool cancelled(prep::Cancellation* c) noexcept {return c && c->cancelled();}
 double area(Rect r, int x, int y) noexcept {
@@ -127,9 +218,27 @@ static Result render_impl(FrameStore& store,const prep::PreparedFrame& frame,
  if(work>max_work) return {Status::limit_exceeded};
  std::size_t index=0;
  std::uint64_t mask_bytes=0,glyph_uses=0,mask_pixels=0,metadata_bytes=0;
+ std::uint64_t clip_central_tests=0,clip_contains_tests=0,clip_node_visits=0;
  std::uint64_t corner_pixels=0,sampled_pixels=0,inner_corner_pixels=0,inner_sampled_pixels=0,clip_corner_pixels=0,joint_sampled_pixels=0;
  try {
   if(cancelled(cancel)) return {Status::cancelled};
+  // Global incompatibility is diagnosed at the second relevant command,
+  // including disjoint scopes, zero scroll, and cancelling local scales.
+  bool saw_scale=false,saw_scroll=false;
+  std::size_t preflight_index=0;
+  for(const auto& event:frame.events()) {
+   if(cancelled(cancel))return {Status::cancelled,FrameStatus::ok,preflight_index,work};
+   if(const auto* push=std::get_if<prep::PushTransform>(&event.command)) {
+    if(push->matrix.m11!=1 || push->matrix.m22!=1) {
+     if(masks || saw_scroll)return {Status::unsupported,FrameStatus::ok,preflight_index,work};
+     saw_scale=true;
+    }
+   } else if(std::holds_alternative<prep::PushScroll>(event.command)) {
+    if(saw_scale)return {Status::unsupported,FrameStatus::ok,preflight_index,work};
+    saw_scroll=true;
+   }
+   ++preflight_index;
+  }
   using Key=std::tuple<std::uintptr_t,std::uint32_t,std::uint32_t,unsigned,unsigned>;
   const auto key=[](const text::FontInstance* f,std::uint32_t id,std::uint32_t flags,unsigned x,unsigned y){return Key{reinterpret_cast<std::uintptr_t>(f),id,flags,x,y};};
   std::map<Key,std::shared_ptr<const text::GlyphMaskA8>> lookup;
@@ -151,10 +260,12 @@ static Result render_impl(FrameStore& store,const prep::PreparedFrame& frame,
   }
   std::vector<Draw> draws;
   std::vector<ClipState> clips;
+  std::vector<ClipNode> clip_nodes;
+  std::size_t clip_head=no_clip,clip_depth=0,max_clip_depth=0;
   // Local ABI matrices retain fractions lost by the prepared float product.
   // Keep this state independent of clips and opacity; clips are device-space.
-  std::vector<std::pair<double,double>> transforms;
-  double transform_x=0,transform_y=0;
+  std::vector<uniform_transform::State> transforms;
+  uniform_transform::State transform;
   CurvedClip curve;
   std::size_t layer_depth=0,max_layer_depth=0;
   const auto surface_bytes=std::uint64_t(v.width)*std::uint64_t(v.height)*4;
@@ -163,25 +274,37 @@ static Result render_impl(FrameStore& store,const prep::PreparedFrame& frame,
   for(const auto& event:frame.events()) {
    if(cancelled(cancel)) return {Status::cancelled,FrameStatus::ok,index,work};
    const auto& command=event.command;
+   const auto draw_begin=draws.size();
    if(const auto* push=std::get_if<prep::PushTransform>(&command)) {
     const auto& m=push->matrix;
-    if(!translation(m) || !bounded_offset(m.dx) || !bounded_offset(m.dy) ||
-       !bounded_offset(transform_x+double(m.dx)) || !bounded_offset(transform_y+double(m.dy)))
+    uniform_transform::State next;
+    if(!uniform_transform::compose(transform,m,next))
      return {Status::unsupported,FrameStatus::ok,index,work};
-    transforms.emplace_back(transform_x,transform_y);
-    transform_x+=double(m.dx);transform_y+=double(m.dy);
+    if(masks && transforms.size()==transforms.capacity()) {
+     const auto capacity=std::max<std::size_t>(1,transforms.capacity()*2);
+     const auto bytes=std::uint64_t(capacity)*sizeof(uniform_transform::State);
+     if(mask_bytes+metadata_bytes+bytes+surface_bytes*(max_layer_depth+1)>text::max_mask_bytes)
+      return {Status::limit_exceeded,FrameStatus::ok,index,work};
+     metadata_bytes+=bytes;transforms.reserve(capacity);
+    }
+    transforms.push_back(transform);transform=next;
    } else if(std::holds_alternative<prep::PopTransform>(command)) {
-    // PreparedFrame owns scope validation; local restore avoids float drift.
-    transform_x=transforms.back().first;transform_y=transforms.back().second;transforms.pop_back();
+    // PreparedFrame owns scope validation; restore never divides/reconstructs.
+    transform=transforms.back();transforms.pop_back();
    }
-   const double displacement_x=transform_x+event.scroll_x,displacement_y=transform_y+event.scroll_y;
+   const double displacement_x=transform.x+event.scroll_x,displacement_y=transform.y+event.scroll_y;
    if(!bounded_offset(displacement_x)||!bounded_offset(displacement_y))
     return {Status::unsupported,FrameStatus::ok,index,work};
+   const bool scaled=transform.scale!=1;
+   if(scaled && (std::holds_alternative<prep::Stroke>(command)||std::holds_alternative<prep::BorderGroup>(command)||
+      std::holds_alternative<prep::BoxShadow>(command)||std::holds_alternative<prep::Text>(command)))
+    return {Status::unsupported,FrameStatus::ok,index,work};
    const bool displaced=!transforms.empty()||event.scroll_depth>0||displacement_x!=0||displacement_y!=0;
-   const auto translated=[&](prep::Rect r){auto v=rect(r);return Rect{v.l+displacement_x,v.t+displacement_y,v.r+displacement_x,v.b+displacement_y};};
+   const auto translated=[&](prep::Rect r){return uniform_transform::apply(rect(r),{transform.scale,displacement_x,displacement_y});};
    const auto bounded=[](Rect r){return std::isfinite(r.l)&&std::isfinite(r.t)&&std::isfinite(r.r)&&std::isfinite(r.b)&&std::abs(r.l)<=65536&&std::abs(r.t)<=65536&&std::abs(r.r)<=65536&&std::abs(r.b)<=65536;};
    const bool translated_ok=std::visit([&](const auto& c){using T=std::decay_t<decltype(c)>;
     if constexpr(std::is_same_v<T,prep::Fill>||std::is_same_v<T,prep::Stroke>||std::is_same_v<T,prep::BoxShadow>||std::is_same_v<T,prep::PushClip>)return bounded(translated(c.rect));
+    else if constexpr(std::is_same_v<T,prep::Image>)return bounded(translated(c.destination));
     else if constexpr(std::is_same_v<T,prep::LinearGradientFill>)return bounded(translated(c.rect))&&bounded(translated(c.gradient_rect));
     else if constexpr(std::is_same_v<T,prep::BorderGroup>)return bounded(translated(c.outer))&&bounded(translated(c.inner));
     else return true;
@@ -194,36 +317,43 @@ static Result render_impl(FrameStore& store,const prep::PreparedFrame& frame,
     Draw d{};d.index=index;d.layer_event=1;d.layer_opacity=begin->opacity;draws.push_back(d);
    } else if(std::holds_alternative<prep::EndOpacity>(command)) {
     --layer_depth;Draw d{};d.index=index;d.layer_event=-1;draws.push_back(d);
+   } else if(const auto* image=std::get_if<prep::Image>(&command)) {
+    const auto src=rect(image->source);
+    if(src.r-src.l<1 || src.b-src.t<1 ||
+       (image->sampling_bounds==prep::ImageSamplingBounds::StrictCrop &&
+        (std::floor(src.l)!=src.l||std::floor(src.t)!=src.t||std::floor(src.r)!=src.r||std::floor(src.b)!=src.b)))
+     return {Status::unsupported,FrameStatus::ok,index,work};
+    const auto original=translated(image->destination),r=intersect(current,original);
+    if(!charge(work,pixel_count(r),16))return {Status::limit_exceeded,FrameStatus::ok,index,work};
+    if(!empty(r)){Draw d{};d.rect=r;d.index=index;d.original=original;d.image=image;draws.push_back(d);}
    } else if(const auto* fill=std::get_if<prep::LinearGradientFill>(&command)) {
-    const double radius=fill->radii.top_left_x;
-    if(!uniform(fill->radii) || (radius>0 &&
-       (fill->rect.width<=0 || fill->rect.height<=0 || 2*radius>std::min(fill->rect.width,fill->rect.height))))
+    const double radius=uniform_transform::radius(radius_reference(fill->radii,index),transform.scale);
+    if(!admitted_radii(fill->radii,fill->rect) || (scaled&&!uniform_transform::radii(fill->radii,transform.scale)))
      return {Status::unsupported,FrameStatus::ok,index,work};
     const auto original=translated(fill->rect),r=intersect(current,original);
     // 256 samples, bounded binary stop lookup (<=7 comparisons) and blend.
     // Charged before candidate allocation; solid draws retain their fast path.
-    if(!charge(work,pixel_count(r),256*8))return {Status::limit_exceeded,FrameStatus::ok,index,work};
+    if(!charge(work,pixel_count(r),256*8) || (radius<0&&!charge(work,pixel_count(r),256*8)))return {Status::limit_exceeded,FrameStatus::ok,index,work};
     if(!empty(r)) {
-     Draw d{};d.rect=r;d.index=index;d.original=original;d.radius=radius;d.clip=curve;
+     Draw d{};d.rect=r;d.index=index;d.original=original;d.radius=radius;
      d.gradient=fill;d.gradient_rect=translated(fill->gradient_rect);draws.push_back(d);
     }
    } else if(const auto* fill=std::get_if<prep::Fill>(&command)) {
-    const double radius=fill->radii.top_left_x;
-    if(!uniform(fill->radii) || (radius>0 &&
-       (fill->rect.width<=0 || fill->rect.height<=0 || 2*radius>std::min(fill->rect.width,fill->rect.height))))
+    const double radius=uniform_transform::radius(radius_reference(fill->radii,index),transform.scale);
+    if(!admitted_radii(fill->radii,fill->rect) || (scaled&&!uniform_transform::radii(fill->radii,transform.scale)))
      return {Status::unsupported,FrameStatus::ok,index,work};
     auto r=intersect(current,translated(fill->rect));
     if(!empty(r)) {
      // All endpoints are bounded by viewport before integer conversion.
      const auto count=pixel_count(r);
-     if(radius>0) {
+     if(radius!=0) {
       const auto corners=corner_bound(translated(fill->rect),r,radius);
-      if(!charge(work,count,2) || !charge(work,corners,256))
+      if(!charge(work,count,2) || !charge(work,corners,radius<0?256*8:256))
        return {Status::limit_exceeded,FrameStatus::ok,index,work};
       // Bounded by total charged work, so this addition cannot overflow.
       corner_pixels+=corners;
      } else if(!charge(work,count,1)) return {Status::limit_exceeded,FrameStatus::ok,index,work};
-     draws.push_back({r,{},fill->color,index,translated(fill->rect),radius,{},0,curve});
+     draws.push_back({r,{},fill->color,index,translated(fill->rect),radius,{},0});
     }
    } else if(const auto* stroke=std::get_if<prep::Stroke>(&command)) {
     const double radius=stroke->radii.top_left_x;
@@ -256,18 +386,18 @@ static Result render_impl(FrameStore& store,const prep::PreparedFrame& frame,
         return {Status::limit_exceeded,FrameStatus::ok,index,work};
        corner_pixels+=outer_corners;
        inner_corner_pixels+=inner_corners;
-       draws.push_back({outer,inner,stroke->color,index,original,outer_radius,inner_original,inner_radius,curve});
+       draws.push_back({outer,inner,stroke->color,index,original,outer_radius,inner_original,inner_radius});
       } else {
        if(!charge(work,count,2))
         return {Status::limit_exceeded,FrameStatus::ok,index,work};
-       draws.push_back({outer,inner,stroke->color,index,original,0,inner_original,0,curve});
+       draws.push_back({outer,inner,stroke->color,index,original,0,inner_original,0});
       }
      }
     }
    } else if(const auto* group=std::get_if<prep::BorderGroup>(&command)) {
     const auto o=translated(group->outer),in=translated(group->inner);
     const auto range=[](Rect r){return std::abs(r.l)<=65536 && std::abs(r.r)<=65536 && std::abs(r.t)<=65536 && std::abs(r.b)<=65536;};
-    if(curve.radius>0 || !uniform(group->outer_radii) || group->outer_radii.top_left_x!=0 ||
+    if(clip_head!=no_clip || !uniform(group->outer_radii) || group->outer_radii.top_left_x!=0 ||
        !uniform(group->inner_radii) || group->inner_radii.top_left_x!=0 ||
        empty(o) || empty(in) || !range(o) || !range(in) ||
        in.l<o.l || in.r>o.r || in.t<o.t || in.b>o.b)
@@ -293,7 +423,7 @@ static Result render_impl(FrameStore& store,const prep::PreparedFrame& frame,
     const auto& s=shadow->shadow;
     const auto box=translated(shadow->rect);
     const auto in_range=[](Rect r){return std::abs(r.l)<=65536 && std::abs(r.r)<=65536 && std::abs(r.t)<=65536 && std::abs(r.b)<=65536;};
-    if(!uniform(shadow->radii) || shadow->radii.top_left_x!=0 || curve.radius>0 || s.inset ||
+    if(!uniform(shadow->radii) || shadow->radii.top_left_x!=0 || clip_head!=no_clip || s.inset ||
        shadow->rect.width>8192 || shadow->rect.height>8192 || !in_range(box) ||
        std::abs(s.offset_x)>8192 || std::abs(s.offset_y)>8192 || std::abs(s.spread_radius)>8192 ||
        s.blur_radius>64 || (s.blur_radius>0 && s.blur_radius<1))
@@ -314,7 +444,7 @@ static Result render_impl(FrameStore& store,const prep::PreparedFrame& frame,
     }
    } else if(const auto* t=std::get_if<prep::Text>(&command)) {
     if(!masks || !t->native || !t->native->run) return {Status::unsupported,FrameStatus::ok,index,work};
-    if(curve.radius!=0 || std::floor(current.l)!=current.l || std::floor(current.t)!=current.t ||
+    if(std::floor(current.l)!=current.l || std::floor(current.t)!=current.t ||
        std::floor(current.r)!=current.r || std::floor(current.b)!=current.b)
      return {Status::unsupported,FrameStatus::ok,index,work};
     const auto& run=*t->native->run;
@@ -356,22 +486,42 @@ static Result render_impl(FrameStore& store,const prep::PreparedFrame& frame,
       return {Status::limit_exceeded,FrameStatus::ok,index,work};
     }
    } else if(const auto* clip=std::get_if<prep::PushClip>(&command)) {
-    const double radius=clip->radii.top_left_x;
+    const double radius=uniform_transform::radius(radius_reference(clip->radii,index),transform.scale);
     if(masks) {
      const auto r=translated(clip->rect);
-     if(radius!=0 || !uniform(clip->radii) || std::floor(r.l)!=r.l || std::floor(r.t)!=r.t ||
+     if(std::floor(r.l)!=r.l || std::floor(r.t)!=r.t ||
         std::floor(r.r)!=r.r || std::floor(r.b)!=r.b)
       return {Status::unsupported,FrameStatus::ok,index,work};
     }
-    if(!uniform(clip->radii) || (radius>0 && (curve.radius>0 ||
-       clip->rect.width<=0 || clip->rect.height<=0 ||
-       2*radius>std::min(clip->rect.width,clip->rect.height))))
+    if(!admitted_radii(clip->radii,clip->rect) || (scaled&&!uniform_transform::radii(clip->radii,transform.scale)))
      return {Status::unsupported,FrameStatus::ok,index,work};
-    clips.push_back({current,curve}); current=intersect(current,translated(clip->rect));
-    if(radius>0) curve={translated(clip->rect),radius};
+    if(masks&&clips.size()==clips.capacity()){
+     const auto capacity=std::max<std::size_t>(1,clips.capacity()*2);
+     const auto bytes=std::uint64_t(capacity)*sizeof(ClipState);
+     if(bytes>text::max_mask_bytes-mask_bytes-metadata_bytes||
+        mask_bytes+metadata_bytes+bytes+surface_bytes*(max_layer_depth+1)>text::max_mask_bytes||!charge(work,capacity,1))
+      return {Status::limit_exceeded,FrameStatus::ok,index,work};
+     metadata_bytes+=bytes;clips.reserve(capacity);
+    }
+    clips.push_back({current,curve,clip_head,clip_depth}); current=intersect(current,translated(clip->rect));
+    if(radius!=0) {
+     if(clip_nodes.size()>=prep::max_commands || clip_depth>=prep::max_scope_depth)
+      return {Status::limit_exceeded,FrameStatus::ok,index,work};
+     curve={translated(clip->rect),radius,transform.scale};
+     if(masks&&clip_nodes.size()==clip_nodes.capacity()){
+      const auto capacity=std::max<std::size_t>(1,clip_nodes.capacity()*2);
+      const auto bytes=std::uint64_t(capacity)*sizeof(ClipNode);
+      if(bytes>text::max_mask_bytes-mask_bytes-metadata_bytes||
+         mask_bytes+metadata_bytes+bytes+surface_bytes*(max_layer_depth+1)>text::max_mask_bytes||!charge(work,capacity,1))
+       return {Status::limit_exceeded,FrameStatus::ok,index,work};
+      metadata_bytes+=bytes;clip_nodes.reserve(capacity);
+     }
+     clip_nodes.push_back({curve,clip_head,clip_depth+1});
+     clip_head=clip_nodes.size()-1;++clip_depth;max_clip_depth=std::max(max_clip_depth,clip_depth);
+    }
    } else if(std::holds_alternative<prep::PopClip>(command)) {
     // PreparedFrame guarantees balanced scopes and validated finite payloads.
-    current=clips.back().bounds;curve=clips.back().curve;clips.pop_back();
+    current=clips.back().bounds;curve=clips.back().curve;clip_head=clips.back().head;clip_depth=clips.back().depth;clips.pop_back();
    } else if(!std::holds_alternative<prep::PushTransform>(command) &&
              !std::holds_alternative<prep::PushScroll>(command) &&
              !std::holds_alternative<prep::PopScroll>(command) &&
@@ -380,12 +530,19 @@ static Result render_impl(FrameStore& store,const prep::PreparedFrame& frame,
              !std::holds_alternative<prep::EndChunk>(command)) {
     return {Status::unsupported,FrameStatus::ok,index,work};
    }
+   for(auto i=draw_begin;i<draws.size();++i)if(!draws[i].layer_event){draws[i].clip_head=clip_head;draws[i].clip_depth=clip_depth;draws[i].scale=transform.scale;}
    ++index;
   }
   // Charge clip work for each retained draw before any candidate is allocated.
-  for(const auto& d:draws) if(d.clip.radius>0) {
-   const auto bound=corner_bound(d.clip.original,d.rect,d.clip.radius);
-   if(!charge(work,pixel_count(d.rect),2) || !charge(work,bound,768))
+  for(const auto& d:draws) if(d.clip_depth) {
+   if(cancelled(cancel))return {Status::cancelled,FrameStatus::ok,d.index,work};
+   // A tagged fill samples the full draw even when every clip is central.
+   const auto count=pixel_count(d.rect);std::uint64_t bound=d.radius<0?count:0;bool extended=d.radius<0;
+   for(auto id=d.clip_head;id!=no_clip;id=clip_nodes[id].parent) {
+    ++clip_node_visits;const auto& c=clip_nodes[id].curve;extended=extended||c.radius<0;
+    bound=std::min(count,bound+corner_bound(c.original,d.rect,c.radius));
+   }
+   if(!charge(work,count,2*d.clip_depth) || !charge(work,bound,256*(d.clip_depth+2)*(extended?8:1)))
     return {Status::limit_exceeded,FrameStatus::ok,d.index,work};
    clip_corner_pixels+=bound;
   }
@@ -456,18 +613,49 @@ static Result render_impl(FrameStore& store,const prep::PreparedFrame& frame,
      if(status==Status::ok)status=axis(y0,y1,r.t,r.b,draw.source.t,draw.source.b,draw.excluded.t,draw.excluded.b,scratch.data()+2*nx,scratch.data()+2*nx+ny);
      if(status!=Status::ok)return {status,FrameStatus::ok,index,work};
     }
+    image_exact_lattice::Context exact_context{};
+    bool exact_image=false;
+    if(draw.image){
+     const auto source=rect(draw.image->source);
+     const double src[]{source.l,source.t,source.r,source.b};
+     const double dst[]{draw.original.l,draw.original.t,draw.original.r,draw.original.b};
+     const double clipped[]{r.l,r.t,r.r,r.b};
+     exact_image=image_exact_lattice::prepare(exact_context,src,dst,clipped,
+      draw.image->opacity,draw.image->resource->width(),draw.image->resource->height(),
+      draw.image->sampling_bounds==prep::ImageSamplingBounds::FullResource,draw.clip_depth);
+    }
     const unsigned alpha=byte(draw.color.a);
     const unsigned channels[]{byte(draw.color.b),byte(draw.color.g),byte(draw.color.r)};
     for(int y=y0;y<y1;++y) {
      if(cancelled(cancel)) return {Status::cancelled,FrameStatus::ok,index,work};
      for(int x=x0;x<x1;++x) {
       const auto b=intersect(r,{double(x),double(y),double(x)+1,double(y)+1});
+      // Evaluate the entire clip chain once per pixel, not inside 256 samples.
+      const bool clips_central=all_clips_central(b,draw.clip_head,clip_nodes,clip_central_tests,clip_node_visits);
+      if(draw.image) {
+       if(exact_image){
+        unsigned channels[4];
+        image_exact_lattice::sample(exact_context,draw.image->resource->pixels().data(),
+         draw.image->resource->stride(),x,y,channels);
+        const unsigned sa=channels[3],inv=255-sa;
+        auto* p=pixels.data()+std::size_t(y)*stride+std::size_t(x)*4;
+        for(int c=0;c<3;++c)p[c]=std::uint8_t(std::min(sa,channels[c])+mul(p[c],inv));
+        p[3]=std::uint8_t(sa+mul(p[3],inv));continue;
+       }
+       double sample[4];image_sample(*draw.image,draw.original,x+.5,y+.5,sample);
+       const double coverage=!clips_central?
+        joint_area(draw,b,joint_sampled_pixels,clip_nodes,clip_contains_tests,clip_node_visits,frame):(b.r-b.l)*(b.b-b.t);
+       const unsigned sa=byte(std::clamp(sample[3]*coverage,0.0,1.0)),inv=255-sa;
+       auto* p=pixels.data()+std::size_t(y)*stride+std::size_t(x)*4;
+       for(int c=0;c<3;++c)p[c]=std::uint8_t(std::min(sa,byte(std::clamp(sample[c]*coverage,0.0,1.0)))+mul(p[c],inv));
+       p[3]=std::uint8_t(sa+mul(p[3],inv));continue;
+      }
       if(draw.gradient) {
        double sums[4]{};
        for(int sy=0;sy<16;++sy)for(int sx=0;sx<16;++sx) {
         const double px=b.l+(sx+.5)*(b.r-b.l)/16,py=b.t+(sy+.5)*(b.b-b.t)/16;
-        if(!contains(draw.original,draw.radius,px,py) ||
-           (draw.clip.radius>0&&!contains(draw.clip.original,draw.clip.radius,px,py)))continue;
+        if(!contains_shape(draw.original,draw.radius,px,py,frame,draw.scale) ||
+           (!clips_central&&!all_clips_contain(px,py,draw.clip_head,clip_nodes,clip_contains_tests,clip_node_visits,frame)))continue;
         double sample[4];gradient_sample(*draw.gradient,draw.gradient_rect,px,py,sample);
         for(int c=0;c<4;++c)sums[c]+=sample[c];
        }
@@ -480,7 +668,14 @@ static Result render_impl(FrameStore& store,const prep::PreparedFrame& frame,
       if(draw.mask) {
        const auto& m=*draw.mask;
        const auto mx=std::size_t(double(x)-draw.original.l),my=std::size_t(double(y)-draw.original.t);
-       const unsigned sa=mul(alpha,m.bytes[my*m.stride+mx]),inv=255-sa;
+       // A8 is the already phase-resolved texel-average glyph coverage.
+       // Treat that texel as constant over its unit square; intersect ALL
+       // geometric clips jointly at the existing 16x16 sample positions.
+       // Never multiply individual clip edge coverages (not idempotent).
+       const unsigned coverage=clips_central?255:byte(std::clamp(
+        joint_area(draw,b,joint_sampled_pixels,clip_nodes,clip_contains_tests,clip_node_visits,frame),0.0,1.0));
+       const unsigned glyph=clips_central?m.bytes[my*m.stride+mx]:mul(m.bytes[my*m.stride+mx],coverage);
+       const unsigned sa=mul(alpha,glyph),inv=255-sa;
        auto* p=pixels.data()+std::size_t(y)*stride+std::size_t(x)*4;
        for(int c=0;c<3;++c)p[c]=std::uint8_t(mul(channels[c],sa)+mul(p[c],inv));
        p[3]=std::uint8_t(sa+mul(p[3],inv));continue;
@@ -507,8 +702,8 @@ static Result render_impl(FrameStore& store,const prep::PreparedFrame& frame,
       if(draw.shadow) {
        covered=scratch[x-x0]*scratch[2*nx+y-y0]-scratch[nx+x-x0]*scratch[2*nx+ny+y-y0];
        if(!shadow_math::bounded(covered,1))return {Status::numeric_error,FrameStatus::ok,index,work};
-      } else if(draw.clip.radius>0 && !central(b,draw.clip)) {
-       covered=joint_area(draw,b,joint_sampled_pixels);
+      } else if(!clips_central || draw.radius<0) {
+       covered=joint_area(draw,b,joint_sampled_pixels,clip_nodes,clip_contains_tests,clip_node_visits,frame);
       } else {
       const double outer_area=draw.radius>0?
        rounded_area(r,draw.original,draw.radius,x,y,sampled_pixels):area(r,x,y);
@@ -531,7 +726,8 @@ static Result render_impl(FrameStore& store,const prep::PreparedFrame& frame,
   guard.active=false;
   return {Status::ok,FrameStatus::ok,0,work,corner_pixels,sampled_pixels,inner_corner_pixels,inner_sampled_pixels,clip_corner_pixels,joint_sampled_pixels,lookup.size(),mask_bytes,glyph_uses,mask_pixels,
    std::uint64_t(std::chrono::duration_cast<std::chrono::nanoseconds>(prepared_at-started).count()),
-   std::uint64_t(std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now()-prepared_at).count())};
+   std::uint64_t(std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now()-prepared_at).count()),
+   clip_central_tests,clip_contains_tests,clip_node_visits,clip_nodes.size(),max_clip_depth};
  } catch(const std::bad_alloc&) {return {Status::allocation_failed,FrameStatus::ok,index,work};}
 }
 Result render(FrameStore& store,const prep::PreparedFrame& frame,prep::Cancellation* cancel) noexcept {

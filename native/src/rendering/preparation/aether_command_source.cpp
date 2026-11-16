@@ -6,6 +6,8 @@
 #include "../native_paint_list.h"
 #include "../display_list_types.h"
 #include <algorithm>
+#include <cstring>
+#include <cmath>
 #include "native_text_validation.h"
 
 namespace aether::rendering::preparation {
@@ -109,7 +111,7 @@ CopyResult copy_command(const aether_paint_command_t& source, std::size_t string
 } // namespace
 
 SnapshotResult snapshot_with_border_groups(const AetherApi& api, aether_display_list_t list,
-                                 std::span<const aether_border_group_range> groups, Cancellation* cancellation, std::span<const NativeScrollState> scroll, bool native_scroll, std::span<const NativeTextEntry> text_runs, bool native_text, bool native_gradients) noexcept {
+                                 std::span<const aether_border_group_range> groups, Cancellation* cancellation, std::span<const NativeScrollState> scroll, bool native_scroll, std::span<const NativeTextEntry> text_runs, bool native_text, bool native_gradients, std::span<const NativeImageEntry> images) noexcept {
  std::optional<std::size_t> index;
  std::optional<int> tag;
  try {
@@ -140,6 +142,31 @@ SnapshotResult snapshot_with_border_groups(const AetherApi& api, aether_display_
     stops+=g.stop_count;
    }
   }
+  if(images.size()>max_commands)return Error{ErrorCode::LIMIT_EXCEEDED};
+  std::size_t previous_image=0, image_key_bytes=0;
+  for(std::size_t n=0;n<images.size();++n) {
+   if(cancelled(cancellation))return Error{ErrorCode::CANCELLED};
+   const auto& e=images[n];
+   if(e.command_index>=list->commands.size() || (n && e.command_index<=previous_image) ||
+      !e.resource || e.source.empty() || e.source.size()>4096 || e.source.find('\0')!=std::string::npos ||
+      e.source.size()>1024u*1024u-image_key_bytes)return Error{ErrorCode::INVALID_PAYLOAD};
+   image_key_bytes+=e.source.size(); previous_image=e.command_index;
+   const auto& raw=list->commands[e.command_index];
+   if(raw.tag!=AETHER_PAINT_DRAW_BACKGROUND_IMAGE)return Error{ErrorCode::INVALID_PAYLOAD};
+   const auto& v=raw.data.draw_background_image;
+   const auto same=[](Rect a,Rect b){return a.x==b.x&&a.y==b.y&&a.width==b.width&&a.height==b.height;};
+   if(!v.source || v.source!=e.source_identity ||
+      std::strcmp(v.source,e.source.c_str())!=0 ||
+      v.has_resolved_geometry!=AETHER_TRUE || !same(v.source_rect,e.crop) ||
+      !same(v.destination_rect,e.destination) || v.opacity!=e.opacity)
+    return Error{ErrorCode::INVALID_PAYLOAD};
+   const double right=double(e.crop.x)+e.crop.width,bottom=double(e.crop.y)+e.crop.height;
+   if(!std::isfinite(e.crop.x)||!std::isfinite(e.crop.y)||!std::isfinite(right)||!std::isfinite(bottom)||
+      e.crop.x<0||e.crop.y<0||right-double(e.crop.x)<1||bottom-double(e.crop.y)<1||
+      right>e.resource->width()||bottom>e.resource->height())
+    return Error{ErrorCode::INVALID_PAYLOAD};
+  }
+  std::size_t image_index=0;
   std::size_t previous_end=0;
   for(const auto& g:groups) {
    if(!g.count || g.count>4 || g.first<previous_end || g.first>std::size_t(count) || g.count>std::size_t(count)-g.first)
@@ -191,7 +218,13 @@ SnapshotResult snapshot_with_border_groups(const AetherApi& api, aether_display_
    const CommandGuard guard{api, source};
    tag = static_cast<int>(source.tag);
    if (cancelled(cancellation)) return Error{ErrorCode::CANCELLED, index, tag};
-   auto copied = copy_command(source, string_bytes,scroll,native_scroll,native_gradients && source.tag==AETHER_PAINT_FILL_ROUNDED_RECT_GRADIENT);
+   const bool has_image=image_index<images.size()&&images[image_index].command_index==std::size_t(i);
+   CopyResult copied;
+   if(has_image) {
+    if(source.tag!=AETHER_PAINT_DRAW_BACKGROUND_IMAGE)return Error{ErrorCode::INVALID_PAYLOAD,index,tag};
+    const auto& e=images[image_index++];
+    copied=Command{Image{e.resource,e.crop,e.destination,e.opacity,ImageSamplingBounds::FullResource}};
+   } else copied=copy_command(source, string_bytes,scroll,native_scroll,native_gradients && source.tag==AETHER_PAINT_FILL_ROUNDED_RECT_GRADIENT);
    if (const auto* error = std::get_if<ErrorCode>(&copied)) return Error{*error, index, tag};
    auto& command = std::get<Command>(copied);
    if(native_text) {
@@ -208,6 +241,7 @@ SnapshotResult snapshot_with_border_groups(const AetherApi& api, aether_display_
    snapshot.commands.push_back(std::move(command));
   }
   if (cancelled(cancellation)) return Error{ErrorCode::CANCELLED, index, tag};
+  if(image_index!=images.size())return Error{ErrorCode::INVALID_PAYLOAD,index,tag};
   if(text_index!=text_runs.size())return Error{ErrorCode::INVALID_PAYLOAD,index,tag};
   return snapshot;
  } catch (const std::bad_alloc&) {
@@ -215,6 +249,6 @@ SnapshotResult snapshot_with_border_groups(const AetherApi& api, aether_display_
  }
 }
 SnapshotResult snapshot_commands(const AetherApi& api,aether_display_list_t list,Cancellation* c) noexcept {
- return snapshot_with_border_groups(api,list,{},c,{},false,{},false,false);
+ return snapshot_with_border_groups(api,list,{},c,{},false,{},false,false,{});
 }
 } // namespace aether::rendering::preparation

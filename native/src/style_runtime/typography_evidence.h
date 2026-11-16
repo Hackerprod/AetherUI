@@ -29,7 +29,22 @@ struct TypographyProvenance {
             declaration_order==v.declaration_order && accepted_source==v.accepted_source && resolved_source==v.resolved_source;
     }
 };
+enum class BreakPolicyReason { none, unauthenticated, revert_semantics, variable_unproven, source_limit };
+struct BreakFieldEvidence {
+    bool known = false;
+    int32_t computed = 0;
+    BreakPolicyReason reason = BreakPolicyReason::unauthenticated;
+    TypographyProvenance provenance;
+    std::string authored_property; // alias retained independently of canonical slot
+    bool operator==(const BreakFieldEvidence&) const = default;
+};
+struct BreakPolicyEvidence {
+    std::array<BreakFieldEvidence,2> fields{}; // word-break, overflow-wrap
+    // Final compiler coverage is independently retained in TypographyRecord.inputs.
+    bool operator==(const BreakPolicyEvidence&) const = default;
+};
 struct TypographyEvidence {
+    BreakPolicyEvidence break_policy;
     std::array<TypographyProvenance,6> provenance{};
     TypographyFieldState family_state = TypographyFieldState::unknown;
     std::vector<TypographyFamily> families;
@@ -52,7 +67,7 @@ struct TypographyEvidence {
     // declaration. Never treat absence of a tracked property as an initial value.
     uint32_t coverage_gaps = 1;
     bool operator==(const TypographyEvidence& v) const {
-        return provenance == v.provenance && family_state == v.family_state && families == v.families &&
+        return break_policy == v.break_policy && provenance == v.provenance && family_state == v.family_state && families == v.families &&
             style_state == v.style_state && font_style == v.font_style &&
             spacing_state == v.spacing_state && spacing_normal == v.spacing_normal &&
             spacing_px == v.spacing_px && size_state == v.size_state && weight_state == v.weight_state &&

@@ -986,7 +986,7 @@ void builtin_properties_register(style_property_registry_s* reg) {
         reg->register_property("flex-direction", false, STYLE_IMPACT_LAYOUT, "row",
             [](const char* s, std::string& o) -> bool {
                 std::string v;
-                if (!bi_try_keyword(s, kw, 4, v)) return false;
+                if (!s || !css_single_identifier(s,v) || !bi_try_keyword(v.c_str(), kw, 4, v)) return false;
                 for (int i = 0; i < 4; ++i)
                     if (str_iequals(v, kw[i])) { o = std::to_string(vals[i]); return true; }
                 return false;
@@ -998,14 +998,22 @@ void builtin_properties_register(style_property_registry_s* reg) {
         };
     }
 
-    // flex-wrap
+    // Private mode survives contextual style ownership. The public boolean is
+    // only a faithful projection for nowrap/wrap; exporting reverse rejects.
     {
         static const char* kw[] = { "nowrap", "wrap", "wrap-reverse" };
         reg->register_property("flex-wrap", false, STYLE_IMPACT_LAYOUT, "nowrap",
-            [](const char* s, std::string& o) -> bool { return bi_try_keyword(s, kw, 3, o); },
-            [](aether_computed_style_t* st, const std::string& v) {
-                st->flex_wrap = (str_iequals(v, "wrap") || str_iequals(v, "wrap-reverse")) ? AETHER_TRUE : AETHER_FALSE;
-            });
+            [](const char* src, std::string& out) -> bool {std::string key;return src&&css_single_identifier(src,key)&&bi_try_keyword(key.c_str(),kw,3,out);},
+            [](aether_computed_style_t* st,const std::string& v){st->flex_wrap=v=="wrap"||v=="wrap-reverse";});
+        reg->definitions.back().css_wide=bi_origin_css_wide;
+        reg->definitions.back().apply_with_context=[](property_apply_context_s& c,const std::string& v){
+            const int mode=v=="wrap-reverse"?2:v=="wrap"?1:0;c.style->flex_wrap=mode!=0;
+            if(c.measures)c.measures->set_flex_wrap_mode(mode);
+        };
+        reg->definitions.back().inherit_context=[](property_apply_context_s& c,ComputedStyleReadView p,const MeasuresReadView* m){
+            c.style->flex_wrap=p.scalars().flex_wrap;
+            if(c.measures)c.measures->set_flex_wrap_mode(m?m->flex_wrap_mode():p.scalars().flex_wrap?1:0);
+        };
     }
 
     // flex-grow
@@ -1053,15 +1061,26 @@ void builtin_properties_register(style_property_registry_s* reg) {
                 std::string v;
                 if (!bi_try_keyword(s, kw, 8, v)) return false;
                 for (int i = 0; i < 8; ++i)
-                    if (str_iequals(v, kw[i])) { o = std::to_string(vals[i]); return true; }
+                    if (str_iequals(v, kw[i])) { o = std::to_string(vals[i]+((i==6 || i==7)?1000:0)); return true; }
                 return false;
             },
-            [](aether_computed_style_t* st, const std::string& v) { st->justify_content = std::atoi(v.c_str()); });
+            [](aether_computed_style_t* st, const std::string& v) { const int parsed=std::atoi(v.c_str());st->justify_content=parsed>=1000?parsed-1000:parsed; });
         reg->definitions.back().css_wide = bi_origin_css_wide;
         reg->definitions.back().inherit_explicit = [](aether_computed_style_t* st, ComputedStyleReadView parent) {
             st->justify_content = parent.scalars().justify_content;
         };
     }
+
+    reg->definitions.back().css_wide=bi_origin_css_wide;
+    reg->definitions.back().apply_with_context=[](property_apply_context_s& c,const std::string& v){
+        const int parsed=std::atoi(v.c_str());
+        c.style->justify_content=parsed>=1000?parsed-1000:parsed;
+        if(c.measures)c.measures->set_flex_alignment_unproven((c.measures->read().flex_alignment_unproven()&~4)|(parsed>=1000?4:0));
+    };
+    reg->definitions.back().inherit_context=[](property_apply_context_s& c,ComputedStyleReadView p,const MeasuresReadView* m){
+        c.style->justify_content=p.scalars().justify_content;
+        if(c.measures)c.measures->set_flex_alignment_unproven((c.measures->read().flex_alignment_unproven()&~4)|(m?(m->flex_alignment_unproven()&4):0));
+    };
 
     // align-items
     {
@@ -1075,11 +1094,22 @@ void builtin_properties_register(style_property_registry_s* reg) {
                 std::string v;
                 if (!bi_try_keyword(s, kw, 7, v)) return false;
                 for (int i = 0; i < 7; ++i)
-                    if (str_iequals(v, kw[i])) { o = std::to_string(vals[i]); return true; }
+                    if (str_iequals(v, kw[i])) { o = std::to_string(vals[i]+((i==1 || i==3 || i==6)?1000:0)); return true; }
                 return false;
             },
-            [](aether_computed_style_t* st, const std::string& v) { st->align_items = std::atoi(v.c_str()); });
+            [](aether_computed_style_t* st, const std::string& v) { const int parsed=std::atoi(v.c_str());st->align_items=parsed>=1000?parsed-1000:parsed; });
     }
+
+    reg->definitions.back().css_wide=bi_origin_css_wide;
+    reg->definitions.back().apply_with_context=[](property_apply_context_s& c,const std::string& v){
+        const int parsed=std::atoi(v.c_str());
+        c.style->align_items=parsed>=1000?parsed-1000:parsed;
+        if(c.measures)c.measures->set_flex_alignment_unproven((c.measures->read().flex_alignment_unproven()&~1)|(parsed>=1000?1:0));
+    };
+    reg->definitions.back().inherit_context=[](property_apply_context_s& c,ComputedStyleReadView p,const MeasuresReadView* m){
+        c.style->align_items=p.scalars().align_items;
+        if(c.measures)c.measures->set_flex_alignment_unproven((c.measures->read().flex_alignment_unproven()&~1)|(m?(m->flex_alignment_unproven()&1):0));
+    };
 
     // align-self
     {
@@ -1094,11 +1124,22 @@ void builtin_properties_register(style_property_registry_s* reg) {
                 std::string v;
                 if (!bi_try_keyword(s, kw, 8, v)) return false;
                 for (int i = 0; i < 8; ++i)
-                    if (str_iequals(v, kw[i])) { o = std::to_string(vals[i]); return true; }
+                    if (str_iequals(v, kw[i])) { o = std::to_string(vals[i]+((i==2 || i==4 || i==7)?1000:0)); return true; }
                 return false;
             },
-            [](aether_computed_style_t* st, const std::string& v) { st->align_self = std::atoi(v.c_str()); });
+            [](aether_computed_style_t* st, const std::string& v) { const int parsed=std::atoi(v.c_str());st->align_self=parsed>=1000?parsed-1000:parsed; });
     }
+
+    reg->definitions.back().css_wide=bi_origin_css_wide;
+    reg->definitions.back().apply_with_context=[](property_apply_context_s& c,const std::string& v){
+        const int parsed=v=="auto"?-1:std::atoi(v.c_str());
+        c.style->align_self=parsed>=1000?parsed-1000:parsed;
+        if(c.measures)c.measures->set_flex_alignment_unproven((c.measures->read().flex_alignment_unproven()&~2)|(parsed>=1000?2:0));
+    };
+    reg->definitions.back().inherit_context=[](property_apply_context_s& c,ComputedStyleReadView p,const MeasuresReadView* m){
+        c.style->align_self=p.scalars().align_self;
+        if(c.measures)c.measures->set_flex_alignment_unproven((c.measures->read().flex_alignment_unproven()&~2)|(m?(m->flex_alignment_unproven()&2):0));
+    };
 
     // align-content
     {
@@ -1109,6 +1150,14 @@ void builtin_properties_register(style_property_registry_s* reg) {
             [](const char* s, std::string& o) -> bool { return bi_try_keyword(s, kw, 9, o); },
             [](aether_computed_style_t* st, const std::string& v) { (void)st; (void)v; });
     }
+
+    reg->definitions.back().css_wide=bi_origin_css_wide;
+    reg->definitions.back().apply_with_context=[](property_apply_context_s& c,const std::string& v){
+        if(c.measures)c.measures->set_flex_align_content(v=="stretch"?0:v=="flex-start"?1:v=="flex-end"?2:v=="center"?3:4);
+    };
+    reg->definitions.back().inherit_context=[](property_apply_context_s& c,ComputedStyleReadView,const MeasuresReadView* m){
+        if(c.measures)c.measures->set_flex_align_content(m?m->flex_align_content():0);
+    };
 
     // row-gap
     reg->register_property("row-gap", false, STYLE_IMPACT_LAYOUT, "0",
@@ -1867,6 +1916,32 @@ void builtin_properties_register(style_property_registry_s* reg) {
             }, {shorthand + "-width", shorthand + "-style", shorthand + "-color"});
     }
 
+    // Expand all targets atomically through the registry's existing deferred
+    // shorthand machinery. Omitted components reset, never preserve old values.
+    reg->register_shorthand("flex-flow",
+        [](const char* source, style_shorthand_writer_s& writer) -> bool {
+            if(!source)return false;
+            std::string wide;
+            if(css_single_identifier(source,wide)) {
+                wide=str_to_lower(wide);
+                if(wide=="initial"||wide=="inherit"||wide=="unset") {
+                    writer.set("flex-direction",wide.c_str());writer.set("flex-wrap",wide.c_str());return true;
+                }
+            }
+            const auto parts=bi_split_ws(source);
+            if(parts.empty()||parts.size()>2)return false;
+            std::string direction="row",wrap="nowrap";bool have_direction=false,have_wrap=false;
+            for(const auto& part:parts){
+                std::string key;if(!css_single_identifier(part,key))return false;key=str_to_lower(key);
+                if(key=="row"||key=="row-reverse"||key=="column"||key=="column-reverse"){
+                    if(have_direction)return false;have_direction=true;direction=key;
+                }else if(key=="nowrap"||key=="wrap"||key=="wrap-reverse"){
+                    if(have_wrap)return false;have_wrap=true;wrap=key;
+                }else return false;
+            }
+            writer.set("flex-direction",direction.c_str());writer.set("flex-wrap",wrap.c_str());return true;
+        }, {"flex-direction","flex-wrap"});
+
     // flex shorthand
     reg->register_shorthand("flex",
         [](const char* source, style_shorthand_writer_s& writer) -> bool {
@@ -2264,4 +2339,38 @@ void builtin_properties_register(style_property_registry_s* reg) {
 
     transition_properties_register_shorthands(reg);
     paused_animation_register_shorthands(reg);
+    // Private inherited break policy. Recognition is NOT renderer support.
+    // word-break: normal=0, keep-all=1, break-all=2, break-word=3.
+    // overflow-wrap: normal=0, break-word=1, anywhere=2.
+    for (const bool overflow : {false, true}) {
+        reg->register_property(overflow ? "overflow-wrap" : "word-break", true,
+            STYLE_IMPACT_TEXT_LAYOUT | STYLE_IMPACT_LAYOUT, "normal",
+            [overflow](const char* source, std::string& out) {
+                std::string value;
+                if (!source || !css_single_identifier(source, value)) return false;
+                value = str_to_lower(value);
+                if (value != "normal" && value != "break-word" &&
+                    !(overflow ? value == "anywhere" : value == "keep-all" || value == "break-all")) return false;
+                out = value; return true;
+            }, [](aether_computed_style_t*, const std::string&) {});
+        reg->definitions.back().css_wide = [](const std::string& source) {
+            std::string value;
+            if (css_single_identifier(source, value) && str_to_lower(value) == "revert-layer")
+                return property_css_wide_e::initial; // separately marked UNPROVEN by evidence hook
+            return bi_origin_css_wide(source);
+        };
+        reg->definitions.back().apply_with_context = [overflow](property_apply_context_s& c, const std::string& v) {
+            if (!c.measures) return;
+            if (overflow) c.measures->set_overflow_wrap(v == "break-word" ? 1 : v == "anywhere" ? 2 : 0);
+            else c.measures->set_word_break(v == "keep-all" ? 1 : v == "break-all" ? 2 : v == "break-word" ? 3 : 0);
+        };
+        reg->definitions.back().inherit_context = [overflow](property_apply_context_s& c, ComputedStyleReadView,
+                                                               const MeasuresReadView* parent) {
+            if (!c.measures) return;
+            if (overflow) c.measures->set_overflow_wrap(parent ? parent->overflow_wrap() : 0);
+            else c.measures->set_word_break(parent ? parent->word_break() : 0);
+        };
+    }
+    reg->register_alias("word-wrap", "overflow-wrap");
+
 }

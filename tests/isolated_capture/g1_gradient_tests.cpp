@@ -1,3 +1,4 @@
+#include "../../native/tests/elliptic_t5_transition.h"
 #ifdef NDEBUG
 #error Assertions required
 #endif
@@ -85,9 +86,13 @@ int main(){
  invalid=gradient();invalid.stops[0].offset=.9f;invalid.stops[1].offset=.1f;ck(std::holds_alternative<p::Error>(p::prepare({{invalid}})));
  invalid=gradient();invalid.direction_x=invalid.direction_y=0;ck(std::holds_alternative<p::Error>(p::prepare({{invalid}})));
  invalid=gradient();invalid.opacity=std::numeric_limits<float>::quiet_NaN();ck(std::holds_alternative<p::Error>(p::prepare({{invalid}})));
- invalid=gradient();invalid.radii.top_left_x=2;ck(s::render(store,prepared({invalid})).status==s::Status::unsupported);ck(frame(store).sequence==before.sequence);
+ invalid=gradient();invalid.radii.top_left_x=2;
+ {namespace o=elliptic_paint_oracle;elliptic_transition::check("gradient-degenerate-former-reject",24,20,{invalid},o::gradient(24,20,{{0,0,16,12,{}},{},{0,0,16,12},false,1,{{0,{0,0,1,1}},{1,{1,0,0,1}}}}));}
+ invalid.radii.top_left_x=17;invalid.radii.top_left_y=1;ck(s::render(store,prepared({invalid})).status==s::Status::unsupported);ck(frame(store).sequence==before.sequence);
  // Unsupported geometry rejects even outside the viewport (no visibility gate).
  invalid=gradient({1000,1000,10,10});invalid.radii.top_left_x=2;
+ elliptic_transition::check("gradient-offscreen-former-reject",24,20,{invalid},elliptic_transition::Bytes(24*20*4,0));
+ invalid.radii.top_left_x=11;invalid.radii.top_left_y=1;
  ck(s::render(store,prepared({invalid})).status==s::Status::unsupported);ck(frame(store).sequence==before.sequence);
  auto matrix=p::identity;matrix.m11=2;
  ck(s::render(store,prepared({p::PushTransform{matrix},gradient(),p::PopTransform{}})).status==s::Status::unsupported);ck(frame(store).sequence==before.sequence);

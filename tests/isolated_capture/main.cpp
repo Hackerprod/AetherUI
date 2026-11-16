@@ -37,6 +37,7 @@ struct Objects {
 aether_text_metrics_t no_text(const char*,const aether_computed_style_t*,float,void* state){*static_cast<bool*>(state)=true;return {};}
 #include "../../native/src/style_runtime/style_property_registry_internal.h"
 #include "h5_profile.h"
+#include "image_catalog.h"
 #include "inventory.h"
 #include "h3_profile.h"
 #include "h4_profile.h"
@@ -52,7 +53,7 @@ void check_css(const std::string& s,const h5::Analysis& analysis){
   try {
   require(!budget.exhausted&&t.kind!=css_variable_token_kind::error,"CSS_LEXICAL_OR_WORK_LIMIT");
   require(t.serialization!=css_variable_serialization::at_keyword||analysis.at_rules.count(t.begin),"CSS_AT_RULE_UNSUPPORTED");
-  require(t.serialization!=css_variable_serialization::url&&t.serialization!=css_variable_serialization::bad_url,"CSS_RESOURCE_UNSUPPORTED");
+  require(t.serialization!=css_variable_serialization::bad_url&&(t.serialization!=css_variable_serialization::url||analysis.image_urls.count(t.begin)),"CSS_RESOURCE_UNSUPPORTED");
   require(t.kind!=css_variable_token_kind::function||analysis.functions.count(t.begin),"CSS_FUNCTION_UNSUPPORTED");
   }catch(Failure f){f.begin=t.begin;f.end=t.end;throw f;}
  }
@@ -67,13 +68,14 @@ std::string read_input(const char* path){
   if(static_cast<size_t>(n)>max_bytes-data.size()){close(fd);throw Failure{"INPUT_BYTE_LIMIT"};}data.append(buffer,static_cast<size_t>(n));}
  close(fd);require(data.find('\0')==std::string::npos,"INPUT_NUL");return data;
 }
-int capture(const char* input,const std::string& out,int width,int height,bool geometry){
+int capture(const char* input,const std::string& out,int width,int height,bool geometry,const capture_images::Config& image_config){
  logstream.open(out+"/worker.log",std::ios::out);if(!logstream)return 8;
  h16::emitted=0;logstream<<"diagnostic_format=H16-v1\ndiagnostic_coverage=PARTIAL_NOT_ALL_BLOCKERS\ndiagnostic_selectors=RANGES_AND_HASHES_NO_VALUES\nformat=H3-initial-canvas\ncanvas_mode=ENABLED_INITIAL_EMPTY\njavascript_execution=NONE\ninventory_scope=DOM_EXTRACTED_CSS_AND_ELEMENTS\ninventory_locations=CSS_SOURCE_LOCAL_BYTE_OFFSETS_NOT_HTML\ninventory_semantic_context=NOT_PROVEN\noutput_domain=AetherResolvedOutput\ncss_eligibility=Unknown\ncss_reason=PARSER_COVERAGE_UNPROVEN\nauthored_css_validation=NOT_RUN\nflexbox_semantic_acceptance=false\nchromium=NOT_RUN\nnetwork_resolver=NONE\nhost_font_lookup=NONE\ninternal_parse_layout_work_limits=NOT_IMPLEMENTED\nprocess_limits=AS_1GiB_CPU_5s_STACK_8MiB_WALL_10s\ninput_limit_bytes="<<max_bytes<<"\nviewport="<<width<<"x"<<height<<"\ndpr=1\n"<<std::flush;
  try{
   std::string html;{Stage s("read");html=read_input(input);}
   logstream<<"input_sha256="<<avc::sha256(html)<<"\ninput_bytes="<<html.size()<<std::endl;
   require(geometry,"REQUESTED_CSS_DOMAIN_UNAVAILABLE");
+  const auto image_catalog=capture_images::load(image_config,logstream);
   // Prepare immutable builtin definitions before the side-effect-free supports probe.
   style_property_registry_init();
   Objects o;require(aether_doc_create(&o.doc)==AETHER_OK,"DOC_CREATE_FAILED");
@@ -93,12 +95,12 @@ int capture(const char* input,const std::string& out,int width,int height,bool g
     if(tag=="style") {std::string css;for(auto* c:n->children){if(c->type!=AETHER_NODE_TEXT)blockers.insert("STYLE_CONTENT_UNSUPPORTED");else css+=c->text;}sheets.push_back(std::move(css));}
     if((tag=="script"&&!h3::json(n))||tag=="link"||tag=="img"||tag=="svg"||tag=="video"||tag=="audio"||tag=="object"||tag=="iframe"||tag=="embed"||tag=="base"){blockers.insert("RESOURCE_OR_SCRIPT_ELEMENT_UNSUPPORTED");diagnostic::element(n,count);}
     if(n->type==AETHER_NODE_TEXT&&!meta&&n->text.find_first_not_of(" \t\r\n\f")!=std::string::npos)blockers.insert("TEXT_RENDERER_UNAVAILABLE");
-    for(const auto& [key,value]:n->attributes){if(h3::lower(key).starts_with("on"))blockers.insert("EVENT_HANDLER_UNSUPPORTED");if(key=="style"){inline_sheets.push_back(value);inline_sources.push_back("inline-dom-"+std::to_string(count));auto analysis=h5::analyze(value,false,&css_work);variable_profile|=analysis.variables;h19_display_unproven|=analysis.h19_display_unproven;writing_profile|=analysis.h21_writing;direction_profile|=analysis.h20_direction;direction_unproven|=analysis.h20_unproven;diagnostic::css(value,"inline-dom-"+std::to_string(count),blockers,analysis);try{check_css(value,analysis);}catch(Failure f){blockers.insert(f.reason);h16::failure(inline_sources.back(),value,f,nullptr,&analysis);}}if(key=="dir")blockers.insert("HTML_DIR_UNSUPPORTED");}
+    for(const auto& [key,value]:n->attributes){if(h3::lower(key).starts_with("on"))blockers.insert("EVENT_HANDLER_UNSUPPORTED");if(key=="style"){inline_sheets.push_back(value);inline_sources.push_back("inline-dom-"+std::to_string(count));auto analysis=h5::analyze(value,false,&css_work,&image_config.aliases);variable_profile|=analysis.variables;h19_display_unproven|=analysis.h19_display_unproven;writing_profile|=analysis.h21_writing;direction_profile|=analysis.h20_direction;direction_unproven|=analysis.h20_unproven;diagnostic::css(value,"inline-dom-"+std::to_string(count),blockers,analysis);try{check_css(value,analysis);}catch(Failure f){blockers.insert(f.reason);h16::failure(inline_sources.back(),value,f,nullptr,&analysis);}}if(key=="dir")blockers.insert("HTML_DIR_UNSUPPORTED");}
     for(auto it=n->children.rbegin();it!=n->children.rend();++it)todo.push_back({*it,depth+1,meta});
    }
    logstream<<"dom_nodes="<<count<<"\nstyle_blocks="<<sheets.size()<<std::endl;
-   size_t sheet_index=0;for(const auto& css:sheets){auto analysis=h5::analyze(css,true,&css_work);variable_profile|=analysis.variables;h19_display_unproven|=analysis.h19_display_unproven;writing_profile|=analysis.h21_writing;direction_profile|=analysis.h20_direction;direction_unproven|=analysis.h20_unproven;diagnostic::css(css,"style-block-"+std::to_string(sheet_index++),blockers,analysis);try{check_css(css,analysis);}catch(Failure f){blockers.insert(f.reason);h16::failure("style-block-"+std::to_string(sheet_index-1),css,f,nullptr,&analysis);}}
-   for(const auto& css:sheets){const auto analysis=h5::analyze(css,true);if(analysis.valid)for(const auto& span:analysis.declarations)if(!span.keyframe&&span.selector_begin!=SIZE_MAX){
+   size_t sheet_index=0;for(const auto& css:sheets){auto analysis=h5::analyze(css,true,&css_work,&image_config.aliases);variable_profile|=analysis.variables;h19_display_unproven|=analysis.h19_display_unproven;writing_profile|=analysis.h21_writing;direction_profile|=analysis.h20_direction;direction_unproven|=analysis.h20_unproven;diagnostic::css(css,"style-block-"+std::to_string(sheet_index++),blockers,analysis);try{check_css(css,analysis);}catch(Failure f){blockers.insert(f.reason);h16::failure("style-block-"+std::to_string(sheet_index-1),css,f,nullptr,&analysis);}}
+   for(const auto& css:sheets){const auto analysis=h5::analyze(css,true,nullptr,&image_config.aliases);if(analysis.valid)for(const auto& span:analysis.declarations)if(!span.keyframe&&span.selector_begin!=SIZE_MAX){
     require(first_letter_gate.add(std::string_view(css).substr(span.selector_begin,span.selector_end-span.selector_begin)),"FIRST_LETTER_SELECTOR_PROFILE_UNSUPPORTED");
    }}
    require(!first_letter_gate.needed()||!h19_display_unproven,"FIRST_LETTER_DISPLAY_SYNTAX_UNPROVEN");
@@ -154,6 +156,7 @@ int capture(const char* input,const std::string& out,int width,int height,bool g
       const auto& record=entry.second;auto* n=record->node();const auto view=record->style_view();
       if(view.transforms().empty())continue;const auto& st=view.scalars();
       require((st.display==AETHER_DISPLAY_BLOCK||st.display==AETHER_DISPLAY_FLEX)&&
+              st.position!=AETHER_POSITION_FIXED&&
               n->tag_name!="body"&&n->tag_name!="html"&&n->tag_name!="canvas",
               "IDENTITY_TRANSFORM_BOX_UNSUPPORTED");
       if(n->parent){const auto* parent=version->backing()->find(n->parent);
@@ -171,21 +174,23 @@ int capture(const char* input,const std::string& out,int width,int height,bool g
   h3::after(o.layout,o.styles,expected);
   logstream<<"canvas_entries="<<o.engine->initial_canvas_entries.size()<<"\ncanvas_registry_bytes="<<o.engine->initial_canvas_entries.size()*sizeof(decltype(o.engine->initial_canvas_entries)::value_type)<<"\ncanvas_registry_bytes_scope=ENTRY_PAYLOAD_EXCLUDES_ALLOCATOR_OVERHEAD\n";
   std::unique_ptr<aether::rendering::NativePaintList> list;
-  {Stage s("display");require(aether_display_list_builder_create(no_text,&text_requested,&o.builder)==AETHER_OK,"BUILDER_FAILED");require(aether::rendering::build_native_opacity(o.builder,o.layout,o.styles,nullptr,list)==AETHER_OK,"NATIVE_PAINT_UNSUPPORTED");require(!text_requested,"TEXT_MEASURE_REQUESTED_UNSUPPORTED");}
-  auto snap=p::snapshot_native_geometry(*list,p::ValidationDomain::ResolvedGeometryOnly);require(std::holds_alternative<p::Snapshot>(snap),"SNAPSHOT_UNSUPPORTED");
-  auto frame=p::prepare(std::get<p::Snapshot>(snap));require(std::holds_alternative<p::PreparedFrame>(frame),"PREPARE_UNSUPPORTED");
+  {Stage s("display");require(aether_display_list_builder_create(no_text,&text_requested,&o.builder)==AETHER_OK,"BUILDER_FAILED");require(aether::rendering::build_native_opacity(o.builder,o.layout,o.styles,nullptr,image_catalog,list)==AETHER_OK,"NATIVE_PAINT_UNSUPPORTED");require(!text_requested,"TEXT_MEASURE_REQUESTED_UNSUPPORTED");}
+  auto snap=[&]{Stage s("snapshot");return p::snapshot_native_geometry(*list,p::ValidationDomain::ResolvedGeometryOnly);}();require(std::holds_alternative<p::Snapshot>(snap),"SNAPSHOT_UNSUPPORTED");
+  auto frame=[&]{Stage s("prepare");return p::prepare(std::get<p::Snapshot>(snap));}();require(std::holds_alternative<p::PreparedFrame>(frame),"PREPARE_UNSUPPORTED");
   aether::rendering::FrameStore store;std::optional<aether::rendering::Frame> image;
-  {Stage s("raster");require(store.resize({width,height,1})==aether::rendering::FrameStatus::ok,"FRAME_LIMIT");require(aether::rendering::software::render(store,std::get<p::PreparedFrame>(frame)).status==aether::rendering::software::Status::ok,"RASTER_UNSUPPORTED");require(store.copy_confirmed(image)==aether::rendering::FrameStatus::ok&&image.has_value(),"FRAME_FAILED");}
+  {Stage s("raster");require(store.resize({width,height,1})==aether::rendering::FrameStatus::ok,"FRAME_LIMIT");const auto result=aether::rendering::software::render(store,std::get<p::PreparedFrame>(frame));require(result.status==aether::rendering::software::Status::ok,"RASTER_UNSUPPORTED");logstream<<"render_preparation_ns="<<result.preparation_ns<<"\ncomposition_ns="<<result.composition_ns<<"\npixel_budget="<<result.pixel_budget<<"\ncurved_samples="<<result.sampled_pixels<<"\n";require(store.copy_confirmed(image)==aether::rendering::FrameStatus::ok&&image.has_value(),"FRAME_FAILED");}
   {Stage s("png");auto bytes=smoke_png::png(smoke_png::rgba(*image),width,height);std::ofstream f(out+"/aether.png.pending",std::ios::binary);f.write(reinterpret_cast<const char*>(bytes.data()),bytes.size());f.close();require(bool(f),"PNG_WRITE_FAILED");}
   logstream<<"worker_status=GEOMETRY_RENDERED\npaint_coverage=AETHER_EMITTED_COMMANDS_ONLY\n"<<std::flush;return 0;
- }catch(Failure f){logstream<<"worker_status=REJECTED\nreason="<<f.reason<<std::endl;return 3;}
+ }catch(capture_images::Error e){logstream<<"worker_status=REJECTED\nreason="<<e.reason<<std::endl;return 3;}
+ catch(Failure f){logstream<<"worker_status=REJECTED\nreason="<<f.reason<<std::endl;return 3;}
  catch(const std::bad_alloc&){logstream<<"diagnostic_v1_incomplete=MEMORY_FAILURE\nworker_status=FAILED\nreason=MEMORY_LIMIT_OR_ALLOCATION\n"<<std::flush;return 4;}
  catch(...){logstream<<"worker_status=FAILED\nreason=UNEXPECTED_EXCEPTION\n"<<std::flush;return 5;}
 }
 int number(const char* s){int n=0;auto e=s+std::strlen(s);auto r=std::from_chars(s,e,n);return r.ec==std::errc{}&&r.ptr==e?n:0;}
 int main(int argc,char** argv){
- if(argc!=7||(std::string(argv[1])!="--geometry"&&std::string(argv[1])!="--css")){std::cerr<<"usage: capture --geometry|--css INPUT NEW_OUTPUT_DIRECTORY WIDTH HEIGHT DPR(1)\n";return 2;}
+ if(argc<7||(std::string(argv[1])!="--geometry"&&std::string(argv[1])!="--css")){std::cerr<<"usage: capture --geometry|--css INPUT NEW_OUTPUT_DIRECTORY WIDTH HEIGHT DPR(1) [--image-root DIR --image ALIAS BASENAME ...]\n";return 2;}
  int width=number(argv[4]),height=number(argv[5]);if(width<1||height<1||width>2048||height>2048||std::string(argv[6])!="1")return 2;
+ capture_images::Config image_config;try{image_config=capture_images::options(argc,argv);}catch(capture_images::Error e){std::cerr<<e.reason<<"\n";return 2;}catch(const std::bad_alloc&){std::cerr<<"IMAGE_OPTIONS_ALLOCATION_FAILED\n";return 2;}
  std::string out=argv[3];if(mkdir(out.c_str(),0700)!=0){std::cerr<<"Output must be a new directory\n";return 2;}
  const auto started=Clock::now();pid_t child=fork();if(child<0)return 8;
  if(child==0){
@@ -197,7 +202,7 @@ int main(int argc,char** argv){
   if(std::string(argv[2])=="WALL_PROBE")for(;;)pause();
   if(std::string(argv[2])=="MEMORY_PROBE"){void* memory=std::malloc(2ULL*1024*1024*1024);_exit(memory?44:42);}
 #endif
-  int rc=capture(argv[2],out,width,height,std::string(argv[1])=="--geometry");logstream.close();_exit(rc);
+  int rc=capture(argv[2],out,width,height,std::string(argv[1])=="--geometry",image_config);logstream.close();_exit(rc);
  }
  int status=0;bool timeout=false;struct rusage usage{};
  for(;;){pid_t got=wait4(child,&status,WNOHANG,&usage);if(got==child)break;if(got<0){kill(child,SIGKILL);wait4(child,&status,0,&usage);return 8;}

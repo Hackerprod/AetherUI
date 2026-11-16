@@ -51,12 +51,20 @@ add_library(aether_core SHARED
     src/layout/table_layout.cpp
     src/layout/scrollbar_geometry.cpp
     src/layout/layout_engine.cpp
+    src/layout/document_text_context.cpp
     src/layout/layout_flex.cpp
     src/layout/layout_positioned.cpp
     src/layout/layout_scroll.cpp
     src/layout/layout_table.cpp
     src/rendering/display_list.cpp
     src/rendering/display_list_builder.cpp
+    src/rendering/native_viewport_capture.cpp
+    src/rendering/document_viewport_capture.cpp
+    src/rendering/document_shadow_plan.cpp
+    src/rendering/document_scope_plan.cpp
+    src/rendering/document_scroll_requests.cpp
+    src/rendering/document_scroll_resolution.cpp
+    src/rendering/document_scroll_bounds.cpp
     src/rendering/background_image_geometry.cpp
     src/rendering/transform_matrix.cpp
     src/rendering/border_painter.cpp
@@ -82,6 +90,7 @@ add_library(aether_core SHARED
     src/style_runtime/style_diff.cpp
     src/style_runtime/style_source_compiler.cpp
     src/style_runtime/style_runtime_core.cpp
+    src/style_runtime/css_scope_proof.cpp
     src/style_runtime/ua_stylesheet.cpp
 )
 
@@ -93,6 +102,7 @@ target_include_directories(aether_core
         $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
 )
 
+target_include_directories(aether_core PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/rendering/preparation/include")
 target_compile_definitions(aether_core PRIVATE AETHER_EXPORTS)
 # Evidence collection only; no resolver reuse/fastpath. Production stays OFF.
 option(AETHER_EFFECT_CAPTURE "Capture experimental R0c preparation effects" OFF)
@@ -661,6 +671,15 @@ if(AETHERUI_BUILD_TESTS)
     add_executable(aether_background_image_geometry_test tests/test_background_image_geometry.cpp src/rendering/background_image_geometry.cpp)
     target_link_libraries(aether_background_image_geometry_test PRIVATE AetherUI::Core)
     add_test(NAME aether.background-image-geometry COMMAND aether_background_image_geometry_test)
+
+    add_executable(aether_background_image_budget_test tests/test_background_image_budget.cpp)
+    target_link_libraries(aether_background_image_budget_test PRIVATE AetherUI::Core)
+    add_test(NAME aether.background-image-budget COMMAND aether_background_image_budget_test)
+
+    add_executable(aether_image_decode_admission_test tests/test_image_decode_admission.cpp)
+    target_include_directories(aether_image_decode_admission_test PRIVATE include)
+    target_compile_definitions(aether_image_decode_admission_test PRIVATE AETHER_EXPORTS)
+    add_test(NAME aether.image-decode-admission COMMAND aether_image_decode_admission_test)
 
     add_executable(aether_image_decode_test tests/test_image_decode.cpp)
     target_link_libraries(aether_image_decode_test PRIVATE AetherUI::Core)
@@ -1901,4 +1920,21 @@ if(AETHERUI_BUILD_TESTS)
     endif()
     add_test(NAME aether.flex-reverse-private COMMAND aether_flex_reverse_private_test)
     set_tests_properties(aether.flex-reverse-private PROPERTIES TIMEOUT 120)
+endif()
+
+# Closed-profile real capture is an explicit Linux-only production tool.
+# Reuse the authoritative core objects/definitions; never link both cores.
+option(AETHER_BUILD_CAPTURE_REAL "Build restricted real HTML viewport capture CLI" OFF)
+option(AETHER_CAPTURE_REAL_TESTING "Build separate capture CLI test-probe executable" OFF)
+if(AETHER_BUILD_CAPTURE_REAL)
+    if(NOT CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        message(FATAL_ERROR "aether_capture_real currently supports Linux only")
+    endif()
+    add_library(aether_capture_core STATIC $<TARGET_OBJECTS:aether_core>)
+    target_include_directories(aether_capture_core PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include")
+    set(AETHER_BUILD_REAL_HTML_TEXT ON)
+    add_subdirectory(src/rendering/text)
+    add_subdirectory(tools/aether_capture_real)
+elseif(AETHER_CAPTURE_REAL_TESTING)
+    message(FATAL_ERROR "Capture test probes require AETHER_BUILD_CAPTURE_REAL")
 endif()

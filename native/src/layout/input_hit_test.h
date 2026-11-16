@@ -18,7 +18,7 @@ inline layout_input_hit_t layout_hit_test_input(const aether_layout_result_s* la
     auto* owner = layout_box_hit_owner(box);
     const bool eligible = owner && presentation.visible &&
         presentation.pointer_events != AETHER_POINTER_EVENTS_NONE;
-    const bool inside_clip = (style.overflow_x == AETHER_OVERFLOW_VISIBLE || (x >= box->padding_box.x && x <= box->padding_box.x + box->padding_box.width)) && (style.overflow_y == AETHER_OVERFLOW_VISIBLE || (y >= box->padding_box.y && y <= box->padding_box.y + box->padding_box.height));
+    const bool inside_clip = layout_hidden_round_clip_contains(box,style,x,y) && (style.overflow_x == AETHER_OVERFLOW_VISIBLE || ((style.overflow_x != AETHER_OVERFLOW_HIDDEN || box->padding_box.width > 0) && x >= box->padding_box.x && (style.overflow_x == AETHER_OVERFLOW_HIDDEN ? x < box->padding_box.x + box->padding_box.width : x <= box->padding_box.x + box->padding_box.width))) && (style.overflow_y == AETHER_OVERFLOW_VISIBLE || ((style.overflow_y != AETHER_OVERFLOW_HIDDEN || box->padding_box.height > 0) && y >= box->padding_box.y && (style.overflow_y == AETHER_OVERFLOW_HIDDEN ? y < box->padding_box.y + box->padding_box.height : y <= box->padding_box.y + box->padding_box.height)));
     aether_scroll_offset_t offset{box->scroll.scroll_offset_x, box->scroll.scroll_offset_y};
     if (offsets && box->element) offset = offsets(box->element, data);
     offset.x = std::clamp(offset.x, 0.f, box->scroll.scrollable_overflow_x);
@@ -55,6 +55,6 @@ inline layout_input_hit_t layout_hit_test_input(const aether_layout_result_s* la
             }
         }
     }
-    if (eligible && layout_box_contains_own_content(box, x, y)) return {AETHER_INPUT_HIT_CONTENT, owner};
+    if (eligible && layout_box_contains_own_content(box, x, y)&&layout_hidden_round_clip_contains(box,style,x,y,false)) return {AETHER_INPUT_HIT_CONTENT, owner};
     return {};
 }

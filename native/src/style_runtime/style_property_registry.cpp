@@ -1,4 +1,5 @@
 #include "style_property_registry_internal.h"
+#include <memory>
 
 // ═══ Global singleton ══════════════════════════════════════════
 
@@ -12,9 +13,10 @@ style_property_registry_s* style_property_registry_get_global() {
 
 void style_property_registry_init() {
     if (g_global_registry) return;
-    g_global_registry = new style_property_registry_s();
-    builtin_properties_register(g_global_registry);
-    g_global_registry->seal();
+    auto pending = std::make_unique<style_property_registry_s>();
+    builtin_properties_register(pending.get());
+    pending->seal();
+    g_global_registry = pending.release();
 }
 
 void style_property_registry_shutdown() {

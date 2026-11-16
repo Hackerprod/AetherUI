@@ -12,6 +12,9 @@
 #include "../primitives/html_space_tokens.h"
 #include "style_property_registry_internal.h"
 #include "style_runtime_types.h"
+#include "document_embedded_style.h"
+#include "../layout/document_text_context.h"
+#include <set>
 #include "selector_match_context.h"
 #include <cassert>
 #include "style_source_limits.h"
@@ -54,6 +57,85 @@ using namespace aether::style;
 #include <vector>
 
 
+namespace aether::style {
+// Per-sheet immutable evidence. DOM is initially live and exclusively owned by
+// the caller during capture; no callback occurs until sheet publication.
+class EmbeddedStyleSource final {
+ struct Node {aether_node_s* key;std::shared_ptr<node_identity_s> token;aether_node_s* parent;std::vector<aether_node_s*> children;};
+ std::vector<Node> nodes_;
+ std::shared_ptr<node_identity_s> document_;
+ aether_doc_s* doc_{};aether_node_s* source_{};
+ std::uint64_t input_{},structure_{},order_{},validation_work_{};
+ std::map<std::string,std::string,std::less<>> attributes_;
+ std::vector<std::string> parts_;
+ std::string bytes_;
+public:
+ static std::shared_ptr<const EmbeddedStyleSource> capture(aether_doc_s* doc,aether_node_s* source,aether::layout::DocumentTextBudget& budget){
+  if(!doc||!source||doc->type!=AETHER_NODE_DOCUMENT)throw std::invalid_argument("DOCUMENT_STYLE_SOURCE");
+  budget.bytes(1,sizeof(EmbeddedStyleSource)+2*sizeof(void*));auto out=std::make_shared<EmbeddedStyleSource>();
+  out->doc_=doc;out->document_=doc->identity;out->input_=doc->identity->mutation_epoch;out->structure_=doc->identity->structure_epoch;out->source_=source;
+  struct Pending {aether_node_s* node;unsigned depth;aether_node_s* parent;};
+  budget.bytes(16384,sizeof(Node)+sizeof(Pending));out->nodes_.reserve(16384);
+  std::vector<Pending> pending;pending.reserve(16384);pending.push_back({doc,0,nullptr});std::set<aether_node_s*> visited;bool found=false;
+  while(!pending.empty()){
+   const auto [node,depth,parent]=pending.back();pending.pop_back();budget.normalized(1);
+   if(!node||depth>64||out->nodes_.size()>=16384)throw std::length_error("DOCUMENT_STYLE_DOM_CAP");
+   std::uint64_t lookup=1;for(auto size=visited.size();size;size>>=1)lookup+=2;budget.normalized(lookup);
+   budget.bytes(1,sizeof(aether_node_s*)+4*sizeof(void*));if(!visited.insert(node).second)throw std::invalid_argument("DOCUMENT_STYLE_GRAPH");
+   if(node->parent!=parent)throw std::invalid_argument("DOCUMENT_STYLE_PARENT");
+   if(!node->identity||!node->identity->alive||!node->identity->attached||node->identity->owner!=node)throw std::invalid_argument("DOCUMENT_STYLE_NODE");
+   if(node->children.size()>16384-pending.size())throw std::length_error("DOCUMENT_STYLE_EDGES");
+   budget.bytes(node->children.size(),sizeof(aether_node_s*));out->nodes_.push_back({node,node->identity,node->parent,node->children});
+   if(node==source){found=true;out->order_=out->nodes_.size();}
+   for(auto it=node->children.rbegin();it!=node->children.rend();++it)pending.push_back({*it,depth+1,node});
+  }
+  if(!found||source->type!=AETHER_NODE_ELEMENT||source->tag_name!="style")throw std::invalid_argument("DOCUMENT_STYLE_MEMBERSHIP");
+  // Unsupported conditions are rejected, never compiled as unconditional CSS.
+  for(const auto& [name,value]:source->attributes){budget.bytes(1,sizeof(decltype(attributes_)::value_type)+4*sizeof(void*));budget.bytes(name.size()+value.size()+2);
+   if(name=="media"||name=="disabled"||name=="scoped"||(name=="type"&&!value.empty()&&value!="text/css"))throw std::invalid_argument("DOCUMENT_STYLE_ATTRIBUTES_UNSUPPORTED");}
+  out->attributes_=source->attributes;budget.bytes(source->children.size(),sizeof(std::string));out->parts_.reserve(source->children.size());
+  std::size_t total=0;
+  for(auto* child:source->children){if(child->type!=AETHER_NODE_TEXT||child->parent!=source)throw std::invalid_argument("DOCUMENT_STYLE_CHILD_UNSUPPORTED");if(child->text.size()>128*1024-total)throw std::length_error("DOCUMENT_STYLE_CSS_CAP");total+=child->text.size();}
+  budget.bytes(total+1);out->bytes_.reserve(total);
+  for(auto* child:source->children){budget.bytes(child->text.size()+1);out->parts_.push_back(child->text);out->bytes_+=child->text;}
+  // Wrapper invokes validation at capture, publication, prepare and commit.
+  // No borrowed capture budget survives in runtime. Each scan is bounded.
+  std::uint64_t work=out->nodes_.size()+total+1;for(const auto& n:out->nodes_)work+=3*n.children.size();for(const auto& [k,v]:out->attributes_)work+=k.size()+v.size()+1;
+  out->validation_work_=work;budget.normalized(work*4);
+  if(!out->valid())throw std::invalid_argument("DOCUMENT_STYLE_STALE");return out;
+ }
+ std::uint64_t validation_work()const noexcept{return validation_work_+40*nodes_.size();}
+ std::uint64_t order()const noexcept{return order_;}
+ bool matches_document(const aether_node_s* document)const noexcept{return document==doc_;}
+ aether_node_s* key()const noexcept{return source_;}
+ const std::string& bytes()const noexcept{return bytes_;}
+ bool valid(const style_revision_s* revision=nullptr)const noexcept{
+  if(!document_||!document_->alive||!document_->attached||document_->owner!=doc_||document_->mutation_epoch!=input_||document_->structure_epoch!=structure_)return false;
+  // Never follow changed adjacency or dereference a new raw pointer.
+  for(const auto& n:nodes_){if(!n.token||!n.token->alive||!n.token->attached||n.token->owner!=n.key)return false;
+   if(n.key->identity!=n.token||n.key->parent!=n.parent||n.key->children.size()>n.children.size()+2||n.key->generated_storage.size()>2)return false;
+   std::size_t index=0,extras=0;const aether_node_s* generated_seen[2]{};
+   for(auto* child:n.key->children){
+    if(index<n.children.size()&&child==n.children[index]){++index;continue;}
+    // Only exact generated owners retained by this committed native revision
+    // may appear between authored children. A flag/raw pointer alone is not evidence.
+    if(extras>=2||(extras&&generated_seen[0]==child))return false;generated_seen[extras++]=child;
+    if(!revision||revision->document_lifetime()!=document_||revision->style_tree_epoch()!=document_->style_tree_epoch)return false;
+    auto record=revision->backing()->find_owner(child);if(!record||record->node()!=child||!record->generated_leaf()||record->generated_leaf().get()!=child)return false;
+    const auto token=record->node_lifetime();if(!token||!token->alive||!token->attached||token->owner!=child)return false;
+    if(child->identity!=token||!child->is_generated||child->parent!=n.key||child->style_origin!=n.key)return false;
+    if(std::find(n.key->generated_storage.begin(),n.key->generated_storage.end(),record->generated_leaf())==n.key->generated_storage.end())return false;
+   }
+   if(index!=n.children.size())return false;
+   std::size_t expected_extras=0;for(const auto& generated:n.key->generated_storage)if(std::find(n.children.begin(),n.children.end(),generated.get())==n.children.end())++expected_extras;
+   if(extras!=expected_extras)return false;
+  }
+  if(source_->type!=AETHER_NODE_ELEMENT||source_->tag_name!="style"||source_->attributes!=attributes_||source_->children.size()!=parts_.size())return false;
+  for(std::size_t i=0;i<parts_.size();++i){auto* child=source_->children[i];if(child->type!=AETHER_NODE_TEXT||child->parent!=source_||child->text!=parts_[i])return false;}
+  return true;
+ }
+};
+}
 // Private preparation data, never a public handle or final record.
 struct PreparedNodeResult {
     TypographyEvidence typography;
@@ -106,6 +188,7 @@ struct aether_style_runtime_s {
     int64_t next_sheet_handle = 1;
     int32_t next_rule_id = 1;
     std::unordered_map<int64_t, std::unique_ptr<compiled_style_sheet_s>> sheets;
+    std::map<aether_node_s*,std::shared_ptr<const EmbeddedStyleSource>> embedded_sources; // preparation-owned; sheet carries association
     std::unordered_map<aether_node_s*, FrozenNodeRef> states;
     std::unordered_map<aether_node_s*, std::unique_ptr<PreparedNodeResult>> prepared;
     std::shared_ptr<document_measure_context_s> document_measures;
@@ -131,7 +214,9 @@ struct aether_style_runtime_s {
     std::vector<const compiled_rule_s*> paused_rules;
     void copy_index_for_preparation(const aether_style_runtime_s& source) {
         index = source.index;
-        for (const auto& sheet : source.sheets) source_accounting.merge(sheet.second->accounting);
+        for (const auto& sheet : source.sheets) {source_accounting.merge(sheet.second->accounting);
+            if(sheet.second->embedded_source&&!embedded_sources.emplace(sheet.second->embedded_source->key(),sheet.second->embedded_source).second)throw std::invalid_argument("DOCUMENT_STYLE_DUPLICATE_SOURCE");
+        }
         source_budget.source_bytes=source_accounting.source_bytes;
         source_budget.declarations=source_accounting.declarations;
         source_budget.rules=source_accounting.rules;
@@ -417,6 +502,8 @@ static PreparedNodeResult* compute_node(aether_style_runtime_s* runtime, aether_
         measures->line_height = parent->measures->line_height;
         measures->direction_rtl = parent->measures->direction_rtl;
         measures->writing_mode = parent->measures->writing_mode;
+        measures->word_break = parent->measures->word_break;
+        measures->overflow_wrap = parent->measures->overflow_wrap;
         measure_set_property_dependencies(*measures, "line-height", MEASURE_PARENT);
     }
     const bool document_element = !node->is_generated && node->type == AETHER_NODE_ELEMENT &&
@@ -424,6 +511,10 @@ static PreparedNodeResult* compute_node(aether_style_runtime_s* runtime, aether_
           aether_doc_get_document_element(static_cast<aether_doc_s*>(node->parent)) == node));
     TypographyEvidence typography = parent ? parent->typography : TypographyEvidence{};
     if (parent) for (auto& origin:typography.provenance) origin.inherited=true;
+    if (!parent) for (auto& field : typography.break_policy.fields) {
+        field.known=true; field.reason=BreakPolicyReason::none; field.computed=0;
+    }
+    else for (auto& field : typography.break_policy.fields) field.provenance.inherited=true;
     bool typography_discarded = false;
     auto typography_set = [&](const std::string& name, const std::string& source) {
         if (name == "font-family") typography_parse_family(source, typography);
@@ -589,6 +680,7 @@ static PreparedNodeResult* compute_node(aether_style_runtime_s* runtime, aether_
             for (const auto& item : staged)
                 cascade[static_cast<size_t>(item.property_id)].offer(priority, item.value);
         } else {
+            if(declaration.name=="flex-flow")runtime->source_accounting.loss(style_source_loss::rejected_declaration);
             report(runtime, substituted ? "AETHER-CSS-VALUE" : "AETHER-CSS-VAR", declaration.name.c_str(),
                    declaration.source.c_str(), substituted ? "Resolved shorthand is invalid." : "Unable to resolve CSS variable.");
             compiled_style_value_s unset;
@@ -699,6 +791,48 @@ static PreparedNodeResult* compute_node(aether_style_runtime_s* runtime, aether_
         if (!cascade[i].is_set) return false;
         const auto& definition = registry->definitions[i];
         const auto& compiled = cascade[i].value;
+        const int break_index=definition.name=="word-break"?0:definition.name=="overflow-wrap"?1:-1;
+        const int alignment_bit=definition.name=="align-items"?1:definition.name=="align-self"?2:definition.name=="justify-content"?4:0;
+        const bool alignment_content=definition.name=="align-content";
+        bool alignment_unknown=false;
+        auto alignment_wide=[&](const std::string& source){
+            std::string keyword;
+            if((alignment_bit||alignment_content)&&css_single_identifier(source,keyword)&&
+                (str_iequals(keyword,"revert")||str_iequals(keyword,"revert-layer")))alignment_unknown=true;
+        };
+        alignment_wide(compiled.typography_source);
+
+        bool break_source_overflow=false;
+        auto break_initial = [&]() {
+            if (break_index<0) return;
+            auto& f=typography.break_policy.fields[break_index];
+            f.known=true; f.reason=BreakPolicyReason::none; f.computed=0;
+            f.provenance.inherited=false;
+        };
+        auto break_unknown = [&](BreakPolicyReason reason) {
+            if (reason==BreakPolicyReason::source_limit) break_source_overflow=true;
+            if (break_index>=0) { auto& f=typography.break_policy.fields[break_index]; f.known=false; f.reason=reason; }
+        };
+        auto break_wide = [&](const std::string& source) {
+            std::string key;
+            if (break_index<0 || !css_single_identifier(source,key)) return;
+            key=typography_ascii_lower(key);
+            if (key=="initial") break_initial();
+            else if (key=="revert" || key=="revert-layer") break_unknown(BreakPolicyReason::revert_semantics);
+        };
+        if (break_index>=0) {
+            auto& f=typography.break_policy.fields[break_index];
+            f.authored_property=compiled.authored_property;
+            auto& p=f.provenance;
+            p.declaration=true; p.important=cascade[i].priority.important; p.inline_style=cascade[i].priority.inline_;
+            p.layer=static_cast<int32_t>(cascade[i].priority.layer);
+            p.source_order=cascade[i].priority.source_order; p.declaration_order=cascade[i].priority.decl_order;
+            if(compiled.typography_source.size()>65536) break_unknown(BreakPolicyReason::source_limit);
+            else { p.accepted_source=compiled.typography_source;
+                if(compiled.mode!=compiled_value_mode::deferred) p.resolved_source=compiled.typography_source;
+            }
+            break_wide(compiled.typography_source);
+        }
         const int typography_index=definition.name=="font-family"?0:definition.name=="font-style"?1:definition.name=="letter-spacing"?2:definition.name=="font-size"?3:definition.name=="font-weight"?4:definition.name=="line-height"?5:-1;
         if (typography_index>=0) {
             auto& origin=typography.provenance[static_cast<size_t>(typography_index)];
@@ -719,10 +853,12 @@ static PreparedNodeResult* compute_node(aether_style_runtime_s* runtime, aether_
         bool explicit_inherit = false;
         switch (compiled.mode) {
         case compiled_value_mode::value:
+            if (break_index>=0) { break_initial(); typography.break_policy.fields[break_index].provenance.resolved_source=compiled.typed_value; }
             typography_set(definition.name, compiled.typography_source);
             value = compiled.typed_value;
             break;
         case compiled_value_mode::initial:
+            if(break_index>=0) { break_initial(); break_wide(compiled.typography_source); }
             typography_reset(definition.name);
             value = initial_value;
             break;
@@ -746,6 +882,9 @@ static PreparedNodeResult* compute_node(aether_style_runtime_s* runtime, aether_
             if(runtime->value_audit && runtime->value_audit->value)
                 runtime->value_audit->value(runtime->value_audit->context,node,definition.name,compiled.deferred_source,substituted?&value:nullptr);
             if (!substituted) {
+                alignment_unknown=alignment_bit||alignment_content;
+                if(definition.name=="flex-wrap"||definition.name=="flex-direction")runtime->source_accounting.loss(style_source_loss::rejected_declaration);
+                break_unknown(BreakPolicyReason::variable_unproven);
                 if (typography_index>=0) {
                     // Missing/cyclic and expansion-budget failures are not
                     // distinguished here. Never convert uncertainty to known.
@@ -761,6 +900,18 @@ static PreparedNodeResult* compute_node(aether_style_runtime_s* runtime, aether_
                 value = initial_value;
                 break;
             }
+            if (break_index>=0) {
+                auto& f=typography.break_policy.fields[break_index];
+                if (value.size()>65536) break_unknown(BreakPolicyReason::source_limit);
+                else f.provenance.resolved_source=value;
+                break_wide(value);
+            }
+            if(definition.name=="flex-wrap"||definition.name=="flex-direction"){
+                std::string keyword;
+                if(css_single_identifier(value,keyword)&&(str_iequals(keyword,"revert")||str_iequals(keyword,"revert-layer")))
+                    runtime->source_accounting.loss(style_source_loss::rejected_declaration);
+            }
+            alignment_wide(value);
             const auto css_wide = definition.css_wide ? definition.css_wide(value) : property_css_wide_e::none;
             if (css_wide != property_css_wide_e::none) {
                 if (typography_index>=0 && parent && (css_wide==property_css_wide_e::inherit || css_wide==property_css_wide_e::unset))
@@ -784,6 +935,8 @@ static PreparedNodeResult* compute_node(aether_style_runtime_s* runtime, aether_
                 }
             }
             if (!definition.parse(value.c_str(), value)) {
+                alignment_unknown=alignment_bit||alignment_content;
+                if(definition.name=="flex-wrap"||definition.name=="flex-direction")runtime->source_accounting.loss(style_source_loss::rejected_declaration);
                 if (typography_index>=0 && !typography_css_wide(typography_keyword)) {
                     // Legacy parse rejection is not proof that a valid but
                     // unimplemented computed value is the parent's normal/zero.
@@ -803,6 +956,7 @@ static PreparedNodeResult* compute_node(aether_style_runtime_s* runtime, aether_
                 if (!definition.css_wide || (definition.inherited && parent)) return false;
                 value = initial_value;
             } else {
+                if (break_index>=0) break_initial();
                 if (typography_index>=0 && !typography_scope_uncertain() && !typography_css_wide(typography_keyword)) typography_set(definition.name, typography_resolved_source);
             }
             break;
@@ -827,6 +981,14 @@ static PreparedNodeResult* compute_node(aether_style_runtime_s* runtime, aether_
             if (typography_index>=0) { typography_reset(definition.name); typography.coverage_gaps |= 2; }
             return false;
         }
+        // Preserve legacy computed aliases/fallbacks, but never certify an
+        // uncertain winning alignment as supported by the reverse-wrap path.
+        if(alignment_unknown){
+            if(alignment_content)selected_measures.set_flex_align_content(4);
+            if(alignment_bit)selected_measures.set_flex_alignment_unproven(selected_measures.read().flex_alignment_unproven()|alignment_bit);
+        }
+        if (break_index>=0 && break_source_overflow)
+            break_unknown(BreakPolicyReason::source_limit);
         return true;
     };
 
@@ -930,7 +1092,9 @@ static PreparedNodeResult* compute_node(aether_style_runtime_s* runtime, aether_
             *previous.color_references(), next, *measures, color_references);
     }
     // A no-op legacy callback must not hide a semantic evidence change.
-    if (typography_discarded) { typography=TypographyEvidence{}; typography.coverage_gaps |= 2; }
+    if (typography_discarded) { auto breaks=std::move(typography.break_policy); typography=TypographyEvidence{}; typography.break_policy=std::move(breaks); typography.coverage_gaps |= 2; }
+    typography.break_policy.fields[0].computed=measures->word_break;
+    typography.break_policy.fields[1].computed=measures->overflow_wrap;
     if (!is_new_node && (!found->second->typography() ||
         found->second->typography()->evidence != typography)) {
         diff.own_impact |= STYLE_IMPACT_TEXT_LAYOUT | STYLE_IMPACT_LAYOUT | STYLE_IMPACT_PAINT;
@@ -1007,7 +1171,7 @@ static void prepare_tree(aether_style_runtime_s* staged, aether_node_s* node,
     if (node->type == AETHER_NODE_ELEMENT) {
         // DOM sources are not correlated with add_stylesheet handles. Never infer
         // that a link/style was fetched/compiled from an unrelated sheet epoch.
-        if (node->tag_name=="link" || node->tag_name=="style") {
+        if (node->tag_name=="link" || (node->tag_name=="style"&&!staged->embedded_sources.count(node))) {
 #if AETHER_EFFECT_CAPTURE
             const auto global_effect=effect_begin(staged,node->tag_name=="link"?CapturedEffectKind::link:CapturedEffectKind::style,node);
 #endif
@@ -1066,9 +1230,9 @@ AETHER_API void aether_style_runtime_set_diagnostics_callback(
 
 AETHER_API void aether_style_runtime_destroy(aether_style_runtime_t runtime) { delete runtime; }
 
-AETHER_API aether_status_t aether_style_runtime_add_stylesheet(
+static aether_status_t add_stylesheet_impl(
     aether_style_runtime_t runtime, const char* source, int32_t layer, const char* source_name,
-    int64_t* out_handle, int32_t* out_rule_count) {
+    int64_t* out_handle, int32_t* out_rule_count,std::shared_ptr<const EmbeddedStyleSource> embedded) {
     if (!runtime || !source) return AETHER_ERROR_NULL_ARG;
     if (runtime->preparing || runtime->owner_thread != std::this_thread::get_id()) return AETHER_ERROR_INVALID_STATE;
     try {
@@ -1084,6 +1248,8 @@ AETHER_API aether_status_t aether_style_runtime_add_stylesheet(
         auto next_rule_id = runtime->next_rule_id;
         auto sheet = std::make_unique<compiled_style_sheet_s>();
         sheet->handle = handle;
+        sheet->embedded_source = embedded;
+        if(embedded){for(const auto& item:runtime->sheets)if(item.second->embedded_source&&(item.second->embedded_source->key()==embedded->key()||item.second->embedded_source->order()>=embedded->order()))throw std::invalid_argument("DOCUMENT_STYLE_SOURCE_ORDER");}
         sheet->layer = static_cast<style_sheet_layer>(layer);
         sheet->source_name = source_name ? source_name : "";
         // The new sheet shares the document source budget with all live sheets.
@@ -1104,6 +1270,7 @@ AETHER_API aether_status_t aether_style_runtime_add_stylesheet(
         // of selectors in one list. ID capacity already bounds this narrowing.
         const auto rule_count = static_cast<int32_t>(sheet->rules.size());
         auto index = aether_style_runtime_s::prepare_rule_index(runtime, sheet.get());
+        if(embedded&&!embedded->valid())throw std::invalid_argument("DOCUMENT_STYLE_STALE");
         runtime->sheets.emplace(handle, std::move(sheet)); // Last fallible allocation.
         using std::swap;
         swap(runtime->index, index);
@@ -1121,6 +1288,26 @@ AETHER_API aether_status_t aether_style_runtime_add_stylesheet(
     return status;
     } catch (const std::bad_alloc&) { return AETHER_ERROR_OUT_OF_MEMORY; }
       catch (...) { return AETHER_ERROR_INVALID_STATE; }
+}
+
+AETHER_API aether_status_t aether_style_runtime_add_stylesheet(aether_style_runtime_t runtime,const char* source,int32_t layer,const char* name,int64_t* handle,int32_t* count){
+ return add_stylesheet_impl(runtime,source,layer,name,handle,count,{});
+}
+void aether::style::DocumentEmbeddedStyleAccess::validate(aether_style_runtime_t runtime,aether_doc_t document,aether::layout::DocumentTextBudget& budget){
+ if(!runtime||!document||runtime->owner_thread!=std::this_thread::get_id())throw std::invalid_argument("DOCUMENT_STYLE_THREAD");
+ if(!runtime->revision||runtime->revision->document_lifetime()!=document->identity||runtime->revision->sheet_epoch()!=runtime->sheet_epoch)throw std::invalid_argument("DOCUMENT_STYLE_SHEET_STALE");
+ for(const auto& sheet:runtime->sheets){budget.normalized(1);const auto& source=sheet.second->embedded_source;if(!source)continue;
+  budget.normalized(source->validation_work());if(!source->matches_document(document)||!source->valid(runtime->revision.get()))throw std::invalid_argument("DOCUMENT_STYLE_STALE");}
+}
+aether_status_t aether::style::DocumentEmbeddedStyleAccess::add(aether_style_runtime_t runtime,aether_doc_t document,aether_node_t source,int32_t layer,aether::layout::DocumentTextBudget& budget,int64_t* handle){
+ if(!runtime||runtime->preparing||runtime->owner_thread!=std::this_thread::get_id())return AETHER_ERROR_INVALID_STATE;
+ if(layer!=2)throw std::invalid_argument("DOCUMENT_STYLE_LAYER");
+ // Throwing private boundary preserves quota/unsupported causes. Existing C API
+ // retains its status behavior. No callbacks during capture or publication.
+ budget.bytes(2,sizeof(decltype(runtime->embedded_sources)::value_type)+4*sizeof(void*));
+ for(const auto& sheet:runtime->sheets)if(sheet.second->embedded_source){budget.normalized(sheet.second->embedded_source->validation_work());if(!sheet.second->embedded_source->matches_document(document)||!sheet.second->embedded_source->valid(runtime->revision.get()))throw std::invalid_argument("DOCUMENT_STYLE_STALE");}
+ const auto owned=EmbeddedStyleSource::capture(document,source,budget);
+ return add_stylesheet_impl(runtime,owned->bytes().c_str(),layer,"document-embedded",handle,nullptr,owned);
 }
 
 AETHER_API aether_bool_t aether_style_runtime_remove_stylesheet(
@@ -1233,6 +1420,7 @@ static aether_status_t prepare_revision_impl(
         const auto sheets_effect=effect_begin(&staged,CapturedEffectKind::sheet_aggregate);
 #endif
         staged.copy_index_for_preparation(*runtime);
+        for(const auto& source:staged.embedded_sources)if(!source.second->matches_document(document)||!source.second->valid(runtime->revision.get()))throw std::invalid_argument("DOCUMENT_STYLE_STALE");
 #if AETHER_EFFECT_CAPTURE
         effect_end(&staged,sheets_effect);
 #endif
@@ -1448,6 +1636,7 @@ AETHER_API aether_status_t aether_style_runtime_commit_revision(
         !transaction->document_lifetime->alive ||
         transaction->document_lifetime->mutation_epoch != transaction->input_epoch ||
         transaction->document_lifetime->style_tree_epoch != transaction->base_style_tree_epoch) return AETHER_ERROR_INVALID_STATE;
+    for(const auto& source:transaction->candidate->embedded_sources)if(!source.second->valid(runtime->revision.get()))return AETHER_ERROR_INVALID_STATE;
     aether::hover_probe::Scope publication_probe(aether::hover_probe::publication);
     // No callbacks, allocation, comparison, diagnostics or fallible work in this
     // publication boundary. Old generated storage stays owned by retained frames.

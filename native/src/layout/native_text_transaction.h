@@ -134,7 +134,7 @@ public:
   if(!active(e)) return;
   const auto& p=e->synthetic_text_policy_;
   if(std::this_thread::get_id()!=p->thread_) throw std::runtime_error("synthetic owner thread");
-  if(p->engine_!=e || !e->layout_in_progress || !p->session_ || p->session_!=e->synthetic_session_ ||
+  if(e->document_text_transaction_ || e->real_text_policy_ || p->engine_!=e || !e->layout_in_progress || !p->session_ || p->session_!=e->synthetic_session_ ||
      p->document_!=doc->identity || e->text_selection() || e->text_measurer || e->contextual_text_measurer)
    throw std::invalid_argument("synthetic policy/session conflict");
   auto transaction=std::shared_ptr<NativeTextTransaction>(new NativeTextTransaction(p,styles));

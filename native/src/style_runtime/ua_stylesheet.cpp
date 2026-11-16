@@ -1,13 +1,15 @@
 #include "ua_stylesheet.h"
 
-// The engine's baked-in UA sheet, Chromium-parity form controls. This text is
-// byte-identical to the constant the managed host used to own; it now lives
-// here so the native core is the single owner of the engine defaults. The
-// string is a static literal valid for the process lifetime.
-AETHER_API const char* aether_style_runtime_defaults_css() {
-    return R"css(html, body { display: block; }
-body { margin: 8px; color: #202124; font-family: "Segoe UI"; font-size: 16px; line-height: 1.25; }
-head, title, meta, link, style, script { display: none; }
+// Shared static literals: only the named inherited-default policy differs.
+// Legacy bytes (including whitespace/order and the terminating NUL) are retained.
+#define AETHER_UA_PREFIX R"css(html, body { display: block; }
+)css"
+#define AETHER_UA_LEGACY_DEFAULTS R"css(body { margin: 8px; color: #202124; font-family: "Segoe UI"; font-size: 16px; line-height: 1.25; }
+)css"
+#define AETHER_UA_WEB_DEFAULTS R"css(html, body:root { color: #202124; font-family: "Segoe UI"; font-size: 16px; line-height: 1.25; }
+body { margin: 8px; }
+)css"
+#define AETHER_UA_COMMON_SUFFIX R"css(head, title, meta, link, style, script { display: none; }
 div, form, p, section, article, header, footer, main, nav, h1, h2, h3, h4, h5, h6 { display: block; }
 table { display: table; }
 tr { display: table-row; }
@@ -30,5 +32,21 @@ input:invalid { border-color: #dc2626; }
 button { padding: 2px 6px 3px 6px; border: 2px outset #9aa0a6; background-color: #efefef; color: #202124; cursor: default; text-align: center; }
 button:hover { background-color: #e2e4e6; }
 button:active { background-color: #d4d7da; }
-button:disabled { opacity: .55; cursor: default; })css";
+button:disabled { opacity: .55; cursor: default; })css"
+
+AETHER_API const char* aether_style_runtime_defaults_css() {
+    return AETHER_UA_PREFIX AETHER_UA_LEGACY_DEFAULTS AETHER_UA_COMMON_SUFFIX;
 }
+
+namespace aether::style {
+// Private opt-in policy for a future whole-document contextual capture.
+// No existing consumer is migrated; this does not change cascade boundaries.
+const char* web_capture_defaults_css() {
+    return AETHER_UA_PREFIX AETHER_UA_WEB_DEFAULTS AETHER_UA_COMMON_SUFFIX;
+}
+}
+
+#undef AETHER_UA_PREFIX
+#undef AETHER_UA_LEGACY_DEFAULTS
+#undef AETHER_UA_WEB_DEFAULTS
+#undef AETHER_UA_COMMON_SUFFIX

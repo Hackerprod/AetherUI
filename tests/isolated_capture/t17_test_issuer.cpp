@@ -130,7 +130,7 @@ bool SyntheticTextTestIssuer::install(aether_layout_engine_s& engine, aether_doc
  std::shared_ptr<const aether::rendering::text::SyntheticFaceSeal> seal,
  std::shared_ptr<const aether::rendering::text::ContextualMeasurementProvider> provider,
  std::shared_ptr<const std::atomic_bool> cancelled) {
- if(engine.layout_in_progress || !doc || !map || !authority || !seal || !provider) return false;
+ if(engine.real_text_policy_ || engine.text_selection() || engine.text_measurer || engine.contextual_text_measurer || engine.layout_in_progress || !doc || !map || !authority || !seal || !provider) return false;
  auto version=aether::style::pin_style_map(map);
  if(!version || !version->contextual() || version->document_lifetime()!=doc->identity ||
     authority->version_!=version || authority->document_!=doc->identity || !authority->epochs_.valid()) return false;

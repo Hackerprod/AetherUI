@@ -1,3 +1,4 @@
+#include "elliptic_t5_transition.h"
 #ifdef NDEBUG
 #error Assertions required
 #endif
@@ -57,8 +58,10 @@ int main(){FrameStore store;assert(store.resize({14,14,1})==FrameStatus::ok);dou
  p::Fill last{{12,12,2,2},{},{0,1,0,1}};
  auto f=prep({clip,fill,p::PushClip{{4,4,1,1},{}},fill,p::PopClip{},fill,p::PopClip{},last});
  assert(s::render(store,f).status==s::Status::ok);assert(get(store).pixels[13*get(store).stride+13*4+3]==255);
- auto saved=get(store);assert(s::render(store,prep({fill,clip,clip,fill,p::PopClip{},p::PopClip{}})).status==s::Status::unsupported);assert(get(store).pixels==saved.pixels);
- auto bad=clip;bad.radii.top_left_y=2;assert(s::render(store,prep({fill,bad,fill,p::PopClip{}})).status==s::Status::unsupported);assert(get(store).pixels==saved.pixels);
+ assert(s::render(store,prep({fill,clip,clip,fill,p::PopClip{},p::PopClip{}})).status==s::Status::ok);auto saved=get(store);
+ auto bad=clip;bad.radii.top_left_y=2;
+ {namespace o=elliptic_composition_oracle;const o::Shape uniform{1,1,11,11,{{{3,3},{3,3},{3,3},{3,3}}}},elliptic{1,1,11,11,{{{3,2},{3,3},{3,3},{3,3}}}};elliptic_transition::check("clip-former-reject",14,14,{fill,bad,fill,p::PopClip{}},o::render(14,14,{{uniform,{},{0,0,1,.5L}},{uniform,{elliptic},{0,0,1,.5L}}}));}
+ bad.radii.top_left_y=11;assert(s::render(store,prep({fill,bad,fill,p::PopClip{}})).status==s::Status::unsupported);assert(get(store).pixels==saved.pixels);
  auto small=clip;small.rect={0,0,0,0};assert(s::render(store,prep({small,p::PopClip{}})).status==s::Status::unsupported);
  auto empty=prep({p::PushClip{{20,20,10,10},radii(3)},fill,p::PopClip{}});assert(s::render(store,empty).status==s::Status::ok);for(auto v:get(store).pixels)assert(v==0);
  Cancel count(100000);assert(s::render(store,f,&count).status==s::Status::ok);saved=get(store);for(int i=1;i<=count.count;++i){Cancel c(i);assert(s::render(store,f,&c).status==s::Status::cancelled);assert(get(store).pixels==saved.pixels&&get(store).sequence==saved.sequence);}

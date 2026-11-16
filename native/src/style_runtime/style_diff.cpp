@@ -251,6 +251,21 @@ AETHER_SIDECAR_COMPARATOR(self_font_size) {
 AETHER_SIDECAR_COMPARATOR(background_gradient) {
     sidecar_changed<StyleSidecar::background_gradient>(result, input.previous.scalars().background_gradient != input.candidate.background_gradient);
 } AETHER_SIDECAR_END
+AETHER_SIDECAR_COMPARATOR(word_break) {
+    sidecar_changed<StyleSidecar::word_break>(result, input.previous.scalars().word_break != input.candidate.word_break);
+} AETHER_SIDECAR_END
+AETHER_SIDECAR_COMPARATOR(overflow_wrap) {
+    sidecar_changed<StyleSidecar::overflow_wrap>(result, input.previous.scalars().overflow_wrap != input.candidate.overflow_wrap);
+} AETHER_SIDECAR_END
+AETHER_SIDECAR_COMPARATOR(flex_wrap_mode) {
+    sidecar_changed<StyleSidecar::flex_wrap_mode>(result, input.previous.scalars().flex_wrap_mode != input.candidate.flex_wrap_mode);
+} AETHER_SIDECAR_END
+AETHER_SIDECAR_COMPARATOR(flex_align_content) {
+    sidecar_changed<StyleSidecar::flex_align_content>(result, input.previous.scalars().flex_align_content != input.candidate.flex_align_content);
+} AETHER_SIDECAR_END
+AETHER_SIDECAR_COMPARATOR(flex_alignment_unproven) {
+    sidecar_changed<StyleSidecar::flex_alignment_unproven>(result, input.previous.scalars().flex_alignment_unproven != input.candidate.flex_alignment_unproven);
+} AETHER_SIDECAR_END
 AETHER_SIDECAR_COMPARATOR(writing_mode) {
     sidecar_changed<StyleSidecar::writing_mode>(result, input.previous.scalars().writing_mode != input.candidate.writing_mode);
 } AETHER_SIDECAR_END

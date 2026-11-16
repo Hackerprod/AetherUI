@@ -124,7 +124,8 @@ float layout_flow_children(
     aether_rectf content,
     percentage_height_s containing_height,
     const BoxStyleSnapshot& parent_style,
-    aether_layout_result_s* result);
+    aether_layout_result_s* result,
+    std::optional<double> document_logical_width = std::nullopt);
 
 float layout_inline_items(
     const aether_layout_engine_s* engine,
@@ -134,7 +135,8 @@ float layout_inline_items(
     float start_x, float start_y, float available_width,
     float available_height, percentage_height_s containing_height,
     const BoxStyleSnapshot& parent_style,
-    aether_layout_result_s* result);
+    aether_layout_result_s* result,
+    std::optional<double> document_logical_width = std::nullopt);
 
 // Shared min/max-height resolution. reference is the containing block's
 // semantic percentage height, never a flex container's numeric auto minimum.
@@ -317,7 +319,7 @@ void accumulate_scrollable_descendant_extent(const aether_layout_box_s* parent,
                                              float& bottom);
 
 const std::vector<aether_node_s*>& collect_flex_items(
-    const StyleLookup* styles,
+    const aether_layout_engine_s* engine,const StyleLookup* styles,
     aether_layout_result_s* result,
     aether_node_s* parent,
     const BoxStyleSnapshot& parent_style);
@@ -355,4 +357,8 @@ inline float layout_used_gap(const StyleLookup* styles, aether_node_s* element,
 }
 
 // H18 bounded box-tree promotion; DOM parents and style inheritance stay unchanged.
-void validate_contents_wrappers(const StyleLookup* styles);
+void validate_contents_wrappers(const StyleLookup* styles,
+    const std::unordered_set<aether_node_s*>* selected_scope = nullptr);
+
+// Authenticated accounting for the existing flex whitespace-only suppression.
+void document_text_discard_flex_sources(const aether_layout_engine_s*,aether_node_s*,const BoxStyleSnapshot&,const std::vector<aether_node_s*>&);

@@ -1,6 +1,12 @@
 /* ── DisplayListBuilder — faithful port from DisplayListBuilder.cs ── */
 #include "display_list_types.h"
+#include "native_viewport_capture.h"
+#include "document_viewport_capture.h"
+#include "document_shadow_plan.h"
+#include "document_scope_plan.h"
+#include <type_traits>
 #include "../layout/layout_types.h"
+#include "../layout/document_text_context.h"
 #include "../layout/layout_internal.h"
 #include "../layout/scrollbar_geometry.h"
 #include "../layout/form_controls.h"
@@ -328,6 +334,17 @@ static void paint_background_and_border(aether_display_list_builder_s* builder, 
                                          bool suppress_background, const paint_context_s& ctx,
                                          std::vector<aether_paint_command_t>& cmds);
 
+// Candidate-only sidecar: native command payloads remain unchanged.
+static void record_document_scope(aether_display_list_builder_s* b,
+ const aether_layout_box_s* box,aether::rendering::NativeDocumentScopeRole role,
+ const std::vector<aether_paint_command_t>& commands) {
+ if(!b->native_scope_plan)return;
+ if(!b->native_scopes||commands.empty()||b->native_scopes->size()>=b->native_scope_plan->scope_capacity())
+  throw std::runtime_error("document scope capacity");
+ b->native_scopes->push_back({commands.size()-1,box,role});
+}
+using DocumentScopeRole=aether::rendering::NativeDocumentScopeRole;
+
 static bool box_has_scrollbar_chrome(const aether_display_list_builder_s* builder,
                                      aether_layout_box_s* box);
 
@@ -467,9 +484,9 @@ static void paint_box(aether_display_list_builder_s* builder,
     // Text box → emit text command and return
     if (box->kind == LAYOUT_BOX_TEXT) {
         const auto first_text_command = cmds.size();
-        if (visible && !empty_border_box && !box->text.empty()) {
+        if (visible && !box->text.empty() && (!empty_border_box || (builder->native_text_runs && box->native_text.run))) {
             if(builder->native_text_runs && (!box->native_text.run ||
-               box->native_text.run->source != box->text ||
+               (box->document_interval ? !box->document_interval->matches_source(box->native_text.run,box->text) : box->native_text.run->source != box->text) ||
                box->native_text.baseline != box->native_text.run->metrics.baseline))
                 throw std::runtime_error("native text identity missing");
 
@@ -498,13 +515,14 @@ static void paint_box(aether_display_list_builder_s* builder,
                     throw std::runtime_error("native text effects unsupported");
                 auto placement=box->native_text;
                 placement.baseline += box->content_box.y;
-                builder->native_text_runs->push_back({first_text_command,std::move(placement)});
+                builder->native_text_runs->push_back({first_text_command,std::move(placement),box->document_interval?box:nullptr,0});
             }
         if (ctx.has_transform) emit_pop_transform(cmds);
         return;
     }
 
-    if (visible && !empty_border_box) {
+    const bool document_root = builder->native_document_capture && box==builder->layout->root;
+    if (visible && !empty_border_box && !document_root) {
         // Box shadows (paint behind background)
         paint_box_shadows(builder, box, cmds);
 
@@ -513,7 +531,9 @@ static void paint_box(aether_display_list_builder_s* builder,
                                     ctx, cmds);
     }
 
-    bool clips = layout_box_clips(style);
+    const auto* viewport_capture = builder->native_viewport_capture;
+    const bool captured_root = (viewport_capture && box==builder->layout->root) || document_root;
+    bool clips = !captured_root && layout_box_clips(style);
     if (clips) {
         const auto outer = aether_border_radii_resolve(style.border_radii, box->border_box, style.font_size, builder->root_font_size, builder->viewport.width, builder->viewport.height);
         const auto clip = aether_corner_radii_inset(outer,
@@ -521,11 +541,18 @@ static void paint_box(aether_display_list_builder_s* builder,
             box->border_box.x + box->border_box.width - (box->padding_box.x + box->padding_box.width),
             box->border_box.y + box->border_box.height - (box->padding_box.y + box->padding_box.height));
         emit_push_clip(cmds, box->padding_box, clip);
+        record_document_scope(builder,box,DocumentScopeRole::nested_padding,cmds);
     }
 
-    const bool dynamic_scroll = layout_box_has_dynamic_scroll(builder->layout, box);
+    if(captured_root) {emit_push_clip(cmds,document_root?builder->native_document_capture->viewport():viewport_capture->viewport(),{});record_document_scope(builder,box,DocumentScopeRole::viewport_content,cmds);}
+    const bool dynamic_scroll = captured_root || layout_box_has_dynamic_scroll(builder->layout, box);
     const bool scrollbar_chrome = visible && box->element && !empty_border_box && box_has_scrollbar_chrome(builder, box);
-    if (dynamic_scroll) { emit_push_scroll_offset(cmds, box->element->style_node_id); if(builder->opacity_events)++builder->native_scroll_depth; }
+    if (dynamic_scroll) { emit_push_scroll_offset(cmds, box->element->style_node_id); record_document_scope(builder,box,DocumentScopeRole::scroll,cmds); if(builder->opacity_events)++builder->native_scroll_depth; }
+    // Document BODY decoration is normal scrolling content; canvas was emitted once outside.
+    if(document_root && visible && !empty_border_box) {
+        paint_box_shadows(builder,box,cmds);
+        paint_background_and_border(builder,box,box->element==builder->canvas_background_source,ctx,cmds);
+    }
     // Children (or atomic control paint)
     if (box->is_initial_canvas) {
         // Initial bitmap is transparent; decorations already painted.
@@ -535,14 +562,16 @@ static void paint_box(aether_display_list_builder_s* builder,
         paint_children(builder, box, focused_element, ctx, cmds);
     }
 
-    if (dynamic_scroll) { emit_pop_scroll_offset(cmds); if(builder->opacity_events)--builder->native_scroll_depth; }
+    if (dynamic_scroll) { emit_pop_scroll_offset(cmds); record_document_scope(builder,box,DocumentScopeRole::scroll,cmds); if(builder->opacity_events)--builder->native_scroll_depth; }
     // Scrollbar chrome is retained separately from content offset. Bindings
     // resolve its live thumb position from the same native geometry formula
     // used by hit-testing.
-    if (scrollbar_chrome) emit_draw_scrollbar_chrome(cmds, box->element->style_node_id);
+    if(captured_root) {emit_pop_clip(cmds);record_document_scope(builder,box,DocumentScopeRole::viewport_content,cmds);}
+    if (captured_root || scrollbar_chrome) {emit_draw_scrollbar_chrome(cmds, box->element->style_node_id);record_document_scope(builder,box,DocumentScopeRole::chrome,cmds);}
 
     if (clips) {
         emit_pop_clip(cmds);
+        record_document_scope(builder,box,DocumentScopeRole::nested_padding,cmds);
     }
 
     // Focus ring
@@ -582,7 +611,12 @@ static void paint_box_shadows(aether_display_list_builder_s* builder,
         // Inset shadow needs an interior mask and remains deliberately absent
         // from the outer-shadow paint path until that renderer exists.
         if (shadow.inset == AETHER_TRUE) continue;
+        if(builder->native_shadow_plan && (!builder->native_shadows ||
+            builder->native_shadows->size()>=builder->native_shadow_plan->size()))
+            throw std::invalid_argument("SHADOW_PLAN_CAPACITY");
         emit_draw_box_shadow(cmds, box->border_box, radii, shadow);
+        if(builder->native_shadow_plan)
+            builder->native_shadows->push_back({cmds.size()-1,box,index});
     }
 }
 
@@ -662,13 +696,28 @@ static void paint_background_layers(aether_display_list_builder_s* builder,
                 }
             } else if (layer.kind == AETHER_BACKGROUND_LAYER_IMAGE_URL && layer_view.image_source.present()) {
                 aether_sizef image_size{};
+                aether::rendering::preparation::ImageRef native_image;
+                if (builder->native_image_catalog) {
+                    const auto& catalog=*builder->native_image_catalog;
+                    auto it=std::lower_bound(catalog.begin(),catalog.end(),layer_view.image_source.c_str(),
+                        [](const auto& a,const char* key){return a.source<key;});
+                    if(it==catalog.end() || it->source!=layer_view.image_source.c_str())
+                        throw std::runtime_error("native image unavailable");
+                    native_image=it->resource;
+                    image_size={float(native_image->width()),float(native_image->height())};
+                }
                 const auto dimensions = builder->image_dimensions;
                 void* const dimensions_data = builder->image_dimensions_data;
-                if (dimensions &&
-                    checked_paint_callback(builder, [&] { return dimensions(layer_view.image_source.c_str(), &image_size, dimensions_data); }) == AETHER_TRUE) {
+                if (native_image || (dimensions &&
+                    checked_paint_callback(builder, [&] { return dimensions(layer_view.image_source.c_str(), &image_size, dimensions_data); }) == AETHER_TRUE)) {
                     aether_background_image_geometry_context_s context{};
                     context.paint_rect = paint_rect;
                     context.image_size = image_size;
+                    // Bound URL tiling before axis allocation, including the legacy binding path.
+                    constexpr size_t image_command_budget = 65536;
+                    const size_t remaining = cmds.size() < image_command_budget
+                        ? image_command_budget - cmds.size() : 0;
+                    context.max_tiles = remaining;
                     context.position_x = layer.position_x;
                     context.position_y = layer.position_y;
                     context.size_kind = layer.size_kind;
@@ -681,14 +730,40 @@ static void paint_background_layers(aether_display_list_builder_s* builder,
                     context.viewport_width = builder->viewport.width;
                     context.viewport_height = builder->viewport.height;
                     std::vector<aether_background_image_tile_s> tiles;
-                    if (aether_background_image_resolve_geometry(context, tiles)) {
+                    if (remaining && aether_background_image_resolve_geometry(context, tiles)) {
                         for (const auto& tile : tiles) {
+                            if(native_image) {
+                                const std::size_t key_size=std::strlen(layer_view.image_source.c_str());
+                                if(key_size>1024u*1024u-builder->native_image_source_bytes)
+                                    throw std::runtime_error("native image source budget");
+                                builder->native_image_source_bytes+=key_size;
+                                // Keep the complete tile mapping. Rounded/background clipping is
+                                // already applied once around the layer group, never via UV crop.
+                                const auto t=tile.tile_rect;
+                                const double right=double(t.x)+t.width,bottom=double(t.y)+t.height;
+                                const double pl=paint_rect.x,pt=paint_rect.y;
+                                const double pr=pl+paint_rect.width,pb=pt+paint_rect.height;
+                                if(!std::isfinite(t.x)||!std::isfinite(t.y)||!std::isfinite(right)||!std::isfinite(bottom)||
+                                   t.width<=0||t.height<=0||std::abs(double(t.x))>65536||std::abs(double(t.y))>65536||
+                                   std::abs(right)>65536||std::abs(bottom)>65536)
+                                    throw std::runtime_error("native image invalid tile bounds");
+                                const double visible_width=(std::min(right,pr)-std::max(double(t.x),pl))*native_image->width()/double(t.width);
+                                const double visible_height=(std::min(bottom,pb)-std::max(double(t.y),pt))*native_image->height()/double(t.height);
+                                if(!std::isfinite(visible_width)||!std::isfinite(visible_height)||visible_width<1||visible_height<1)
+                                    throw std::runtime_error("native image sub-texel visible span");
+                            }
+                            const aether_rectf source=native_image?aether_rectf{0,0,float(native_image->width()),float(native_image->height())}:tile.source;
+                            const aether_rectf destination=native_image?tile.tile_rect:tile.destination;
                             emit_draw_background_image(cmds, paint_rect, layer_view, ctx.effective_opacity,
-                                                       tile.source, tile.destination, AETHER_TRUE);
+                                                       source, destination, AETHER_TRUE);
+                            if(native_image) builder->native_images->push_back({cmds.size()-1,
+                                cmds.back().data.draw_background_image.source,layer_view.image_source.c_str(),
+                                native_image,source,destination,ctx.effective_opacity});
                         }
                         continue;
                     }
                 }
+                if(builder->native_image_catalog)throw std::runtime_error("native image unresolved geometry");
                 // Pending or failed resources retain the declarative command so the binding can
                 // request it; the renderer intentionally paints no unresolved command.
                 emit_draw_background_image(cmds, paint_rect, layer_view, ctx.effective_opacity);
@@ -985,8 +1060,20 @@ AETHER_API aether_status_t aether_display_list_build_with_styles(
     builder->border_groups = &list->border_groups;
     builder->native_gradient_output = builder->opacity_events ? list : nullptr;
     builder->canvas_background_source = nullptr;
+    if(builder->native_viewport_capture) {
+        if(!builder->native_viewport_capture->accepts(layout,current_styles))
+            throw std::runtime_error("viewport authority stale");
+        emit_push_clip(list->commands,builder->native_viewport_capture->viewport(),{});
+    }
+    if(builder->native_document_capture) {
+        if(builder->native_viewport_capture || !(builder->native_document_checked?builder->native_document_capture->stamp_current(layout,current_styles):builder->native_document_capture->accepts(layout,current_styles)))
+            throw std::runtime_error("document viewport authority stale");
+        emit_push_clip(list->commands,builder->native_document_capture->viewport(),{});
+        record_document_scope(builder,layout->root,DocumentScopeRole::viewport_outer,list->commands);
+    }
     paint_canvas_background(builder, layout, list->commands);
     paint_box(builder, layout->root, focused_element, paint_context_s{}, list->commands);
+    if(builder->native_viewport_capture || builder->native_document_capture) {emit_pop_clip(list->commands);record_document_scope(builder,layout->root,DocumentScopeRole::viewport_outer,list->commands);}
     builder->canvas_background_source = nullptr;
     builder->style_pin = nullptr;
     builder->layout = nullptr;
@@ -1215,18 +1302,64 @@ AETHER_API void aether_display_list_builder_set_contextual_text_measurer(aether_
 namespace aether::rendering {
 namespace {
 aether_status_t build_scroll(aether_display_list_builder_t b,aether_layout_result_t l,
- aether_style_map_t styles,aether_node_t node,const NativeScrollInput* input,std::unique_ptr<NativePaintList>& out) noexcept {
+ aether_style_map_t styles,aether_node_t node,const NativeScrollInput* input,const NativeImageCatalog* images,std::unique_ptr<NativePaintList>& out,const NativeViewportAuthority* authority=nullptr,const DocumentViewportAuthority* document_authority=nullptr,bool checked=false) {
+ if(checked&&(!b||!b->native_document_checked||!document_authority||!document_authority->request_bound()||!b->native_scope_plan||!b->native_shadow_plan))return AETHER_ERROR_INVALID_STATE;
+ if(!checked&&((b&&b->native_document_checked)||(document_authority&&document_authority->request_bound())))return AETHER_ERROR_INVALID_STATE;
+ const auto valid_document=[&]{return checked?document_authority->accepts_checked(l,styles):document_authority->accepts(l,styles);};
+ if(authority && document_authority)return AETHER_ERROR_INVALID_STATE;
+ if(b&&b->native_scope_plan&&(!document_authority||!document_authority->registry_candidate()))return AETHER_ERROR_INVALID_STATE;
+ if(document_authority&&document_authority->registry_candidate()&&(!b||!b->native_scope_plan))return AETHER_ERROR_INVALID_STATE;
+ if(document_authority && (!valid_document()||!b||node||b->native_document_capture!=document_authority))return AETHER_ERROR_INVALID_STATE;
+ if(b && b->native_document_capture && !document_authority)return AETHER_ERROR_INVALID_STATE;
+ if(authority && !authority->accepts(l,styles))return AETHER_ERROR_INVALID_STATE;
+ if(authority && (!b || node || b->native_viewport_capture!=authority))return AETHER_ERROR_INVALID_STATE;
  if(!b||!l)return AETHER_ERROR_NULL_ARG;
  if(b->style_pin||b->opacity_events)return AETHER_ERROR_INVALID_STATE;
  try {
   if(input && input->size()>65536)return AETHER_ERROR_INVALID_STATE;
+  NativeImageCatalog catalog;
+  if(images) {
+   if(images->size()>4096)return AETHER_ERROR_INVALID_STATE;
+   std::size_t key_bytes=0; std::vector<preparation::ImageRef> refs;
+   refs.reserve(images->size());
+   for(const auto& entry:*images) {
+    if(entry.source.empty()||entry.source.size()>4096||entry.source.find('\0')!=std::string::npos||
+       entry.source.size()>1024u*1024u-key_bytes||!entry.resource)return AETHER_ERROR_INVALID_STATE;
+    key_bytes+=entry.source.size(); refs.push_back(entry.resource);
+   }
+   std::sort(refs.begin(),refs.end(),[](const auto& a,const auto& b){return std::less<const preparation::ImageResource*>{}(a.get(),b.get());});
+   std::size_t bytes=0; const preparation::ImageResource* previous=nullptr;
+   for(const auto& ref:refs)if(ref.get()!=previous) {
+    const auto size=ref->pixels().size();
+    if(size>256u*1024u*1024u-bytes)return AETHER_ERROR_INVALID_STATE;
+    bytes+=size;previous=ref.get();
+   }
+   catalog=*images;
+   std::sort(catalog.begin(),catalog.end(),[](const auto& a,const auto& b){return a.source<b.source;});
+   for(std::size_t i=1;i<catalog.size();++i)if(catalog[i-1].source==catalog[i].source)return AETHER_ERROR_INVALID_STATE;
+  }
   auto candidate=std::make_unique<NativePaintList>();
-  struct Reset {aether_display_list_builder_t b; ~Reset(){b->opacity_events=nullptr;b->native_text_runs=nullptr;b->opacity_parents.clear();b->opacity_serial=0;b->native_scroll_depth=0;}} reset{b};
+  struct Reset {aether_display_list_builder_t b; ~Reset(){b->native_image_source_bytes=0;b->native_image_catalog=nullptr;b->native_images=nullptr;b->opacity_events=nullptr;b->native_text_runs=nullptr;b->native_shadows=nullptr;b->native_scopes=nullptr;b->opacity_parents.clear();b->opacity_serial=0;b->native_scroll_depth=0;}} reset{b};
+  b->native_image_source_bytes=0;
+  b->native_image_catalog=images?&catalog:nullptr;
+  b->native_images=images?&candidate->images:nullptr;
   b->opacity_events=&candidate->events;
   b->native_text_runs=&candidate->text_runs;
+  if(b->native_scope_plan){
+   if(!document_authority||!document_authority->registry_candidate()||
+      !b->native_scope_plan->bound_to(*document_authority)||!(checked?b->native_scope_plan->accepts_checked(l,styles):b->native_scope_plan->accepts(l,styles))||
+      !b->native_shadow_plan||!b->native_shadow_plan->bound_to(*document_authority))return AETHER_ERROR_INVALID_STATE;
+   candidate->document_scopes.reserve(b->native_scope_plan->scope_capacity());
+   b->native_scopes=&candidate->document_scopes;
+  }
+  if(b->native_shadow_plan){
+   if(!document_authority||!(checked?b->native_shadow_plan->accepts_checked(l,styles):b->native_shadow_plan->accepts(l,styles)))return AETHER_ERROR_INVALID_STATE;
+   candidate->shadows.reserve(b->native_shadow_plan->size());
+   b->native_shadows=&candidate->shadows;
+  }
   const auto status=node?aether_display_list_build_node_with_styles(b,l,styles,node,nullptr,&NativeListAccess::list(*candidate)):
     aether_display_list_build_with_styles(b,l,styles,nullptr,&NativeListAccess::list(*candidate));
-  if(status!=AETHER_OK)return status;
+  if(status!=AETHER_OK){if(checked&&status==AETHER_ERROR_OUT_OF_MEMORY)throw std::bad_alloc();return status;}
   auto list=NativeListAccess::list(*candidate);
   if(list->commands.size()>65536)return AETHER_ERROR_INVALID_STATE;
   std::size_t text_index=0, glyph_count=0;
@@ -1243,6 +1376,17 @@ aether_status_t build_scroll(aether_display_list_builder_t b,aether_layout_resul
    if(glyph_count>text::max_frame_glyphs)return AETHER_ERROR_INVALID_STATE;
   }
   if(text_index!=candidate->text_runs.size())return AETHER_ERROR_INVALID_STATE;
+  if(b->native_scope_plan){
+   const auto& states=b->native_scope_plan->states();
+   if(input)return AETHER_ERROR_INVALID_STATE;
+   // ScopePlan verifies every emitted scope, exact ID payload, per-owner
+   // counts and state universe. No redundant candidate ID scratch allocation.
+   candidate->scroll=states;
+   // No caller callback: all proofs precede publication of this private list.
+   b->native_shadow_plan->verify(*candidate,{});
+   b->native_scope_plan->verify(*candidate);
+   out=std::move(candidate);return AETHER_OK;
+  }
   std::vector<std::int64_t> ids;
   for(const auto& c:list->commands) {
    if(c.tag==AETHER_PAINT_PUSH_SCROLL_OFFSET)ids.push_back(c.data.push_scroll_offset.scroll_container_id);
@@ -1259,7 +1403,16 @@ aether_status_t build_scroll(aether_display_list_builder_t b,aether_layout_resul
   for(const auto& item:l->primary_boxes)if(item.first)boxes.emplace(item.first->style_node_id,item.second);
   for(const auto& offset:sorted) {
    const auto it=boxes.find(offset.id);
-   if(it==boxes.end()||it->second==l->root)return AETHER_ERROR_INVALID_STATE;
+   if(it==boxes.end())return AETHER_ERROR_INVALID_STATE;
+   if(it->second==l->root) {
+    if(ids.size()!=1)return AETHER_ERROR_INVALID_STATE;
+    if(document_authority) {if(!valid_document()||offset.id!=document_authority->root_id())return AETHER_ERROR_INVALID_STATE;}
+    else if(!authority || !authority->accepts(l,styles) || offset.id!=authority->root_id())return AETHER_ERROR_INVALID_STATE;
+    const auto& state=document_authority?document_authority->state():authority->state();
+    if(offset.x!=state.x || offset.y!=state.y)return AETHER_ERROR_INVALID_STATE;
+    candidate->scroll.push_back(state);continue;
+   }
+   if(authority||document_authority)return AETHER_ERROR_INVALID_STATE;
    const auto& box=*it->second;
    const double rx=box.scroll.scrollable_overflow_x,ry=box.scroll.scrollable_overflow_y;
    if(!std::isfinite(rx)||!std::isfinite(ry)||rx<0||ry<0||rx>65536||ry>65536||
@@ -1271,16 +1424,98 @@ aether_status_t build_scroll(aether_display_list_builder_t b,aether_layout_resul
    if(double(x)!=offset.x||double(y)!=offset.y)return AETHER_ERROR_INVALID_STATE;
    candidate->scroll.push_back({offset.id,offset.x,offset.y,rx,ry,aether_resolve_scrollbar_geometry(box,{x,y})});
   }
+  if(authority && (!authority->accepts(l,styles) || candidate->scroll.size()!=1))return AETHER_ERROR_INVALID_STATE;
+  if(document_authority && (!valid_document()||candidate->scroll.size()!=1))return AETHER_ERROR_INVALID_STATE;
   out=std::move(candidate);return AETHER_OK;
- }catch(const std::bad_alloc&){return AETHER_ERROR_OUT_OF_MEMORY;}catch(...){return AETHER_ERROR_INVALID_STATE;}
+ }catch(const std::bad_alloc&){if(checked)throw;return AETHER_ERROR_OUT_OF_MEMORY;}catch(...){if(checked)throw;return AETHER_ERROR_INVALID_STATE;}
 }
 }
 aether_status_t build_native_opacity(aether_display_list_builder_t b,aether_layout_result_t l,
  aether_style_map_t styles,aether_node_t node,std::unique_ptr<NativePaintList>& out) noexcept {
- return build_scroll(b,l,styles,node,nullptr,out);
+ return build_scroll(b,l,styles,node,nullptr,nullptr,out);
 }
 aether_status_t build_native_opacity(aether_display_list_builder_t b,aether_layout_result_t l,
  aether_style_map_t styles,aether_node_t node,const NativeScrollInput& input,std::unique_ptr<NativePaintList>& out) noexcept {
- return build_scroll(b,l,styles,node,&input,out);
+ return build_scroll(b,l,styles,node,&input,nullptr,out);
 }
+aether_status_t build_native_opacity(aether_display_list_builder_t b,aether_layout_result_t l,
+ aether_style_map_t styles,aether_node_t node,const NativeImageCatalog& images,
+ std::unique_ptr<NativePaintList>& out) noexcept {
+ return build_scroll(b,l,styles,node,nullptr,&images,out);
+}
+aether_status_t build_native_opacity(aether_display_list_builder_t b,aether_layout_result_t l,
+ aether_style_map_t styles,aether_node_t node,const NativeScrollInput& input,const NativeImageCatalog& images,
+ std::unique_ptr<NativePaintList>& out) noexcept {
+ return build_scroll(b,l,styles,node,&input,&images,out);
+}
+
+aether_status_t build_native_viewport_capture(aether_display_list_builder_t b,aether_layout_result_t l,
+ aether_style_map_t styles,const NativeViewportAuthority& authority,const NativeImageCatalog& images,
+ std::unique_ptr<NativePaintList>& out) noexcept {
+ // Authority checks thread/lifetime before any mutable layout/style dereference.
+ if(!authority.accepts(l,styles))return AETHER_ERROR_INVALID_STATE;
+ if(!b)return AETHER_ERROR_NULL_ARG;
+ if(b->native_document_checked||b->style_pin||b->opacity_events||b->native_viewport_capture||b->native_document_capture)return AETHER_ERROR_INVALID_STATE;
+ try {
+  static_assert(std::is_nothrow_move_assignable_v<aether_display_list_builder_s>);
+  struct Restore {aether_display_list_builder_t b;aether_display_list_builder_s saved;~Restore(){*b=std::move(saved);}} restore{b,*b};
+  if(!authority.scrolling())return build_native_opacity(b,l,styles,nullptr,NativeScrollInput{},images,out);
+  b->native_viewport_capture=&authority;
+  const auto& state=authority.state();NativeScrollInput offsets{{state.id,state.x,state.y}};
+  return build_scroll(b,l,styles,nullptr,&offsets,&images,out,&authority);
+ }catch(const std::bad_alloc&){return AETHER_ERROR_OUT_OF_MEMORY;}catch(...){return AETHER_ERROR_INVALID_STATE;}
+}
+
+aether_status_t build_native_document_capture(aether_display_list_builder_t b,aether_layout_result_t l,
+ aether_style_map_t styles,const DocumentViewportAuthority& authority,std::unique_ptr<NativePaintList>& out,const DocumentShadowPlan* shadows) noexcept {
+ if(authority.registry_candidate()||!authority.accepts(l,styles))return AETHER_ERROR_INVALID_STATE;
+ if(!b)return AETHER_ERROR_NULL_ARG;
+ if(b->native_document_checked||b->style_pin||b->opacity_events||b->native_viewport_capture||b->native_document_capture||b->transition_runtime)return AETHER_ERROR_INVALID_STATE;
+ try {
+  static_assert(std::is_nothrow_move_assignable_v<aether_display_list_builder_s>);
+  struct Restore {aether_display_list_builder_t b;aether_display_list_builder_s saved;~Restore(){*b=std::move(saved);}} restore{b,*b};
+  b->native_document_capture=&authority;
+  if(shadows&&!shadows->accepts(l,styles))return AETHER_ERROR_INVALID_STATE;
+  b->native_shadow_plan=shadows;
+  const auto& state=authority.state();NativeScrollInput offsets{{state.id,state.x,state.y}};
+  return build_scroll(b,l,styles,nullptr,&offsets,nullptr,out,nullptr,&authority);
+ }catch(const std::bad_alloc&){return AETHER_ERROR_OUT_OF_MEMORY;}catch(...){return AETHER_ERROR_INVALID_STATE;}
+}
+
+// Inactive private entry: no wrapper/CLI invokes it. Zero-offset registry only
+// until the separately reviewed requests component exists.
+aether_status_t build_native_document_registry_candidate(aether_display_list_builder_t b,aether_layout_result_t l,
+ aether_style_map_t styles,const DocumentViewportAuthority& authority,const DocumentScopePlan& scopes,
+ const DocumentShadowPlan& shadows,std::unique_ptr<NativePaintList>& out) noexcept {
+ if(authority.request_bound()||!authority.registry_candidate()||!authority.accepts(l,styles)||!scopes.bound_to(authority)||
+    !shadows.bound_to(authority)||!scopes.accepts(l,styles)||!shadows.accepts(l,styles))return AETHER_ERROR_INVALID_STATE;
+ if(!b)return AETHER_ERROR_NULL_ARG;
+ if(b->native_document_checked||b->style_pin||b->opacity_events||b->native_viewport_capture||b->native_document_capture||
+    b->native_shadow_plan||b->native_shadows||b->native_scope_plan||b->native_scopes||b->transition_runtime)
+  return AETHER_ERROR_INVALID_STATE;
+ try {
+  static_assert(std::is_nothrow_move_assignable_v<aether_display_list_builder_s>);
+  struct Restore {aether_display_list_builder_t b;aether_display_list_builder_s saved;~Restore(){*b=std::move(saved);}} restore{b,*b};
+  b->native_document_capture=&authority;b->native_scope_plan=&scopes;b->native_shadow_plan=&shadows;
+  return build_scroll(b,l,styles,nullptr,nullptr,nullptr,out,nullptr,&authority);
+ }catch(const std::bad_alloc&){return AETHER_ERROR_OUT_OF_MEMORY;}catch(...){return AETHER_ERROR_INVALID_STATE;}
+}
+
+// Request-bound path deliberately throws quota/allocation causes. No public
+// caller enables this mode and no caller callbacks run during native emission.
+aether_status_t build_native_document_requests_checked(aether_display_list_builder_t b,aether_layout_result_t l,
+ aether_style_map_t styles,const DocumentViewportAuthority& authority,const DocumentScopePlan& scopes,
+ const DocumentShadowPlan& shadows,std::unique_ptr<NativePaintList>& out) {
+ if(!authority.request_bound()||!authority.registry_candidate()||!authority.accepts_checked(l,styles)||
+    !scopes.bound_to(authority)||!shadows.bound_to(authority)||!scopes.accepts_checked(l,styles)||!shadows.accepts_checked(l,styles))return AETHER_ERROR_INVALID_STATE;
+ if(!b)return AETHER_ERROR_NULL_ARG;
+ if(b->native_document_checked||b->style_pin||b->opacity_events||b->native_viewport_capture||b->native_document_capture||
+    b->native_shadow_plan||b->native_shadows||b->native_scope_plan||b->native_scopes||b->transition_runtime||
+    b->text_measurer||b->contextual_text_measurer||b->image_dimensions)return AETHER_ERROR_INVALID_STATE;
+ static_assert(std::is_nothrow_move_assignable_v<aether_display_list_builder_s>);
+ struct Restore {aether_display_list_builder_t b;aether_display_list_builder_s saved;~Restore()noexcept{*b=std::move(saved);}} restore{b,*b};
+ b->native_document_checked=true;b->native_document_capture=&authority;b->native_scope_plan=&scopes;b->native_shadow_plan=&shadows;
+ return build_scroll(b,l,styles,nullptr,nullptr,nullptr,out,nullptr,&authority,true);
+}
+
 }

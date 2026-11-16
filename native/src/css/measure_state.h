@@ -39,6 +39,8 @@ struct measure_background_size_s {
     aether_css_length y = aether_css_length_auto();
 };
 struct measure_state_s {
+    int32_t flex_wrap_mode=0, flex_align_content=0, flex_alignment_unproven=0; // private geometry semantics
+    int32_t word_break = 0, overflow_wrap = 0; // private computed enums, normal=0
     int32_t flex_order = 0;
     bool direction_rtl = false;
     aether::css::GradientEvidence background_gradient = aether::css::GradientEvidence::unproven;
@@ -85,6 +87,8 @@ inline void measure_recompute_dependencies(measure_state_s& state) noexcept {
 // No engaged vectors, dependency map or document owner is constructed for a
 // probe. Only the selected property's writes become owned local output.
 struct measure_property_delta_s {
+    std::optional<int32_t> flex_wrap_mode, flex_align_content, flex_alignment_unproven;
+    std::optional<int32_t> word_break, overflow_wrap;
     std::optional<int32_t> flex_order;
     std::optional<bool> direction_rtl;
     std::optional<int32_t> writing_mode;
@@ -129,6 +133,11 @@ public:
     aether::css::GradientEvidence background_gradient() const noexcept {
         return delta_ && delta_->background_gradient ? *delta_->background_gradient : base_->background_gradient;
     }
+    int32_t flex_wrap_mode() const noexcept { return delta_ && delta_->flex_wrap_mode ? *delta_->flex_wrap_mode : base_->flex_wrap_mode; }
+    int32_t flex_align_content() const noexcept { return delta_ && delta_->flex_align_content ? *delta_->flex_align_content : base_->flex_align_content; }
+    int32_t flex_alignment_unproven() const noexcept { return delta_ && delta_->flex_alignment_unproven ? *delta_->flex_alignment_unproven : base_->flex_alignment_unproven; }
+    int32_t word_break() const noexcept { return delta_ && delta_->word_break ? *delta_->word_break : base_->word_break; }
+    int32_t overflow_wrap() const noexcept { return delta_ && delta_->overflow_wrap ? *delta_->overflow_wrap : base_->overflow_wrap; }
     int32_t writing_mode() const noexcept {
         return delta_ && delta_->writing_mode ? *delta_->writing_mode : base_->writing_mode;
     }
@@ -211,6 +220,11 @@ public:
     void set_background_gradient(aether::css::GradientEvidence value) noexcept {
         if (target_) target_->background_gradient = value; else delta_->background_gradient = value;
     }
+    void set_flex_wrap_mode(int32_t v) noexcept { if(target_) target_->flex_wrap_mode=v; else delta_->flex_wrap_mode=v; }
+    void set_flex_align_content(int32_t v) noexcept { if(target_) target_->flex_align_content=v; else delta_->flex_align_content=v; }
+    void set_flex_alignment_unproven(int32_t v) noexcept { if(target_) target_->flex_alignment_unproven=v; else delta_->flex_alignment_unproven=v; }
+    void set_word_break(int32_t v) noexcept { if(target_) target_->word_break=v; else delta_->word_break=v; }
+    void set_overflow_wrap(int32_t v) noexcept { if(target_) target_->overflow_wrap=v; else delta_->overflow_wrap=v; }
     void set_writing_mode(int32_t value) noexcept {
         if (target_) target_->writing_mode = value; else delta_->writing_mode = value;
     }

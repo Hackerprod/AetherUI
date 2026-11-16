@@ -57,7 +57,7 @@ static const html_entity html_entities[] = {
     {"Yuml",     0x0178}, {"Zeta",     0x0396}, {"aacute",   0x00E1},
     {"acirc",    0x00E2}, {"acute",    0x00B4}, {"aelig",    0x00E6},
     {"agrave",   0x00E0}, {"alefsym",  0x2135}, {"alpha",    0x03B1},
-    {"amp",      0x0026}, {"and",      0x2227}, {"ang",      0x2220},
+    {"amp",      0x0026}, {"and",      0x2227}, {"ang",      0x2220}, {"apos",     0x0027},
     {"aring",    0x00E5}, {"asymp",    0x2248}, {"atilde",   0x00E3},
     {"auml",     0x00E4}, {"bdquo",    0x201E}, {"beta",     0x03B2},
     {"brvbar",   0x00A6}, {"bull",     0x2022}, {"cap",      0x2229},

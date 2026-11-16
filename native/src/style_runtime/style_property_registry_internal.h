@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <functional>
 #include <string>
+#include <stdexcept>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -143,7 +144,24 @@ struct style_property_registry_s {
     std::unordered_map<std::string, const style_shorthand_definition_s*> shorthands;
     std::vector<style_property_definition_s> definitions;
     std::vector<style_shorthand_definition_s> shorthand_defs;
+    // Pending aliases own names only; vector growth cannot stale their targets.
+    std::unordered_map<std::string, std::string> aliases;
     bool sealed = false;
+    bool seal_failed = false;
+
+    void register_alias(const char* name, const char* canonical) {
+        if (sealed) throw std::invalid_argument("ALIAS_REGISTRY_SEALED");
+        if (!name || !canonical) throw std::invalid_argument("ALIAS_NAME");
+        const auto key = str_trim(str_to_lower(name));
+        const auto target = str_trim(str_to_lower(canonical));
+        if (key.empty() || target.empty() || key == target || by_name.count(key) ||
+            shorthands.count(key) || aliases.count(key) || aliases.count(target))
+            throw std::invalid_argument("ALIAS_COLLISION");
+        bool found = false;
+        for (const auto& definition : definitions) if (definition.name == target) found = true;
+        if (!found) throw std::invalid_argument("ALIAS_TARGET_MISSING");
+        aliases.emplace(key, target);
+    }
 
     void register_property(
         const char* name,
@@ -157,6 +175,7 @@ struct style_property_registry_s {
         if (!name || !*name) return;
 
         std::string normalized = str_trim(str_to_lower(name));
+        if (aliases.count(normalized)) throw std::invalid_argument("PROPERTY_ALIAS_COLLISION");
         if (by_name.count(normalized)) return;
 
         style_property_definition_s def;
@@ -187,6 +206,7 @@ struct style_property_registry_s {
         if (!name || !*name) return;
 
         std::string normalized = str_trim(str_to_lower(name));
+        if (aliases.count(normalized)) throw std::invalid_argument("PROPERTY_ALIAS_COLLISION");
         if (by_name.count(normalized)) return;
 
         style_property_definition_s def;
@@ -217,6 +237,7 @@ struct style_property_registry_s {
         if (!name || !*name) return;
 
         std::string normalized = str_trim(str_to_lower(name));
+        if (aliases.count(normalized)) throw std::invalid_argument("PROPERTY_ALIAS_COLLISION");
         if (by_name.count(normalized)) return;
 
         style_property_definition_s def;
@@ -245,6 +266,7 @@ struct style_property_registry_s {
         if (!name || !*name) return;
 
         std::string normalized = str_trim(str_to_lower(name));
+        if (aliases.count(normalized)) throw std::invalid_argument("PROPERTY_ALIAS_COLLISION");
         if (by_name.count(normalized)) return;
 
         style_property_definition_s def;
@@ -267,6 +289,7 @@ struct style_property_registry_s {
         if (!name || !*name) return;
 
         std::string normalized = str_trim(str_to_lower(name));
+        if (aliases.count(normalized)) throw std::invalid_argument("SHORTHAND_ALIAS_COLLISION");
         if (by_name.count(normalized) || shorthands.count(normalized)) return;
 
         style_shorthand_definition_s def;
@@ -279,35 +302,61 @@ struct style_property_registry_s {
     }
 
     void seal() {
-        // std::vector growth invalidates the pointers cached while properties are
-        // registered. Rebuild both lookup tables once the registry becomes stable.
-        by_name.clear();
-        for (const auto& definition : definitions)
-            by_name[definition.name] = &definition;
-        shorthands.clear();
-        for (auto& shorthand : shorthand_defs) {
-            shorthands[shorthand.name] = &shorthand;
-            shorthand.target_ids.clear();
+        // Build all tables and target lists before publishing. A failed attempt
+        // disables lookups; callers may retry seal after allocation recovery.
+        // No pointers from a partially built table become observable.
+        seal_failed = true;
+        sealed = false;
+        decltype(by_name) next_names;
+        decltype(shorthands) next_shorthands;
+        std::vector<std::vector<int32_t>> next_targets;
+        next_targets.reserve(shorthand_defs.size());
+        for (const auto& definition : definitions) {
+            if (!next_names.emplace(definition.name, &definition).second)
+                throw std::invalid_argument("DUPLICATE_PROPERTY");
+        }
+        for (const auto& alias : aliases) {
+            // Only canonical definitions can be targets: never follow aliases.
+            const style_property_definition_s* target = nullptr;
+            for (const auto& definition : definitions)
+                if (definition.name == alias.second) target = &definition;
+            if (!target || aliases.count(alias.second) || next_names.count(alias.first))
+                throw std::invalid_argument("ALIAS_TARGET_OR_COLLISION");
+            if (!next_names.emplace(alias.first, target).second)
+                throw std::invalid_argument("ALIAS_COLLISION");
+        }
+        for (const auto& shorthand : shorthand_defs) {
+            if (aliases.count(shorthand.name)) throw std::invalid_argument("SHORTHAND_ALIAS_COLLISION");
+            next_shorthands[shorthand.name] = &shorthand;
+            std::vector<int32_t> ids;
             for (const auto& name : shorthand.target_names) {
-                const auto found = by_name.find(name);
-                if (found == by_name.end()) { shorthand.target_ids.clear(); break; }
+                const auto found = next_names.find(name);
+                if (found == next_names.end()) { ids.clear(); break; }
                 const auto id = found->second->id;
                 bool duplicate = false;
-                for (auto previous : shorthand.target_ids) if (previous == id) duplicate = true;
-                if (duplicate) { shorthand.target_ids.clear(); break; }
-                shorthand.target_ids.push_back(id);
+                for (auto previous : ids) if (previous == id) duplicate = true;
+                if (duplicate) { ids.clear(); break; }
+                ids.push_back(id);
             }
+            next_targets.push_back(std::move(ids));
         }
+        by_name.swap(next_names);
+        shorthands.swap(next_shorthands);
+        for (size_t i = 0; i < shorthand_defs.size(); ++i)
+            shorthand_defs[i].target_ids.swap(next_targets[i]);
         sealed = true;
+        seal_failed = false;
     }
 
     const style_property_definition_s* try_get(const char* name) const {
+        if (seal_failed) return nullptr;
         std::string normalized = str_trim(str_to_lower(name));
         auto it = by_name.find(normalized);
         return it != by_name.end() ? it->second : nullptr;
     }
 
     const style_shorthand_definition_s* try_get_shorthand(const char* name) const {
+        if (seal_failed) return nullptr;
         std::string normalized = str_trim(str_to_lower(name));
         auto it = shorthands.find(normalized);
         return it != shorthands.end() ? it->second : nullptr;

@@ -298,6 +298,7 @@ struct compiled_style_value_s {
     std::string typed_value;
     // Original accepted longhand tokens, before lossy legacy projection.
     std::string typography_source;
+    std::string authored_property; // only tracked break-policy aliases/longhands
     std::string deferred_source;
 };
 
@@ -416,7 +417,8 @@ media_condition_s* media_condition_not(media_condition_s* value,
     media_condition_allocation_scope_s* scope = nullptr);
 bool media_condition_matches(const media_condition_s* node, const aether_style_environment_t* env);
 media_condition_s* media_condition_parse(const char* source, aether_style_diagnostic_fn diag,
-    void* diag_data, int32_t offset, media_condition_allocation_scope_s* scope = nullptr);
+    void* diag_data, int32_t offset, media_condition_allocation_scope_s* scope = nullptr,
+    bool* complete_width_syntax = nullptr);
 
 // ═══ Compiled rule & stylesheet ════════════════════════════════
 
@@ -437,7 +439,9 @@ struct compiled_rule_s {
     int32_t source_order = 0;
 };
 
+namespace aether::style {class EmbeddedStyleSource;}
 struct compiled_style_sheet_s {
+    std::shared_ptr<const aether::style::EmbeddedStyleSource> embedded_source;
     style_source_accounting_s accounting;
     int64_t handle = 0;
     style_sheet_layer layer = style_sheet_layer::author;

@@ -1,3 +1,4 @@
+#include "elliptic_t5_transition.h"
 #ifdef NDEBUG
 #error "Assertions required"
 #endif
@@ -7,6 +8,8 @@
 #include <limits>
 #include <new>
 #include <thread>
+#include <filesystem>
+#include <system_error>
 using namespace aether::rendering;
 namespace p=aether::rendering::preparation;
 namespace s=aether::rendering::software;
@@ -21,7 +24,19 @@ void pixel(const Frame& f,int x,int y,std::array<int,4> expected) {
  for(int i=0;i<4;++i) assert(f.pixels[n+std::size_t(i)]==expected[std::size_t(i)]);
 }
 struct Cancel : p::Cancellation {int count{},at;explicit Cancel(int n):at(n){} bool cancelled() noexcept override {return ++count==at;}};
-int main() {
+int main(int argc,char** argv) {
+ if(argc!=1&&argc!=2){std::fputs("usage: renderer-test [existing-empty-evidence-directory]\n",stderr);return 2;}
+ const std::string evidence_directory=argc==2?argv[1]:"";
+ if(argc==2){
+  // POSIX evidence spelling policy: reject before any filesystem query.
+  if(evidence_directory.empty()||evidence_directory.back()=='/'||std::filesystem::path(evidence_directory).filename()=="."||std::filesystem::path(evidence_directory).filename()==".."){
+   std::fputs("renderer evidence directory must exist, be real and empty\n",stderr);return 2;
+  }
+  std::error_code error;const auto status=std::filesystem::symlink_status(evidence_directory,error);
+  bool valid=!error&&std::filesystem::is_directory(status)&&!std::filesystem::is_symlink(status);
+  if(valid){const bool empty=std::filesystem::is_empty(evidence_directory,error);valid=!error&&empty;}
+  if(!valid){std::fputs("renderer evidence directory must exist, be real and empty\n",stderr);return 2;}
+ }
  FrameStore store;assert(store.resize({4,4,1})==FrameStatus::ok);
  auto integer=prepare({fill(1,1,2,2)});auto result=s::render(store,integer);
  assert(result.status==s::Status::ok && result.pixel_budget==20);
@@ -44,8 +59,15 @@ int main() {
  assert(s::render(store,unsupported).status==s::Status::unsupported);
  assert(get(store).pixels==saved.pixels && get(store).sequence==saved.sequence);
  auto rounded=fill(0,0,1,1);rounded.radii.top_left_x=1;
- assert(s::render(store,prepare({rounded})).status==s::Status::unsupported);
- assert(s::render(store,prepare({p::PushClip{{0,0,1,1},rounded.radii},p::PopClip{}})).status==s::Status::unsupported);
+ elliptic_transition::Bytes expected_fill(64,0);expected_fill[2]=255;expected_fill[3]=255;
+ const elliptic_transition::Evidence fill_evidence{evidence_directory,17,0,0},clip_evidence{evidence_directory,16,0,0};
+ elliptic_transition::check("renderer-degenerate-fill-former-reject",4,4,{rounded},expected_fill,nullptr,&fill_evidence);
+ elliptic_transition::check("renderer-degenerate-clip-empty-former-reject",4,4,{p::PushClip{{0,0,1,1},rounded.radii},p::PopClip{}},elliptic_transition::Bytes(64,0),nullptr,&clip_evidence);
+ // Preserve both negative assertions using an effective side-sum violation.
+ rounded.radii.top_left_x=2;rounded.radii.top_left_y=1;
+ auto preserved=[&]{const auto now=get(store);assert(now.sequence==saved.sequence&&now.viewport.width==saved.viewport.width&&now.viewport.height==saved.viewport.height&&now.viewport.dpi==saved.viewport.dpi&&now.stride==saved.stride&&now.pixels==saved.pixels);};
+ assert(s::render(store,prepare({rounded})).status==s::Status::unsupported);preserved();
+ assert(s::render(store,prepare({p::PushClip{{0,0,1,1},rounded.radii},p::PopClip{}})).status==s::Status::unsupported);preserved();
  auto trans=p::identity;trans.m11=2; // G2 permits translations, not scale.
  assert(s::render(store,prepare({p::PushTransform{trans},p::PopTransform{}})).status==s::Status::unsupported);
  assert(store.resize({4,4,2})==FrameStatus::ok);assert(s::render(store,integer).status==s::Status::unsupported);

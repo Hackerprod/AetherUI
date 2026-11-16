@@ -71,6 +71,10 @@ aether_transform_matrix aether_transform_matrix_resolve(
                 operation_matrix(transforms[index], border_box, font_size, root_font_size, viewport));
         }
     }
+    // A pure translation is independent of transform-origin. Avoid losing
+    // small offsets when subtracting/adding a large float origin.
+    if (list_matrix.m11 == 1.f && list_matrix.m12 == 0.f &&
+        list_matrix.m21 == 0.f && list_matrix.m22 == 1.f) return list_matrix;
     const float origin_x = border_box.x + resolve_length(origin.x, border_box.width, font_size, root_font_size, viewport);
     const float origin_y = border_box.y + resolve_length(origin.y, border_box.height, font_size, root_font_size, viewport);
     return compose(compose({1.f, 0.f, 0.f, 1.f, -origin_x, -origin_y}, list_matrix),

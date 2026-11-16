@@ -1,5 +1,6 @@
 #pragma once
 #include <aether/aether.h>
+#include <aether/rendering/preparation/image_resource.hpp>
 #include <cstddef>
 #include <array>
 #include <cstdint>
@@ -34,6 +35,12 @@ inline constexpr std::size_t max_frame_gradient_stops = 65536;
 struct GradientStop { float offset{}; Color color{}; };
 // Owning private payload: only the trusted native adapter admits CSS evidence.
 struct LinearGradientFill { Rect rect{}, gradient_rect{}; Radii radii{}; float direction_x{}, direction_y{}, opacity{1}; std::vector<GradientStop> stops; };
+// Internal only: adapter admission and raster support remain separate gates.
+// Sampling bounds are independent of destination clipping. StrictCrop preserves
+// the legacy integer subimage contract; FullResource permits fractional UVs.
+enum class ImageSamplingBounds { StrictCrop, FullResource };
+struct Image { ImageRef resource; Rect source{}, destination{}; float opacity{1};
+ ImageSamplingBounds sampling_bounds{ImageSamplingBounds::StrictCrop}; };
 struct Fill { Rect rect{}; Radii radii{}; Color color{}; };
 struct Stroke { Rect rect{}; Radii radii{}; float stroke_width{}; Color color{}; };
 struct NativeText {
@@ -57,7 +64,7 @@ struct PushScroll { std::int64_t id{}; double x{},y{}; };
 struct PopScroll {};
 struct ScrollChrome { aether_scrollbar_geometry_t geometry{}; };
 using Command = std::variant<Fill, Stroke, Text, PushClip, PopClip, PushTransform,
- PopTransform, BeginChunk, EndChunk, BoxShadow, BorderGroup, BeginOpacity, EndOpacity, PushScroll, PopScroll, ScrollChrome, LinearGradientFill>;
+ PopTransform, BeginChunk, EndChunk, BoxShadow, BorderGroup, BeginOpacity, EndOpacity, PushScroll, PopScroll, ScrollChrome, LinearGradientFill, Image>;
 struct Snapshot { std::vector<Command> commands; bool native_text_required{}; };
 int command_tag(const Command&) noexcept;
 // Shared field validation; updates string budget only on success. Does not check scopes.
@@ -68,13 +75,15 @@ class PreparedFrame;
 using PrepareResult = std::variant<PreparedFrame, Error>;
 class PreparedFrame {
  std::vector<PreparedEvent> events_;
- explicit PreparedFrame(std::vector<PreparedEvent>&& events) noexcept;
+ std::shared_ptr<const ImageSet> images_;
+ explicit PreparedFrame(std::vector<PreparedEvent>&& events, std::shared_ptr<const ImageSet> images) noexcept;
  friend PrepareResult prepare(const Snapshot&, Cancellation*) noexcept;
  public:
  PreparedFrame(const PreparedFrame&) = delete;
  PreparedFrame& operator=(const PreparedFrame&) = delete;
  PreparedFrame(PreparedFrame&&) noexcept = default;
  PreparedFrame& operator=(PreparedFrame&&) = delete;
+ const ImageSet* images() const noexcept { return images_.get(); }
  const std::vector<PreparedEvent>& events() const noexcept { return events_; }
 };
 PrepareResult prepare(const Snapshot&, Cancellation* = nullptr) noexcept;

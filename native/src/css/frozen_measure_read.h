@@ -21,6 +21,11 @@ public:
     int32_t flex_order() const;
     bool direction_rtl() const;
     int32_t writing_mode() const;
+    int32_t flex_wrap_mode() const;
+    int32_t flex_align_content() const;
+    int32_t flex_alignment_unproven() const;
+    int32_t word_break() const;
+    int32_t overflow_wrap() const;
     aether::css::GradientEvidence background_gradient() const;
     aether::css::intrinsic_size_keyword intrinsic_keyword(const std::string& name) const;
     aether_css_length row_gap() const;

@@ -376,18 +376,21 @@ static media_condition_s* parse_term(
     void* diag_data,
     int32_t /*offset*/,
     media_condition_allocation_scope_s* scope,
-    media_profile_evidence* evidence = nullptr)
+    media_profile_evidence* evidence = nullptr, bool* complete_width_syntax = nullptr)
 {
     std::string trimmed = media_trim(source);
 
     if (str_iequals(trimmed, "all") || str_iequals(trimmed, "screen")) {
+        if(complete_width_syntax&&!str_iequals(trimmed,"screen"))*complete_width_syntax=false;
         return media_condition_always();
     }
     if (str_iequals(trimmed, "print")) {
+        if(complete_width_syntax)*complete_width_syntax=false;
         return media_condition_never();
     }
 
     if (trimmed.empty() || trimmed[0] != '(' || trimmed.back() != ')') {
+        if(complete_width_syntax)*complete_width_syntax=false;
         emit_diag(diag, diag_data, "AUIMED001", trimmed.c_str(), "",
                   ("Unsupported media term '" + trimmed + "'.").c_str());
         if (evidence) { evidence->profile_supported = false; evidence->saw_unknown_or_discarded = true; }
@@ -397,6 +400,7 @@ static media_condition_s* parse_term(
     std::string body = media_trim(trimmed.substr(1, trimmed.size() - 2));
     int32_t colon = find_top_level(body, ':');
     if (colon < 0) {
+        if(complete_width_syntax)*complete_width_syntax=false;
         emit_diag(diag, diag_data, "AUIMED002", body.c_str(), "",
                   ("Media feature '" + body + "' requires a value.").c_str());
         if (evidence) { evidence->profile_supported = false; evidence->saw_unknown_or_discarded = true; }
@@ -412,6 +416,7 @@ static media_condition_s* parse_term(
     {
         aether_css_length length_val = {};
         if (!media_length(value, length_val)) {
+            if(complete_width_syntax)*complete_width_syntax=false;
             emit_diag(diag, diag_data, "AUIMED003", name.c_str(), value.c_str(),
                       ("Invalid media length '" + value + "'.").c_str());
             if (evidence) { evidence->profile_supported = false; evidence->saw_unknown_or_discarded = true; }
@@ -427,6 +432,16 @@ static media_condition_s* parse_term(
                 evidence->saw_unknown_or_discarded = true;
             }
         }
+        if(complete_width_syntax){
+            aether::css::calc_value_s literal;double original=0;
+            // Completeness is syntax evidence from the original term, before
+            // folding. Admit only literal nonnegative px min/max-width.
+            if((name!="min-width"&&name!="max-width")||
+                !aether::css::try_parse_numeric_literal(value,literal,&original)||
+                literal.kind!=aether::css::calc_value_kind_e::length||
+                literal.length.unit!=AETHER_CSS_UNIT_PX||!std::isfinite(original)||original<0||
+                !std::isfinite(length_val.value)) *complete_width_syntax=false;
+        }
         auto* node = allocate_media_node(scope);
         node->kind = media_condition_s::kind_t::length_feature;
         node->length_value = length_val;
@@ -441,6 +456,7 @@ static media_condition_s* parse_term(
 
     if (evidence) { evidence->profile_supported = false; evidence->saw_unknown_or_discarded = true; }
 
+    if(complete_width_syntax)*complete_width_syntax=false;
     // prefers-color-scheme
     if (name == "prefers-color-scheme") {
         auto* node = allocate_media_node(scope);
@@ -509,7 +525,7 @@ static media_condition_s* parse_alternative(
     void* diag_data,
     int32_t offset,
     media_condition_allocation_scope_s* scope,
-    media_profile_evidence* evidence = nullptr)
+    media_profile_evidence* evidence = nullptr, bool* complete_width_syntax = nullptr)
 {
     auto text = [&](size_t i) {
         const auto& term = alternative.terms[i];
@@ -523,6 +539,7 @@ static media_condition_s* parse_alternative(
         return alternative.terms[i].kind == component_kind::open && alternative.terms[i].delimiter == '(';
     };
     auto invalid = [&]() {
+        if(complete_width_syntax)*complete_width_syntax=false;
         if (evidence) { evidence->profile_supported = false; evidence->saw_unknown_or_discarded = true; }
         emit_diag(diag, diag_data, "AUIMED006", "", "", "Invalid media query syntax.");
         return media_condition_never();
@@ -531,6 +548,7 @@ static media_condition_s* parse_alternative(
     size_t first = 0;
     const bool negate = keyword(first, "not");
     const bool only = keyword(first, "only");
+    if(complete_width_syntax&&negate)*complete_width_syntax=false;
     if (negate || only) ++first;
     if (first == alternative.terms.size() || keyword(first, "not") || keyword(first, "only") ||
         keyword(first, "and") || keyword(first, "or")) return invalid();
@@ -549,15 +567,16 @@ static media_condition_s* parse_alternative(
     media_condition_s* result;
     if (type) {
         const auto media_type = text(first);
+        if(complete_width_syntax&&!str_iequals(media_type,"screen"))*complete_width_syntax=false;
         if (evidence && !str_iequals(media_type,"all") && !str_iequals(media_type,"screen") && !str_iequals(media_type,"print")) {
             evidence->profile_supported = false;
             evidence->saw_unknown_or_discarded = true;
         }
         result = str_iequals(media_type, "all") || str_iequals(media_type, "screen")
             ? media_condition_always() : media_condition_never();
-    } else result = parse_term(text(first), diag, diag_data, offset, scope, evidence);
+    } else result = parse_term(text(first), diag, diag_data, offset, scope, evidence, complete_width_syntax);
     for (size_t i = first + 2; i < alternative.terms.size(); i += 2)
-        result = media_condition_and(result, parse_term(text(i), diag, diag_data, offset, scope, evidence), scope);
+        result = media_condition_and(result, parse_term(text(i), diag, diag_data, offset, scope, evidence, complete_width_syntax), scope);
     return negate ? media_condition_not(result, scope) : result;
 }
 
@@ -566,13 +585,17 @@ media_condition_s* media_condition_parse(
     aether_style_diagnostic_fn diag,
     void* diag_data,
     int32_t offset,
-    media_condition_allocation_scope_s* scope)
+    media_condition_allocation_scope_s* scope, bool* complete_width_syntax)
 {
+    if(complete_width_syntax)*complete_width_syntax=false;
     if (!source) return media_condition_never();
     const auto components = media_scan(source);
+    bool syntax_complete=!components.recovered;
+
     media_condition_s* result = media_condition_never();
     for (const auto& alternative : components.alternatives)
-        result = media_condition_or(result, parse_alternative(components, alternative, diag, diag_data, offset, scope), scope);
+        result = media_condition_or(result, parse_alternative(components, alternative, diag, diag_data, offset, scope, nullptr, complete_width_syntax?&syntax_complete:nullptr), scope);
+    if(complete_width_syntax)*complete_width_syntax=syntax_complete;
     return result;
 }
 

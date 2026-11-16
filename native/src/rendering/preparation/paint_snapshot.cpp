@@ -51,9 +51,9 @@ std::optional<Matrix> compose(Matrix m, Matrix c) noexcept {
 }
 }
 int command_tag(const Command& command) noexcept {
- constexpr std::array<int,17> tags{AETHER_PAINT_FILL_ROUNDED_RECT,AETHER_PAINT_STROKE_ROUNDED_RECT,
+ constexpr std::array<int,18> tags{AETHER_PAINT_FILL_ROUNDED_RECT,AETHER_PAINT_STROKE_ROUNDED_RECT,
  AETHER_PAINT_DRAW_TEXT,AETHER_PAINT_PUSH_CLIP,AETHER_PAINT_POP_CLIP,AETHER_PAINT_PUSH_TRANSFORM,
- AETHER_PAINT_POP_TRANSFORM,AETHER_PAINT_BEGIN_PAINT_CHUNK,AETHER_PAINT_END_PAINT_CHUNK,AETHER_PAINT_DRAW_BOX_SHADOW,AETHER_PAINT_FILL_BORDER_SIDE,-100,-101,AETHER_PAINT_PUSH_SCROLL_OFFSET,AETHER_PAINT_POP_SCROLL_OFFSET,AETHER_PAINT_DRAW_SCROLLBAR_CHROME,AETHER_PAINT_FILL_ROUNDED_RECT_GRADIENT};
+ AETHER_PAINT_POP_TRANSFORM,AETHER_PAINT_BEGIN_PAINT_CHUNK,AETHER_PAINT_END_PAINT_CHUNK,AETHER_PAINT_DRAW_BOX_SHADOW,AETHER_PAINT_FILL_BORDER_SIDE,-100,-101,AETHER_PAINT_PUSH_SCROLL_OFFSET,AETHER_PAINT_POP_SCROLL_OFFSET,AETHER_PAINT_DRAW_SCROLLBAR_CHROME,AETHER_PAINT_FILL_ROUNDED_RECT_GRADIENT,AETHER_PAINT_DRAW_BACKGROUND_IMAGE};
  return command.valueless_by_exception() ? -1 : tags[command.index()];
 }
 std::optional<ErrorCode> validate_text(const Text& value, std::size_t& bytes) noexcept {
@@ -75,7 +75,15 @@ std::optional<ErrorCode> validate_command(const Command& command, std::size_t& b
  if (command.valueless_by_exception()) return ErrorCode::INVALID_PAYLOAD;
  return std::visit([&bytes](const auto& value) -> std::optional<ErrorCode> {
   using T = std::decay_t<decltype(value)>;
-  if constexpr (std::is_same_v<T,PushScroll>) {
+  if constexpr (std::is_same_v<T,Image>) {
+   const auto& r=value.source; const auto& d=value.destination;
+   if((value.sampling_bounds!=ImageSamplingBounds::StrictCrop && value.sampling_bounds!=ImageSamplingBounds::FullResource) ||
+      !value.resource || !valid(r) || r.x<0 || r.y<0 || r.width<=0 || r.height<=0 ||
+      double(r.x)+r.width>value.resource->width() || double(r.y)+r.height>value.resource->height() ||
+      !valid(d) || d.width<=0 || d.height<=0 || std::abs(double(d.x))>65536 || std::abs(double(d.y))>65536 ||
+      std::abs(double(d.x)+d.width)>65536 || std::abs(double(d.y)+d.height)>65536 ||
+      !nonnegative(value.opacity) || value.opacity>1) return ErrorCode::INVALID_PAYLOAD;
+  } else if constexpr (std::is_same_v<T,PushScroll>) {
    if(value.id<=0 || !std::isfinite(value.x)||!std::isfinite(value.y)||value.x<0||value.y<0||value.x>65536||value.y>65536)return ErrorCode::INVALID_PAYLOAD;
   } else if constexpr (std::is_same_v<T,ScrollChrome>) {
    const auto& g=value.geometry;
@@ -126,7 +134,7 @@ std::optional<ErrorCode> validate_command(const Command& command, std::size_t& b
   return {};
  }, command);
 }
-PreparedFrame::PreparedFrame(std::vector<PreparedEvent>&& events) noexcept : events_(std::move(events)) {}
+PreparedFrame::PreparedFrame(std::vector<PreparedEvent>&& events, std::shared_ptr<const ImageSet> images) noexcept : events_(std::move(events)), images_(std::move(images)) {}
 PrepareResult prepare(const Snapshot& snapshot, Cancellation* cancellation) noexcept {
  std::optional<std::size_t> index;
  std::optional<int> tag;
@@ -136,13 +144,32 @@ PrepareResult prepare(const Snapshot& snapshot, Cancellation* cancellation) noex
   if (snapshot.commands.size() > max_commands) return error(ErrorCode::COMMAND_COUNT);
   // Bound the total deep-copy work before allocating/copying any event payload.
   std::size_t stop_count=0;
+  std::vector<ImageRef> image_refs;
   for(const auto& command:snapshot.commands) {
    if(cancelled(cancellation))return error(ErrorCode::CANCELLED);
+   if(const auto* image=std::get_if<Image>(&command)) {
+    index=&command-snapshot.commands.data(); tag=command_tag(command);
+    std::size_t ignored=0;
+    if(auto e=validate_command(command,ignored))return error(*e);
+    image_refs.push_back(image->resource);
+   }
    if(const auto* g=std::get_if<LinearGradientFill>(&command)) {
     if(g->stops.size()>max_gradient_stops || g->stops.size()>max_frame_gradient_stops-stop_count)return error(ErrorCode::LIMIT_EXCEEDED);
     stop_count+=g->stops.size();
    }
   }
+  std::shared_ptr<const ImageSet> images;
+  if(cancelled(cancellation))return error(ErrorCode::CANCELLED);
+  if(!image_refs.empty()) {
+   auto admitted=ImageSet::create(image_refs,256u*1024u*1024u,4096);
+   if(const auto* e=std::get_if<ImageError>(&admitted)) {
+    return error(*e==ImageError::OutOfMemory?ErrorCode::OUT_OF_MEMORY:
+                 *e==ImageError::LimitExceeded?ErrorCode::LIMIT_EXCEEDED:ErrorCode::INVALID_PAYLOAD);
+   }
+   images=std::get<std::shared_ptr<const ImageSet>>(std::move(admitted));
+  }
+  if(cancelled(cancellation))return error(ErrorCode::CANCELLED);
+  index.reset(); tag.reset();
   std::vector<PreparedEvent> events;
   events.reserve(snapshot.commands.size());
   std::vector<Matrix> transforms;
@@ -232,7 +259,7 @@ PrepareResult prepare(const Snapshot& snapshot, Cancellation* cancellation) noex
   index.reset(); tag.reset();
   if (cancelled(cancellation)) return error(ErrorCode::CANCELLED);
   if (!scrolls.empty() || !groups.empty() || !transforms.empty() || !clips.empty() || !chunks.empty()) return error(ErrorCode::UNCLOSED_SCOPE);
-  return PreparedFrame(std::move(events));
+  return PreparedFrame(std::move(events),std::move(images));
  } catch (const std::bad_alloc&) { return error(ErrorCode::OUT_OF_MEMORY); }
 }
 std::optional<Error> replay(const PreparedFrame& frame, CommandSink& sink, Cancellation* cancellation) noexcept {

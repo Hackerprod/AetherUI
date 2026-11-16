@@ -78,7 +78,7 @@ static void charge_expansion(const declaration_compilation_result& d,size_t sele
     auto str=[&](const std::string& v){add(v.size());add(1);};
     auto entries=[&](size_t n,size_t width){source_charge(count,n,static_cast<size_t>(-1));add(source_product(n,width));};
     entries(d.properties.size(),sizeof(compiled_property_declaration_s));
-    for(const auto& v:d.properties){str(v.value.typed_value);str(v.value.typography_source);str(v.value.deferred_source);}
+    for(const auto& v:d.properties){str(v.value.typed_value);str(v.value.typography_source);str(v.value.authored_property);str(v.value.deferred_source);}
     entries(d.custom.size(),sizeof(custom_property_declaration_s));
     for(const auto& v:d.custom){str(v.name);str(v.source);if(v.original_source)str(*v.original_source);}
     entries(d.content.size(),sizeof(compiled_content_declaration_s));for(const auto& v:d.content)str(v.source);
@@ -224,6 +224,11 @@ static bool try_compile_longhand(
     if (!def) return false;
 
     std::string normalized = str_trim(value);
+    if(def->name=="flex-direction"||def->name=="flex-wrap"){
+        std::string key;
+        if(css_single_identifier(normalized,key)&&(str_iequals(key,"revert")||str_iequals(key,"revert-layer")))return false;
+    }
+
     // Decode only for CSS-wide classification. The registered display parser
     // consumes source tokens itself; feeding it decoded text would re-interpret
     // an escaped backslash (e.g. \5c 66lex) as a second CSS escape.
@@ -234,9 +239,14 @@ static bool try_compile_longhand(
     }
     compiled_style_value_s compiled;
     if (name == "font-family" || name == "font-style" || name == "letter-spacing" ||
-        name == "font-size" || name == "font-weight" || name == "line-height")
+        name == "font-size" || name == "font-weight" || name == "line-height" ||
+        name == "align-items" || name == "align-self" || name == "align-content" || name == "justify-content")
         compiled.typography_source = normalized;
 
+    if (def->name == "word-break" || def->name == "overflow-wrap") {
+        compiled.typography_source = normalized;
+        compiled.authored_property = name;
+    }
     const auto css_wide = def->css_wide ? def->css_wide(wide_keyword) : property_css_wide_e::none;
     if (css_wide == property_css_wide_e::initial || str_iequals(wide_keyword, "initial") || str_iequals(wide_keyword, "revert")) {
         compiled.mode = compiled_value_mode::initial;
@@ -561,7 +571,7 @@ static aether_status_t compile_range(
         accounting.add(accounting.rules, 1, accounting.max_rules);
         if (work) source_work_add(work->work_rule_starts, 1);
         if (source[index] == '@') {
-            accounting.loss(style_source_loss::at_rule);
+
             int32_t at_offset = index;
             index++;
             css_component_lexer at_lexer(original.data(),static_cast<size_t>(end),static_cast<size_t>(index));
@@ -573,6 +583,7 @@ static aether_status_t compile_range(
             const size_t name_end=name_token.end-(name_token.kind==css_variable_token_kind::function?1:0);
             std::string name;
             if(!css_single_identifier(original.substr(name_token.begin,name_end-name_token.begin),name)){accounting.incomplete(style_source_loss::incomplete_parse);index=end;continue;}
+            if(name!="media")accounting.loss(style_source_loss::at_rule);
             index=static_cast<int32_t>(name_end);
             skip_whitespace(source, index, end);
 
@@ -584,8 +595,9 @@ static aether_status_t compile_range(
             }
 
             if (str_iequals(name, "import") || str_iequals(name, "font-face")) { accounting.external_pending = true; accounting.incomplete(style_source_loss::external_source); }
-            if (name == "media" || name == "supports") accounting.loss(style_source_loss::conditional_source);
+            if (name == "supports") accounting.loss(style_source_loss::conditional_source);
             if (source[delimiter] == ';') {
+                if(name=="media"){accounting.loss(style_source_loss::at_rule);accounting.loss(style_source_loss::conditional_source);}
                 index = delimiter + 1;
                 continue;
             }
@@ -616,8 +628,10 @@ static aether_status_t compile_range(
                     rule.keyframes=std::move(keyframes);out_rules.push_back(std::move(rule));
                 }
             } else if (name == "media") {
+                bool complete_width_syntax=false;
                 media_condition_s* media = media_condition_parse(
-                    prelude.c_str(), nullptr, nullptr, at_offset, &media_scope);
+                    prelude.c_str(), nullptr, nullptr, at_offset, &media_scope,&complete_width_syntax);
+                if(!complete_width_syntax){accounting.loss(style_source_loss::at_rule);accounting.loss(style_source_loss::conditional_source);}
                 media_condition_s* combined = media_condition_and(frame.condition, media, &media_scope);
                 frames.push_back({delimiter + 1, extent->body_end, combined, frame.active});
             }

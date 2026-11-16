@@ -20,7 +20,18 @@ struct paint_context_s {
     bool has_transform = false;                    /* whether a transform bracket must be pushed */
 };
 
+namespace aether::rendering {class NativeViewportAuthority;class DocumentViewportAuthority;class DocumentShadowPlan;class DocumentScopePlan;}
 struct aether_display_list_builder_s {
+    const aether::rendering::NativeViewportAuthority* native_viewport_capture = nullptr;
+    const aether::rendering::DocumentViewportAuthority* native_document_capture = nullptr;
+    const aether::rendering::DocumentShadowPlan* native_shadow_plan = nullptr;
+    std::vector<aether::rendering::NativeShadowEntry>* native_shadows = nullptr;
+    bool native_document_checked = false;
+    const aether::rendering::DocumentScopePlan* native_scope_plan = nullptr;
+    std::vector<aether::rendering::NativeDocumentScopeEntry>* native_scopes = nullptr;
+    std::size_t native_image_source_bytes = 0;
+    const aether::rendering::NativeImageCatalog* native_image_catalog = nullptr;
+    std::vector<aether::rendering::NativeImageEntry>* native_images = nullptr;
     aether_display_list_s* native_gradient_output = nullptr;
     std::vector<aether::rendering::OpacityEvent>* opacity_events = nullptr;
     std::vector<aether::rendering::NativeTextEntry>* native_text_runs = nullptr;

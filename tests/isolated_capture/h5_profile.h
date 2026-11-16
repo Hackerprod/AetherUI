@@ -12,12 +12,13 @@ namespace h5 {
 // Shared traversal returns original declaration spans; never executable flattened CSS.
 struct DeclarationRange { size_t begin,end; bool keyframe; unsigned depth; size_t selector_begin=SIZE_MAX,selector_end=SIZE_MAX; };
 struct WorkBudget { size_t bytes=2*1024*1024, tokens=524288, rules=65536, steps=32*1024*1024; };
-struct Analysis { std::vector<DeclarationRange> declarations; std::set<size_t> functions, at_rules; bool valid=true; bool variables=false; bool h19_display_unproven=false; bool h21_writing=false; bool h20_direction=false,h20_unproven=false; size_t failure_begin=SIZE_MAX,failure_end=SIZE_MAX,failure_selector_begin=SIZE_MAX,failure_selector_end=SIZE_MAX; bool limit_failure=false,lexical_failure=false; };
+struct Analysis { std::vector<DeclarationRange> declarations; std::set<size_t> functions, at_rules, image_urls; bool valid=true; bool variables=false; bool h19_display_unproven=false; bool h21_writing=false; bool h20_direction=false,h20_unproven=false; size_t failure_begin=SIZE_MAX,failure_end=SIZE_MAX,failure_selector_begin=SIZE_MAX,failure_selector_end=SIZE_MAX; bool limit_failure=false,lexical_failure=false; };
 struct Scanner {
  explicit Scanner(const std::string& source):s(source){}
  const std::string& s; std::vector<css_variable_token> ts; Analysis out;
  size_t current_begin=0,current_end=0,current_selector_begin=SIZE_MAX,current_selector_end=SIZE_MAX;
  void invalid(){if(out.valid){out.failure_begin=current_begin;out.failure_end=current_end;out.failure_selector_begin=current_selector_begin;out.failure_selector_end=current_selector_end;}out.valid=false;}
+ const std::set<std::string>* image_aliases=nullptr;
  size_t supports_budget=65536; WorkBudget local; WorkBudget* budget=nullptr;
  bool spend(size_t& counter,size_t amount=1){if(amount>counter){invalid();out.limit_failure=true;return false;}counter-=amount;return true;}
  bool step(){return spend(budget->steps);}
@@ -47,6 +48,13 @@ struct Scanner {
    current_end=i<z?ts[i].begin:e;size_t end=i;if(end>=start+2&&d(end-2,'!')&&ts[end-1].kind==css_variable_token_kind::ident&&ident(end-1)=="important")end-=2;
    if(start==end){if(property.starts_with("--"))continue;invalid();return;}
    auto value=s.substr(ts[start].begin,ts[end-1].end-ts[start].begin);
+   // Opt-in image profile: one canonical URL token in a literal background-image.
+   // No general URL/function admission, variables, shorthand, or keyframes.
+   if(image_aliases && !keyframe && raw_property=="background-image" && end==start+1 &&
+      ts[start].serialization==css_variable_serialization::url && value.starts_with("url(") && value.ends_with(")")) {
+    const auto alias=value.substr(4,value.size()-5);
+    if(image_aliases->count(alias))out.image_urls.insert(ts[start].begin);
+   }
    if(h14::variable_source(property,value)){out.variables=true;for(size_t j=start;j<end;++j)if(ts[j].kind==css_variable_token_kind::function)out.functions.insert(ts[j].begin);}
    // H19 must never infer flex from an earlier declaration when the native
    // parser silently discards a later valid-but-unimplemented display syntax.
@@ -118,5 +126,5 @@ struct Scanner {
   if(sheet)rules(0,ts.size(),0);else declarations(0,ts.size());return out;
  }
 };
-inline Analysis analyze(const std::string& s,bool sheet,WorkBudget* budget=nullptr){Scanner scanner{s};scanner.budget=budget;return scanner.run(sheet);}
+inline Analysis analyze(const std::string& s,bool sheet,WorkBudget* budget=nullptr,const std::set<std::string>* image_aliases=nullptr){Scanner scanner{s};scanner.budget=budget;scanner.image_aliases=image_aliases;return scanner.run(sheet);}
 }

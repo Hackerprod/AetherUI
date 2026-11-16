@@ -29,7 +29,7 @@ inline void css(const std::string& s,const std::string& source,std::set<std::str
   while(cursor<t.begin){if(s[cursor++]=='\n'){++line;column=1;}else ++column;}
   const std::string label=std::string(kind)=="url"?"url":name(s,a,z);
   ++totals[std::string(kind)+":"+label];
-  const bool admitted=analysis.valid&&(t.kind==css_variable_token_kind::function?analysis.functions.count(t.begin):analysis.at_rules.count(t.begin));
+  const bool admitted=analysis.valid&&(t.kind==css_variable_token_kind::function?analysis.functions.count(t.begin):t.serialization==css_variable_serialization::url?analysis.image_urls.count(t.begin):analysis.at_rules.count(t.begin));
   if(admitted)reason="H5_CONTEXT_PROFILE_ADMITTED";
   else if(t.kind!=css_variable_token_kind::function)blockers.insert(reason);
   logstream<<"inventory_css source="<<quoted(source)<<" offset="<<t.begin<<" length="<<t.end-t.begin<<" line="<<line<<" column="<<column<<" kind="<<kind<<" name="<<quoted(label)<<" reason="<<reason<<" context=SHARED_PROFILE_ANALYSIS full_css_support=UNVERIFIED\n";

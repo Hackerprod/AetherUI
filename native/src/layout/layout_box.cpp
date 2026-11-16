@@ -4,6 +4,8 @@
 
 void LayoutBoxRegistry::link(aether_layout_box_s* box) noexcept {
     assert(box && !box->owner && !box->registry_prev_ && !box->registry_next_);
+    advance_revision(); // Before membership is made observable.
+    box->registry_birth_ = revision_;
     box->registry_next_ = head_;
     if (head_) head_->registry_prev_ = box;
     head_ = box;
@@ -11,6 +13,7 @@ void LayoutBoxRegistry::link(aether_layout_box_s* box) noexcept {
 
 void LayoutBoxRegistry::unlink(aether_layout_box_s* box) noexcept {
     assert(box && box->owner);
+    advance_revision(); // Before unlink or destruction can reuse the address.
     if (box->registry_prev_) box->registry_prev_->registry_next_ = box->registry_next_;
     else { assert(head_ == box); head_ = box->registry_next_; }
     if (box->registry_next_) box->registry_next_->registry_prev_ = box->registry_prev_;

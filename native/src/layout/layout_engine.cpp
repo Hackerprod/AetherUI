@@ -1,7 +1,15 @@
+#include "document_word_fit.h"
+#include "document_attempt_layout.h"
 #include "initial_canvas.h"
 /* ── Layout Engine — core box layout, flow, inline, and intrinsic sizing ─ */
 #include "layout_internal.h"
 #include "native_text_transaction.h"
+#include "real_simple_text_policy.h"
+#include "selected_layout_capture.h"
+#include "document_text_context.h"
+#include "document_root_layout.h"
+using aether::layout::DocumentTextAccess;
+using aether::layout::RealSimpleTextAccess;
 using aether::layout::NativeTextAccess;
 #include "layout_scroll_bounds.h"
 #include "inline_line_resolver.h"
@@ -182,6 +190,11 @@ aether_rectf normal_flow_border_box(const aether_layout_box_s* box) {
     auto rect = box->border_box;
     offset_rect(rect, -box->own_relative_dx, -box->own_relative_dy);
     return rect;
+}
+
+static void place_normal_flow_block(aether_layout_box_s* box,float cursor_y,float collapsed_before) {
+    const float border_y = cursor_y + collapsed_before;
+    offset_box(box, 0, border_y - normal_flow_border_box(box).y);
 }
 
 aether_rectf normal_flow_margin_box(const aether_layout_box_s* box) {
@@ -440,7 +453,10 @@ float clamp_border_height(const aether_layout_engine_s* engine,
     return std::max(decorations, height);
 }
 
-aether_layout_box_s* layout_element(
+static void admit_document_atomic_style(const aether_layout_engine_s*,aether_node_s*,const BoxStyleSnapshot&);
+static document_atomic_widths_s document_auto_atomic_border_width(const aether_layout_engine_s*,const StyleLookup*,aether_node_s*,const BoxStyleSnapshot&,double);
+
+static aether_layout_box_s* layout_element_body(
     const aether_layout_engine_s* engine,
     const StyleLookup* styles,
     aether_node_s* element,
@@ -458,6 +474,12 @@ aether_layout_box_s* layout_element(
     float intrinsic_available_width)
 {
     auto style = get_style(styles, element);
+    if(DocumentTextAccess::drawing_mode(engine)&&
+       (style.display==AETHER_DISPLAY_TABLE||style.display==AETHER_DISPLAY_TABLE_ROW||
+        style.display==AETHER_DISPLAY_TABLE_CELL||
+        style.position!=AETHER_POSITION_STATIC))
+        throw std::invalid_argument("DOCUMENT_DRAWING_UNTRACKED_PATH");
+    if(DocumentTextAccess::drawing_mode(engine)&&style.display==AETHER_DISPLAY_INLINE_BLOCK)admit_document_atomic_style(engine,element,style);
     if (style.display == AETHER_DISPLAY_CONTENTS)
         throw std::invalid_argument("CONTENTS_BOX_CONTEXT_UNSUPPORTED");
     const bool intrinsic_width = intrinsic_measurement &&
@@ -498,11 +520,15 @@ aether_layout_box_s* layout_element(
     float specified_width = intrinsic_width ? NAN
         : used_width("width", style.width);
     float border_width = specified_width;
+    std::optional<document_atomic_widths_s> document_atomic_widths;
 
     if (box->is_initial_canvas && !is_keyword("width")) {
         border_width = canvas.width + aether_thicknessf_horizontal(padding) + aether_thicknessf_horizontal(border);
     } else if (has_forced_border_width) {
         border_width = forced_border_width;
+    } else if (DocumentTextAccess::drawing_mode(engine)&&style.display==AETHER_DISPLAY_INLINE_BLOCK&&style.width.unit==AETHER_CSS_UNIT_AUTO) {
+        document_atomic_widths=document_auto_atomic_border_width(engine,styles,element,style,containing_block.width);
+        border_width=static_cast<float>(document_atomic_widths->border);
     } else if (!std::isfinite(border_width)) {
         border_width = force_available_width
             ? available_border_width
@@ -632,7 +658,7 @@ aether_layout_box_s* layout_element(
         content_height = layout_flow_children(engine, styles, box, element,
                                               {content_x, content_y, content_width, child_containing_height},
                                               child_percentage_height,
-                                              style, result);
+                                              style, result,document_atomic_widths?std::optional<double>(document_atomic_widths->content):std::nullopt);
         // Chromium centers in-flow content inside form controls that carry it
         // (buttons): the line block floats in the middle of the control's definite
         // height instead of hugging the top — even when the line block is TALLER
@@ -732,8 +758,41 @@ aether_layout_box_s* layout_element(
     } else {
         layout_complete_element(engine, styles, completion, natural_border, result);
     }
+    // Store only after child callbacks/completion. Logical capacity stayed on
+    // this stack throughout fitting; this retained value serves outer atomic fit.
+    box->document_atomic_widths=document_atomic_widths;
     return box;
 }
+
+aether_layout_box_s* layout_element(
+    const aether_layout_engine_s* engine,
+    const StyleLookup* styles,
+    aether_node_s* element,
+    aether_rectf containing_block,
+    percentage_height_s containing_height,
+    float normal_flow_y,
+    bool force_available_width,
+    float forced_border_width, bool has_forced_border_width,
+    float forced_border_height, forced_height_kind_e forced_height_kind,
+    bool is_independent_layout_item,
+    aether_layout_result_s* result,
+    const int32_t* viewport_overflow_override,
+    element_completion_s* deferred_completion,
+    const intrinsic_measurement_s* intrinsic_measurement,
+    float intrinsic_available_width)
+{
+ if(!DocumentTextAccess::drawing_mode(engine))return layout_element_body(engine, styles, element, containing_block, containing_height, normal_flow_y, force_available_width, forced_border_width, has_forced_border_width, forced_border_height, forced_height_kind, is_independent_layout_item, result, viewport_overflow_override, deferred_completion, intrinsic_measurement, intrinsic_available_width);
+ auto* mutable_engine=const_cast<aether_layout_engine_s*>(engine);
+ auto& state=DocumentTextAccess::drawing_attempts(engine);
+ aether::layout::DocumentAttemptLayout::Frame attempt(state,mutable_engine);
+ try{
+  auto* box=layout_element_body(engine, styles, element, containing_block, containing_height, normal_flow_y, force_available_width, forced_border_width, has_forced_border_width, forced_border_height, forced_height_kind, is_independent_layout_item, result, viewport_overflow_override, deferred_completion, intrinsic_measurement, intrinsic_available_width);
+  if(box->document_has_last_line)box->document_last_line_baseline-=double(box->content_box.y);
+  box->document_layout_attempt=state.active_id(mutable_engine);
+  attempt.close(box);return box;
+ }catch(...){DocumentTextAccess::capture_failure(mutable_engine);throw;}
+}
+
 
 void layout_recompute_saved_scroll(aether_layout_box_s* box) {
     const auto flags = box->scroll_completion_flags;
@@ -861,17 +920,35 @@ static void retain_unit_admission(std::vector<inline_item_s>& output,
     aether_node_s* owner, const BoxStyleSnapshot& style, bool barrier) {
     auto marker = inline_item_s::text_item(owner, style, "");
     marker.legacy_ignored = true;
+    marker.marker_kind=inline_item_s::MarkerKind::admission_only;
     marker.unit_barrier = barrier;
     output.push_back(std::move(marker));
+}
+
+static void collect_document_source(const aether_layout_engine_s* engine,aether_node_s* owner,
+    aether_node_s* node,const BoxStyleSnapshot& style,std::vector<inline_item_s>& output) {
+    auto source=DocumentTextAccess::source(engine,owner,node,style);
+    auto item=inline_item_s::text_item(owner,style,source->decoded);
+    item.is_line_break=source->kind==aether::layout::DocumentTextSource::Kind::line_break;
+    item.document_source=std::move(source);output.push_back(std::move(item));
 }
 
 // One side-effect-free admission decision on the entire IFC, including empty
 // inline ancestors. There is no prefix admission or fallback after measuring.
 // ASCII excludes bidi/shaping/Unicode line-breaking from this initial contract.
-static bool uses_source_unit_resolver(const std::vector<inline_item_s>& items,
+static bool uses_source_unit_resolver(const aether_layout_engine_s* engine,const std::vector<inline_item_s>& items,
                                      const BoxStyleSnapshot& parent_style,
                                      bool intrinsic_width = false) {
     const auto mode = parent_style.white_space;
+    if(DocumentTextAccess::active(engine)) {
+        if(mode!=AETHER_WHITE_SPACE_NORMAL&&mode!=AETHER_WHITE_SPACE_NOWRAP&&mode!=AETHER_WHITE_SPACE_PRE&&!(DocumentTextAccess::drawing_mode(engine)&&mode==AETHER_WHITE_SPACE_PRE_WRAP))
+            throw std::invalid_argument("DOCUMENT_TEXT_WHITE_SPACE_UNSUPPORTED");
+        for(const auto& item:items){DocumentTextAccess::check(engine);
+            if(item.unit_barrier||item.hanging_barrier||(item.is_atomic&&!DocumentTextAccess::drawing_mode(engine))||item.block_anchor_index!=static_cast<size_t>(-1)||(!item.is_atomic&&item.style.white_space!=mode))
+                throw std::invalid_argument("DOCUMENT_TEXT_IFC_UNSUPPORTED");
+        }
+        return true;
+    }
     // PRE_WRAP is admitted only for intrinsic widths. Its hanging/geometry
     // resolver stays unchanged; HTML newlines separated by markup remain two breaks.
     if (!(intrinsic_width && mode == AETHER_WHITE_SPACE_PRE_WRAP) &&
@@ -894,11 +971,15 @@ static bool uses_source_unit_resolver(const std::vector<inline_item_s>& items,
 // comment boundaries cannot change shaping, whitespace or break opportunities.
 // The children remain borrowed aliases; no authored node or text is modified.
 static bool collect_anonymous_flex_text_items(
-    aether_node_s* element,
+    const aether_layout_engine_s* engine,aether_node_s* element,
     const BoxStyleSnapshot& style,
     std::vector<inline_item_s>& output)
 {
     if (!element->anonymous_flex_owner) return false;
+    if(DocumentTextAccess::active(engine)){
+        for(auto* child:element->children)collect_document_source(engine,element,child,style,output);
+        return true;
+    }
     std::string text;
     for (const auto* child : element->children) {
         if (child->type == AETHER_NODE_TEXT) text.append(child->text);
@@ -918,8 +999,20 @@ float layout_flow_children(
     aether_rectf content,
     percentage_height_s containing_height,
     const BoxStyleSnapshot& parent_style,
-    aether_layout_result_s* result)
+    aether_layout_result_s* result,std::optional<double> document_logical_width)
 {
+    if (RealSimpleTextAccess::owns(engine,parent)) {
+        const auto measured=RealSimpleTextAccess::measure(engine,parent,parent_style);
+        auto* fragment=result->create_box();
+        fragment->kind=LAYOUT_BOX_TEXT; fragment->element=parent; fragment->style=parent_style;
+        fragment->text=measured.run ? measured.run->source : std::string{};
+        fragment->native_text={measured.run,measured.metrics.baseline};
+        fragment->content_box={content.x,content.y,measured.metrics.width,measured.metrics.height};
+        fragment->padding_box=fragment->border_box=fragment->margin_box=fragment->content_box;
+        parent_box->add_child(fragment);
+        if(result->records_boxes) result->paint_order.push_back(fragment);
+        return measured.metrics.height;
+    }
     if (NativeTextAccess::owns(engine,parent)) {
         const auto measured=NativeTextAccess::measure(engine,parent,parent_style);
         if(!measured.run) return 0.f;
@@ -936,19 +1029,20 @@ float layout_flow_children(
     float cursor_y = content.y;
     std::vector<inline_item_s> inline_items;
     inline_capitalization_context_s context;
-    if (collect_anonymous_flex_text_items(parent, parent_style, inline_items)) {
+    if (collect_anonymous_flex_text_items(engine,parent, parent_style, inline_items)) {
         return layout_inline_items(engine, styles, parent_box, inline_items,
-            content.x, content.y, content.width, content.height, containing_height, parent_style, result);
+            content.x, content.y, content.width, content.height, containing_height, parent_style, result,document_logical_width);
     }
     bool has_pending_margin = false;
     float pending_margin = 0.f;
     aether_node_s* cursor_owner = nullptr;
 
     auto flush_inline = [&]() {
-        if (!has_legacy_inline_content(inline_items)) { inline_items.clear(); return; }
+        if (!has_legacy_inline_content(inline_items) &&
+            (!DocumentTextAccess::drawing_mode(engine) || inline_items.empty())) { inline_items.clear(); return; }
         // An eligible all-collapsed sequence has no line at all. In particular,
         // nested whitespace must not consume the margin separating two blocks.
-        if (uses_source_unit_resolver(inline_items, parent_style) &&
+        if (!DocumentTextAccess::active(engine) && uses_source_unit_resolver(engine,inline_items, parent_style) &&
             std::none_of(inline_items.begin(), inline_items.end(), [&](const inline_item_s& item) {
                 return item.is_line_break ||
                     aether_inline_text_has_visible_content(item.text, parent_style.white_space);
@@ -963,7 +1057,7 @@ float layout_flow_children(
         }
         const float used = layout_inline_items(engine, styles, parent_box, inline_items,
                                                content.x, cursor_y, content.width,
-                                               content.height, containing_height, parent_style, result);
+                                               content.height, containing_height, parent_style, result,document_logical_width);
         cursor_y += used;
         // A non-empty inline line separates adjacent block margins. Whitespace
         // alone has zero height and must not prevent the normal CSS collapse.
@@ -993,6 +1087,7 @@ float layout_flow_children(
         }
         const auto role = append_inline_node(engine, styles, parent, parent_style, node, inline_items, context);
         if (role == inline_node_role_e::block_content) {
+            if(DocumentTextAccess::drawing_mode(engine)&&parent_style.display==AETHER_DISPLAY_INLINE_BLOCK)throw std::invalid_argument("DOCUMENT_ATOMIC_BLOCK_CONTENT");
             const auto child_style = get_style(styles, node);
                 flush_inline();
                 auto* child_box = layout_element(engine, styles, node,
@@ -1005,8 +1100,7 @@ float layout_flow_children(
                 const float collapsed_before = has_pending_margin
                     ? aether_collapse_adjoining_margins(pending_margin, child_box->collapsed_margin_before)
                     : child_box->collapsed_margin_before;
-                const float border_y = cursor_y + collapsed_before;
-                offset_box(child_box, 0, border_y - normal_flow_border_box(child_box).y);
+                place_normal_flow_block(child_box, cursor_y, collapsed_before);
                 parent_box->add_child(child_box);
                 aether_margin_adjacency_facts empty_facts{};
                 empty_facts.has_in_flow_content_before = !child_box->children.empty();
@@ -1086,16 +1180,502 @@ struct measured_inline_fragment {
 struct inline_source_fragment {
     size_t item_index;
     std::string text;
+    std::vector<std::shared_ptr<const aether::layout::DocumentTextSource>> sources;
+    std::vector<aether::layout::DocumentTextRange> provenance;
+    std::shared_ptr<const aether::layout::DocumentTextFragment> authenticated;
 };
-enum class inline_source_kind { word, space, forced };
+enum class inline_source_kind { word, space, forced, atomic };
 struct inline_source_unit {
     inline_source_kind kind;
     std::vector<inline_source_fragment> fragments;
+    std::size_t atomic_item=static_cast<std::size_t>(-1);
 };
 
+// Candidate extension of the existing source-unit collector. It emits the same
+// units consumed by the existing intrinsic and line resolvers, not a new breaker.
+namespace aether::layout {
+class DocumentTextNormalizer final {
+ using Source=std::shared_ptr<const DocumentTextSource>;
+ struct Pending {Source source;DocumentTextRange range;};
+ struct PassGuard {const aether_layout_engine_s* engine;bool complete=false;~PassGuard(){if(!complete)DocumentTextAccess::abort_pass(engine);}};
+public:
+ struct AtomicStamp {
+  const aether_layout_box_s* key{};
+  std::shared_ptr<node_identity_s> element_token,presentation_token,visual_token;
+  aether_node_s* element{};
+  aether_node_s* presentation_owner{};
+  layout_box_kind_t kind{};
+  BoxStyleSnapshot style{};
+  std::vector<aether_layout_box_s*> children{};
+  std::string text{};
+  std::shared_ptr<const DocumentTextSource> document_source{};
+  aether::rendering::text::Placement native_text{};
+  std::shared_ptr<const DocumentTextInterval> document_interval;
+  std::shared_ptr<const DocumentConstructionInterval> document_construction;
+  std::optional<document_atomic_widths_s> document_atomic_widths;
+  bool document_has_last_line{};
+  double document_last_line_baseline{};
+  std::uint64_t document_layout_attempt{};
+  std::shared_ptr<const DocumentAtomicInlineEvent> document_atomic_inline;
+  bool is_atomic_control{};
+  bool is_initial_canvas{};
+  std::string control_display_text{};
+  bool control_shows_placeholder{};
+  aether_scroll_metrics_t scroll{};
+  bool visual_sample_valid{};
+  bool visual_has_transform{};
+  aether_transform_matrix visual_transform{};
+  float visual_opacity{};
+  int64_t visual_timestamp{};
+  float collapsed_margin_before{};
+  float collapsed_margin_after{};
+  float own_relative_dx{};
+  float own_relative_dy{};
+  aether_thicknessf used_border{};
+  aether_rectf margin_box{};
+  aether_rectf border_box{};
+  aether_rectf padding_box{};
+  aether_rectf content_box{};
+  layout_scroll_proxy_s scroll_proxy{};
+  float scroll_flow_height{};
+  float scroll_base_height{};
+  uint8_t scroll_completion_flags{};
+  std::uint64_t birth{};
+  const aether_layout_box_s* primary{};
+ };
+ struct DrawingAtom {
+  aether_layout_box_s* box{};
+  std::vector<AtomicStamp> stamps;
+  std::vector<aether_layout_box_s*> paint;
+  double width{},height{},baseline{};
+  std::shared_ptr<const DocumentAtomicInlineEvent> event;
+ };
+ static void authenticate_atomic_capture(const aether_layout_engine_s* engine,aether_layout_result_s* layout){
+  auto& backend=DocumentTextAccess::drawing_backend(engine);
+  (void)DocumentTextAccess::capture_construction_geometry(engine,layout,&backend);
+ }
+ static std::pair<float,float> physical_strut(const aether_layout_engine_s* engine,aether_node_s* owner,const BoxStyleSnapshot& style){return DocumentTextAccess::validate_admission_marker(engine,owner,style,false);}
+ static double atomic_width(const aether_layout_engine_s* engine,const inline_item_s& item){
+  if(!item.is_atomic||item.style.display!=AETHER_DISPLAY_INLINE_BLOCK||item.document_source||!item.text.empty()||item.is_line_break)throw std::invalid_argument("DOCUMENT_ATOMIC_KIND");
+  (void)physical_strut(engine,item.element,item.style);const auto& s=item.style;
+  const auto px=[](aether_css_length v){if(v.unit!=AETHER_CSS_UNIT_PX||!std::isfinite(v.value)||v.value<0||v.value>65536||v.linear_percent||v.linear_em||v.linear_rem||v.linear_vw||v.linear_vh)throw std::invalid_argument("DOCUMENT_ATOMIC_PX");return double(v.value);};
+  if(s.position!=AETHER_POSITION_STATIC||s.overflow_x!=AETHER_OVERFLOW_VISIBLE||s.overflow_y!=AETHER_OVERFLOW_VISIBLE)throw std::invalid_argument("DOCUMENT_ATOMIC_OVERFLOW");
+  const aether::style::MeasuresReadView m(*s.measures_owner());
+  if(m.direction_rtl()||m.writing_mode()!=0||!s.measures_owner()->intrinsic_keywords().empty()||!s.measures_owner()->contextual_lengths().empty())throw std::invalid_argument("DOCUMENT_ATOMIC_CONTEXT");
+  for(auto v:{s.min_width,s.min_height})if(v.unit!=AETHER_CSS_UNIT_AUTO&&px(v)!=0)throw std::invalid_argument("DOCUMENT_ATOMIC_MIN");
+  for(auto v:{s.max_width,s.max_height})if(v.unit!=AETHER_CSS_UNIT_AUTO)throw std::invalid_argument("DOCUMENT_ATOMIC_MAX");
+  const double width=s.width.unit==AETHER_CSS_UNIT_AUTO?0.:px(s.width);if(s.height.unit!=AETHER_CSS_UNIT_AUTO)(void)px(s.height);
+  for(auto edges:{s.margin,s.padding,s.border_width})for(auto v:{edges.top,edges.right,edges.bottom,edges.left})(void)px(v);
+  const auto border=resolve_border_edges(engine,s,0);
+  const double edge=px(s.padding.left)+px(s.padding.right)+border.left+border.right;
+  const double result=(s.box_sizing==AETHER_BOX_SIZING_BORDER_BOX?std::max(width,edge):width+edge)+px(s.margin.left)+px(s.margin.right);
+  if(!std::isfinite(result)||result>65536)throw std::length_error("DOCUMENT_ATOMIC_WIDTH");return result;
+ }
+ static std::optional<std::pair<float,float>> admit_drawing_items(const aether_layout_engine_s* engine,const std::vector<inline_item_s>& items,int32_t mode){
+  std::optional<std::pair<float,float>> common;
+  for(const auto& item:items){
+   if(item.unit_barrier||item.hanging_barrier||item.block_anchor_index!=static_cast<std::size_t>(-1)||(!item.is_atomic&&item.style.white_space!=mode))
+    throw std::invalid_argument("DOCUMENT_DRAWING_IFC");
+   if(item.is_atomic){(void)atomic_width(engine,item);continue;}
+   if(item.marker_kind==inline_item_s::MarkerKind::admission_only){
+    if(!item.legacy_ignored||item.document_source||item.is_line_break||!item.text.empty()||!transparent_unit_inline(item.style))throw std::invalid_argument("DOCUMENT_DRAWING_MARKER");
+    const auto metrics=DocumentTextAccess::validate_admission_marker(engine,item.element,item.style);
+    if(common&&*common!=metrics)throw std::invalid_argument("DOCUMENT_MARKER_STRUT_UNSUPPORTED");common=metrics;
+   }else if(!item.document_source&&!item.is_line_break)throw std::invalid_argument("DOCUMENT_DRAWING_ATOMIC_UNSUPPORTED");
+  }
+  // Dropping a marker is allowed only for a homogeneous vertical IFC. Real
+  // fragments on every nonempty line then represent the same strut; empty and
+  // forced lines separately require the identical effective minimum height.
+  if(common)for(const auto& item:items)if(item.document_source){
+   const auto metrics=DocumentTextAccess::validate_admission_marker(engine,item.element,item.style,false);
+   if(*common!=metrics)throw std::invalid_argument("DOCUMENT_MARKER_STRUT_UNSUPPORTED");
+  }
+  return common;
+ }
+ static void reserve_drawing_box(const aether_layout_engine_s* engine,aether_layout_result_s* result,
+  aether_layout_box_s* parent,std::size_t bytes){
+  auto& budget=DocumentTextAccess::drawing_budget(engine);budget.normalized(1);
+  if(result->live_box_count>=65536)throw std::length_error("DOCUMENT_DRAWING_BOX_CAP");
+  budget.bytes(1,sizeof(aether_layout_box_s));budget.bytes(bytes+1);
+  const auto reserve=[&](auto& vector){if(vector.size()==vector.capacity()){
+   const auto old=vector.capacity(),next=old?std::min(std::size_t{65536},old*2):std::size_t{1};
+   if(next<=old)throw std::length_error("DOCUMENT_DRAWING_EDGE_CAP");
+   budget.bytes(next,sizeof(aether_layout_box_s*));vector.reserve(next);
+  }};
+  reserve(parent->children);if(result->records_boxes)reserve(result->paint_order);
+ }
+ // Internal TU-only retention accounting; does not expose the budget reference.
+ static std::uint64_t atomic_birth(const aether_layout_box_s* box){return box->registry_birth_;}
+ static void work_drawing(const aether_layout_engine_s* engine,std::uint64_t n){DocumentTextAccess::drawing_budget(engine).normalized(n);}
+ static void retain_drawing(const aether_layout_engine_s* engine,std::size_t count,std::size_t bytes){DocumentTextAccess::drawing_budget(engine).bytes(count,bytes);}
+ static void reserve_atomic_cleanup(const aether_layout_engine_s* engine,std::size_t count){if(count>65536)throw std::length_error("DOCUMENT_ATOMIC_COUNT");DocumentTextAccess::normalization_budget(engine).normalized(std::uint64_t(count)*65536);}
+ static void retain(const aether_layout_engine_s* engine,std::size_t count,std::size_t bytes){
+  DocumentTextAccess::normalization_budget(engine).bytes(count,bytes);
+ }
+ static void discard_flex(const aether_layout_engine_s* engine,const std::vector<inline_item_s>& items){
+  auto& budget=DocumentTextAccess::normalization_budget(engine);budget.bytes(items.size(),sizeof(Source));std::vector<Source> inputs;inputs.reserve(items.size());
+  for(const auto& item:items){DocumentTextAccess::check(engine);budget.normalized(1);if(item.style.display!=AETHER_DISPLAY_FLEX||!item.document_source)throw std::invalid_argument("DOCUMENT_TEXT_FLEX_DISCARD");inputs.push_back(item.document_source);}
+  DocumentTextAccess::begin_pass(engine,inputs);PassGuard pass_guard{engine};
+  for(const auto& source:inputs){DocumentTextAccess::validate_source(engine,source);if(source->decoded.empty()){budget.bytes(1,sizeof(DocumentTextRange));DocumentTextAccess::dropped(engine,{{source->ordinal,0,0,0,0}});continue;}
+   for(std::size_t i=0;i<source->decoded.size();++i){DocumentTextAccess::check(engine);budget.normalized(1);const auto c=source->decoded[i];if(c!=' '&&c!='\t'&&c!='\r'&&c!='\n')throw std::invalid_argument("DOCUMENT_TEXT_FLEX_DISCARD_SCALAR");budget.bytes(1,sizeof(DocumentTextRange));DocumentTextAccess::dropped(engine,{{source->ordinal,i,1,0,0}});}
+  }
+  DocumentTextAccess::finish_pass(engine);pass_guard.complete=true;
+  // Flex item collection is cached and may first run in an intrinsic probe.
+  // Its whitespace-only normalization pass never creates a geometry obligation.
+ }
+ static std::vector<inline_source_unit> collect(const aether_layout_engine_s* engine,
+     const std::vector<inline_item_s>& items,int32_t mode) {
+  auto& budget=DocumentTextAccess::normalization_budget(engine);
+  std::vector<inline_source_unit> units;std::vector<Pending> pending;
+  budget.bytes(items.size(),sizeof(Source));std::vector<Source> inputs;inputs.reserve(items.size());
+  for(const auto& item:items){DocumentTextAccess::check(engine);budget.normalized(1);if(item.document_source)inputs.push_back(item.document_source);}
+  DocumentTextAccess::begin_pass(engine,inputs);PassGuard pass_guard{engine};
+  bool line_content=false,previous_cr=false,have_order=false;std::size_t last_order=0,pending_owner=0;
+  const bool pre=mode==AETHER_WHITE_SPACE_PRE||mode==AETHER_WHITE_SPACE_PRE_WRAP;
+  auto check=[&](){DocumentTextAccess::check(engine);budget.normalized(1);};
+  auto drop=[&](const Source& source,std::size_t begin,std::size_t length){
+   budget.bytes(1,sizeof(DocumentTextRange));
+   DocumentTextAccess::dropped(engine,{{source->ordinal,begin,length,0,0}});
+  };
+  auto append=[&](inline_source_kind kind,std::size_t owner,const std::string& bytes,
+                  const std::vector<Pending>& input){
+   if(units.empty()||units.back().kind!=kind){budget.bytes(1,sizeof(inline_source_unit));units.push_back({kind,{}});}
+   auto& list=units.back().fragments;
+   if(list.empty()||list.back().item_index!=owner){budget.bytes(1,sizeof(inline_source_fragment));list.push_back({owner,{}});}
+   auto& fragment=list.back();const auto begin=fragment.text.size();
+   budget.bytes(bytes.size());fragment.text+=bytes;
+   for(const auto& p:input){check();budget.bytes(1,sizeof(DocumentTextRange));auto r=p.range;r.output_begin=begin;r.output_length=bytes.size();fragment.provenance.push_back(r);
+    if(fragment.sources.empty()||fragment.sources.back()!=p.source){
+     budget.bytes(1,sizeof(Source));fragment.sources.push_back(p.source);
+    }
+   }
+  };
+  auto flush=[&](bool emit){
+   if(emit&&!pending.empty())append(inline_source_kind::space,pending_owner," ",pending);
+   else for(const auto& p:pending){check();drop(p.source,p.range.input_begin,p.range.input_length);}
+   pending.clear();
+  };
+  auto forced=[&](){flush(false);budget.bytes(1,sizeof(inline_source_unit));units.push_back({inline_source_kind::forced,{}});line_content=false;};
+  for(std::size_t index=0;index<items.size();++index){
+   check();const auto& item=items[index];const auto& source=item.document_source;
+   if(item.is_atomic){flush(line_content);budget.bytes(1,sizeof(inline_source_unit));units.push_back({inline_source_kind::atomic,{},index});line_content=true;previous_cr=false;continue;}
+   if(!source){if(!item.text.empty()||item.is_line_break)throw std::invalid_argument("DOCUMENT_TEXT_UNAUTHENTICATED_ITEM");continue;}
+   DocumentTextAccess::validate_source(engine,source);
+   if(have_order&&source->dom_ordinal<=last_order)throw std::invalid_argument("DOCUMENT_TEXT_PASS_ORDER");
+   have_order=true;last_order=source->dom_ordinal;
+   if(source->kind==DocumentTextSource::Kind::comment){drop(source,0,0);continue;}
+   if(source->kind==DocumentTextSource::Kind::line_break){drop(source,0,0);forced();previous_cr=false;continue;}
+   if(item.text!=source->decoded)throw std::invalid_argument("DOCUMENT_TEXT_PASS_BYTES");
+   if(source->decoded.empty()){drop(source,0,0);continue;}
+   // Complete consumption of each source in original UTF-8 scalar order is
+   // structural here. No caller-provided slices can omit, repeat or reorder it.
+   for(std::size_t offset=0;offset<source->decoded.size();){
+    check();const auto begin=offset;const auto c=static_cast<unsigned char>(source->decoded[offset]);
+    const auto length=c<128?1u:c<224?2u:c<240?3u:4u;
+    if(length>source->decoded.size()-offset)throw std::invalid_argument("DOCUMENT_TEXT_PASS_UTF8");offset+=length;
+    if(pre&&c=='\n'&&previous_cr){drop(source,begin,length);previous_cr=false;continue;}
+    previous_cr=pre&&c=='\r';
+    if(pre&&(c=='\r'||c=='\n')){drop(source,begin,length);forced();continue;}
+    const bool space=length==1&&(c==' '||c=='\t'||c=='\r'||c=='\n');
+    if(pre&&c=='\t')throw std::invalid_argument("TAB_PRESERVATION_UNSUPPORTED");
+    if(space&&!pre){if(pending.empty())pending_owner=index;budget.bytes(1,sizeof(Pending));pending.push_back({source,{source->ordinal,begin,length,0,0}});continue;}
+    flush(line_content);budget.bytes(length+sizeof(Pending));
+    append(space?inline_source_kind::space:inline_source_kind::word,index,
+       source->decoded.substr(begin,length),{{source,{source->ordinal,begin,length,0,0}}});
+    line_content=true;
+   }
+  }
+  flush(false);
+  std::uint64_t unit_ordinal=0;
+  for(auto& unit:units){for(auto& fragment:unit.fragments){check();const auto& item=items[fragment.item_index];
+   fragment.authenticated=DocumentTextAccess::fragment(engine,fragment.sources,item.element,item.style,fragment.text,fragment.provenance);
+   if(DocumentTextAccess::drawing_mode(engine))DocumentTextAccess::register_normalized_unit(engine,fragment.authenticated,unit_ordinal,unit.kind==inline_source_kind::space);
+  }++unit_ordinal;}
+  DocumentTextAccess::finish_pass(engine);pass_guard.complete=true;
+  return units;
+ }
+ struct ExactIntrinsics {double min_content{},max_content{};};
+ static ExactIntrinsics atomic_intrinsics(const aether_layout_engine_s* engine,const StyleLookup* styles,const inline_item_s& item,bool content_only=false){
+  const double fixed=atomic_width(engine,item);
+  if(item.style.width.unit!=AETHER_CSS_UNIT_AUTO)return {fixed,fixed};
+  if(!styles)throw std::invalid_argument("DOCUMENT_ATOMIC_INTRINSIC_LOOKUP");
+  // Count before callbacks; reserve the full collector capacity rather than
+  // charging one logical append while vector growth allocates larger blocks.
+  auto& budget=DocumentTextAccess::drawing_budget(engine);
+  std::size_t nodes=0;
+  const auto count=[&](auto&& self,const aether_node_s* node,std::size_t depth)->void{
+   budget.normalized(1);if(!node||depth>64||++nodes>16384)throw std::length_error("DOCUMENT_ATOMIC_INTRINSIC_TREE");
+   for(const auto* child:node->children)self(self,child,depth+1);
+  };
+  count(count,item.element,1);
+  budget.bytes(nodes*3,sizeof(inline_item_s));
+  std::vector<inline_item_s> children;children.reserve(nodes*3);inline_capitalization_context_s context;
+  budget.bytes(item.element->children.size(),sizeof(aether_node_s*));
+  const auto direct=item.element->children;
+  for(auto* child:direct){
+   const auto role=append_inline_node(engine,styles,item.element,item.style,child,children,context);
+   if(role==inline_node_role_e::block_content)throw std::invalid_argument("DOCUMENT_ATOMIC_BLOCK_CONTENT");
+  }
+  for(const auto& child:children)if(child.is_atomic)throw std::invalid_argument("DOCUMENT_ATOMIC_NESTED_UNSUPPORTED");
+  const auto raw=drawing_intrinsics_exact(engine,styles,children,item.style.white_space);
+  if(content_only)return raw;
+  const auto border=resolve_border_edges(engine,item.style,0);
+  const double edges=double(item.style.padding.left.value)+item.style.padding.right.value+border.left+border.right+item.style.margin.left.value+item.style.margin.right.value;
+  ExactIntrinsics out{raw.min_content+edges,raw.max_content+edges};
+  if(!std::isfinite(out.min_content)||!std::isfinite(out.max_content)||out.min_content<0||out.max_content<out.min_content||out.max_content>65536)throw std::length_error("DOCUMENT_ATOMIC_INTRINSIC_LIMIT");return out;
+ }
+ static ExactIntrinsics drawing_intrinsics_exact(const aether_layout_engine_s* engine,const StyleLookup* styles,
+  const std::vector<inline_item_s>& items,int32_t mode){
+  const auto strut=admit_drawing_items(engine,items,mode);
+  DocumentTextAccess::normalization_budget(engine).bytes(items.size(),sizeof(ExactIntrinsics));
+  std::vector<ExactIntrinsics> atom_widths(items.size());
+  for(std::size_t i=0;i<items.size();++i)if(items[i].is_atomic)atom_widths[i]=atomic_intrinsics(engine,styles,items[i]);
+  const auto units=collect(engine,items,mode);
+  auto& budget=DocumentTextAccess::normalization_budget(engine);auto& backend=DocumentTextAccess::drawing_backend(engine);
+  std::size_t count=0;for(const auto& unit:units){if(unit.fragments.size()>65536-count)throw std::length_error("DOCUMENT_FIT_PARTS");count+=unit.fragments.size();}
+  budget.bytes(count,sizeof(std::shared_ptr<const aether::rendering::text::ShapedRun>));
+  std::vector<std::shared_ptr<const aether::rendering::text::ShapedRun>> runs;runs.reserve(count);
+  for(const auto& unit:units)for(const auto& source:unit.fragments){const auto& item=items[source.item_index];
+   if(!source.authenticated||item.style.white_space!=mode)throw std::invalid_argument("DOCUMENT_DRAWING_SOURCE_POLICY");
+   runs.push_back(DocumentTextAccess::measure(engine,source.authenticated,item.style,item.element).run);
+  }
+  if(strut){
+   if(runs.empty())throw std::invalid_argument("DOCUMENT_MARKER_EMPTY_IFC");
+   for(const auto& run:runs)if(std::pair{run->metrics.height,run->metrics.baseline}!=*strut)throw std::invalid_argument("DOCUMENT_MARKER_STRUT_UNSUPPORTED");
+  }
+  std::shared_ptr<const DocumentFitCatalog> catalog;if(!runs.empty())catalog=backend.prepare_fit_catalog(engine,runs);
+  const bool wrap=aether_white_space_allows_soft_wrap(mode);
+  std::size_t cursor=0;double physical=0,maximum=0,minimum=0;
+  for(const auto& unit:units){
+   if(unit.kind==inline_source_kind::forced){maximum=std::max(maximum,physical);physical=0;continue;}
+   if(unit.kind==inline_source_kind::atomic){const auto width=atom_widths.at(unit.atomic_item);physical+=width.max_content;if(wrap)minimum=std::max(minimum,width.min_content);if(!std::isfinite(physical)||physical>65536)throw std::length_error("DOCUMENT_INTRINSIC_WIDTH");continue;}
+   double whole=0,indivisible=0;bool have=false;std::tuple<int32_t,bool,bool> policy;bool anywhere=false;
+   for(const auto& source:unit.fragments){
+    budget.normalized(1);const auto& item=items[source.item_index];const aether::style::MeasuresReadView m(*item.style.measures_owner());
+    const auto wb=m.word_break(),ow=m.overflow_wrap();
+    if((wb!=0&&wb!=3)||ow<0||ow>2)throw std::invalid_argument("DOCUMENT_BREAK_POLICY_UNSUPPORTED");
+    const auto used=std::make_tuple(mode,wrap&&(wb==3||ow!=0),wrap&&(wb==3||ow==2));
+    if(unit.kind==inline_source_kind::word&&have&&policy!=used)throw std::invalid_argument("DOCUMENT_MIXED_BREAK_POLICY");
+    have=true;policy=used;anywhere=std::get<2>(used);
+    const auto n=backend.fit_boundary(engine,catalog,cursor,0).count;
+    if(n<2)throw std::invalid_argument("DOCUMENT_FIT_EMPTY");
+    whole+=backend.fit_width(engine,catalog,cursor,0,n-1);
+    if(unit.kind==inline_source_kind::word&&anywhere)for(std::size_t i=0;i+1<n;++i){
+     budget.normalized(1);indivisible=std::max(indivisible,backend.fit_width(engine,catalog,cursor,i,i+1));
+    }
+    ++cursor;
+   }
+   physical+=whole;
+   if(!std::isfinite(physical)||physical>65536.)throw std::length_error("DOCUMENT_INTRINSIC_WIDTH");
+   // Conditional/hanging spaces never create a min-content opportunity of their
+   // own. overflow-wrap:break-word leaves the whole word in min-content.
+   if(wrap&&unit.kind==inline_source_kind::word)minimum=std::max(minimum,anywhere?indivisible:whole);
+  }
+  maximum=std::max(maximum,physical);if(!wrap)minimum=maximum;
+  return {minimum,maximum};
+ }
+ struct DrawingFragment {
+  std::size_t item_index{};
+  std::string text;
+  document_inline_line_metrics metrics;
+  aether::rendering::text::Placement native_text;
+  std::shared_ptr<const DocumentConstructionInterval> construction;
+  DrawingAtom* atom=nullptr;
+ };
+ template<class Emit>
+ static double drawing_lines(const aether_layout_engine_s* engine,
+  const std::vector<inline_item_s>& items,int32_t mode,double available,double minimum,Emit emit,bool geometry=true,
+  std::optional<std::pair<float,float>> physical_strut=std::nullopt,std::vector<DrawingAtom>* atoms=nullptr){
+  std::shared_ptr<const DocumentLayoutSnapshot> atomic_snapshot;
+  if(atoms){auto* layout=DocumentTextAccess::construction_layout(engine);atomic_snapshot=DocumentTextAccess::capture_construction_geometry(engine,layout,&DocumentTextAccess::drawing_backend(engine));}
+  const auto strut=admit_drawing_items(engine,items,mode);
+  if(strut&&minimum!=double(strut->first))throw std::invalid_argument("DOCUMENT_MARKER_MINIMUM_UNSUPPORTED");
+  auto units=collect(engine,items,mode);
+  auto& budget=DocumentTextAccess::normalization_budget(engine);
+  auto& backend=DocumentTextAccess::drawing_backend(engine);
+  if(geometry)DocumentTextAccess::bind_latest_construction_pass(engine);
+  struct Part {std::size_t item{},count{};std::shared_ptr<const aether::rendering::text::ShapedRun> run;std::shared_ptr<const DocumentTextFragment> fragment;};
+  std::size_t count=0;
+  for(const auto& u:units){if(u.fragments.size()>65536-count)throw std::length_error("DOCUMENT_FIT_PARTS");count+=u.fragments.size();}
+  budget.bytes(count,sizeof(Part)+sizeof(std::shared_ptr<const aether::rendering::text::ShapedRun>));
+  std::vector<Part> parts;parts.reserve(count);
+  std::vector<std::shared_ptr<const aether::rendering::text::ShapedRun>> runs;runs.reserve(count);
+  for(const auto& unit:units)for(const auto& source:unit.fragments){
+   const auto& item=items[source.item_index];
+   if(!source.authenticated||item.style.white_space!=mode)throw std::invalid_argument("DOCUMENT_DRAWING_SOURCE_POLICY");
+   auto measured=DocumentTextAccess::measure(engine,source.authenticated,item.style,item.element);
+   parts.push_back({source.item_index,0,measured.run,source.authenticated});runs.push_back(std::move(measured.run));
+  }
+  if(strut){
+   if(runs.empty())throw std::invalid_argument("DOCUMENT_MARKER_EMPTY_IFC");
+   for(const auto& run:runs)if(std::pair{run->metrics.height,run->metrics.baseline}!=*strut)throw std::invalid_argument("DOCUMENT_MARKER_STRUT_UNSUPPORTED");
+  }
+  std::shared_ptr<const DocumentFitCatalog> catalog;
+  if(!runs.empty())catalog=backend.prepare_fit_catalog(engine,runs);
+  for(std::size_t i=0;i<parts.size();++i)parts[i].count=backend.fit_boundary(engine,catalog,i,0).count;
+  if(atomic_snapshot)DocumentTextAccess::validate_final_geometry(engine,atomic_snapshot,&backend);
+  if(atoms){auto* layout=DocumentTextAccess::construction_layout(engine);
+   budget.bytes(layout->live_box_count,sizeof(aether_layout_box_s*)+4*sizeof(void*));std::unordered_set<const aether_layout_box_s*> members;members.reserve(layout->live_box_count);
+   for(auto* box:layout->allocated_boxes){budget.normalized(1);members.insert(box);}
+   const auto rect=[](aether_rectf a,aether_rectf b){return a.x==b.x&&a.y==b.y&&a.width==b.width&&a.height==b.height;};
+   const auto real=[](float a,float b){return a==b||(std::isnan(a)&&std::isnan(b));};
+   const auto node_same=[](const aether_node_s* key,const std::shared_ptr<node_identity_s>& token){return !key?!token:token&&token->alive&&token->attached&&token->owner==key;};
+   for(const auto& atom:*atoms)if(atom.box){
+    if(atom.stamps.size()!=atom.paint.size()||atom.paint.empty()||atom.paint[0]!=atom.box)throw std::invalid_argument("DOCUMENT_ATOMIC_TREE_CHANGED");
+    // Membership and birth precede every saved-box dereference, including root.
+    for(std::size_t i=0;i<atom.stamps.size();++i){const auto& r=atom.stamps[i];
+     budget.normalized(1+r.children.size()+r.text.size()+r.control_display_text.size());
+     if(!members.contains(r.key)||r.key!=atom.paint[i]||r.key->registry_birth_!=r.birth)throw std::invalid_argument("DOCUMENT_ATOMIC_CHILD_CHANGED");
+     const auto* box=r.key;
+     budget.normalized(1);for(auto n=layout->primary_boxes.size();n;n>>=1)budget.normalized(2);
+     if(layout->find_primary_box(r.element)!=r.primary)throw std::invalid_argument("DOCUMENT_ATOMIC_PRIMARY_CHANGED");
+     if(box->owner!=layout||!box->block_static_anchors.empty()||!node_same(r.element,r.element_token)||!node_same(r.presentation_owner,r.presentation_token))throw std::invalid_argument("DOCUMENT_ATOMIC_LIFETIME");
+     if((r.element&&r.element->identity!=r.element_token)||(r.presentation_owner&&r.presentation_owner->identity!=r.presentation_token))throw std::invalid_argument("DOCUMENT_ATOMIC_NODE_CHANGED");
+     if(box->element!=r.element||box->presentation_owner!=r.presentation_owner||box->kind!=r.kind||box->children!=r.children||box->text!=r.text||box->document_source!=r.document_source||box->document_interval!=r.document_interval||box->document_construction!=r.document_construction||box->document_atomic_widths!=r.document_atomic_widths||box->document_has_last_line!=r.document_has_last_line||box->document_last_line_baseline!=r.document_last_line_baseline||box->document_layout_attempt!=r.document_layout_attempt||box->document_atomic_inline!=r.document_atomic_inline)throw std::invalid_argument("DOCUMENT_ATOMIC_CHANGED");
+  if(box->is_atomic_control!=r.is_atomic_control)throw std::invalid_argument("DOCUMENT_GEOMETRY_CHANGED");
+  if(box->is_initial_canvas!=r.is_initial_canvas)throw std::invalid_argument("DOCUMENT_GEOMETRY_CHANGED");
+  if(box->control_display_text!=r.control_display_text)throw std::invalid_argument("DOCUMENT_GEOMETRY_CHANGED");
+  if(box->control_shows_placeholder!=r.control_shows_placeholder)throw std::invalid_argument("DOCUMENT_GEOMETRY_CHANGED");
+  if(box->visual_sample_valid!=r.visual_sample_valid)throw std::invalid_argument("DOCUMENT_GEOMETRY_CHANGED");
+  if(box->visual_has_transform!=r.visual_has_transform)throw std::invalid_argument("DOCUMENT_GEOMETRY_CHANGED");
+  if(box->visual_opacity!=r.visual_opacity)throw std::invalid_argument("DOCUMENT_GEOMETRY_CHANGED");
+  if(box->visual_timestamp!=r.visual_timestamp)throw std::invalid_argument("DOCUMENT_GEOMETRY_CHANGED");
+  if(box->collapsed_margin_before!=r.collapsed_margin_before)throw std::invalid_argument("DOCUMENT_GEOMETRY_CHANGED");
+  if(box->collapsed_margin_after!=r.collapsed_margin_after)throw std::invalid_argument("DOCUMENT_GEOMETRY_CHANGED");
+  if(box->own_relative_dx!=r.own_relative_dx)throw std::invalid_argument("DOCUMENT_GEOMETRY_CHANGED");
+  if(box->own_relative_dy!=r.own_relative_dy)throw std::invalid_argument("DOCUMENT_GEOMETRY_CHANGED");
+  if(box->scroll_flow_height!=r.scroll_flow_height)throw std::invalid_argument("DOCUMENT_GEOMETRY_CHANGED");
+  if(box->scroll_completion_flags!=r.scroll_completion_flags)throw std::invalid_argument("DOCUMENT_GEOMETRY_CHANGED");
+  if(box->style.style_owner()!=r.style.style_owner()||box->style.measures_owner()!=r.style.measures_owner()||!native_text_detail::scalars_equal(box->style.scalars(),r.style.scalars())||box->native_text.run!=r.native_text.run||box->native_text.baseline!=r.native_text.baseline||box->visual_identity.lock()!=r.visual_token)throw std::invalid_argument("DOCUMENT_GEOMETRY_STYLE");
+  for(auto pair:{std::pair{box->margin_box,r.margin_box},std::pair{box->border_box,r.border_box},std::pair{box->padding_box,r.padding_box},std::pair{box->content_box,r.content_box}})if(!rect(pair.first,pair.second))throw std::invalid_argument("DOCUMENT_GEOMETRY_RECT");
+  const auto& a=box->visual_transform;const auto& b=r.visual_transform;
+  if(a.m11!=b.m11||a.m12!=b.m12||a.m21!=b.m21||a.m22!=b.m22||a.dx!=b.dx||a.dy!=b.dy||
+     box->scroll.scrollable_overflow_x!=r.scroll.scrollable_overflow_x||box->scroll.scrollable_overflow_y!=r.scroll.scrollable_overflow_y||box->scroll.scroll_offset_x!=r.scroll.scroll_offset_x||box->scroll.scroll_offset_y!=r.scroll.scroll_offset_y||
+     box->scroll_proxy.left!=r.scroll_proxy.left||box->scroll_proxy.right!=r.scroll_proxy.right||box->scroll_proxy.reference_content_x!=r.scroll_proxy.reference_content_x||box->scroll_proxy.valid!=r.scroll_proxy.valid||
+     box->used_border.left!=r.used_border.left||box->used_border.top!=r.used_border.top||box->used_border.right!=r.used_border.right||box->used_border.bottom!=r.used_border.bottom||!real(box->scroll_base_height,r.scroll_base_height))throw std::invalid_argument("DOCUMENT_GEOMETRY_PROXY");
+    }
+   }
+  }
+  if(atoms){std::uint64_t ordinal=0;for(const auto& unit:units){if(unit.kind==inline_source_kind::atomic){auto& atom=atoms->at(unit.atomic_item);if(!atom.box)throw std::invalid_argument("DOCUMENT_ATOMIC_MISSING");
+    if(geometry)atom.event=DocumentTextAccess::bind_atomic_unit(engine,atom.box,ordinal,atom.width,atom.height,atom.baseline);
+   }++ordinal;}}
+  document_inline_line_resolver resolver(available,minimum);
+  if(physical_strut)resolver.set_physical_strut(physical_strut->first,physical_strut->second);
+  std::vector<DrawingFragment> line;
+  double total=0;std::uint64_t line_number=0;bool represented=false;bool after_atom=false;
+  const bool wrap=aether_white_space_allows_soft_wrap(mode);
+  const bool preserved=mode==AETHER_WHITE_SPACE_PRE_WRAP;
+  auto close=[&](inline_line_end end){
+   if(!resolver.empty()||end==inline_line_end::forced){
+    const auto summary=resolver.close(end);emit(line,summary,total,end);
+    total+=summary.height;if(!std::isfinite(total)||total>65536.)throw std::length_error("DOCUMENT_FIT_HEIGHT");
+    ++line_number;
+   }
+   resolver.reset();line.clear();
+  };
+  auto append=[&](DocumentWordPiece piece,bool whitespace){
+   const auto& part=parts[piece.table];
+   const auto begin=backend.fit_boundary(engine,catalog,piece.table,piece.begin);
+   const auto end=backend.fit_boundary(engine,catalog,piece.table,piece.end);
+   if(end.byte<begin.byte||end.byte>part.run->source.size())throw std::invalid_argument("DOCUMENT_FIT_BYTES");
+   budget.retained();
+   if(line.size()>=65536)throw std::length_error("DOCUMENT_LINE_CAP");
+   if(line.size()==line.capacity()){const auto capacity=std::min(std::size_t{65536},std::max(std::size_t{1},line.capacity()*2));budget.bytes(capacity,sizeof(DrawingFragment));line.reserve(capacity);}
+   if(line.size()==resolver.retained_capacity()){const auto capacity=std::min(std::size_t{65536},std::max(std::size_t{1},resolver.retained_capacity()*2));budget.bytes(capacity,sizeof(document_inline_line_metrics));resolver.reserve_retained(capacity);}
+   budget.bytes(end.byte-begin.byte+1);
+   auto transport=geometry?backend.fit_construction(engine,catalog,piece.table,piece.begin,piece.end):std::shared_ptr<const DocumentConstructionInterval>{};
+   DrawingFragment f{part.item,part.run->source.substr(begin.byte,end.byte-begin.byte),
+    {piece.width,piece.height,piece.baseline,true,whitespace,mode},
+    {part.run,part.run->metrics.baseline},std::move(transport)};
+   resolver.append(f.metrics);line.push_back(std::move(f));represented=true;
+  };
+  auto unit_width=[&](std::size_t begin,std::size_t end){double width=0;
+   for(auto i=begin;i<end;++i){budget.normalized(1);width+=backend.fit_width(engine,catalog,i,0,parts[i].count-1);}
+   if(!std::isfinite(width)||width>65536.)throw std::length_error("DOCUMENT_FIT_WIDTH");return width;
+  };
+  auto append_whole=[&](std::size_t begin,std::size_t end,bool whitespace){
+   for(auto i=begin;i<end;++i){const auto& p=parts[i];append({i,0,p.count-1,backend.fit_width(engine,catalog,i,0,p.count-1),p.run->metrics.height,p.run->metrics.baseline},whitespace);}
+  };
+  std::size_t cursor=0,pending_begin=0,pending_end=0;bool opportunity=false;
+  auto seal_pending=[&](std::size_t first,std::size_t last,DrawingAtom* following){
+   budget.bytes(1,sizeof(DocumentSoftWrapPlan)+2*sizeof(void*));
+   budget.bytes(line.size(),sizeof(std::shared_ptr<const DocumentConstructionInterval>)+sizeof(std::shared_ptr<const DocumentAtomicInlineEvent>)+1);
+   budget.bytes(pending_end-pending_begin+last-first,sizeof(std::shared_ptr<const DocumentConstructionInterval>));
+   auto plan=std::shared_ptr<DocumentSoftWrapPlan>(new DocumentSoftWrapPlan);plan->available_=available;plan->line_number_=line_number;
+   plan->line_.reserve(line.size());plan->line_atoms_.reserve(line.size());plan->line_order_.reserve(line.size());plan->pending_.reserve(pending_end-pending_begin);plan->next_.reserve(last-first);
+   for(const auto& f:line){plan->line_order_.push_back(f.atom?1:0);if(f.atom)plan->line_atoms_.push_back(f.atom->event);else plan->line_.push_back(f.construction);}
+   for(auto i=pending_begin;i<pending_end;++i)plan->pending_.push_back(backend.fit_construction(engine,catalog,i,0,parts[i].count-1));
+   if(following)plan->next_atom_=following->event;else for(auto i=first;i<last;++i)plan->next_.push_back(backend.fit_construction(engine,catalog,i,0,parts[i].count-1));
+   DocumentTextAccess::seal_soft_wrap_plan(engine,plan);
+   for(auto i=pending_begin;i<pending_end;++i)DocumentTextAccess::suppress_normal_separator(engine,parts[i].fragment,plan);
+  };
+  auto append_atom=[&](std::size_t item){
+   if(!atoms||item>=atoms->size())throw std::invalid_argument("DOCUMENT_ATOMIC_UNPREPARED");auto& atom=atoms->at(item);
+   if(pending_begin!=pending_end){const auto pending=unit_width(pending_begin,pending_end);
+    if(resolver.needs_break(pending+atom.width,wrap)){if(geometry)seal_pending(0,0,&atom);close(inline_line_end::soft);}
+    else append_whole(pending_begin,pending_end,true);pending_begin=pending_end=0;
+   }
+   if(resolver.needs_break(atom.width,wrap))close(inline_line_end::soft);
+   budget.retained();if(line.size()>=65536)throw std::length_error("DOCUMENT_LINE_CAP");
+   if(line.size()==line.capacity()){const auto n=std::min(std::size_t{65536},std::max(std::size_t{1},line.capacity()*2));budget.bytes(n,sizeof(DrawingFragment));line.reserve(n);}
+   if(line.size()==resolver.retained_capacity()){const auto n=std::min(std::size_t{65536},std::max(std::size_t{1},resolver.retained_capacity()*2));budget.bytes(n,sizeof(document_inline_line_metrics));resolver.reserve_retained(n);}
+   DrawingFragment f;f.item_index=item;f.metrics={atom.width,atom.height,atom.baseline,false,false,mode,true};f.atom=&atom;
+   resolver.append(f.metrics);line.push_back(std::move(f));represented=true;opportunity=true;after_atom=true;
+  };
+  for(const auto& unit:units){
+   if(unit.kind==inline_source_kind::forced){close(inline_line_end::forced);opportunity=false;continue;}
+   if(unit.kind==inline_source_kind::atomic){append_atom(unit.atomic_item);continue;}
+   const auto first=cursor;cursor+=unit.fragments.size();
+   if(unit.kind==inline_source_kind::space){
+    if(preserved){append_whole(first,cursor,true);opportunity=true;}
+    else if(wrap){pending_begin=first;pending_end=cursor;}
+    else append_whole(first,cursor,true);
+    continue;
+   }
+   bool emergency=false;bool have_policy=false;std::tuple<int32_t,bool,bool> policy;
+   for(auto i=first;i<cursor;++i){
+    const auto& item=items[parts[i].item];const aether::style::MeasuresReadView m(*item.style.measures_owner());
+    const auto wb=m.word_break(),ow=m.overflow_wrap();
+    if((wb!=0&&wb!=3)||ow<0||ow>2)throw std::invalid_argument("DOCUMENT_BREAK_POLICY_UNSUPPORTED");
+    const bool split=wrap&&(wb==3||ow!=0),min_split=wrap&&(wb==3||ow==2);
+    const auto used=std::make_tuple(mode,split,min_split);
+    if(have_policy&&policy!=used)throw std::invalid_argument("DOCUMENT_MIXED_BREAK_POLICY");
+    have_policy=true;policy=used;emergency=split;
+   }
+   if(pending_begin!=pending_end){
+    const auto pending_width=unit_width(pending_begin,pending_end);
+    if(resolver.needs_break(pending_width+unit_width(first,cursor),true)){
+     // Source disposition is emitted at this actual decision, never later to
+     // repair a gap in final coverage. Original source/pass remain untouched.
+     if(geometry)seal_pending(first,cursor,nullptr);
+     close(inline_line_end::soft);
+    }else append_whole(pending_begin,pending_end,true);
+    pending_begin=pending_end=0;
+   }
+   budget.bytes(cursor-first,sizeof(DocumentWordPart));std::vector<DocumentWordPart> word;word.reserve(cursor-first);
+   for(auto i=first;i<cursor;++i)word.push_back({i,parts[i].count,parts[i].run->metrics.height,parts[i].run->metrics.baseline});
+   DocumentWordFit::append(word,resolver,available,wrap&&((preserved&&opportunity)||after_atom),emergency,budget,
+    [&](auto table,auto begin,auto end){return backend.fit_width(engine,catalog,table,begin,end);},
+    [&](DocumentWordPiece piece){append(piece,false);},[&]{close(inline_line_end::soft);});
+   opportunity=false;after_atom=false;
+  }
+  if(pending_begin!=pending_end)throw std::invalid_argument("DOCUMENT_UNEXPECTED_TRAILING_SEPARATOR");
+  if(strut&&!represented)throw std::invalid_argument("DOCUMENT_MARKER_EMPTY_IFC");
+  close(inline_line_end::paragraph_end);return total;
+ }
+};
+}
+
+void document_text_discard_flex_sources(const aether_layout_engine_s* engine,aether_node_s* parent,const BoxStyleSnapshot& style,const std::vector<aether_node_s*>& nodes){
+ std::vector<inline_item_s> items;
+ for(auto* node:nodes)collect_document_source(engine,parent,node,style,items);
+ aether::layout::DocumentTextNormalizer::discard_flex(engine,items);
+}
+
 static std::vector<inline_source_unit> collect_source_units(
-    const std::vector<inline_item_s>& items, int32_t mode)
+    const aether_layout_engine_s* engine,const std::vector<inline_item_s>& items, int32_t mode)
 {
+    if(DocumentTextAccess::active(engine))return aether::layout::DocumentTextNormalizer::collect(engine,items,mode);
     std::vector<inline_source_unit> units;
     bool previous_cr = false, line_content = false, pending_space = false;
     size_t pending_owner = 0;
@@ -1164,9 +1744,13 @@ static measured_source_unit measure_source_unit(const aether_layout_engine_s* en
     measured_source_unit result;
     for (const auto& fragment : source.fragments) {
         const auto& item = items[fragment.item_index];
-        const auto measured = engine_measure_text_transport(engine, fragment.text.c_str(), &item.style, 0.f, item.element);
+        const auto measured = fragment.authenticated ? DocumentTextAccess::measure(engine,fragment.authenticated,item.style,item.element) : engine_measure_text_transport(engine, fragment.text.c_str(), &item.style, 0.f, item.element);
         const auto metrics = measured.metrics;
         result.width = checked_inline_sum(result.width, metrics.width);
+        if (fragment.authenticated && item.style.white_space == AETHER_WHITE_SPACE_PRE_WRAP) {
+            aether::layout::DocumentTextNormalizer::retain(engine, 2, sizeof(measured_inline_fragment));
+            aether::layout::DocumentTextNormalizer::retain(engine, 1, fragment.text.size() + 1);
+        }
         result.fragments.push_back({fragment.item_index, fragment.text,
             {metrics.width, metrics.height, metrics.baseline, true,
              source.kind == inline_source_kind::space, item.style.white_space}, nullptr, {}, {measured.run, metrics.baseline}});
@@ -1182,11 +1766,13 @@ static float resolve_source_inline_lines(
     const aether_layout_engine_s* engine, const std::vector<inline_item_s>& items,
     int32_t mode, float available_width, float minimum_line_height, EmitLine emit_line)
 {
-    const auto units = collect_source_units(items, mode);
+    const auto units = collect_source_units(engine,items, mode);
     const bool wrap = aether_white_space_allows_soft_wrap(mode);
     inline_line_resolver resolver(available_width, minimum_line_height);
     std::vector<measured_inline_fragment> line;
     measured_source_unit pending;
+    const bool preserved_wrap = mode == AETHER_WHITE_SPACE_PRE_WRAP;
+    bool preserved_opportunity = false;
     float total_height = 0.f;
     auto close = [&](inline_line_end end) {
         if (!resolver.empty() || end == inline_line_end::forced) {
@@ -1196,9 +1782,14 @@ static float resolve_source_inline_lines(
         }
         resolver.reset();
         line.clear();
+        preserved_opportunity = false;
     };
     auto accept = [&](measured_source_unit& unit) {
         for (auto& fragment : unit.fragments) {
+            if (preserved_wrap && DocumentTextAccess::active(engine)) {
+                aether::layout::DocumentTextNormalizer::retain(engine, 2,
+                    sizeof(inline_line_metrics) + sizeof(measured_inline_fragment));
+            }
             resolver.append(fragment.metrics);
             line.push_back(std::move(fragment));
         }
@@ -1211,6 +1802,22 @@ static float resolve_source_inline_lines(
             continue;
         }
         auto unit = measure_source_unit(engine, items, source);
+        if (preserved_wrap) {
+            // A preserved group remains physically on this line even if it
+            // exceeds available width. Its following word may trigger a soft
+            // break; close() computes hanging/alignment from retained prefixes.
+            // collect_source_units joins adjacent spaces across inline owners.
+            if (source.kind == inline_source_kind::space) {
+                accept(unit);
+                preserved_opportunity = true;
+            } else {
+                if (resolver.needs_break(unit.width, preserved_opportunity))
+                    close(inline_line_end::soft);
+                accept(unit);
+                preserved_opportunity = false;
+            }
+            continue;
+        }
         if (wrap && source.kind == inline_source_kind::space) {
             pending = std::move(unit);
             continue;
@@ -1229,9 +1836,10 @@ static float resolve_source_inline_lines(
 }
 
 static aether_inline_intrinsic_sizes_s measure_source_intrinsic_sizes(
-    const aether_layout_engine_s* engine, const std::vector<inline_item_s>& items, int32_t mode)
+    const aether_layout_engine_s* engine, const std::vector<inline_item_s>& items, int32_t mode,const StyleLookup* styles)
 {
-    const auto units = collect_source_units(items, mode);
+    if(DocumentTextAccess::drawing_mode(engine)){const auto exact=aether::layout::DocumentTextNormalizer::drawing_intrinsics_exact(engine,styles,items,mode);return {float(exact.min_content),float(exact.max_content)};}
+    const auto units = collect_source_units(engine,items, mode);
     aether_inline_intrinsic_sizes_s result{};
     float line_width = 0.f;
     const bool wrap = aether_white_space_allows_soft_wrap(mode);
@@ -1243,6 +1851,8 @@ static aether_inline_intrinsic_sizes_s measure_source_intrinsic_sizes(
         }
         const auto unit = measure_source_unit(engine, items, source);
         line_width = checked_inline_sum(line_width, unit.width);
+        // Preserved spaces hang at min-content opportunities (including a
+        // space-only paragraph), while max-content retains every advance.
         if (wrap && source.kind == inline_source_kind::word)
             result.min_content = std::max(result.min_content, unit.width);
     }
@@ -1337,6 +1947,183 @@ static float resolve_hanging_inline_lines(
     }
     flush_unit(); close(inline_line_end::paragraph_end);
     return total_height;
+}
+
+static document_atomic_widths_s document_auto_atomic_border_width(const aether_layout_engine_s* engine,const StyleLookup* styles,aether_node_s* node,const BoxStyleSnapshot& style,double containing){
+ using N=aether::layout::DocumentTextNormalizer;
+ if(!std::isfinite(containing)||containing<0||containing>65536)throw std::invalid_argument("DOCUMENT_ATOMIC_CONTAINING_WIDTH");
+ const auto sizes=N::atomic_intrinsics(engine,styles,inline_item_s::atomic(node,style),true);
+ const auto border=resolve_border_edges(engine,style,0);
+ const double e=double(style.padding.left.value)+style.padding.right.value+border.left+border.right;
+ const double m=double(style.margin.left.value)+style.margin.right.value;
+ const double minimum=sizes.min_content,preferred=sizes.max_content;
+ const double available=std::max(0.,containing-e-m);
+ const double content=std::min(std::max(minimum,available),preferred),out=content+e;
+ if(!std::isfinite(out)||out<0||out+m>65536)throw std::length_error("DOCUMENT_ATOMIC_USED_WIDTH");return {content,out,out+m};
+}
+static void admit_document_atomic_style(const aether_layout_engine_s* engine,aether_node_s* node,const BoxStyleSnapshot& style){
+ auto item=inline_item_s::atomic(node,style);(void)aether::layout::DocumentTextNormalizer::atomic_width(engine,item);
+}
+
+// Owns all provisional children until they are actually attached to the parent.
+// Destruction revokes each child ticket before deleting its genuine subtree.
+struct document_prepared_atoms {
+ const aether_layout_engine_s* engine; aether_layout_result_s* result;
+ std::vector<aether::layout::DocumentTextNormalizer::DrawingAtom> values;
+ int initial_exceptions=std::uncaught_exceptions();
+ ~document_prepared_atoms()noexcept{
+  if(std::uncaught_exceptions()>initial_exceptions){
+   // A rejected callback may have corrupted child edges. The genuine engine
+   // failure path owns the registry and severs all edges before reclamation.
+   // Revoke custody now, but never recursively delete an untrusted subtree.
+   for(auto& atom:values)if(atom.box)aether::layout::DocumentTextAccess::discard_drawing_geometry(engine,atom.box);
+   return;
+  }
+  for(auto& atom:values)if(atom.box){bool member=false;for(auto* b:result->allocated_boxes)if(b==atom.box)member=true;
+   aether::layout::DocumentTextAccess::discard_drawing_geometry(engine,atom.box);if(member)delete atom.box;
+  }
+ }
+};
+static void prepare_document_atoms(document_prepared_atoms& prepared,const StyleLookup* styles,
+ const std::vector<inline_item_s>& items,float available_width,float available_height,percentage_height_s containing_height,const BoxStyleSnapshot& parent_style){
+ using N=aether::layout::DocumentTextNormalizer;
+ N::reserve_atomic_cleanup(prepared.engine,std::count_if(items.begin(),items.end(),[](const auto& item){return item.is_atomic;}));
+ N::retain(prepared.engine,items.size(),sizeof(N::DrawingAtom));prepared.values.resize(items.size());
+ for(std::size_t i=0;i<items.size();++i)if(items[i].is_atomic){
+  if(parent_style.display==AETHER_DISPLAY_INLINE_BLOCK)throw std::invalid_argument("DOCUMENT_ATOMIC_NESTED_UNSUPPORTED");
+  (void)N::atomic_width(prepared.engine,items[i]);
+  N::retain_drawing(prepared.engine,1,sizeof(aether_layout_box_s)+sizeof(decltype(prepared.result->primary_boxes)::value_type)+4*sizeof(void*));
+  if(prepared.result->live_box_count>=65536)throw std::length_error("DOCUMENT_ATOMIC_BOX_CAP");
+  if(prepared.result->records_boxes&&prepared.result->paint_order.size()==prepared.result->paint_order.capacity()){
+   const auto n=std::min(std::size_t{65536},std::max(std::size_t{1},prepared.result->paint_order.capacity()*2));
+   N::retain_drawing(prepared.engine,n,sizeof(aether_layout_box_s*));prepared.result->paint_order.reserve(n);
+  }
+  const auto first=prepared.result->paint_order.size();
+  auto* box=layout_element(prepared.engine,styles,items[i].element,{0,0,available_width,available_height},containing_height,0,false,0,false,0,forced_height_kind_e::none,true,prepared.result);
+  auto& atom=prepared.values[i];atom.box=box;
+  if(!box->document_has_last_line)throw std::invalid_argument("DOCUMENT_ATOMIC_NO_LINE");
+  atom.width=box->document_atomic_widths?box->document_atomic_widths->margin:double(box->margin_box.width);atom.height=box->margin_box.height;
+  atom.baseline=double(box->content_box.y)-box->margin_box.y+box->document_last_line_baseline;
+  if(!std::isfinite(atom.baseline)||atom.baseline<0||atom.baseline>65536)throw std::invalid_argument("DOCUMENT_ATOMIC_BASELINE");
+  const auto count=box->children.size()+1;
+  if(count>65536||prepared.result->paint_order.size()<first)throw std::invalid_argument("DOCUMENT_ATOMIC_PAINT_COUNT");
+  N::retain_drawing(prepared.engine,prepared.result->live_box_count,sizeof(aether_layout_box_s*)+4*sizeof(void*));
+  std::unordered_set<const aether_layout_box_s*> members;members.reserve(prepared.result->live_box_count);
+  N::work_drawing(prepared.engine,prepared.result->live_box_count+count);
+  for(auto* key:prepared.result->allocated_boxes)members.insert(key);
+  // Callback-free full authentication before dereferencing node identities for
+  // owned stamps. Subsequent siblings may allocate, but may not mutate these boxes.
+  N::authenticate_atomic_capture(prepared.engine,prepared.result);
+  N::retain_drawing(prepared.engine,count,sizeof(aether_layout_box_s*)+sizeof(N::AtomicStamp));atom.paint.reserve(count);atom.stamps.reserve(count);
+  for(std::size_t j=0;j<count;++j){auto* retained=j?box->children[j-1]:box;
+   if(!members.contains(retained)||(j&&retained->kind!=LAYOUT_BOX_TEXT))throw std::invalid_argument("DOCUMENT_ATOMIC_CHILD_KIND");
+   if(prepared.result->records_boxes&&(prepared.result->paint_order.size()-first!=count||prepared.result->paint_order[first+j]!=retained))throw std::invalid_argument("DOCUMENT_ATOMIC_PAINT_ORDER");
+   N::retain_drawing(prepared.engine,retained->text.size()+retained->control_display_text.size()+2,1);
+   N::retain_drawing(prepared.engine,retained->children.size(),sizeof(aether_layout_box_s*));
+   atom.paint.push_back(retained);const auto* box=retained;N::AtomicStamp r;
+   N::work_drawing(prepared.engine,1);for(auto n=prepared.result->primary_boxes.size();n;n>>=1)N::work_drawing(prepared.engine,2);
+   r.primary=prepared.result->find_primary_box(box->element);
+   r.key=box;r.birth=N::atomic_birth(box);r.element_token=box->element?box->element->identity:nullptr;
+   r.presentation_token=box->presentation_owner?box->presentation_owner->identity:nullptr;r.visual_token=box->visual_identity.lock();
+  r.element=box->element;
+  r.presentation_owner=box->presentation_owner;
+  r.kind=box->kind;
+  r.style=box->style;
+  r.children=box->children;
+  r.text=box->text;
+  r.document_source=box->document_source;
+  r.native_text=box->native_text;
+  r.document_interval=box->document_interval;r.document_construction=box->document_construction;
+  r.document_atomic_widths=box->document_atomic_widths;
+  r.document_has_last_line=box->document_has_last_line;r.document_last_line_baseline=box->document_last_line_baseline;
+  r.document_layout_attempt=box->document_layout_attempt;r.document_atomic_inline=box->document_atomic_inline;
+  r.is_atomic_control=box->is_atomic_control;
+  r.is_initial_canvas=box->is_initial_canvas;
+  r.control_display_text=box->control_display_text;
+  r.control_shows_placeholder=box->control_shows_placeholder;
+  r.scroll=box->scroll;
+  r.visual_sample_valid=box->visual_sample_valid;
+  r.visual_has_transform=box->visual_has_transform;
+  r.visual_transform=box->visual_transform;
+  r.visual_opacity=box->visual_opacity;
+  r.visual_timestamp=box->visual_timestamp;
+  r.collapsed_margin_before=box->collapsed_margin_before;
+  r.collapsed_margin_after=box->collapsed_margin_after;
+  r.own_relative_dx=box->own_relative_dx;
+  r.own_relative_dy=box->own_relative_dy;
+  r.used_border=box->used_border;
+  r.margin_box=box->margin_box;
+  r.border_box=box->border_box;
+  r.padding_box=box->padding_box;
+  r.content_box=box->content_box;
+  r.scroll_proxy=box->scroll_proxy;
+  r.scroll_flow_height=box->scroll_flow_height;
+  r.scroll_base_height=box->scroll_base_height;
+  r.scroll_completion_flags=box->scroll_completion_flags;
+   atom.stamps.push_back(std::move(r));
+  }
+  prepared.result->paint_order.resize(first);
+ }
+}
+
+static float layout_drawing_inline_items(const aether_layout_engine_s* engine,const StyleLookup* styles,
+ aether_layout_box_s* parent_box,const std::vector<inline_item_s>& items,
+ float start_x,float start_y,float available_width,float available_height,percentage_height_s containing_height,const BoxStyleSnapshot& parent_style,aether_layout_result_s* result,std::optional<double> document_logical_width){
+ using namespace aether::layout;
+ const double logical_width=document_logical_width.value_or(double(available_width));
+ if(parent_style.text_align==AETHER_TEXT_ALIGN_JUSTIFY)
+  throw std::invalid_argument("DOCUMENT_DRAWING_JUSTIFY_UNSUPPORTED");
+ const double minimum=std::max(double(layout_used_line_height(engine,parent_box->element,parent_style)),1.);
+ const bool has_atoms=std::any_of(items.begin(),items.end(),[](const auto& item){return item.is_atomic;});
+ document_prepared_atoms prepared{engine,result,{}};
+ std::optional<std::pair<float,float>> physical;
+ if(has_atoms||parent_style.display==AETHER_DISPLAY_INLINE_BLOCK)physical=DocumentTextNormalizer::physical_strut(engine,parent_box->element,parent_style);
+ if(has_atoms)prepare_document_atoms(prepared,styles,items,available_width,available_height,containing_height,parent_style);
+ auto emit=[&](const auto& line,const document_inline_line_summary& summary,double y,inline_line_end){
+  parent_box->document_has_last_line=true;
+  parent_box->document_last_line_baseline=double(start_y)+y+summary.ascent;
+  double x=start_x;
+  if(parent_style.text_align==AETHER_TEXT_ALIGN_CENTER)x+=std::max(0.,(logical_width-summary.alignment_width)/2.);
+  else if(parent_style.text_align==AETHER_TEXT_ALIGN_RIGHT||parent_style.text_align==AETHER_TEXT_ALIGN_END)
+   x+=std::max(0.,logical_width-summary.alignment_width);
+  const double left=x,right=x+summary.alignment_width;
+  aether_check_scroll_coordinate(left);aether_check_scroll_coordinate(right);
+  for(const auto& fragment:line){
+   const auto& item=items[fragment.item_index];
+   const double top=double(start_y)+y+std::max(0.,summary.ascent-fragment.metrics.baseline);
+   for(double value:{x,top,fragment.metrics.width,fragment.metrics.height})
+    if(!std::isfinite(value)||std::abs(value)>65536.)throw std::length_error("DOCUMENT_DRAWING_GEOMETRY");
+   if(fragment.atom){auto& atom=*fragment.atom;auto* box=atom.box;
+    if(!box||!atom.event||box->document_atomic_inline!=atom.event)throw std::invalid_argument("DOCUMENT_ATOMIC_EMIT");
+    DocumentTextNormalizer::retain_drawing(engine,1,sizeof(aether_layout_box_s*));
+    if(parent_box->children.size()==parent_box->children.capacity()){const auto n=std::max(std::size_t{1},parent_box->children.capacity()*2);DocumentTextNormalizer::retain_drawing(engine,n,sizeof(aether_layout_box_s*));parent_box->children.reserve(n);}
+    const auto needed=result->paint_order.size()+atom.paint.size();
+    if(needed>65536)throw std::length_error("DOCUMENT_ATOMIC_PAINT_CAP");
+    if(needed>result->paint_order.capacity()){DocumentTextNormalizer::retain_drawing(engine,needed,sizeof(aether_layout_box_s*));result->paint_order.reserve(needed);}
+    const auto normal=normal_flow_margin_box(box);offset_box(box,float(x)-normal.x,float(top)-normal.y);
+    parent_box->add_child(box);if(result->records_boxes)result->paint_order.insert(result->paint_order.end(),atom.paint.begin(),atom.paint.end());atom.box=nullptr;
+    x+=fragment.metrics.width;continue;
+   }
+   DocumentTextNormalizer::reserve_drawing_box(engine,result,parent_box,fragment.text.size());
+   auto* box=result->create_box();box->kind=LAYOUT_BOX_TEXT;box->element=item.element;box->style=item.style;
+   box->presentation_owner=item.element?item.element->anonymous_flex_owner:nullptr;
+   box->text=fragment.text;box->native_text=fragment.native_text;
+   box->document_construction=fragment.construction;
+   if(!box->document_construction)throw std::invalid_argument("DOCUMENT_DRAWING_MISSING_CONSTRUCTION");
+   box->content_box={float(x),float(top),box->document_construction->projected_width(),float(fragment.metrics.height)};
+   box->padding_box=box->border_box=box->margin_box=box->content_box;
+   if(summary.hanging_width>0.){
+    const auto& rect=box->content_box;
+    box->scroll_proxy={std::clamp(double(rect.x),left,right),
+     std::clamp(double(rect.x)+rect.width,left,right),rect.x,true};
+    (void)aether_scroll_own_bounds(box);
+   }
+   if(result->records_boxes)result->paint_order.push_back(box);
+   parent_box->add_child(box);x+=fragment.metrics.width;
+  }
+ };
+ return float(DocumentTextNormalizer::drawing_lines(engine,items,parent_style.white_space,
+  logical_width,minimum,emit,true,physical,has_atoms?&prepared.values:nullptr));
 }
 
 static float layout_resolved_inline_items(
@@ -1444,9 +2231,14 @@ float layout_inline_items(
     float start_x, float start_y, float available_width,
     float available_height, percentage_height_s containing_height,
     const BoxStyleSnapshot& parent_style,
-    aether_layout_result_s* result)
+    aether_layout_result_s* result,std::optional<double> document_logical_width)
 {
-    if (uses_source_unit_resolver(items, parent_style))
+    if(DocumentTextAccess::drawing_mode(engine)){
+        if(!uses_source_unit_resolver(engine,items,parent_style))throw std::invalid_argument("DOCUMENT_DRAWING_IFC");
+        aether::layout::DocumentTextNormalizer::admit_drawing_items(engine,items,parent_style.white_space);
+        return layout_drawing_inline_items(engine,styles,parent_box,items,start_x,start_y,available_width,available_height,containing_height,parent_style,result,document_logical_width);
+    }
+    if (uses_source_unit_resolver(engine,items, parent_style))
         return layout_resolved_inline_items(engine, styles, parent_box, items,
             start_x, start_y, available_width, available_height, containing_height, parent_style, result, true);
     if (uses_hanging_line_resolver(items))
@@ -1600,7 +2392,9 @@ static void collect_inline_element(
     }
     for (auto* node : element->children) {
         if (node->type == AETHER_NODE_TEXT) {
-            collect_text_items(element, style, node->text, output, context);
+            if(DocumentTextAccess::active(engine))collect_document_source(engine,element,node,style,output);
+            else collect_text_items(element, style, node->text, output, context);
+        } else if(node->type==AETHER_NODE_COMMENT&&DocumentTextAccess::active(engine)){collect_document_source(engine,element,node,style,output);
         } else if (node->type == AETHER_NODE_ELEMENT) {
             auto child_style = get_style(styles, node);
             if (child_style.display == AETHER_DISPLAY_NONE) continue;
@@ -1612,7 +2406,8 @@ static void collect_inline_element(
             inline_capitalization_context_s independent;
             auto& child_context = (isolated || block) ? independent : context;
             if (child_style.display == AETHER_DISPLAY_LINE_BREAK) {
-                output.push_back(inline_item_s::line_break(node, child_style));
+                if(DocumentTextAccess::active(engine))collect_document_source(engine,node,node,child_style,output);
+                else output.push_back(inline_item_s::line_break(node, child_style));
                 child_context.starts_word = true;
             } else if (initial_canvas_for(engine,node) || is_opaque_single_line_control(node) || child_style.display == AETHER_DISPLAY_INLINE_BLOCK) {
                 output.push_back(inline_item_s::atomic(node, child_style));
@@ -1656,6 +2451,9 @@ static inline_node_role_e append_inline_node(
     aether_node_s* node,
     std::vector<inline_item_s>& output, inline_capitalization_context_s& context)
 {
+    if(DocumentTextAccess::active(engine)&&(node->type==AETHER_NODE_TEXT||node->type==AETHER_NODE_COMMENT)){
+        collect_document_source(engine,parent,node,parent_style,output);return inline_node_role_e::inline_content;
+    }
     if (node->type == AETHER_NODE_TEXT) {
         if (!aether_inline_text_has_visible_content(node->text, parent_style.white_space)) {
             if (!node->text.empty()) {
@@ -1698,7 +2496,8 @@ static inline_node_role_e append_inline_node(
     }
     if (child_style.display == AETHER_DISPLAY_LINE_BREAK) {
         retain_unit_admission(output, node, child_style, !transparent_unit_inline(child_style));
-        output.push_back(inline_item_s::line_break(node, child_style));
+        if(DocumentTextAccess::active(engine))collect_document_source(engine,node,node,child_style,output);
+                else output.push_back(inline_item_s::line_break(node, child_style));
         context.starts_word = true;
     } else if (initial_canvas_for(engine,node) || is_opaque_single_line_control(node) || child_style.display == AETHER_DISPLAY_INLINE_BLOCK) {
         output.push_back(inline_item_s::atomic(node, child_style));
@@ -1717,8 +2516,8 @@ static intrinsic_widths_s measure_inline_items_intrinsic_widths(
     aether_layout_result_s* result,
     intrinsic_width_request_s request)
 {
-    if (uses_source_unit_resolver(items, parent_style, true)) {
-        const auto sizes = measure_source_intrinsic_sizes(engine, items, parent_style.white_space);
+    if (uses_source_unit_resolver(engine,items, parent_style, true)) {
+        const auto sizes = measure_source_intrinsic_sizes(engine, items, parent_style.white_space,styles);
         return {sizes.min_content, sizes.max_content};
     }
     std::vector<aether_inline_intrinsic_fragment_s> minimum_fragments, maximum_fragments;
@@ -1769,6 +2568,7 @@ intrinsic_widths_s measure_intrinsic_widths(
     intrinsic_width_request_s request)
 {
     const float decoration = aether_thicknessf_horizontal(padding) + aether_thicknessf_horizontal(border);
+    if(RealSimpleTextAccess::owns(engine,element)) {const float w=RealSimpleTextAccess::measure(engine,element,style).metrics.width+decoration;return {w,w};}
     if(NativeTextAccess::owns(engine,element)) {
         const float width=NativeTextAccess::measure(engine,element,style).metrics.width+decoration;
         return {width,width};
@@ -1801,7 +2601,7 @@ intrinsic_widths_s measure_intrinsic_widths(
         inline_items.clear();
     };
 
-    if (!collect_anonymous_flex_text_items(element, style, inline_items)) {
+    if (!collect_anonymous_flex_text_items(engine,element, style, inline_items)) {
         for (auto* child : element->children) {
             const auto role = append_inline_node(engine, styles, element, style, child, inline_items, context);
             if (role != inline_node_role_e::block_content) continue;
@@ -1879,6 +2679,7 @@ float measure_intrinsic_height(
     aether_thicknessf padding, aether_thicknessf border,
     float available_width)
 {
+    if(RealSimpleTextAccess::owns(engine,element)) return RealSimpleTextAccess::measure(engine,element,style).metrics.height+aether_thicknessf_vertical(padding)+aether_thicknessf_vertical(border);
     if(NativeTextAccess::owns(engine,element)) {
         const auto m=NativeTextAccess::measure(engine,element,style);
         return (m.run ? std::max(m.metrics.height,layout_used_line_height(engine,element,style)) : 0.f)
@@ -1921,7 +2722,7 @@ float measure_intrinsic_height(
     if (flex) {
         // Reuse this result's exact item sequence and synthetic overlay. Inline
         // elements, text wrappers and block elements are all real flex items.
-        const auto& children = collect_flex_items(styles, result, element, style);
+        const auto& children = collect_flex_items(engine,styles, result, element, style);
         for (auto* child : children) measure_child(child);
         if (!row && !children.empty()) {
             content_height += (children.size() - 1) * layout_used_gap(styles, element, style, style.flex_direction == AETHER_FLEX_DIRECTION_COLUMN || style.flex_direction == AETHER_FLEX_DIRECTION_COLUMN_REVERSE, 0.f, false);
@@ -1935,7 +2736,7 @@ float measure_intrinsic_height(
                 engine, styles, inline_items, content_width, style, result, element));
             inline_items.clear();
         };
-        if (!collect_anonymous_flex_text_items(element, style, inline_items)) {
+        if (!collect_anonymous_flex_text_items(engine,element, style, inline_items)) {
             for (auto* child : element->children) {
                 const auto role = append_inline_node(engine, styles, element, style, child, inline_items, context);
                 if (role != inline_node_role_e::block_content) continue;
@@ -1956,10 +2757,19 @@ static float measure_inline_items_height(
     const BoxStyleSnapshot& parent_style,
     aether_layout_result_s* result, aether_node_s* owner)
 {
-    const bool source_units = uses_source_unit_resolver(items, parent_style);
+    const bool source_units = uses_source_unit_resolver(engine,items, parent_style);
     const float line_minimum = std::max(1.f, layout_used_line_height(engine, owner, parent_style));
     if (source_units) {
         auto emit = [](const auto&, const inline_line_summary&, float, inline_line_end) {};
+        if(DocumentTextAccess::drawing_mode(engine)){
+            const bool has_atoms=std::any_of(items.begin(),items.end(),[](const auto& item){return item.is_atomic;});
+            document_prepared_atoms prepared{engine,result,{}};
+            if(has_atoms)prepare_document_atoms(prepared,styles,items,available_width,0,{},parent_style);
+            std::optional<std::pair<float,float>> physical;
+            if(has_atoms||parent_style.display==AETHER_DISPLAY_INLINE_BLOCK)physical=aether::layout::DocumentTextNormalizer::physical_strut(engine,owner,parent_style);
+            return float(aether::layout::DocumentTextNormalizer::drawing_lines(engine,items,parent_style.white_space,
+                available_width,line_minimum,[](const auto&,const auto&,double,inline_line_end){},false,physical,has_atoms?&prepared.values:nullptr));
+        }
         return resolve_source_inline_lines(engine, items, parent_style.white_space,
             available_width, line_minimum, emit);
     }
@@ -2292,7 +3102,7 @@ static intrinsic_widths_s measure_intrinsic_flex_widths(
     // A wrapping maximum has an independent, natural min-content floor. Never
     // derive that floor from H, or run a second recursive walk at each level.
     if (wrap_row && request.maximum) request.minimum = true;
-    const auto& children = collect_flex_items(styles, result, element, style);
+    const auto& children = collect_flex_items(engine,styles, result, element, style);
     std::vector<float> minimums, maximums;
     if (request.minimum) minimums.reserve(children.size());
     if (request.maximum) maximums.reserve(children.size());
@@ -2409,13 +3219,53 @@ AETHER_API aether_status_t aether_layout_prepare_transition_context(
     } catch (const std::bad_alloc&) { return AETHER_ERROR_OUT_OF_MEMORY; }
 }
 
-AETHER_API aether_status_t aether_layout_layout(
+} // extern "C"
+
+// Prove the omitted HTML containing block has origin (0,0) and the
+// viewport's available width. Unsupported geometry is rejected, not ignored.
+static bool document_root_parent(const StyleLookup* styles,aether_doc_s* doc,
+                                 aether_node_s* body) {
+    auto* html=aether_doc_get_document_element(doc);
+    if(html==body) return false; // Standalone BODY has no parent-collapse phase.
+    if(!html||html->tag_name!="html"||!body||body->tag_name!="body"||body->parent!=html)
+        throw aether::layout::DocumentRootGeometryUnsupported{};
+    const auto record=styles->lookup_record_owner(html);
+    if(!record||!record->measures())throw aether::layout::DocumentRootGeometryUnsupported{};
+    const auto s=get_style(styles,html);const auto view=s.view();
+    const aether::style::MeasuresReadView measures(*record->measures());
+    const auto zero=[](aether_css_length v){return v.unit==AETHER_CSS_UNIT_PX&&v.value==0&&
+        v.linear_percent==0&&v.linear_em==0&&v.linear_rem==0&&v.linear_vw==0&&v.linear_vh==0;};
+    const auto automatic=[](aether_css_length v){return v.unit==AETHER_CSS_UNIT_AUTO&&v.value==0&&
+        v.linear_percent==0&&v.linear_em==0&&v.linear_rem==0&&v.linear_vw==0&&v.linear_vh==0;};
+    if(s.display!=AETHER_DISPLAY_BLOCK||s.position!=AETHER_POSITION_STATIC||
+       s.box_sizing!=AETHER_BOX_SIZING_CONTENT_BOX||!s.visible||s.opacity!=1||
+       (s.overflow_x!=AETHER_OVERFLOW_VISIBLE&&s.overflow_x!=AETHER_OVERFLOW_AUTO)||
+       (s.overflow_y!=AETHER_OVERFLOW_VISIBLE&&s.overflow_y!=AETHER_OVERFLOW_AUTO)||
+       measures.direction_rtl()||measures.writing_mode()!=0||!view.transforms().empty()||
+       !automatic(s.width)||!automatic(s.height)||!automatic(s.max_width)||!automatic(s.max_height)||
+       !(automatic(s.min_width)||zero(s.min_width))||!(automatic(s.min_height)||zero(s.min_height)))
+        throw aether::layout::DocumentRootGeometryUnsupported{};
+    for(const auto edges:{s.margin,s.padding,s.border_width})
+        for(const auto v:{edges.top,edges.right,edges.bottom,edges.left})
+            if(!zero(v))throw aether::layout::DocumentRootGeometryUnsupported{};
+    for(const auto v:{s.inset.top,s.inset.right,s.inset.bottom,s.inset.left})
+        if(!automatic(v))throw aether::layout::DocumentRootGeometryUnsupported{};
+    for(const std::string name:{"width","height","min-width","min-height","max-width","max-height"})
+        if(measures.contextual_tree(name)||measures.intrinsic_keyword(name)!=aether::css::intrinsic_size_keyword::none)throw aether::layout::DocumentRootGeometryUnsupported{};
+    return true;
+}
+
+static aether_status_t layout_impl(
     aether_layout_engine_t engine, aether_doc_t doc, aether_style_map_t source_styles,
     float viewport_width, float viewport_height,
     aether_scroll_offset_fn scroll_fn, void* scroll_data,
-    aether_layout_result_t* out_result)
+    aether_layout_result_t* out_result,
+    const aether::layout::SelectedLayoutAuthority* selection, bool document_root=false)
 {
+    if (document_root && (selection || scroll_fn)) return AETHER_ERROR_INVALID_STATE;
+    if (selection && !selection->accepts(doc,source_styles)) return AETHER_ERROR_INVALID_STATE;
     if (!engine) return AETHER_ERROR_NULL_ARG;
+    if ((selection || document_root) && (engine->initial_canvas_mode || scroll_fn)) return AETHER_ERROR_INVALID_STATE;
     if (engine->layout_in_progress) return AETHER_ERROR_INVALID_STATE;
     engine->layout_in_progress = true;
     struct layout_scope_s { aether_layout_engine_s* e; ~layout_scope_s() { e->layout_in_progress = false; } } layout_scope{engine};
@@ -2440,7 +3290,7 @@ AETHER_API aether_status_t aether_layout_layout(
     if (!result) return AETHER_ERROR_OUT_OF_MEMORY;
     result->viewport = {viewport_width, viewport_height};
     result->abandoned = true;
-    struct measure_scope_s { aether_layout_engine_s* e; ~measure_scope_s() { NativeTextAccess::clear(e); e->measure_styles = nullptr; e->measure_document.reset(); } } measure_scope{engine};
+    struct measure_scope_s { aether_layout_engine_s* e; ~measure_scope_s() { NativeTextAccess::clear(e); RealSimpleTextAccess::clear(e); e->measure_styles = nullptr; e->measure_document.reset(); } } measure_scope{engine};
     try {
     const auto text_selection = engine->text_selection();
     if(text_selection && ((text_selection->mode==aether::rendering::text::MeasurementMode::native &&
@@ -2456,11 +3306,16 @@ AETHER_API aether_status_t aether_layout_layout(
     result->build_overlay = std::make_unique<aether::layout::MutableLayoutOverlay>();
     result->assets = std::make_shared<const aether::layout::LayoutAssets>(version, nullptr, defaults, document_identity, document_structure_epoch);
     const StyleLookup build_lookup(version, result->build_overlay.get(), defaults);
+    // Declared after lookup: cleanup clears its borrowed pointer first, even on
+    // early returns/throws. Overlay nodes remain owned by result/assets until then.
+    struct document_measure_scope_s {aether_layout_engine_s* engine;~document_measure_scope_s(){DocumentTextAccess::finish(engine);}} document_measure_scope{engine};
     const auto* styles = &build_lookup;
     engine->measure_styles = styles;
     engine->measure_document = document_identity;
+    RealSimpleTextAccess::begin(engine,doc,*styles);
     NativeTextAccess::begin(engine,doc,*styles);
-    validate_contents_wrappers(styles);
+    DocumentTextAccess::begin(engine,doc,*styles,result);
+    validate_contents_wrappers(styles, selection ? &selection->scope() : nullptr);
     prepare_initial_canvas(engine,doc);
     if (version && version->contextual()) {
         for (const auto& entry : version->backing()->entries()) {
@@ -2471,26 +3326,56 @@ AETHER_API aether_status_t aether_layout_layout(
             break;
         }
     }
-    const auto freeze_assets = [&]() {
+    const auto freeze_assets = [&](bool retain_overlay=false) {
         auto assets = std::make_shared<const aether::layout::LayoutAssets>(version, result->build_overlay->freeze(), defaults, document_identity, document_structure_epoch);
         result->assets = std::move(assets);
-        result->build_overlay.reset();
+        if(!retain_overlay)result->build_overlay.reset();
+    };
+    const bool final_geometry=DocumentTextAccess::final_geometry_mode(engine);
+    if(final_geometry&&!document_root)throw std::invalid_argument("DOCUMENT_FINAL_LAYOUT_MODE");
+    if(DocumentTextAccess::drawing_mode(engine))DocumentTextAccess::begin_drawing_attempts(engine);
+    // The helper owns its snapshot/pin only during prepare; all such owners are
+    // destroyed before it returns/throws, hence before any caller delete result.
+    const auto complete_final_geometry = [&]() -> aether_status_t {
+        if(DocumentTextAccess::drawing_mode(engine))DocumentTextAccess::drawing_attempts(engine).select_root(engine,result->root);
+        freeze_assets(true); // immutable owner copies; live overlay becomes read-only
+        if(version&&version->contextual()) {
+            const auto status=aether_contextual_transition_finalize_layout(result,nullptr);
+            if(status!=AETHER_OK)return status;
+        }
+        validate_used_geometry(result);
+        result->build_hit_order_cache(); // optional cache; allocations precede audit
+        if(DocumentTextAccess::drawing_mode(engine))DocumentTextAccess::promote_drawing_geometry(engine,result);
+        auto pending=DocumentTextAccess::prepare_final_layout(engine,result);
+        // No callbacks, allocation or throwing work from prepare return to commit.
+        if(!DocumentTextAccess::commit_final_layout(engine,result,pending))return AETHER_ERROR_INVALID_STATE;
+        result->build_overlay.reset(); // finish in commit has already cleared borrow
+        return AETHER_OK;
     };
     result->effective_context_enabled = prepared || (version && version->contextual());
     if (result->effective_context_enabled) {
         try { result->effective_fixed_container_nodes = effective_fixed_containers(styles, active); }
-        catch (const std::bad_alloc&) { delete result; return AETHER_ERROR_OUT_OF_MEMORY; }
+        catch (const std::bad_alloc&) { DocumentTextAccess::capture_failure(engine); DocumentTextAccess::finish(engine); delete result; return AETHER_ERROR_OUT_OF_MEMORY; }
     }
 
     // Find root element (using C API from document_node.cpp)
-    aether_node_s* root_el = aether_doc_get_body(doc);
+    aether_node_s* root_el = selection ? selection->target() : aether_doc_get_body(doc);
     if (!root_el) root_el = aether_doc_get_document_element(doc);
-    if (!root_el) { freeze_assets(); result->abandoned = false; *out_result = result; return AETHER_OK; } // empty doc
+    if(!root_el&&final_geometry) {
+        const auto status=complete_final_geometry();
+        if(status!=AETHER_OK){DocumentTextAccess::finish(engine);delete result;return status;}
+        result->abandoned=false;*out_result=result;return AETHER_OK;
+    }
+    if (!root_el) { DocumentTextAccess::finish(engine); freeze_assets(); DocumentTextAccess::complete_layout(engine,result); result->abandoned = false; *out_result = result; return AETHER_OK; } // empty doc
 
+    if(document_root && (!version||!version->contextual()||version->document_lifetime()!=document_identity))
+        throw aether::layout::DocumentRootGeometryUnsupported{};
+    const bool place_document_body=document_root&&document_root_parent(styles,doc,root_el);
     auto root_style = get_style(styles, root_el);
     engine->root_font_size = get_style(styles, aether_doc_get_document_element(doc)).font_size;
     result->root_font_size = engine->root_font_size;
 
+    if (!selection) {
     // CSS Overflow 3.3 viewport propagation. The root (html) overflow applies
     // to the viewport; when html is visible in both axes and a body child is
     // laid out, the body's overflow propagates instead. The propagated element
@@ -2517,19 +3402,38 @@ AETHER_API aether_status_t aether_layout_layout(
     if (result->viewport_overflow_y == AETHER_OVERFLOW_VISIBLE)
         result->viewport_overflow_y = AETHER_OVERFLOW_AUTO;
 
+    }
     const int32_t viewport_overflow[2] = {result->viewport_overflow_x, result->viewport_overflow_y};
     auto* root_box = layout_element(engine, styles, root_el,
                                     {0, 0, viewport_width, viewport_height}, viewport_height,
-                                    0, true,
+                                    0, selection == nullptr,
                                     0, false, 0, forced_height_kind_e::none, false, result,
-                                    viewport_overflow);
+                                    selection ? nullptr : viewport_overflow);
     result->root = root_box;
-    layout_finalize_fixed_containers(engine, styles, result);
-    if (!aether::style::structure_valid(version.get()) || !operation_guard.valid()) {
-        delete result; return AETHER_ERROR_INVALID_STATE;
+    if(place_document_body&&root_box) {
+        const float before=root_box->collapsed_margin_before;
+        const float delta=before-normal_flow_border_box(root_box).y;
+        if(!std::isfinite(before)||!std::isfinite(delta)||std::abs(before)>65536||std::abs(delta)>65536)
+            throw aether::layout::DocumentRootGeometryUnsupported{};
+        validate_used_geometry(result);
+        // Exactly the parent normal-flow placement, before visual/scroll
+        // finalization and immutable assets; never a paint-only correction.
+        place_normal_flow_block(root_box,0,before);
     }
+    layout_finalize_fixed_containers(engine, styles, result);
+    if (!aether::style::structure_valid(version.get()) || !operation_guard.valid() ||
+        (selection && !selection->accepts(doc,source_styles))) {
+        DocumentTextAccess::finish(engine); delete result; return AETHER_ERROR_INVALID_STATE;
+    }
+    RealSimpleTextAccess::finish(engine);
     NativeTextAccess::finish(engine);
     NativeTextAccess::clear(engine);
+    if(final_geometry) {
+        const auto status=complete_final_geometry();
+        if(status!=AETHER_OK){DocumentTextAccess::finish(engine);delete result;return status;}
+        result->abandoned=false;*out_result=result;return AETHER_OK;
+    }
+    DocumentTextAccess::finish(engine);
     freeze_assets();
     if (version && version->contextual()) {
         const auto status = aether_contextual_transition_finalize_layout(result, nullptr);
@@ -2537,19 +3441,44 @@ AETHER_API aether_status_t aether_layout_layout(
     }
     validate_used_geometry(result);
     result->build_hit_order_cache();
+    DocumentTextAccess::complete_layout(engine,result);
     result->abandoned = false;
     *out_result = result;
     return AETHER_OK;
     } catch (const std::bad_alloc&) {
+        DocumentTextAccess::capture_failure(engine);
         result->abandoned = true; delete result; return AETHER_ERROR_OUT_OF_MEMORY;
     } catch (...) {
+        DocumentTextAccess::capture_failure(engine);
         result->abandoned = true; delete result; return AETHER_ERROR_INVALID_STATE;
     }
 }
 
+namespace aether::layout {
+aether_status_t DocumentRootLayoutAccess::layout(aether_layout_engine_t engine,aether_doc_t doc,
+    aether_style_map_t styles,float width,float height,aether_layout_result_t* out) noexcept {
+    return layout_impl(engine,doc,styles,width,height,nullptr,nullptr,out,nullptr,true);
+}
+aether_status_t layout_selected_capture(aether_layout_engine_t engine,aether_doc_t doc,
+    aether_style_map_t styles,const SelectedLayoutAuthority& authority,
+    aether_layout_result_t* out_result) noexcept {
+    return layout_impl(engine,doc,styles,authority.viewport_width(),authority.viewport_height(),
+                       nullptr,nullptr,out_result,&authority);
+}
+}
+
+extern "C" {
+AETHER_API aether_status_t aether_layout_layout(
+    aether_layout_engine_t engine,aether_doc_t doc,aether_style_map_t styles,
+    float viewport_width,float viewport_height,aether_scroll_offset_fn scroll_fn,
+    void* scroll_data,aether_layout_result_t* out_result) {
+    return layout_impl(engine,doc,styles,viewport_width,viewport_height,
+                       scroll_fn,scroll_data,out_result,nullptr);
+}
+
 AETHER_API void aether_layout_set_contextual_text_measurer(aether_layout_engine_t engine,
     aether_text_measurer_contextual_fn callback, void* data) {
-    if (!engine) return;
+    if (!engine || RealSimpleTextAccess::active(engine) || DocumentTextAccess::active(engine)) return;
     if (engine->layout_in_progress && engine->text_selection() &&
         engine->text_selection()->mode==aether::rendering::text::MeasurementMode::native) return;
     engine->contextual_text_measurer = callback;

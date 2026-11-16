@@ -17,6 +17,16 @@
 #include <cstdlib>
 #include <limits>
 
+namespace {
+// Per-image admission limits, not a bound on total live image resources or stb scratch.
+constexpr size_t kMaxEncodedBytes = 64u * 1024u * 1024u;
+constexpr size_t kMaxDecodedBytes = 256u * 1024u * 1024u;
+constexpr int kMaxDimension = 16384;
+bool admitted_dimensions(int width, int height) {
+    return width > 0 && height > 0 && width <= kMaxDimension && height <= kMaxDimension &&
+        static_cast<size_t>(width) <= kMaxDecodedBytes / 4u / static_cast<size_t>(height);
+}
+}
 extern "C" {
 
 AETHER_API aether_status_t aether_image_decode(const uint8_t* bytes, size_t byte_count,
@@ -25,19 +35,24 @@ AETHER_API aether_status_t aether_image_decode(const uint8_t* bytes, size_t byte
     if (!bytes || byte_count == 0 || !out_width || !out_height || !out_pixels) {
         return AETHER_ERROR_NULL_ARG;
     }
-    if (byte_count > static_cast<size_t>((std::numeric_limits<int>::max)())) {
+    if (byte_count > kMaxEncodedBytes || byte_count > static_cast<size_t>((std::numeric_limits<int>::max)())) {
         return AETHER_ERROR_PARSE_FAILED;
     }
 
     int width = 0;
     int height = 0;
     int channels_in_file = 0;
+    // Inspect dimensions before asking stb to allocate/decompress the pixel payload.
+    if (!stbi_info_from_memory(bytes, static_cast<int>(byte_count), &width, &height, &channels_in_file) ||
+        !admitted_dimensions(width, height)) {
+        return AETHER_ERROR_PARSE_FAILED;
+    }
     uint8_t* pixels = stbi_load_from_memory(
         bytes, static_cast<int>(byte_count), &width, &height, &channels_in_file, STBI_rgb_alpha);
     if (!pixels) {
         return AETHER_ERROR_PARSE_FAILED;
     }
-    if (width <= 0 || height <= 0) {
+    if (!admitted_dimensions(width, height)) {
         stbi_image_free(pixels);
         return AETHER_ERROR_PARSE_FAILED;
     }

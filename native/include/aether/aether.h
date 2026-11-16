@@ -956,7 +956,10 @@ AETHER_API void aether_paint_command_free(aether_paint_command_t* cmd);
 /* Decodes arbitrary image bytes (PNG, JPEG, GIF, BMP, ...) into the engine's
    canonical pixel format: contiguous BGRA8 pixels with premultiplied alpha, in
    top-to-bottom rows, using Width * 4 bytes per row. The returned buffer is
-   owned by the caller and must be released with aether_image_pixels_free. */
+   owned by the caller and must be released with aether_image_pixels_free.
+   Admission limits per image: 64 MiB encoded, 16384 pixels per dimension, and
+   256 MiB BGRA output. Over-limit or invalid input returns PARSE_FAILED without
+   changing outputs. These limits do not bound decoder scratch or total live images. */
 AETHER_API aether_status_t aether_image_decode(const uint8_t* bytes, size_t byte_count,
                                                int32_t* out_width, int32_t* out_height,
                                                uint8_t** out_pixels);

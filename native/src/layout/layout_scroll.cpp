@@ -30,14 +30,6 @@ bool aether_overflow_is_clip(int32_t overflow) {
 namespace {
 using OverflowBounds = layout_scroll_bounds_s;
 
-void unite(OverflowBounds& result, const OverflowBounds& contribution) {
-    if (contribution.empty) return;
-    if (result.empty) { result = contribution; return; }
-    result.left = std::min(result.left, contribution.left);
-    result.top = std::min(result.top, contribution.top);
-    result.right = std::max(result.right, contribution.right);
-    result.bottom = std::max(result.bottom, contribution.bottom);
-}
 
 void check_coordinate(double coordinate) {
     if (!std::isfinite(coordinate) || std::abs(coordinate) > std::numeric_limits<float>::max())
@@ -54,25 +46,11 @@ OverflowBounds project(const OverflowBounds& bounds, const aether_transform_matr
         const double mapped_y = x * matrix.m12 + y * matrix.m22 + matrix.dy;
         check_coordinate(mapped_x);
         check_coordinate(mapped_y);
-        unite(result, {mapped_x, mapped_y, mapped_x, mapped_y, false});
+        aether_scroll_unite(result, {mapped_x, mapped_y, mapped_x, mapped_y, false});
     }
     return result;
 }
 
-OverflowBounds clip_descendant(OverflowBounds bounds, const aether_layout_box_s* owner) {
-    if (bounds.empty) return bounds;
-    const auto& clip = owner->padding_box;
-    if (owner->style.overflow_x != AETHER_OVERFLOW_VISIBLE) {
-        bounds.left = std::max(bounds.left, double(clip.x));
-        bounds.right = std::min(bounds.right, double(clip.x) + clip.width);
-    }
-    if (owner->style.overflow_y != AETHER_OVERFLOW_VISIBLE) {
-        bounds.top = std::max(bounds.top, double(clip.y));
-        bounds.bottom = std::min(bounds.bottom, double(clip.y) + clip.height);
-    }
-    bounds.empty = bounds.right < bounds.left || bounds.bottom < bounds.top;
-    return bounds;
-}
 
 bool establishes_fixed_container(const aether_layout_box_s* box) {
     return (box->visual_sample_valid && box->visual_has_transform) ||
@@ -86,13 +64,13 @@ OverflowBounds subtree_bounds(const aether_layout_box_s* box, bool fixed_contain
         if (child->style.position == AETHER_POSITION_FIXED && !fixed_container) continue;
         // Clip each child contribution before union: two disjoint children
         // outside opposite clip edges must not manufacture a spanning rectangle.
-        unite(result, clip_descendant(subtree_bounds(child, fixed_container), box));
+        aether_scroll_unite(result, aether_scroll_clip_descendant(subtree_bounds(child, fixed_container), box));
     }
     if (box->visual_sample_valid && box->visual_has_transform) {
         // Scrollable overflow cannot shrink under a transform. The untransformed
         // and transformed local bounds are both propagated to the parent space.
         const auto transformed = project(result, box->visual_transform);
-        unite(result, transformed);
+        aether_scroll_unite(result, transformed);
     }
     return result;
 }

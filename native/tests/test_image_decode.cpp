@@ -3,6 +3,9 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
+#include <utility>
+#include <initializer_list>
 
 static void require(bool value, const char* message) {
     if (!value) {
@@ -54,6 +57,23 @@ int main() {
         "garbage bytes must be rejected as PARSE_FAILED");
     require(pixels == nullptr, "failed decode must not produce a buffer");
 
+    // Encoded-byte limit must reject before reading the claimed payload.
+    width = 7; height = 9; pixels = reinterpret_cast<uint8_t*>(1);
+    require(aether_image_decode(raw, 64u*1024u*1024u+1u, &width, &height, &pixels) == AETHER_ERROR_PARSE_FAILED,
+        "encoded payload limit");
+    require(width == 7 && height == 9 && pixels == reinterpret_cast<uint8_t*>(1), "failure preserves outputs");
+    // Header-only adversarial PNGs: admission rejects both dimension and output-byte limits.
+    for (const auto dimensions : {std::pair<unsigned,unsigned>{16385,1}, {16384,16384}}) {
+        unsigned char png[sizeof(kRedPng)];
+        std::memcpy(png,kRedPng,sizeof(png));
+        for (unsigned j=0;j<4;++j) {
+            png[16+j]=static_cast<unsigned char>(dimensions.first >> (24-8*j));
+            png[20+j]=static_cast<unsigned char>(dimensions.second >> (24-8*j));
+        }
+        require(aether_image_decode(png,sizeof(png),&width,&height,&pixels)==AETHER_ERROR_PARSE_FAILED,
+            "oversize image header rejected");
+        require(width == 7 && height == 9 && pixels == reinterpret_cast<uint8_t*>(1), "oversize preserves outputs");
+    }
     std::printf("OK: image decode test passed\n");
     return 0;
 }

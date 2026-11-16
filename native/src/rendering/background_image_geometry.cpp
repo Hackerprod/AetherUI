@@ -30,7 +30,7 @@ bool resolve_image_size(const aether_background_image_geometry_context_s& contex
     const float area_width = context.paint_rect.width;
     const float area_height = context.paint_rect.height;
     if (!(area_width > 0.f && area_height > 0.f)) return false;
-    if (context.has_intrinsic_size && !(source_width > 0.f && source_height > 0.f)) return false;
+    if (context.has_intrinsic_size && !(std::isfinite(source_width) && std::isfinite(source_height) && source_width > 0.f && source_height > 0.f)) return false;
 
     if (context.size_kind == AETHER_BACKGROUND_SIZE_COVER ||
         context.size_kind == AETHER_BACKGROUND_SIZE_CONTAIN) {
@@ -103,9 +103,9 @@ std::vector<axis_tile_s> resolve_axis(float area_start, float area_length, float
         return result;
     }
 
-    const int first = static_cast<int>(std::floor((area_start - positioned_start) / image_length));
+    const double first = std::floor((double(area_start) - positioned_start) / image_length);
     size_t iterations=0;
-    for (float start = positioned_start + first * image_length; start < area_end; start += image_length) {
+    for (float start = static_cast<float>(double(positioned_start) + first * image_length); start < area_end; start += image_length) {
         if (work_limit && (++iterations>work_limit || !(start+image_length>start))) return {};
         if (start + image_length > area_start) result.push_back({start, image_length});
     }
@@ -129,6 +129,8 @@ bool aether_background_image_resolve_geometry(
     float image_width = 0.f;
     float image_height = 0.f;
     if (!resolve_image_size(context, image_width, image_height)) return false;
+    constexpr size_t hard_limit = 65536;
+    const size_t work_limit = context.max_tiles ? std::min(context.max_tiles, hard_limit) : hard_limit;
 
     const float positioned_x = context.paint_rect.x + position_offset(
         context.position_x, context.paint_rect.width - image_width, context.paint_rect.width, context);
@@ -136,7 +138,7 @@ bool aether_background_image_resolve_geometry(
         context.position_y, context.paint_rect.height - image_height, context.paint_rect.height, context);
     if (!std::isfinite(positioned_x) || !std::isfinite(positioned_y)) return false;
 
-    if (context.max_tiles) {
+    {
         const auto bound = [&](float start,float length,float image,float position,int repeat)->double {
             if (!std::isfinite(start) || !std::isfinite(length) || !std::isfinite(image) ||
                 !(length>0 && image>0) || !std::isfinite(start+length)) return 0;
@@ -144,21 +146,21 @@ bool aether_background_image_resolve_geometry(
             if (repeat!=AETHER_BACKGROUND_REPEAT && repeat!=AETHER_BACKGROUND_SPACE && repeat!=AETHER_BACKGROUND_ROUND) return 0;
             const double ratio=double(length)/image;
             const double first=std::floor((double(start)-position)/image);
-            if (!std::isfinite(ratio) || ratio>double(context.max_tiles) || !std::isfinite(first) ||
+            if (!std::isfinite(ratio) || ratio>double(work_limit) || !std::isfinite(first) ||
                 first<std::numeric_limits<int>::min()+1.0 || first>std::numeric_limits<int>::max()-1.0 ||
                 !(position+image>position) || !(start+image>start) || !(start+length+image>start+length)) return 0;
             return std::ceil(ratio)+2; // Conservative boundary tiles, prior to any axis allocation.
         };
         const double nx=bound(context.paint_rect.x,context.paint_rect.width,image_width,positioned_x,context.repeat_x);
         const double ny=bound(context.paint_rect.y,context.paint_rect.height,image_height,positioned_y,context.repeat_y);
-        if (nx<=0 || ny<=0 || nx>double(context.max_tiles)/ny) return false;
+        if (nx<=0 || ny<=0 || nx>double(work_limit)/ny) return false;
     }
 
     const auto horizontal = resolve_axis(context.paint_rect.x, context.paint_rect.width, image_width,
-                                         positioned_x, context.repeat_x, context.max_tiles);
+                                         positioned_x, context.repeat_x, work_limit);
     const auto vertical = resolve_axis(context.paint_rect.y, context.paint_rect.height, image_height,
-                                       positioned_y, context.repeat_y, context.max_tiles);
-    if (context.max_tiles && (horizontal.empty() || vertical.empty() || horizontal.size()>context.max_tiles/vertical.size())) return false;
+                                       positioned_y, context.repeat_y, work_limit);
+    if (horizontal.empty() || vertical.empty() || horizontal.size()>work_limit/vertical.size()) return false;
     for (const auto& y : vertical) {
         float clipped_y = 0.f;
         float clipped_height = 0.f;
@@ -173,6 +175,11 @@ bool aether_background_image_resolve_geometry(
             const float source_y = (clipped_y - y.start) * source_height_base / y.length;
             const float source_width = clipped_width * source_width_base / x.length;
             const float source_height = clipped_height * source_height_base / y.length;
+            if (!std::isfinite(source_x) || !std::isfinite(source_y) ||
+                !std::isfinite(source_width) || !std::isfinite(source_height)) {
+                tiles.clear();
+                return false;
+            }
             tiles.push_back({{clipped_x, clipped_y, clipped_width, clipped_height},
                              {source_x, source_y, source_width, source_height},
                              {x.start, y.start, x.length, y.length}});

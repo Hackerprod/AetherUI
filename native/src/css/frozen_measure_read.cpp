@@ -25,6 +25,11 @@ measure_line_height_s MeasuresReadView::line_height() const {
     return {read_kind(frozen_->scalars().line_height_kind), frozen_->scalars().line_height_value};
 }
 aether::css::GradientEvidence MeasuresReadView::background_gradient() const { return frozen_ ? frozen_->scalars().background_gradient : builder_.value().background_gradient(); }
+int32_t MeasuresReadView::flex_wrap_mode() const { return frozen_ ? frozen_->scalars().flex_wrap_mode : builder_.value().flex_wrap_mode(); }
+int32_t MeasuresReadView::flex_align_content() const { return frozen_ ? frozen_->scalars().flex_align_content : builder_.value().flex_align_content(); }
+int32_t MeasuresReadView::flex_alignment_unproven() const { return frozen_ ? frozen_->scalars().flex_alignment_unproven : builder_.value().flex_alignment_unproven(); }
+int32_t MeasuresReadView::word_break() const { return frozen_ ? frozen_->scalars().word_break : builder_.value().word_break(); }
+int32_t MeasuresReadView::overflow_wrap() const { return frozen_ ? frozen_->scalars().overflow_wrap : builder_.value().overflow_wrap(); }
 int32_t MeasuresReadView::writing_mode() const { return frozen_ ? frozen_->scalars().writing_mode : builder_.value().writing_mode(); }
 bool MeasuresReadView::direction_rtl() const { return frozen_ ? frozen_->scalars().direction_rtl : builder_.value().direction_rtl(); }
 int32_t MeasuresReadView::flex_order() const { return frozen_ ? frozen_->scalars().flex_order : builder_.value().flex_order(); }
@@ -63,7 +68,7 @@ aether_status_t freeze_runtime_measures(const measure_state_s& source, FrozenDoc
     try {
         if(!document || source.background_positions.empty() || source.background_sizes.empty()) return AETHER_ERROR_INVALID_STATE;
         MeasureScalarValues scalars{source.parent_font_size,source.self_font_size,freeze_kind(source.line_height.kind),
-            source.line_height.value,source.row_gap,source.column_gap,source.dependencies,source.flex_order,source.direction_rtl,source.writing_mode,source.background_gradient};
+            source.line_height.value,source.row_gap,source.column_gap,source.dependencies,source.flex_order,source.direction_rtl,source.writing_mode,source.background_gradient,source.word_break,source.overflow_wrap,source.flex_wrap_mode,source.flex_align_content,source.flex_alignment_unproven};
         std::vector<MeasureBackgroundPosition> positions;
         positions.reserve(source.background_positions.size());
         for(const auto& p:source.background_positions) positions.push_back({p.x,p.y});

@@ -7,7 +7,7 @@
 #include "../../native/src/style_runtime/css_component_values.h"
 #include <set>
 #include "../../native/src/css/linear_gradient.h"
-#include "../../native/src/css/identity_translate_z.h"
+#include "../../native/src/css/bounded_translate.h"
 namespace h4 {
 inline std::string lower(std::string s){for(char& c:s)if(c>='A'&&c<='Z')c+=32;return s;}
 inline std::string identifier(const std::string& source,size_t begin,size_t end){
@@ -52,7 +52,7 @@ inline bool gap_length(const std::string& source){
 }
 inline bool value(const std::string& property,const std::string& source){
  if(property=="background-image")return aether_linear_gradient_g1_source_supported(source.c_str());
- if(property=="transform")return aether::css::single_identity_translate_z(source);
+ if(property=="transform")return aether::css::single_identity_translate_z(source)||aether::css::single_bounded_translate(source);
  bool valid=false;auto parts=css_split_components(source,&valid);if(!valid||parts.empty())return false;
  if(property=="gap"||property=="row-gap"||property=="column-gap"){if(parts.size()>(property=="gap"?2u:1u))return false;for(const auto& p:parts)if(!gap_length(p))return false;return true;}
  if(property=="padding") {if(parts.size()>4)return false;for(const auto& p:parts)if(!length(p))return false;return true;}
