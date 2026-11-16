@@ -160,7 +160,7 @@ bool all_clips_contain(double x,double y,std::size_t head,const std::vector<Clip
  }
  return true;
 }
-double joint_area(const Draw& d,Rect b,std::uint64_t& sampled,const std::vector<ClipNode>& nodes,
+unsigned joint_count(const Draw& d,Rect b,std::uint64_t& sampled,const std::vector<ClipNode>& nodes,
  std::uint64_t& tests,std::uint64_t& visits,const prep::PreparedFrame& frame) noexcept {
  ++sampled;unsigned count=0;
  for(int sy=0;sy<16;++sy)for(int sx=0;sx<16;++sx){
@@ -168,6 +168,12 @@ double joint_area(const Draw& d,Rect b,std::uint64_t& sampled,const std::vector<
   if(contains_shape(d.original,d.radius,x,y,frame,d.scale) && !contains(d.inner_original,d.inner_radius,x,y) &&
      all_clips_contain(x,y,d.clip_head,nodes,tests,visits,frame)) ++count;
  }
+ return count;
+}
+double joint_area(const Draw& d,Rect b,std::uint64_t& sampled,const std::vector<ClipNode>& nodes,
+ std::uint64_t& tests,std::uint64_t& visits,const prep::PreparedFrame& frame) noexcept {
+ const unsigned count=joint_count(d,b,sampled,nodes,tests,visits,frame);
+ // Preserve the legacy operation order for every non-exact caller.
  return (b.r-b.l)*(b.b-b.t)*count/256;
 }
 // Inputs already clipped to the viewport, so integer products are <=8192^2.
@@ -634,9 +640,12 @@ static Result render_impl(FrameStore& store,const prep::PreparedFrame& frame,
       const bool clips_central=all_clips_central(b,draw.clip_head,clip_nodes,clip_central_tests,clip_node_visits);
       if(draw.image) {
        if(exact_image){
+        // Reuse the same single joint grid evaluation, never reconstruct count from area.
+        const unsigned count=clips_central?256u:
+         joint_count(draw,b,joint_sampled_pixels,clip_nodes,clip_contains_tests,clip_node_visits,frame);
         unsigned channels[4];
         image_exact_lattice::sample(exact_context,draw.image->resource->pixels().data(),
-         draw.image->resource->stride(),x,y,channels);
+         draw.image->resource->stride(),x,y,channels,count);
         const unsigned sa=channels[3],inv=255-sa;
         auto* p=pixels.data()+std::size_t(y)*stride+std::size_t(x)*4;
         for(int c=0;c<3;++c)p[c]=std::uint8_t(std::min(sa,channels[c])+mul(p[c],inv));

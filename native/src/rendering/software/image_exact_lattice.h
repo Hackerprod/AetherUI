@@ -1,5 +1,6 @@
 #pragma once
 #include <algorithm>
+#include <cassert>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -21,8 +22,10 @@ inline bool coordinate(double value,std::int32_t& result) noexcept {
 inline bool prepare(Context& out,const double* source,const double* destination,
  const double* clipped,double opacity,std::uint32_t width,std::uint32_t height,
  bool full,std::size_t clip_depth) noexcept {
+ // Eligibility is arithmetic only; the caller supplies the joint coverage count.
+ (void)clip_depth;
 #if defined(__SIZEOF_INT128__)
- if(clip_depth!=0||width==0||height==0||width>16384||height>16384||
+ if(width==0||height==0||width>16384||height>16384||
     !std::isfinite(opacity)||opacity<0||opacity>1)return false;
  const double scaled=opacity*65536;
  if(std::floor(scaled)!=scaled)return false;
@@ -52,7 +55,8 @@ inline bool prepare(Context& out,const double* source,const double* destination,
 #if defined(__SIZEOF_INT128__)
 using Wide=unsigned __int128;
 inline unsigned half_up(Wide numerator,Wide denominator) noexcept {
- // 0 <= numerator / denominator <= 255, denominator > 0, both < 2^104.
+ // 0 <= numerator / denominator <= 255; denominator > 0 and < 2^104.
+ // Numerator < 2^112; largest denominator shift (7) is < 2^111.
  unsigned result=0;
  for(int bit=7;bit>=0;--bit){
   const Wide shifted=denominator<<bit;
@@ -75,7 +79,9 @@ inline Axis axis(const Context& ctx,unsigned k,std::int64_t center,std::uint64_t
 }
 #endif
 inline void sample(const Context& ctx,const std::uint8_t* pixels,std::size_t stride,
- int x,int y,unsigned* out) noexcept {
+ int x,int y,unsigned* out,unsigned count=256) noexcept {
+ // Exact arithmetic conditioned on the existing sampler, not exact curve membership.
+ assert(count<=256);
 #if defined(__SIZEOF_INT128__)
  // Caller iterates the retained clipped rect; x/y are legal frame pixel indices.
  const std::int64_t px=std::int64_t(x)*256,py=std::int64_t(y)*256;
@@ -87,16 +93,18 @@ inline void sample(const Context& ctx,const std::uint8_t* pixels,std::size_t str
  const Wide weights[]{Wide(ctx.vx-ax.fraction)*(ctx.vy-ay.fraction),
   Wide(ax.fraction)*(ctx.vy-ay.fraction),Wide(ctx.vx-ax.fraction)*ay.fraction,
   Wide(ax.fraction)*ay.fraction};
- const Wide denominator=(Wide(ctx.vx)*ctx.vy)<<32;
+ // T < 2^64; promotion precedes the shift. count is unsigned, including 256.
+ const Wide denominator=(Wide(ctx.vx)*ctx.vy)<<40;
  for(unsigned c=0;c<4;++c){
   const Wide numerator=Wide(pixels[ay.lo*stride+ax.lo*4+c])*weights[0]+
    Wide(pixels[ay.lo*stride+ax.hi*4+c])*weights[1]+
    Wide(pixels[ay.hi*stride+ax.lo*4+c])*weights[2]+
    Wide(pixels[ay.hi*stride+ax.hi*4+c])*weights[3];
-  out[c]=half_up(numerator*area*ctx.opacity,denominator);
+  // Every partial product is Wide: < 2^88, < 2^104, then < 2^112.
+  out[c]=half_up(numerator*area*ctx.opacity*count,denominator);
  }
 #else
- (void)ctx;(void)pixels;(void)stride;(void)x;(void)y;
+ (void)ctx;(void)pixels;(void)stride;(void)x;(void)y;(void)count;
  for(unsigned c=0;c<4;++c)out[c]=0; // Unreachable: prepare always returns false.
 #endif
 }

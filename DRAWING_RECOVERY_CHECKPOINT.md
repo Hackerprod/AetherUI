@@ -38,3 +38,33 @@ self-contained distribution of all test evidence.
 
 No workflows were added or changed. GitHub Actions remain disabled per the
 repository owner's explicit instruction. No workflow was dispatched.
+
+## Additional experimental clips checkpoint
+
+The later clip-aware candidate is now preserved in this branch. It reuses the
+existing coverage sampler and feeds its integer count into bounded image
+arithmetic; this is exact arithmetic conditional on that sampler, not a proof
+of universal curve accuracy. Out-of-domain/platform fallback remains legacy.
+
+Independent validation approved experimental contract v3 and a bounded
+operational success/cancellation campaign. The corpus's earlier 233 discrepancy
+routes are preserved as historical evidence, not 233 new renders. Regression
+coverage is 27 C++ results reused from this same clip-aware renderer plus one
+new contract-v3 test, and 28 HTML tests/124 buffers reused with verified custody.
+Earlier v1/v2 compatibility failures remain failures: v3 explicitly accepts two
+additional changed bytes after independent rational reconstruction of frame25.
+Only frames9 and25 have that rational reconstruction claim; the other30 retain
+compatibility references. Do not describe this as unconditional compatibility.
+
+The two-process operational observation passed exact buffers, atomicity and
+cancellation checks in its reviewed scene. It establishes neither universal
+performance nor a cancellation SLA. Host isolation, real workload, performance
+budget, Direct2D parity and production acceptance remain unverified; the prior
+LSan blocker remains open.
+
+Recovery fixtures and frozen helpers are under
+`recovery/clips-checkpoint-20261116.zip` (extract into a new directory); old and new helper namespaces are needed
+by those comparison tests. The versioned v3 test is additionally placed under
+`native/tests` for its relative engine include. Prior test contracts were not
+rewritten. Documentation of earlier checkpoint results above is historical,
+not the latest clip-aware status. No workflows or main-branch state changed.
