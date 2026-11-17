@@ -1,3 +1,4 @@
+#include "html_ltr/session.h"
 /* ── DisplayListBuilder — faithful port from DisplayListBuilder.cs ── */
 #include "display_list_types.h"
 #include "../layout/layout_types.h"
@@ -852,7 +853,63 @@ static AETHER_PAINT_CONTROL_NOINLINE void paint_control(aether_display_list_buil
                            const paint_context_s& ctx,
                            std::vector<aether_paint_command_t>& cmds)
 {
-    if(builder->native_text_runs) throw std::runtime_error("native controls unsupported");
+    if (builder->native_text_runs) {
+        using namespace aether::rendering;
+        const auto& atomic = box->atomic_control;
+        const auto& presentation = atomic.presentation;
+        if (!builder->native_control_runs || !presentation || presentation->profile != 2 ||
+            !presentation->record || presentation->record->node() != box->element ||
+            presentation->record->style() != box->style.style_owner() ||
+            box->control_display_text != presentation->text ||
+            box->control_shows_placeholder != presentation->shows_placeholder || box->native_text.run)
+            throw std::runtime_error("native control identity missing");
+        HTML_LTR_STAGE(control_clip);
+        NativeControlEntry evidence;
+        evidence.owner = box->element;
+        evidence.placement = atomic;
+        evidence.clip = box->content_box;
+        if (presentation->text.empty()) {
+            if (atomic.text.run || atomic.occurrence || atomic.text.baseline != 0 ||
+                presentation->kind != html_ltr::ControlKind::empty)
+                throw std::runtime_error("native empty control has text");
+            builder->native_control_runs->push_back(std::move(evidence));
+            return;
+        }
+        const auto& run = atomic.text.run;
+        if (!run || !atomic.occurrence || run->source != presentation->text ||
+            atomic.text.baseline != run->metrics.baseline ||
+            presentation->kind == html_ltr::ControlKind::empty ||
+            !run->font || float(run->font->size_26_6)/64.f != box->style.font_size)
+            throw std::runtime_error("native control run missing");
+        const auto& clip = box->content_box;
+        evidence.run_rect = {clip.x, clip.y + std::max(0.f, (clip.height-run->metrics.height)/2.f),
+                             run->metrics.width, run->metrics.height};
+        // Keep the natural run geometry, even for a zero-width content clip.
+        // Decorations were emitted before this exact clip/text/pop scope.
+        evidence.push_index = cmds.size();
+        emit_push_clip(cmds, clip, {});
+        evidence.draw_index = cmds.size();
+        aether_paint_command_t command{};
+        paint_command_guard_s guard{command};
+        command.tag = AETHER_PAINT_DRAW_TEXT;
+        command.data.draw_text.text = checked_strdup(presentation->text.c_str());
+        command.data.draw_text.rect = evidence.run_rect;
+        strncpy(command.data.draw_text.font_family, "AetherLTR", sizeof(command.data.draw_text.font_family)-1);
+        command.data.draw_text.font_size = box->style.font_size;
+        command.data.draw_text.font_weight = box->style.font_weight;
+        command.data.draw_text.text_align = AETHER_TEXT_ALIGN_START;
+        command.data.draw_text.color = presentation->color;
+        command.data.draw_text.wrap = AETHER_FALSE;
+        cmds.push_back(command);
+        guard.release();
+        auto placement = atomic.text;
+        placement.baseline += evidence.run_rect.y;
+        builder->native_text_runs->push_back({evidence.draw_index, std::move(placement)});
+        evidence.pop_index = cmds.size();
+        emit_pop_clip(cmds);
+        builder->native_control_runs->push_back(std::move(evidence));
+        return;
+    }
     auto* element = box->element;
     const auto view = style_for_box(builder, box);
     const auto& style = view.scalars();
@@ -1221,9 +1278,10 @@ aether_status_t build_scroll(aether_display_list_builder_t b,aether_layout_resul
  try {
   if(input && input->size()>65536)return AETHER_ERROR_INVALID_STATE;
   auto candidate=std::make_unique<NativePaintList>();
-  struct Reset {aether_display_list_builder_t b; ~Reset(){b->opacity_events=nullptr;b->native_text_runs=nullptr;b->opacity_parents.clear();b->opacity_serial=0;b->native_scroll_depth=0;}} reset{b};
+  struct Reset {aether_display_list_builder_t b; ~Reset(){b->opacity_events=nullptr;b->native_text_runs=nullptr;b->native_control_runs=nullptr;b->opacity_parents.clear();b->opacity_serial=0;b->native_scroll_depth=0;}} reset{b};
   b->opacity_events=&candidate->events;
   b->native_text_runs=&candidate->text_runs;
+  b->native_control_runs=&candidate->control_runs;
   const auto status=node?aether_display_list_build_node_with_styles(b,l,styles,node,nullptr,&NativeListAccess::list(*candidate)):
     aether_display_list_build_with_styles(b,l,styles,nullptr,&NativeListAccess::list(*candidate));
   if(status!=AETHER_OK)return status;

@@ -1,3 +1,6 @@
+#ifdef AETHER_HTML_LTR_TESTING
+#include "../html_ltr/session.h"
+#endif
 #include "truetype_raster.h"
 #include "raster_active_bound.h"
 #include <algorithm>
@@ -91,7 +94,11 @@ static RasterResult rasterize_impl(std::shared_ptr<const Outline> outline,std::s
   if(aggregate){if(aggregate->remaining<work.reserved)throw RasterError::budget_exceeded;aggregate->remaining-=work.reserved;work.aggregate_charged=work.reserved;}
   }
   if(mask_bytes){if(pixels>mask_bytes->remaining)throw RasterError::budget_exceeded;mask_bytes->remaining-=pixels;work.mask_charged=pixels;}
-  run.check();std::vector<std::uint8_t> bytes;bytes.reserve(pixels);
+  run.check();std::vector<std::uint8_t> bytes;
+#ifdef AETHER_HTML_LTR_TESTING
+  HTML_LTR_STAGE(a8_pixels);
+#endif
+  bytes.reserve(pixels);
   for(std::uint64_t i=0;i<pixels;++i){run.tick();bytes.push_back(0);++work.output_operations;}
   run.check();std::vector<Cross> crosses;crosses.reserve(s);
   run.check();std::vector<double> partial,delta;partial.reserve(width);delta.reserve(width+1);

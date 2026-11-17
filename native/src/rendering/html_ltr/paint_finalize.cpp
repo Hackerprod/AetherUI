@@ -129,9 +129,28 @@ void validate_generated_mask(const std::shared_ptr<const text::GlyphMaskA8>& mas
 }
 }
 std::vector<std::shared_ptr<const text::GlyphMaskA8>> finalize_paint(
- NativePaintList& native,const FinalTexts& finals,FontProvider& provider) {
+ NativePaintList& native,const FinalTexts& finals,FontProvider& provider,const FinalControls& controls,uint32_t profile) {
  validate_controls(native,provider);
  auto* list=NativeListAccess::list(native);
+ if(profile!=1&&profile!=2)internal();
+ if(profile==1&&(!controls.empty()||!native.control_runs.empty()))internal();
+ if(native.control_runs.size()!=controls.size())internal();
+ std::set<aether_node_s*> seen_controls;
+ for(const auto& entry:native.control_runs){
+  if(!entry.owner||!seen_controls.insert(entry.owner).second||!controls.contains(entry.owner))internal();
+  const auto& f=controls.at(entry.owner);const auto& a=f.placement;const auto& b=entry.placement;
+  if(!a.presentation||a.presentation!=b.presentation||a.presentation->profile!=2||a.text.run!=b.text.run||a.text.baseline!=b.text.baseline||a.occurrence!=b.occurrence||!same(entry.clip,f.clip)||!same(entry.run_rect,f.rect))internal();
+  rect(f.clip);
+  if(a.presentation->text.empty()){
+   if(a.text.run||a.occurrence||entry.push_index!=SIZE_MAX||entry.draw_index!=SIZE_MAX||entry.pop_index!=SIZE_MAX)internal();
+   continue;
+  }
+  if(!a.text.run||!a.occurrence||!finals.contains(a.text.run.get())||entry.push_index>=list->commands.size()||entry.draw_index!=entry.push_index+1||entry.pop_index!=entry.draw_index+1||entry.pop_index>=list->commands.size())internal();
+  if(list->commands[entry.push_index].tag!=AETHER_PAINT_PUSH_CLIP||list->commands[entry.draw_index].tag!=AETHER_PAINT_DRAW_TEXT||list->commands[entry.pop_index].tag!=AETHER_PAINT_POP_CLIP||!same(list->commands[entry.push_index].data.push_clip.rect,f.clip)||!same(list->commands[entry.draw_index].data.draw_text.rect,f.rect))internal();
+  const auto& m=a.text.run->metrics;const aether_rectf expected{f.clip.x,f.clip.y+std::max(0.f,(f.clip.height-m.height)/2.f),m.width,m.height};
+  if(!same(f.rect,expected)||a.text.baseline!=m.baseline)internal();
+  bool matched=false;for(const auto& t:native.text_runs)if(t.command_index==entry.draw_index){if(matched||t.placement.run!=a.text.run||t.placement.baseline!=f.rect.y+m.baseline)internal();matched=true;}if(!matched)internal();
+ }
  reserve_items(provider,finals.size(),sizeof(std::pair<const text::ShapedRun*,bool>));
  std::set<const text::ShapedRun*> expected;
  std::size_t placed=0;
@@ -141,7 +160,8 @@ std::vector<std::shared_ptr<const text::GlyphMaskA8>> finalize_paint(
   // Builder explicitly omits empty boxes, but never viewport-clipped nonempty
   // text. Account for those omitted zero-area fragments rather than weakening
   // coverage to only the entries that happened to survive.
-  if(final.rect.width>0&&final.rect.height>0)expected.insert(key);
+  bool atomic=false;for(const auto& [_,c]:controls)if(c.placement.text.run.get()==key)atomic=true;
+  if(atomic||(final.rect.width>0&&final.rect.height>0))expected.insert(key);
  }
  if(native.text_runs.size()!=expected.size())internal();
  reserve_items(provider,list->commands.size(),sizeof(aether_paint_command_t));
@@ -168,6 +188,7 @@ std::vector<std::shared_ptr<const text::GlyphMaskA8>> finalize_paint(
      (t.font_weight!=400&&t.font_weight!=700)||t.text_align!=AETHER_TEXT_ALIGN_START||t.wrap)internal();
   if(original->font->source!=(t.font_weight==700?provider.bold_source():provider.regular_source()))internal();
   opaque(t.color);
+  if(final.verify_color&&(t.color.r!=final.color.r||t.color.g!=final.color.g||t.color.b!=final.color.b||t.color.a!=final.color.a))internal();
   const double scale=double(original->font->size_26_6)/64/product.binding->face()->units_per_em();
   const auto qx=quantize_absolute(t.rect.x),qy=quantize_absolute(entry.placement.baseline);
   reserve_items(provider,original->glyphs.size(),sizeof(text::Glyph));

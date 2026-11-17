@@ -27,7 +27,7 @@ extern "C" {
  * ABI 1.0, a major-version change denotes an incompatible ABI.
  */
 #define AETHER_ABI_VERSION_MAJOR 0u
-#define AETHER_ABI_VERSION_MINOR 36u
+#define AETHER_ABI_VERSION_MINOR 37u
 #define AETHER_ABI_VERSION_PATCH 0u
 
 #define AETHER_ABI_VERSION_MAKE(major, minor, patch) \
@@ -952,8 +952,12 @@ AETHER_API aether_status_t aether_surface_render(aether_surface_t surface, aethe
    Body solid background propagates to the viewport; html has no painted box.
    Fixed viewport clipping does not enable authored overflow or scrolling. */
 #define AETHER_HTML_LTR_PROFILE_1 1u
+/* Static semantic controls; no editing, events, focus or accessibility. */
+#define AETHER_HTML_LTR_PROFILE_STATIC_CONTROLS_2 2u
 #define AETHER_HTML_LTR_TYPOGRAPHY_INCOMPLETE 1u
 #define AETHER_HTML_LTR_CSS_COVERAGE_INCOMPLETE 2u
+#define AETHER_HTML_LTR_INTERACTION_UNSUPPORTED 4u
+#define AETHER_HTML_LTR_ACCESSIBILITY_UNSUPPORTED 8u
 typedef struct aether_html_ltr_options_s {
     uint32_t struct_size;
     uint32_t profile;

@@ -1187,3 +1187,20 @@ to the full canvas, and private viewport clipping does not enable authored scrol
 Every render error preserves confirmed frame state. Limitations query returns3 for
 profile1 andUINT32_MAX for unknown profiles. LSan remains NOT_VALIDATED in the local
 ptrace-based validation environment; that debt is not a claim of leak freedom.
+
+## Native static controls profile 2 (ABI 0.37.0)
+
+`AETHER_HTML_LTR_PROFILE_STATIC_CONTROLS_2` extends the bounded one-shot HTML
+pipeline with semantic text/password inputs and plain-text buttons. Use the same
+`aether_html_ltr_options` structure and render/copy API; no new capability bit or
+changed field layout. Discover support through
+`aether_html_ltr_profile_limitations(2) != UINT32_MAX`. The exact limitation mask
+is 15; profile 1 remains 3 and its grammar is unchanged.
+
+The separate [static login example](examples/native_login_static/README.md)
+provides a public C11 consumer, scope matrix and closed grammar. C++ owns
+presentation, TrueType measurement, masks and content clipping; bindings do not
+measure or paint text. Password presentation contains generated bullets, but
+source HTML/DOM still exists during rendering: masking is not secure erasure.
+There are no editing, focus, caret, event, authentication or accessibility APIs
+in this release. General HTML/CSS and gradients remain outside this profile.

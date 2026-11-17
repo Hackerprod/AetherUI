@@ -4,17 +4,28 @@
 #include <memory>
 #include <vector>
 #include "text/shaped_run.h"
+#include "html_ltr/control_presentation.h"
+#include <limits>
 namespace aether::rendering {
 struct OpacityEvent { std::size_t boundary{}; bool open{}; std::uint64_t id{}, parent{}; float opacity{1}; };
 struct NativeScrollOffset { std::int64_t id{}; double x{},y{}; };
 using NativeScrollInput = std::vector<NativeScrollOffset>;
 struct NativeScrollState { std::int64_t id{}; double x{},y{},range_x{},range_y{}; aether_scrollbar_geometry_t chrome{}; };
 struct NativeTextEntry { std::size_t command_index{}; text::Placement placement; };
+struct NativeControlEntry {
+ aether_node_s* owner{};
+ html_ltr::AtomicControlPlacement placement;
+ aether_rectf clip{},run_rect{};
+ std::size_t push_index=std::numeric_limits<std::size_t>::max();
+ std::size_t draw_index=std::numeric_limits<std::size_t>::max();
+ std::size_t pop_index=std::numeric_limits<std::size_t>::max();
+};
 class NativePaintList {
  aether_display_list_t list_{};
  friend struct NativeListAccess;
  public:
  std::vector<NativeTextEntry> text_runs;
+ std::vector<NativeControlEntry> control_runs;
  std::vector<OpacityEvent> events;
  std::vector<NativeScrollState> scroll;
  NativePaintList()=default;

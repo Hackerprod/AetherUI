@@ -64,7 +64,8 @@ aether_status_t rendering_status(r::software::Result v) noexcept {
 extern "C" {
 AETHER_API size_t aether_html_ltr_options_size(void) { return sizeof(aether_html_ltr_options); }
 AETHER_API uint32_t aether_html_ltr_profile_limitations(uint32_t profile) {
-    return profile == AETHER_HTML_LTR_PROFILE_1 ? 3u : UINT32_MAX;
+    return profile == AETHER_HTML_LTR_PROFILE_1 ? 3u :
+        profile == AETHER_HTML_LTR_PROFILE_STATIC_CONTROLS_2 ? 15u : UINT32_MAX;
 }
 AETHER_API aether_status_t aether_surface_render_html_ltr(aether_surface_t surface,
         const char* html, size_t length, const aether_html_ltr_options* options) {
@@ -74,7 +75,7 @@ AETHER_API aether_status_t aether_surface_render_html_ltr(aether_surface_t surfa
         auto status = frame_status(surface->store.current_viewport(viewport));
         if (status != AETHER_OK) return status;
         if (!html || !options) return AETHER_ERROR_NULL_ARG;
-        if (options->struct_size != sizeof(*options) || options->profile != 1 ||
+        if (options->struct_size != sizeof(*options) || (options->profile != 1 && options->profile != 2) ||
             !options->regular_font || !options->regular_font_size ||
             (bool(options->bold_font) != bool(options->bold_font_size)))
             return AETHER_ERROR_INVALID_ARGUMENT;
@@ -92,7 +93,7 @@ AETHER_API aether_status_t aether_surface_render_html_ltr(aether_surface_t surfa
         std::vector<uint8_t> regular(options->regular_font, options->regular_font + options->regular_font_size);
         std::vector<uint8_t> bold;
         if (options->bold_font_size) bold.assign(options->bold_font, options->bold_font + options->bold_font_size);
-        r::html_ltr::HtmlLtrSession session(std::move(owned_html), std::move(regular), std::move(bold), viewport);
+        r::html_ltr::HtmlLtrSession session(std::move(owned_html), std::move(regular), std::move(bold), viewport, options->profile);
         const auto& prepared = session.prepare();
         HTML_LTR_STAGE(candidate);
         const auto rendered = r::software::render_a8(surface->store, prepared, session.masks(), nullptr);

@@ -79,7 +79,7 @@ void css(Node& node,std::string_view input) {
     if(node.inherited.line_height<node.inherited.font_size)unsupported();
 }
 class Recognizer {
-    std::string_view source;std::size_t at=0;Inventory result;
+    std::string_view source;std::size_t at=0;Inventory result;std::uint32_t profile;
     bool starts(std::string_view v) const {return source.substr(at,v.size())==v;}
     void expect(char c) {if(at>=source.size()||source[at]!=c)invalid();++at;}
     std::string_view name() {const auto begin=at;if(at>=source.size()||!alpha(source[at]))invalid();while(at<source.size()&&name_char(source[at]))++at;return source.substr(begin,at-begin);}
@@ -96,9 +96,51 @@ class Recognizer {
         }
         n.text.assign(s);
     }
+    void attribute_text(std::string& destination,std::string_view value) {
+        std::size_t count=0;
+        for(std::size_t i=0;i<value.size();) {
+            const auto cp=scalar(value,i);
+            if(cp=='&'||cp=='<'||!((cp>=32&&cp<=126)||(cp>=160&&cp<=255&&cp!=173)))unsupported();
+            if(count==256||result.scalar_count==4096)limit();
+            ++count;++result.scalar_count;
+        }
+        destination.assign(value);
+    }
+    void control_attributes(Node& node) {
+        bool type=false,value=false,placeholder=false,style=false;
+        for(;;) {
+            const auto separator=at;
+            while(at<source.size()&&source[at]==' ')++at;
+            if(at==source.size())invalid();
+            if(source[at]=='>') {++at;break;}
+            if(at==separator||source[at]=='/'||ws(source[at]))invalid();
+            const auto attr=name();expect('=');expect('"');const auto begin=at;
+            while(at<source.size()&&source[at]!='"')++at;
+            if(at==source.size())invalid();
+            const auto val=source.substr(begin,at-begin);++at;
+            bool* seen=nullptr;
+            if(attr=="type")seen=&type;
+            else if(attr=="style")seen=&style;
+            else if(node.input()&&attr=="value")seen=&value;
+            else if(node.input()&&attr=="placeholder")seen=&placeholder;
+            else unsupported();
+            if(*seen)invalid();
+            *seen=true;
+            if(attr=="type") {
+                if(node.input() ? (val!="text"&&val!="password") : val!="button")unsupported();
+                node.type.assign(val);
+            } else if(attr=="style")css(node,val);
+            else if(attr=="value")attribute_text(node.value,val);
+            else attribute_text(node.placeholder,val);
+        }
+        if(!type)invalid();
+        if(result.control_count==32)limit();
+        ++result.control_count;
+    }
     void opening(Node& node) {
         expect('<');const auto tag=name();node.tag.assign(tag);
-        if(tag!="html"&&tag!="body"&&tag!="div"&&tag!="h1"&&tag!="p")unsupported();
+        if(tag!="html"&&tag!="body"&&tag!="div"&&tag!="h1"&&tag!="p"&&!(profile==2&&(tag=="input"||tag=="button")))unsupported();
+        if(node.control()){control_attributes(node);return;}
         const auto after_name=at;
         while(at<source.size()&&source[at]==' ')++at;
         if(at>=source.size())invalid();
@@ -128,16 +170,18 @@ class Recognizer {
         Node node;node.parent=parent;if(parent!=Node::no_parent)node.inherited=result.nodes[parent].inherited;
         opening(node);
         if(parent==Node::no_parent) {if(node.tag!="html")unsupported();}
-        else {const auto& p=result.nodes[parent].tag;if(p=="html"){if(node.tag!="body"||!result.nodes[parent].children.empty())unsupported();}else if(node.tag!="div"&&node.tag!="h1"&&node.tag!="p")unsupported();}
+        else {const auto& p=result.nodes[parent].tag;if(p=="html"){if(node.tag!="body"||!result.nodes[parent].children.empty())unsupported();}else if(node.tag!="div"&&node.tag!="h1"&&node.tag!="p"&&!(profile==2&&node.control()))unsupported();}
         if(node.inherited.line_height<node.inherited.font_size)unsupported();
         const auto index=result.nodes.size();result.nodes.push_back(std::move(node));
         if(parent!=Node::no_parent)result.nodes[parent].children.push_back(index);
+        if(result.nodes[index].input())return index;
         if(result.nodes[index].leaf()) {
             if(result.leaf_count==64)limit();
             ++result.leaf_count;
             const auto begin=at;while(at<source.size()&&source[at]!='<')++at;
             text(result.nodes[index],source.substr(begin,at-begin));
             if(!starts("</")) {if(at==source.size())invalid();unsupported();}
+            if(result.nodes[index].tag=="button"&&result.nodes[index].text.empty())invalid();
         } else {
             for(;;) {
                 const auto begin=at;while(at<source.size()&&ws(source[at]))++at;
@@ -152,7 +196,7 @@ class Recognizer {
         closing(result.nodes[index].tag);return index;
     }
 public:
-    explicit Recognizer(std::string_view s):source(s){}
+    explicit Recognizer(std::string_view s,std::uint32_t p):source(s),profile(p){}
     Inventory run() {
         if(source.empty())invalid();
         if(source.size()>65536)limit();
@@ -165,5 +209,5 @@ public:
     }
 };
 }
-Inventory admit(std::string_view html) {return Recognizer(html).run();}
+Inventory admit(std::string_view html,std::uint32_t profile) {if(profile!=1&&profile!=2)invalid();return Recognizer(html,profile).run();}
 }

@@ -1,6 +1,7 @@
 #include "initial_canvas.h"
 /* ── Layout Engine — core box layout, flow, inline, and intrinsic sizing ─ */
 #include "layout_internal.h"
+#include "../rendering/html_ltr/session.h"
 #include "native_text_transaction.h"
 using aether::layout::NativeTextAccess;
 #include "layout_scroll_bounds.h"
@@ -37,7 +38,12 @@ static opaque_control_size_s measure_opaque_single_line_control(
     if(engine->text_selection() && engine->text_selection()->mode==aether::rendering::text::MeasurementMode::native)
         throw std::invalid_argument("opaque controls outside native text contract");
     const float min_height = std::max(style.font_size * 1.1f, layout_used_line_height(engine, element, style));
-    const std::string text = aether_opaque_control_display_text(element, style);
+    const auto presentation = engine->html_ltr_bridge()
+        ? engine->html_ltr_bridge()->control(element, style) : nullptr;
+    if (engine->html_ltr_bridge() && !presentation)
+        throw std::invalid_argument("native control presentation missing");
+    const std::string text = presentation ? presentation->text
+        : aether_opaque_control_display_text(element, style);
     if (text.empty()) return {0.f, min_height};
     const auto metrics = engine_measure_text(engine, text.c_str(), &style, 0.f, element);
     return {metrics.width, std::max(metrics.height, min_height)};
@@ -569,9 +575,30 @@ aether_layout_box_s* layout_element(
     bool intrinsic_control = is_opaque_single_line_control(element);
     box->is_atomic_control = intrinsic_control;
     if (intrinsic_control) {
-        box->control_display_text = aether_opaque_control_display_text(element, style);
-        const auto value = element->attributes.find("value");
-        box->control_shows_placeholder = value == element->attributes.end() || value->second.empty();
+        if (engine->html_ltr_bridge()) {
+            auto presentation = engine->html_ltr_bridge()->control(element, style);
+            if (!presentation || presentation->profile != 2)
+                throw std::invalid_argument("native control presentation missing");
+            box->atomic_control.presentation = presentation;
+            box->control_display_text = presentation->text;
+            box->control_shows_placeholder = presentation->shows_placeholder;
+            // Intrinsic probes must not mint final occurrences. The final box
+            // retains its own run, never a metrics-only probe's product.
+            if (!intrinsic_measurement && !presentation->text.empty()) {
+                HTML_LTR_STAGE(control_transport);
+                const auto measured = engine_measure_text_transport(engine,
+                    presentation->text.c_str(), &style, 0.f, element);
+                if (!measured.run) throw std::invalid_argument("native atomic run missing");
+                box->atomic_control.text = {measured.run, measured.metrics.baseline};
+                box->atomic_control.occurrence = engine->html_ltr_bridge()->occurrence(measured.run.get());
+                if (!box->atomic_control.occurrence)
+                    throw std::invalid_argument("native atomic occurrence missing");
+            }
+        } else {
+            box->control_display_text = aether_opaque_control_display_text(element, style);
+            const auto value = element->attributes.find("value");
+            box->control_shows_placeholder = value == element->attributes.end() || value->second.empty();
+        }
     }
 
     float definite_content_height;

@@ -109,6 +109,7 @@ struct aether_layout_box_s {
     std::vector<block_static_anchor_s> block_static_anchors;
     std::string text;
     aether::rendering::text::Placement native_text;
+    aether::rendering::html_ltr::AtomicControlPlacement atomic_control;
     bool  is_atomic_control = false;
     bool is_initial_canvas = false;
     std::string control_display_text;

@@ -26,6 +26,7 @@ class FontProvider final {
  std::map<std::pair<const text::FontSource*,std::uint32_t>,std::uint16_t> cmap_;
  std::map<std::pair<const text::FontSource*,std::uint32_t>,std::shared_ptr<const tt::Outline>> outlines_;
  FontProviderUsage usage_{};
+ const std::uint32_t profile_;
  void validate_source(const std::shared_ptr<const text::FontSource>&);
  std::shared_ptr<const tt::RealFontBinding> binding(int size, int weight);
  static void reserve(std::size_t n,std::size_t& used,std::size_t limit);
@@ -34,7 +35,7 @@ public:
  static constexpr std::uint64_t outline_work_limit=256000000u;
  tt::AggregateBudget raster_budget{512000000u};
  tt::AggregateBudget mask_budget{16u*1024u*1024u};
- FontProvider(std::vector<std::uint8_t> regular,std::vector<std::uint8_t> bold);
+ FontProvider(std::vector<std::uint8_t> regular,std::vector<std::uint8_t> bold,std::uint32_t profile=1);
  FontProvider(const FontProvider&)=delete;
  FontProvider& operator=(const FontProvider&)=delete;
  void reserve_payload(std::size_t bytes);

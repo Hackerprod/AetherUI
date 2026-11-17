@@ -21,14 +21,17 @@ struct Node {
     std::string tag;
     std::size_t parent = no_parent;
     std::string text;
+    std::string type, value, placeholder;
     std::vector<std::pair<std::string,std::string>> declarations;
     std::vector<std::size_t> children;
     std::vector<Trivia> trivia;
     InheritedStyle inherited;
-    bool leaf() const noexcept { return tag == "h1" || tag == "p"; }
+    bool input() const noexcept { return tag == "input"; }
+    bool control() const noexcept { return input() || tag == "button"; }
+    bool leaf() const noexcept { return tag == "h1" || tag == "p" || tag == "button"; }
 };
-struct Inventory { std::vector<Node> nodes; std::size_t scalar_count = 0, leaf_count = 0; };
+struct Inventory { std::vector<Node> nodes; std::size_t scalar_count = 0, leaf_count = 0, control_count = 0; };
 // Recognizes only the authored grammar; it never invokes the tolerant DOM parser.
 // Every string in the inventory is owned. All structural/text limits precede DOM.
-Inventory admit(std::string_view html);
+Inventory admit(std::string_view html, std::uint32_t profile = 1);
 }

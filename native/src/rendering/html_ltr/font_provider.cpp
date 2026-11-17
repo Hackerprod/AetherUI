@@ -40,9 +40,10 @@ constexpr std::size_t outline_temporary_max=17*outline_retained_max;
 // face loca <=65536*4; cmap <=65536 ranges (24 bytes in F1); table/owner overhead.
 constexpr std::size_t binding_temporary_max=2u*1024u*1024u;
 constexpr std::size_t map_entry_overhead=64;
-std::uint32_t scalar(std::string_view source,std::size_t& at){
+std::uint32_t scalar(std::string_view source,std::size_t& at,std::uint32_t profile){
  if(at>=source.size())fail(AETHER_ERROR_INTERNAL);
  const auto first=static_cast<unsigned char>(source[at++]);std::uint32_t cp=first;
+ if(profile==2&&first==0xe2&&source.size()-at>=2&&static_cast<unsigned char>(source[at])==0x80&&static_cast<unsigned char>(source[at+1])==0xa2){at+=2;return 0x2022;}
  if(first>=128){
   if(first<0xc2||first>0xc3||at==source.size())fail(AETHER_ERROR_INVALID_ARGUMENT);
   const auto next=static_cast<unsigned char>(source[at++]);if((next&0xc0)!=0x80)fail(AETHER_ERROR_INVALID_ARGUMENT);
@@ -66,7 +67,8 @@ void FontProvider::validate_source(const std::shared_ptr<const text::FontSource>
  // operation never refunds; callers abort the whole one-shot session.
  map_result=tt::CmapError::cancelled;face.reset();usage_.payload-=binding_temporary_max;
 }
-FontProvider::FontProvider(std::vector<std::uint8_t> regular,std::vector<std::uint8_t> bold){
+FontProvider::FontProvider(std::vector<std::uint8_t> regular,std::vector<std::uint8_t> bold,std::uint32_t profile):profile_(profile){
+ if(profile_!=1&&profile_!=2)fail(AETHER_ERROR_INVALID_ARGUMENT);
  if(regular.empty())fail(AETHER_ERROR_INVALID_ARGUMENT);
  if(regular.size()>16u*1024u*1024u||bold.size()>16u*1024u*1024u-regular.size())fail(AETHER_ERROR_LIMIT_EXCEEDED);
  reserve_payload(regular.size()+sizeof(text::FontSource)+128);
@@ -106,7 +108,7 @@ FontProduct FontProvider::product(std::string_view source,int size,int weight,in
  if(line_height<8||line_height>96)fail(AETHER_ERROR_INTERNAL);
  if(line_height<size)fail(AETHER_ERROR_UNSUPPORTED);
  // Count both physical decoding passes, reserving BEFORE each visit.
- std::size_t n=0;for(std::size_t at=0;at<source.size();){reserve(1,usage_.scalar_visits,65536);scalar(source,at);++n;}
+ std::size_t n=0;for(std::size_t at=0;at<source.size();){reserve(1,usage_.scalar_visits,65536);scalar(source,at,profile_);++n;}
  if(n>text::max_glyphs)fail(AETHER_ERROR_LIMIT_EXCEEDED);
  // n is bounded by max_glyphs before products and reservations.
  reserve_payload(sizeof(FontProduct)+source.size()+n*sizeof(text::Glyph)+(n+1)*sizeof(std::uint64_t));
@@ -117,7 +119,7 @@ FontProduct FontProvider::product(std::string_view source,int size,int weight,in
  const double baseline=double(vm.ascent)*scale+(double(line_height)-(double(vm.ascent)+vm.descent)*scale)/2;
  if(!std::isfinite(baseline)||baseline<0||baseline>line_height)fail(AETHER_ERROR_UNSUPPORTED);
  std::uint64_t sum=0;
- for(std::size_t at=0;at<source.size();){reserve(1,usage_.scalar_visits,65536);const auto cluster=at;const auto cp=scalar(source,at);const auto key=std::pair{product.binding->source().get(),cp};std::uint16_t glyph;
+ for(std::size_t at=0;at<source.size();){reserve(1,usage_.scalar_visits,65536);const auto cluster=at;const auto cp=scalar(source,at,profile_);const auto key=std::pair{product.binding->source().get(),cp};std::uint16_t glyph;
   if(auto it=cmap_.find(key);it!=cmap_.end())glyph=it->second;
   else {reserve(1,usage_.cmap_lookups,4352);reserve_payload(sizeof(decltype(cmap_)::value_type)+map_entry_overhead);auto mapped=product.binding->map()->lookup(cp);if(auto e=std::get_if<tt::CmapError>(&mapped))check(*e);if(std::holds_alternative<tt::Missing>(mapped))fail(AETHER_ERROR_UNSUPPORTED);glyph=std::get<tt::Mapped>(mapped).glyph_id;cmap_.emplace(key,glyph);}
   auto ol=outline(product.binding,glyph);const auto delta=std::uint64_t(ol->metrics.advance);sum=checked_design_add(sum,delta);

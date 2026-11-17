@@ -15,7 +15,7 @@ class HtmlLtrSession final {
  std::unique_ptr<State> state_;
  static void install(aether_layout_engine_s*,std::shared_ptr<HtmlLtrMeasureBridge>);
 public:
- HtmlLtrSession(std::string,std::vector<uint8_t>,std::vector<uint8_t>,Viewport);
+ HtmlLtrSession(std::string,std::vector<uint8_t>,std::vector<uint8_t>,Viewport,uint32_t profile=1);
  ~HtmlLtrSession();
  HtmlLtrSession(const HtmlLtrSession&)=delete;
  const preparation::PreparedFrame& prepare();
@@ -25,7 +25,7 @@ public:
 
 #ifdef AETHER_HTML_LTR_TESTING
 namespace aether::rendering::html_ltr::testing {
-enum class Stage {html_copy,font_copy,inventory,runtime,layout,occurrence,masks,staging,snapshot,preparation,candidate};
+enum class Stage {html_copy,font_copy,inventory,runtime,layout,occurrence,masks,staging,snapshot,preparation,candidate,control_presentation,control_transport,control_clip,a8_pixels};
 void stage(Stage);
 void inspect(aether_layout_result_s*,aether::rendering::NativePaintList*);
 }
