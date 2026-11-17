@@ -93,8 +93,8 @@ void gates() {
  reset();
  expect_error(snapshot_commands(api, nullptr), ErrorCode::INVALID_LIST);
  assert(state.counts == 0 && state.gets == 0 && state.frees == 0);
- for (auto packed : {AETHER_ABI_VERSION_MAKE(1,34,0), AETHER_ABI_VERSION_MAKE(0,35,0),
-                     AETHER_ABI_VERSION_MAKE(0,34,1)}) {
+ for (auto packed : {AETHER_ABI_VERSION_MAKE(1,35,0), AETHER_ABI_VERSION_MAKE(0,36,0),
+                     AETHER_ABI_VERSION_MAKE(0,35,1)}) {
   reset(); state.version = packed;
   expect_error(snapshot_commands(api, &list), ErrorCode::ABI_VERSION);
   assert(state.counts == 0 && state.gets == 0 && state.frees == 0);

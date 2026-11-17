@@ -27,7 +27,7 @@ extern "C" {
  * ABI 1.0, a major-version change denotes an incompatible ABI.
  */
 #define AETHER_ABI_VERSION_MAJOR 0u
-#define AETHER_ABI_VERSION_MINOR 34u
+#define AETHER_ABI_VERSION_MINOR 35u
 #define AETHER_ABI_VERSION_PATCH 0u
 
 #define AETHER_ABI_VERSION_MAKE(major, minor, patch) \
@@ -45,6 +45,7 @@ typedef uint64_t aether_capabilities_t;
 /* Each bit represents a tested public pipeline, not the mere presence of a
    symbol. In particular, STYLE_RUNTIME refers to the aether_style_runtime_*
    cascade API; it does not advertise legacy or experimental CSS entrypoints. */
+#define AETHER_CAPABILITY_NATIVE_SURFACE (UINT64_C(1) << 7)
 #define AETHER_CAPABILITY_DOM           (UINT64_C(1) << 0)
 #define AETHER_CAPABILITY_STYLE_RUNTIME (UINT64_C(1) << 1)
 #define AETHER_CAPABILITY_LAYOUT        (UINT64_C(1) << 2)
@@ -64,6 +65,16 @@ typedef int32_t aether_status_t;
 #define AETHER_ERROR_OUT_OF_MEMORY -3
 #define AETHER_ERROR_DISPOSED      -4
 #define AETHER_ERROR_PARSE_FAILED  -5
+#define AETHER_ERROR_INVALID_ARGUMENT -6
+#define AETHER_ERROR_WRONG_THREAD -7
+#define AETHER_ERROR_NO_FRAME -8
+#define AETHER_ERROR_BUFFER_TOO_SMALL -9
+#define AETHER_ERROR_UNSUPPORTED -10
+#define AETHER_ERROR_LIMIT_EXCEEDED -11
+#define AETHER_ERROR_SUSPENDED -12
+#define AETHER_ERROR_EXHAUSTED -13
+#define AETHER_ERROR_INTERNAL -14
+
 
 typedef int32_t aether_bool_t;
 #define AETHER_TRUE  1
@@ -911,6 +922,39 @@ typedef struct {
 AETHER_API size_t aether_paint_command_size(void);
 
 typedef struct aether_display_list_s*          aether_display_list_t;
+
+/* Synchronous resolved-display-list raster API. Not complete HTML/CSS rendering:
+ * public lists do not retain every native metadata item (notably opacity groups).
+ * Text/resources and unsupported commands fail atomically. Color alpha is supported.
+ * Owner-thread only, including destroy. Caller keeps list immutable during render.
+ * Arbitrary/stale handles and concurrent destroy are caller errors. DPI is fixed 1.
+ * Dimensions: 0..8192 and width*height*4 <= 64 MiB (per-frame, not total memory).
+ * A zero dimension suspends rendering. Resize preserves the old confirmed frame.
+ */
+typedef struct aether_surface_s* aether_surface_t;
+#define AETHER_PIXEL_FORMAT_BGRA8_PREMULTIPLIED 1u
+typedef struct {
+    uint32_t struct_size;
+    int32_t width, height;
+    uint32_t format;
+    uint64_t stride, byte_count, sequence;
+} aether_surface_frame_info;
+AETHER_API size_t aether_surface_frame_info_size(void);
+AETHER_API aether_status_t aether_surface_create(int32_t width, int32_t height, aether_surface_t* out_surface);
+AETHER_API aether_status_t aether_surface_destroy(aether_surface_t surface);
+AETHER_API aether_status_t aether_surface_resize(aether_surface_t surface, int32_t width, int32_t height);
+AETHER_API aether_status_t aether_surface_render(aether_surface_t surface, aether_display_list_t list);
+/* Set struct_size to sizeof(info), exact match required. NULL/0 destination queries.
+ * BGRA8 premultiplied, top-down, stride=width*4. No borrowed storage is returned.
+ * Short buffer: metadata returned, no pixels written. Other errors leave info intact.
+ * Sufficient buffer: exactly byte_count bytes written; tail untouched. Info and pixels
+ * must not overlap. A temporary owning copy is made even for queries: OOM is possible.
+ * First copy before a successful render returns NO_FRAME. Success increments sequence
+ * once; resize/copy/failure do not. No cancellation, callbacks or public workers.
+ */
+AETHER_API aether_status_t aether_surface_copy_frame(aether_surface_t surface,
+    aether_surface_frame_info* info, uint8_t* destination, size_t capacity);
+
 typedef struct aether_display_list_builder_s*  aether_display_list_builder_t;
 
 typedef aether_bool_t (*aether_image_dimensions_fn)(const char* source, aether_sizef* out_size, void* user_data);

@@ -13,6 +13,12 @@ set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
 add_library(aether_core SHARED
     src/abi/aether_abi.cpp
+    src/abi/aether_surface.cpp
+    src/rendering/native_frame.cpp
+    src/rendering/preparation/paint_snapshot.cpp
+    src/rendering/preparation/aether_command_source.cpp
+    src/rendering/preparation/native_command_source.cpp
+    src/rendering/software/software_renderer.cpp
     src/dom/node.cpp
     src/dom/element_node.cpp
     src/dom/document_node.cpp
@@ -86,6 +92,9 @@ add_library(aether_core SHARED
 )
 
 add_library(AetherUI::Core ALIAS aether_core)
+find_package(Threads REQUIRED)
+target_link_libraries(aether_core PRIVATE Threads::Threads)
+target_include_directories(aether_core PRIVATE src/rendering/preparation/include)
 
 target_include_directories(aether_core
     PUBLIC
@@ -1902,3 +1911,33 @@ if(AETHERUI_BUILD_TESTS)
     add_test(NAME aether.flex-reverse-private COMMAND aether_flex_reverse_private_test)
     set_tests_properties(aether.flex-reverse-private PROPERTIES TIMEOUT 120)
 endif()
+
+# Existing white-box targets reuse the exact core source list, now including
+# private preparation units. Keep that include path private in those targets too.
+foreach(surface_core_test IN ITEMS aether_stylesheet_source_order_runtime_test
+        aether_rule_index_test_core aether_contextual_geometry_malloc_test
+        aether_layout_immutable_consumers_test aether_flex_text_test_core
+        aether_layout_intrusive_registry_test aether_layout_checked_edges_test aether_layout_checked_edges_atomic_test
+        aether_contextual_sampler_atomic_test)
+    if(TARGET ${surface_core_test})
+        target_include_directories(${surface_core_test} PRIVATE src/rendering/preparation/include)
+        target_link_libraries(${surface_core_test} PRIVATE Threads::Threads)
+    endif()
+endforeach()
+if(AETHERUI_BUILD_TESTS AND UNIX)
+    add_executable(aether_native_surface_test tests/test_native_surface.c)
+    set_target_properties(aether_native_surface_test PROPERTIES C_STANDARD 11 C_STANDARD_REQUIRED YES)
+    target_link_libraries(aether_native_surface_test PRIVATE AetherUI::Core Threads::Threads)
+    if(NOT MSVC)
+        target_compile_options(aether_native_surface_test PRIVATE -Werror)
+    endif()
+    add_test(NAME aether.native-surface COMMAND aether_native_surface_test)
+endif()
+# $<TARGET_OBJECTS:...> does not propagate object-library link requirements.
+get_property(surface_test_targets DIRECTORY PROPERTY BUILDSYSTEM_TARGETS)
+foreach(surface_test_target IN LISTS surface_test_targets)
+    get_target_property(surface_test_sources ${surface_test_target} SOURCES)
+    if("${surface_test_sources}" MATCHES "TARGET_OBJECTS:aether_(rule_index|flex_text)_test_core")
+        target_link_libraries(${surface_test_target} PRIVATE Threads::Threads)
+    endif()
+endforeach()

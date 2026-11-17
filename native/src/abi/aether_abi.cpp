@@ -89,7 +89,8 @@ AETHER_API aether_capabilities_t aether_abi_capabilities(void) {
            AETHER_CAPABILITY_DISPLAY_LIST |
            AETHER_CAPABILITY_RENDER_PLAN |
            AETHER_CAPABILITY_INPUT_HIT_TEST |
-           AETHER_CAPABILITY_LAYOUT_TRANSITION_CONTEXT;
+           AETHER_CAPABILITY_LAYOUT_TRANSITION_CONTEXT |
+           AETHER_CAPABILITY_NATIVE_SURFACE;
 }
 
 AETHER_API size_t aether_computed_style_size(void) {
@@ -108,6 +109,15 @@ AETHER_API const char* aether_status_message(aether_status_t status) {
         case AETHER_ERROR_OUT_OF_MEMORY:  return "Out of memory";
         case AETHER_ERROR_DISPOSED:       return "Object disposed";
         case AETHER_ERROR_PARSE_FAILED:   return "Parse failed";
+        case AETHER_ERROR_INVALID_ARGUMENT: return "Invalid argument";
+        case AETHER_ERROR_WRONG_THREAD: return "Wrong thread";
+        case AETHER_ERROR_NO_FRAME: return "No frame";
+        case AETHER_ERROR_BUFFER_TOO_SMALL: return "Buffer too small";
+        case AETHER_ERROR_UNSUPPORTED: return "Unsupported";
+        case AETHER_ERROR_LIMIT_EXCEEDED: return "Limit exceeded";
+        case AETHER_ERROR_SUSPENDED: return "Suspended";
+        case AETHER_ERROR_EXHAUSTED: return "Exhausted";
+        case AETHER_ERROR_INTERNAL: return "Internal";
         default:                          return "Unknown error";
     }
 }
