@@ -3,6 +3,9 @@
 #include "../rendering/preparation/native_command_source.h"
 #include "../rendering/software/software_renderer.h"
 #include <cstring>
+#include "../rendering/html_ltr/session.h"
+#include "../rendering/html_ltr/admission.h"
+#include "../rendering/html_ltr/raster_coordinate.h"
 #include <memory>
 #include <new>
 #ifdef AETHER_SURFACE_TESTING
@@ -59,6 +62,48 @@ aether_status_t rendering_status(r::software::Result v) noexcept {
 }
 #define SURFACE_CATCH catch (const std::bad_alloc&) { return AETHER_ERROR_OUT_OF_MEMORY; } catch (...) { return AETHER_ERROR_INTERNAL; }
 extern "C" {
+AETHER_API size_t aether_html_ltr_options_size(void) { return sizeof(aether_html_ltr_options); }
+AETHER_API uint32_t aether_html_ltr_profile_limitations(uint32_t profile) {
+    return profile == AETHER_HTML_LTR_PROFILE_1 ? 3u : UINT32_MAX;
+}
+AETHER_API aether_status_t aether_surface_render_html_ltr(aether_surface_t surface,
+        const char* html, size_t length, const aether_html_ltr_options* options) {
+    try {
+        if (!surface) return AETHER_ERROR_NULL_ARG;
+        r::Viewport viewport;
+        auto status = frame_status(surface->store.current_viewport(viewport));
+        if (status != AETHER_OK) return status;
+        if (!html || !options) return AETHER_ERROR_NULL_ARG;
+        if (options->struct_size != sizeof(*options) || options->profile != 1 ||
+            !options->regular_font || !options->regular_font_size ||
+            (bool(options->bold_font) != bool(options->bold_font_size)))
+            return AETHER_ERROR_INVALID_ARGUMENT;
+        for (auto reserved : options->reserved) if (reserved) return AETHER_ERROR_INVALID_ARGUMENT;
+        if (!viewport.width || !viewport.height) return AETHER_ERROR_SUSPENDED;
+        if (!length) return AETHER_ERROR_INVALID_ARGUMENT;
+        constexpr size_t font_limit = 16u * 1024u * 1024u;
+        if (viewport.width > 2048 || viewport.height > 2048 || viewport.dpi != 1 ||
+            length > 65536 || options->regular_font_size > font_limit ||
+            options->bold_font_size > font_limit - options->regular_font_size)
+            return AETHER_ERROR_LIMIT_EXCEEDED;
+        HTML_LTR_STAGE(html_copy);
+        std::string owned_html(html, length);
+        HTML_LTR_STAGE(font_copy);
+        std::vector<uint8_t> regular(options->regular_font, options->regular_font + options->regular_font_size);
+        std::vector<uint8_t> bold;
+        if (options->bold_font_size) bold.assign(options->bold_font, options->bold_font + options->bold_font_size);
+        r::html_ltr::HtmlLtrSession session(std::move(owned_html), std::move(regular), std::move(bold), viewport);
+        const auto& prepared = session.prepare();
+        HTML_LTR_STAGE(candidate);
+        const auto rendered = r::software::render_a8(surface->store, prepared, session.masks(), nullptr);
+        if (rendered.status == r::software::Status::missing_mask || rendered.status == r::software::Status::invalid_mask)
+            return AETHER_ERROR_INTERNAL;
+        return rendering_status(rendered);
+    } catch (const r::html_ltr::Error& e) { return e.status; }
+      catch (const r::html_ltr::BoundaryError& e) { return e.status; }
+      catch (const std::bad_alloc&) { return AETHER_ERROR_OUT_OF_MEMORY; }
+      catch (...) { return AETHER_ERROR_INTERNAL; }
+}
 AETHER_API size_t aether_surface_frame_info_size(void) { return sizeof(aether_surface_frame_info); }
 AETHER_API aether_status_t aether_surface_create(int32_t width, int32_t height, aether_surface_t* out) {
     if (!out) return AETHER_ERROR_NULL_ARG;

@@ -14,6 +14,15 @@ set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 add_library(aether_core SHARED
     src/abi/aether_abi.cpp
     src/abi/aether_surface.cpp
+    src/rendering/html_ltr/admission.cpp
+    src/rendering/html_ltr/font_provider.cpp
+    src/rendering/html_ltr/session.cpp
+    src/rendering/html_ltr/paint_finalize.cpp
+    src/rendering/text/truetype_outline.cpp
+    src/rendering/text/truetype_cmap.cpp
+    src/rendering/text/truetype_raster.cpp
+    src/rendering/text/real_font_binding.cpp
+    src/rendering/text/real_font_metrics.cpp
     src/rendering/native_frame.cpp
     src/rendering/preparation/paint_snapshot.cpp
     src/rendering/preparation/aether_command_source.cpp
@@ -1941,3 +1950,14 @@ foreach(surface_test_target IN LISTS surface_test_targets)
         target_link_libraries(${surface_test_target} PRIVATE Threads::Threads)
     endif()
 endforeach()
+
+if(AETHERUI_BUILD_TESTS AND UNIX)
+    add_executable(aether_native_html_ltr_test tests/test_native_html_ltr.c)
+    set_target_properties(aether_native_html_ltr_test PROPERTIES C_STANDARD 11 C_STANDARD_REQUIRED YES)
+    target_link_libraries(aether_native_html_ltr_test PRIVATE AetherUI::Core Threads::Threads)
+    target_compile_options(aether_native_html_ltr_test PRIVATE -Werror)
+    add_test(NAME aether.native-html-ltr COMMAND aether_native_html_ltr_test
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/fonts/DejaVuSans.ttf"
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/fonts/DejaVuSans-Bold.ttf"
+        "${CMAKE_CURRENT_BINARY_DIR}/native-html-ltr")
+endif()

@@ -25,6 +25,7 @@ using aether::layout::CallbackEpochGuard;
 #include "../rendering/text/shaped_run.h"
 #include "../rendering/text/measurement_provider.h"
 #include "synthetic_text_policy.h"
+#include "../rendering/html_ltr/measure_bridge.h"
 
 /* ── Internal layout types (mirrors C# LayoutBox/LayoutResult) ──── */
 
@@ -487,6 +488,8 @@ struct initial_canvas_dimensions { float width, height; };
 struct aether_layout_engine_s {
 private:
     friend class aether::layout::SyntheticTextTestIssuer;
+    friend class aether::rendering::html_ltr::HtmlLtrSession;
+    std::shared_ptr<aether::rendering::html_ltr::HtmlLtrMeasureBridge> html_ltr_bridge_;
     friend class aether::layout::NativeTextAccess;
     friend class aether::layout::NativeTextTransaction;
     std::shared_ptr<const int> synthetic_session_;
@@ -500,6 +503,7 @@ public:
         text_selection_=std::move(s); return true;
     }
     const auto& text_selection() const { return text_selection_; }
+    const auto& html_ltr_bridge() const { return html_ltr_bridge_; }
     bool initial_canvas_mode = false;
     std::unordered_map<aether_node_s*, initial_canvas_dimensions> initial_canvas_entries;
     bool layout_in_progress = false;
@@ -546,6 +550,11 @@ inline aether_text_metrics_t engine_measure_text(
     const aether_layout_engine_s* e, const char* text,
     const BoxStyleSnapshot* style, float max_width, aether_node_s* node = nullptr)
 {
+    if (e && e->html_ltr_bridge()) {
+        if (e->text_selection() || e->contextual_text_measurer || e->text_measurer)
+            throw std::invalid_argument("HTML LTR measurement conflict");
+        return e->html_ltr_bridge()->measure(text,*style,max_width,node,false).metrics;
+    }
     if (!e || (!e->contextual_text_measurer && !e->text_measurer)) return {0.f, 0.f, 0.f};
     const auto lifetime = e->measure_document;
     const CallbackEpochGuard guard(lifetime);
@@ -582,6 +591,11 @@ inline aether_text_metrics_t engine_measure_text(
 inline aether::rendering::text::Measurement engine_measure_text_transport(
     const aether_layout_engine_s* e, const char* text,
     const BoxStyleSnapshot* style, float width, aether_node_s* node=nullptr) {
+    if (e && e->html_ltr_bridge()) {
+        if (e->text_selection() || e->contextual_text_measurer || e->text_measurer)
+            throw std::invalid_argument("HTML LTR measurement conflict");
+        return e->html_ltr_bridge()->measure(text,*style,width,node,true);
+    }
     const auto selection=e ? e->text_selection() : nullptr;
     if(selection && selection->mode==aether::rendering::text::MeasurementMode::native) {
         if(e->text_measurer || e->contextual_text_measurer)

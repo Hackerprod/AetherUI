@@ -27,7 +27,7 @@ extern "C" {
  * ABI 1.0, a major-version change denotes an incompatible ABI.
  */
 #define AETHER_ABI_VERSION_MAJOR 0u
-#define AETHER_ABI_VERSION_MINOR 35u
+#define AETHER_ABI_VERSION_MINOR 36u
 #define AETHER_ABI_VERSION_PATCH 0u
 
 #define AETHER_ABI_VERSION_MAKE(major, minor, patch) \
@@ -46,6 +46,7 @@ typedef uint64_t aether_capabilities_t;
    symbol. In particular, STYLE_RUNTIME refers to the aether_style_runtime_*
    cascade API; it does not advertise legacy or experimental CSS entrypoints. */
 #define AETHER_CAPABILITY_NATIVE_SURFACE (UINT64_C(1) << 7)
+#define AETHER_CAPABILITY_NATIVE_HTML_LTR (UINT64_C(1) << 8)
 #define AETHER_CAPABILITY_DOM           (UINT64_C(1) << 0)
 #define AETHER_CAPABILITY_STYLE_RUNTIME (UINT64_C(1) << 1)
 #define AETHER_CAPABILITY_LAYOUT        (UINT64_C(1) << 2)
@@ -944,6 +945,30 @@ AETHER_API aether_status_t aether_surface_create(int32_t width, int32_t height, 
 AETHER_API aether_status_t aether_surface_destroy(aether_surface_t surface);
 AETHER_API aether_status_t aether_surface_resize(aether_surface_t surface, int32_t width, int32_t height);
 AETHER_API aether_status_t aether_surface_render(aether_surface_t surface, aether_display_list_t list);
+
+/* Strict one-shot native HTML card profile. Not general browser HTML/CSS.
+   Inputs remain stable until return and may be released immediately afterwards.
+   All failures preserve the confirmed frame. Profile 1 has permanent limitations.
+   Body solid background propagates to the viewport; html has no painted box.
+   Fixed viewport clipping does not enable authored overflow or scrolling. */
+#define AETHER_HTML_LTR_PROFILE_1 1u
+#define AETHER_HTML_LTR_TYPOGRAPHY_INCOMPLETE 1u
+#define AETHER_HTML_LTR_CSS_COVERAGE_INCOMPLETE 2u
+typedef struct aether_html_ltr_options_s {
+    uint32_t struct_size;
+    uint32_t profile;
+    const uint8_t* regular_font;
+    size_t regular_font_size;
+    const uint8_t* bold_font;
+    size_t bold_font_size;
+    uint32_t reserved[4];
+} aether_html_ltr_options;
+AETHER_API size_t aether_html_ltr_options_size(void);
+AETHER_API uint32_t aether_html_ltr_profile_limitations(uint32_t profile);
+AETHER_API aether_status_t aether_surface_render_html_ltr(
+    aether_surface_t surface, const char* html, size_t html_length,
+    const aether_html_ltr_options* options);
+
 /* Set struct_size to sizeof(info), exact match required. NULL/0 destination queries.
  * BGRA8 premultiplied, top-down, stride=width*4. No borrowed storage is returned.
  * Short buffer: metadata returned, no pixels written. Other errors leave info intact.

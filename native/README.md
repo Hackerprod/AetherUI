@@ -1172,3 +1172,18 @@ contribution constraints. Existing nonnegative-contribution flooring and deferre
 percentage-gap resolution are unchanged. The public `aether.flex-intrinsic-width`
 test covers fixed cards, decorations, signed margins with positive outer widths,
 gaps, exclusions, parent clamps, atomic-inline propagation and result/style reuse.
+
+## Native HTML LTR profile 1 (ABI 0.36.0)
+
+`aether_surface_render_html_ltr` is an additive one-shot HTML card pipeline over
+native surfaces. It accepts copied TrueType byte inputs, strict precomposed-Latin
+HTML/inline CSS, inherits fixed typography, and uses the common native renderer.
+It is not browser HTML/CSS or an interactive login. Capability bit8 advertises
+this operation, while native-surface bit7 retains its existing meaning.
+
+See [the C11 example and exact profile restrictions](examples/native_html_ltr/README.md).
+In particular html only carries typography/color, solid body backgrounds propagate
+to the full canvas, and private viewport clipping does not enable authored scroll.
+Every render error preserves confirmed frame state. Limitations query returns3 for
+profile1 andUINT32_MAX for unknown profiles. LSan remains NOT_VALIDATED in the local
+ptrace-based validation environment; that debt is not a claim of leak freedom.

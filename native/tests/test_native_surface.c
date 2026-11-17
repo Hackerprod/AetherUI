@@ -35,7 +35,7 @@ int main(int argc,char** argv) {
     const char* css="html,body{margin:0;padding:0;background:transparent}#solid{position:absolute;left:2px;top:2px;width:8px;height:8px;background:red}#clip{position:absolute;left:4px;top:4px;width:4px;height:4px;overflow:clip}#alpha{width:8px;height:8px;background:rgba(0,0,255,0.5)}";
     Scene a=scene(html,css,16,16), b=scene("<body><div></div></body>","body{margin:0}div{width:3px;height:3px;background:lime}",16,16);
     aether_surface_t s=NULL,out=(aether_surface_t)(uintptr_t)1;unsigned char buf[4098],saved[4096];aether_surface_frame_info i,old,sentinel;
-    CHECK(aether_abi_version()==AETHER_ABI_VERSION_CURRENT && AETHER_ABI_VERSION_GET_MINOR(aether_abi_version())==35);CHECK(aether_abi_capabilities()&AETHER_CAPABILITY_NATIVE_SURFACE);CHECK(aether_surface_frame_info_size()==sizeof(i));
+    CHECK(aether_abi_version()==AETHER_ABI_VERSION_CURRENT && AETHER_ABI_VERSION_GET_MINOR(aether_abi_version())==36);CHECK(aether_abi_capabilities()&AETHER_CAPABILITY_NATIVE_SURFACE);CHECK(aether_surface_frame_info_size()==sizeof(i));
     CHECK(aether_surface_create(16,16,NULL)==AETHER_ERROR_NULL_ARG);CHECK(aether_surface_create(-1,1,&out)==AETHER_ERROR_INVALID_ARGUMENT && out==NULL);
     CHECK(aether_surface_create(8193,1,&out)==AETHER_ERROR_INVALID_ARGUMENT && out==NULL);CHECK(aether_surface_create(8192,2049,&out)==AETHER_ERROR_INVALID_ARGUMENT && out==NULL);
     OK(aether_surface_destroy(NULL));CHECK(aether_surface_resize(NULL,1,1)==AETHER_ERROR_NULL_ARG);CHECK(aether_surface_render(NULL,a.list)==AETHER_ERROR_NULL_ARG);i=info();sentinel=i;CHECK(aether_surface_copy_frame(NULL,&i,NULL,0)==AETHER_ERROR_NULL_ARG);CHECK(memcmp(&i,&sentinel,sizeof(i))==0);
