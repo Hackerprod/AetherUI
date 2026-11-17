@@ -412,6 +412,10 @@ explicit failures stay active in Release. `aether.dom-mutation-boundary` complem
 provenance and nonreciprocal-remove fixtures. The JavaScript native integration regression is described
 in its binding README; negotiation-only/mock tests do not establish native DOM integrity.
 
+## Minimal invalidation checkpoint
+
+For the bounded direct-build checkpoint, prerequisites, execution command, structured results and the intentional nonzero exit, see [Minimal invalidation checkpoint](docs/minimal-invalidation-checkpoint.md). It does not certify the CMake build/install workflows below.
+
 ## Build, test, and install
 
 The install tree — not the build tree — is the consumption contract. Never point a consumer at

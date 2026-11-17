@@ -36,6 +36,7 @@
 #include "custom_property_scope_internal.h"
 #include "typography_scope_probe.h"
 #include "typography_context.h"
+#include "typography_composition.h"
 #include "frozen_runtime_metadata.h"
 #include "value_audit_internal.h"
 #include "paused_keyframes.h"
@@ -66,6 +67,16 @@ struct PreparedNodeResult {
     FrozenColorRef color_references;
     uint32_t declared_impact=0, declared_inherited_impact=0, inherited_change_impact=0, impact=0;
 };
+static uint32_t apply_final_typography_impact(PreparedNodeResult& prepared,
+    const TypographyRecord* prior,const TypographyRecord& next,
+    const TypographyProjection& old,const TypographyProjection& current) {
+    const uint32_t contribution=composed_final_impact(prior,*next.prepared_evidence,next.evidence,*next.inputs,old,current);
+    prepared.impact |= contribution;
+    prepared.declared_impact |= contribution;
+    prepared.declared_inherited_impact |= contribution;
+    prepared.inherited_change_impact |= contribution;
+    return contribution;
+}
 struct MutableStyleBuilder {
     aether_computed_style_t value{};
     MutableStyleBuilder() = default;
@@ -97,7 +108,25 @@ struct aether_style_update_s {
     ~aether_style_update_s() { aether_computed_style_free(&current.style); }
 };
 
+// Private seam compiled solely into the standalone integration test TU.
+// No public ABI, global mutable hook, or dependency in ordinary builds.
+#ifndef AETHER_SAME_STAGE_TEST_HOOKS
+#define AETHER_SAME_STAGE_TEST_HOOKS 0
+#endif
+#if AETHER_SAME_STAGE_TEST_HOOKS
+struct SameStageTestHooks {
+    void* context=nullptr;
+    void (*accounting)(void*, style_source_accounting_s&)=nullptr;
+    void (*base)(void*, aether_node_s*, uint32_t, uint32_t)=nullptr;
+    void (*before_p)(void*, aether_node_s*)=nullptr;
+    void (*after_p)(void*, aether_node_s*, const TypographyEvidenceRef&)=nullptr;
+    void (*before_freeze)(void*, aether_node_s*)=nullptr;
+};
+#endif
 struct aether_style_runtime_s {
+#if AETHER_SAME_STAGE_TEST_HOOKS
+    SameStageTestHooks* same_stage_test_hooks=nullptr;
+#endif
     aether_style_runtime_options_t options{};
     aether_style_environment_t environment{};
     aether_style_diagnostic_fn diag_cb = nullptr;
@@ -131,6 +160,7 @@ struct aether_style_runtime_s {
     std::vector<const compiled_rule_s*> paused_rules;
     void copy_index_for_preparation(const aether_style_runtime_s& source) {
         index = source.index;
+        source_accounting=style_source_accounting_s::tracked();
         for (const auto& sheet : source.sheets) source_accounting.merge(sheet.second->accounting);
         source_budget.source_bytes=source_accounting.source_bytes;
         source_budget.declarations=source_accounting.declarations;
@@ -423,7 +453,13 @@ static PreparedNodeResult* compute_node(aether_style_runtime_s* runtime, aether_
         ((!node->parent) || (node->parent->type == AETHER_NODE_DOCUMENT &&
           aether_doc_get_document_element(static_cast<aether_doc_s*>(node->parent)) == node));
     TypographyEvidence typography = parent ? parent->typography : TypographyEvidence{};
-    if (parent) for (auto& origin:typography.provenance) origin.inherited=true;
+    if (parent) {
+        for (size_t slot=0;slot<2;++slot)
+            typography.noop_absence[slot]=parent->typography.noop_absence_valid(slot)
+                ? NoopAbsenceProof::inherited_absence : NoopAbsenceProof::unproven;
+        for (auto& origin:typography.provenance) origin.inherited=true;
+    } else typography.noop_absence.fill(NoopAbsenceProof::local_absence);
+
     bool typography_discarded = false;
     auto typography_set = [&](const std::string& name, const std::string& source) {
         if (name == "font-family") typography_parse_family(source, typography);
@@ -435,8 +471,8 @@ static PreparedNodeResult* compute_node(aether_style_runtime_s* runtime, aether_
     };
     auto typography_reset = [&](const std::string& name) {
         if (name == "font-family") { typography.family_state=TypographyFieldState::unknown; typography.families.clear(); }
-        else if (name == "font-style") { typography.style_state=TypographyFieldState::unknown; typography.font_style.clear(); }
-        else if (name == "letter-spacing") { typography.spacing_state=TypographyFieldState::unknown; typography.spacing_normal=false; typography.spacing_px=0; }
+        else if (name == "font-style") { typography.noop_absence[0]=NoopAbsenceProof::unproven; typography.style_state=TypographyFieldState::unknown; typography.font_style.clear(); }
+        else if (name == "letter-spacing") { typography.noop_absence[1]=NoopAbsenceProof::unproven; typography.spacing_state=TypographyFieldState::unknown; typography.spacing_normal=false; typography.spacing_px=0; }
         else if (name == "font-size") { typography.size_state=TypographyFieldState::unknown; typography.size_px=0; typography.size_dependencies=0; typography.provenance[3].resolved_source.clear(); }
         else if (name == "font-weight") { typography.weight_state=TypographyFieldState::unknown; typography.weight=0; typography.provenance[4].resolved_source.clear(); }
         else if (name == "line-height") { typography.line_height_state=TypographyFieldState::unknown; typography.line_height_value=0; typography.line_height_used_px=0; typography.line_height_dependencies=0; typography.provenance[5].resolved_source.clear(); }
@@ -701,6 +737,8 @@ static PreparedNodeResult* compute_node(aether_style_runtime_s* runtime, aether_
         const auto& compiled = cascade[i].value;
         const int typography_index=definition.name=="font-family"?0:definition.name=="font-style"?1:definition.name=="letter-spacing"?2:definition.name=="font-size"?3:definition.name=="font-weight"?4:definition.name=="line-height"?5:-1;
         if (typography_index>=0) {
+            if (typography_index==1 || typography_index==2)
+                typography.noop_absence[static_cast<size_t>(typography_index-1)]=NoopAbsenceProof::unproven;
             auto& origin=typography.provenance[static_cast<size_t>(typography_index)];
             origin.declaration=true;
             origin.inherited=parent && (compiled.mode==compiled_value_mode::inherit ||
@@ -929,10 +967,19 @@ static PreparedNodeResult* compute_node(aether_style_runtime_s* runtime, aether_
         diff = classify_style_diff(previous.style_view(), *previous.measures(),
             *previous.color_references(), next, *measures, color_references);
     }
-    // A no-op legacy callback must not hide a semantic evidence change.
+#if AETHER_SAME_STAGE_TEST_HOOKS
+    if(runtime->same_stage_test_hooks && runtime->same_stage_test_hooks->base)
+        runtime->same_stage_test_hooks->base(runtime->same_stage_test_hooks->context,node,diff.own_impact,diff.inherited_value_impact);
+#endif
+    // Compare P with P, retaining genuine discarded-typography uncertainty.
     if (typography_discarded) { typography=TypographyEvidence{}; typography.coverage_gaps |= 2; }
-    if (!is_new_node && (!found->second->typography() ||
-        found->second->typography()->evidence != typography)) {
+    const auto* previous_typography = !is_new_node &&
+        found->second->node_lifetime() == node->identity &&
+        found->second->node_identity() == aether_node_identity(node)
+        ? found->second->typography().get() : nullptr;
+    if (!is_new_node && composed_prepared_impact(previous_typography, typography,
+            typography_projection(found->second->style_view().scalars(), *found->second->measures()),
+            typography_projection(next, *measures)) != 0) {
         diff.own_impact |= STYLE_IMPACT_TEXT_LAYOUT | STYLE_IMPACT_LAYOUT | STYLE_IMPACT_PAINT;
         diff.inherited_value_impact |= STYLE_IMPACT_TEXT_LAYOUT | STYLE_IMPACT_LAYOUT | STYLE_IMPACT_PAINT;
     }
@@ -1225,6 +1272,9 @@ static aether_status_t prepare_revision_impl(
         auto& staged = *transaction->candidate;
         staged.hover_provenance = HoverProvenance::capture(document);
         staged.value_audit = runtime->value_audit;
+#if AETHER_SAME_STAGE_TEST_HOOKS
+        staged.same_stage_test_hooks=runtime->same_stage_test_hooks;
+#endif
         staged.options = runtime->options; staged.environment = requested_environment;
         if (isolate_legacy_root && root != document && root->parent && root->parent->type != AETHER_NODE_DOCUMENT)
             staged.legacy_inheritance_root = root;
@@ -1313,6 +1363,10 @@ static aether_status_t prepare_revision_impl(
             effect_end(&staged,text_effect);
 #endif
         }
+#if AETHER_SAME_STAGE_TEST_HOOKS
+        if(staged.same_stage_test_hooks && staged.same_stage_test_hooks->accounting)
+            staged.same_stage_test_hooks->accounting(staged.same_stage_test_hooks->context,staged.source_accounting);
+#endif
         const auto source_accounting=std::make_shared<const style_source_accounting_s>(staged.source_accounting);
 #if AETHER_REUSABLE_PAYLOAD_CAPTURE
         auto payload_snapshot=std::make_shared<ReusablePayloadSnapshot>();
@@ -1334,7 +1388,7 @@ static aether_status_t prepare_revision_impl(
 #endif
         revision_input.entries.reserve(order.size());
         for(auto* node:order) {
-            const auto& prepared=*staged.prepared.at(node);
+            auto& prepared=*staged.prepared.at(node);
 #if AETHER_REUSABLE_PAYLOAD_CAPTURE
             const bool document_element = !node->is_generated && node->type == AETHER_NODE_ELEMENT &&
                 ((!node->parent) || (node->parent->type == AETHER_NODE_DOCUMENT &&
@@ -1348,11 +1402,33 @@ static aether_status_t prepare_revision_impl(
             NodeRecordInput input;
             input.origin=RecordOrigin::runtime; input.node=node; input.style=prepared.style;
             auto typography_record=std::make_shared<TypographyRecord>();
+            // Copy F (and optional payload above) before moving P. No mutable
+            // sharing between stages; allocations remain transaction-local.
             typography_record->evidence=prepared.typography;
+#if AETHER_SAME_STAGE_TEST_HOOKS
+            if(staged.same_stage_test_hooks && staged.same_stage_test_hooks->before_p)
+                staged.same_stage_test_hooks->before_p(staged.same_stage_test_hooks->context,node);
+#endif
+            typography_record->prepared_evidence=
+                std::make_shared<const TypographyEvidence>(std::move(prepared.typography));
+#if AETHER_SAME_STAGE_TEST_HOOKS
+            if(staged.same_stage_test_hooks && staged.same_stage_test_hooks->after_p)
+                staged.same_stage_test_hooks->after_p(staged.same_stage_test_hooks->context,node,typography_record->prepared_evidence);
+#endif
             typography_record->inputs=source_accounting;
             typography_record->text_diagnostic=prepared.text_diagnostic;
             if (source_accounting->losses || !source_accounting->inputs_accounted)
                 typography_record->evidence.coverage_gaps |= 4;
+            const auto previous=runtime->states.find(node);
+            if (previous!=runtime->states.end()) {
+                const auto* prior = previous->second->node_lifetime()==node->identity &&
+                    previous->second->node_identity()==aether_node_identity(node)
+                    ? previous->second->typography().get() : nullptr;
+                // Run the projection guard even when final evidence/accounting are equal.
+                apply_final_typography_impact(prepared,prior,*typography_record,
+                    typography_projection(previous->second->style_view().scalars(), *previous->second->measures()),
+                    typography_projection(prepared.style->view().scalars(), *prepared.measures));
+            }
             typography_record->generation=revision_input.generation;
             typography_record->document_identity=revision_input.document_identity;
             typography_record->input_epoch=revision_input.input_epoch;
@@ -1367,6 +1443,10 @@ static aether_status_t prepare_revision_impl(
             input.document_identity=d.identity;input.node_identity=aether_node_identity(node);
             input.node_lifetime=node->identity;input.document_lifetime=document->identity;
             if(auto it=leaves.find(node);it!=leaves.end())input.generated_leaf=it->second;
+#if AETHER_SAME_STAGE_TEST_HOOKS
+            if(staged.same_stage_test_hooks && staged.same_stage_test_hooks->before_freeze)
+                staged.same_stage_test_hooks->before_freeze(staged.same_stage_test_hooks->context,node);
+#endif
             FrozenNodeRef record;require_style_status(freeze_node_record(input,record));
             AETHER_HP_ADD(frozen_records,1);
             next_states.emplace(node,record);backing.entries.emplace(node,record);

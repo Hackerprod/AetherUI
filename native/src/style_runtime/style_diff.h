@@ -217,6 +217,7 @@ inline constexpr auto style_dependency_catalog = std::to_array<StyleDependencyPo
     {"color", DependencyPercentagePolicy::metadata, PropertyStatePolicy::stored},
     {"column-gap", DependencyPercentagePolicy::gap, PropertyStatePolicy::stored},
     {"cursor", DependencyPercentagePolicy::metadata, PropertyStatePolicy::stored},
+    {"direction", DependencyPercentagePolicy::metadata, PropertyStatePolicy::stored},
     {"display", DependencyPercentagePolicy::metadata, PropertyStatePolicy::stored},
     {"flex-basis", DependencyPercentagePolicy::flex_basis, PropertyStatePolicy::stored},
     {"flex-direction", DependencyPercentagePolicy::metadata, PropertyStatePolicy::stored},
@@ -266,6 +267,7 @@ inline constexpr auto style_dependency_catalog = std::to_array<StyleDependencyPo
     {"visibility", DependencyPercentagePolicy::metadata, PropertyStatePolicy::stored},
     {"white-space", DependencyPercentagePolicy::metadata, PropertyStatePolicy::stored},
     {"width", DependencyPercentagePolicy::dimension, PropertyStatePolicy::stored},
+    {"writing-mode", DependencyPercentagePolicy::metadata, PropertyStatePolicy::stored},
     {"z-index", DependencyPercentagePolicy::metadata, PropertyStatePolicy::stored},
 });
 constexpr size_t style_dependency_index(std::string_view name) noexcept {

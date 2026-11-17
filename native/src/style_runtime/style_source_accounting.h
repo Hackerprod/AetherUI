@@ -11,6 +11,14 @@ enum class style_source_loss : uint32_t {
     external_source = 1u << 6, incomplete_parse = 1u << 7,
     budget = 1u << 8
 };
+// Loss attribution is private evidence, never permission to render. Default
+// construction is unproven (including synthetic/test accounting).
+struct style_source_loss_attribution_s {
+    bool complete = false;
+    uint32_t unattributed = 0;
+    size_t direct_width_rejections = 0;
+    bool operator==(const style_source_loss_attribution_s&) const = default;
+};
 struct style_source_accounting_s {
     static constexpr size_t max_source_bytes = 16u * 1024u * 1024u;
     static constexpr size_t max_declarations = 65536;
@@ -21,13 +29,45 @@ struct style_source_accounting_s {
     uint32_t losses = 0;
     bool inputs_accounted = true;
     bool external_pending = false;
-    void loss(style_source_loss reason) noexcept { losses |= static_cast<uint32_t>(reason); }
+    style_source_loss_attribution_s attribution;
+    static style_source_accounting_s tracked() noexcept {
+        style_source_accounting_s result; result.attribution.complete=true; return result;
+    }
+    bool attribution_consistent() const noexcept {
+        const uint32_t described=attribution.unattributed | (attribution.direct_width_rejections
+            ? static_cast<uint32_t>(style_source_loss::rejected_declaration) : 0u);
+        return losses==described && attribution.direct_width_rejections<=max_declarations;
+    }
+    bool visual_losses_certified() const noexcept {
+        return attribution.complete && attribution_consistent() && !attribution.unattributed;
+    }
+    void loss(style_source_loss reason) noexcept {
+        const auto bits=static_cast<uint32_t>(reason);
+        losses |= bits; attribution.unattributed |= bits; attribution.complete=false;
+    }
+    void reject_direct_width() noexcept {
+        // Do not repair a partial certificate or an untracked write to losses.
+        attribution.complete=attribution.complete && attribution_consistent();
+        losses |= static_cast<uint32_t>(style_source_loss::rejected_declaration);
+        if (attribution.direct_width_rejections==max_declarations) {
+            incomplete(style_source_loss::budget); return;
+        }
+        ++attribution.direct_width_rejections;
+    }
     void incomplete(style_source_loss reason) noexcept { loss(reason); inputs_accounted = false; }
     void add(size_t& value, size_t increment, size_t limit) noexcept {
         if (value > limit || increment > limit - value) { value = limit; incomplete(style_source_loss::budget); }
         else value += increment;
     }
     void merge(const style_source_accounting_s& other) noexcept {
+        attribution.complete=attribution.complete && other.attribution.complete &&
+            attribution_consistent() && other.attribution_consistent();
+        attribution.unattributed |= other.attribution.unattributed;
+        if (other.attribution.direct_width_rejections>max_declarations ||
+            attribution.direct_width_rejections>max_declarations-other.attribution.direct_width_rejections) {
+            attribution.direct_width_rejections=max_declarations;
+            incomplete(style_source_loss::budget);
+        } else attribution.direct_width_rejections+=other.attribution.direct_width_rejections;
         add(source_bytes, other.source_bytes, max_source_bytes);
         add(declarations, other.declarations, max_declarations);
         add(rules, other.rules, max_rules);

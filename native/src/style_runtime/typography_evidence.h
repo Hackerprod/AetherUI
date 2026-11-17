@@ -13,6 +13,7 @@
 namespace aether::style {
 enum class TypographyLineHeightKind { normal, number, absolute_css_px };
 enum class TypographyFieldState { unknown, known, unsupported };
+enum class NoopAbsenceProof { unproven, local_absence, inherited_absence };
 struct TypographyFamily {
     std::string name;
     bool generic = false;
@@ -29,7 +30,24 @@ struct TypographyProvenance {
             declaration_order==v.declaration_order && accepted_source==v.accepted_source && resolved_source==v.resolved_source;
     }
 };
+enum class BreakPolicyReason { none, unauthenticated, revert_semantics, variable_unproven, source_limit };
+struct BreakFieldEvidence {
+    bool known = false;
+    int32_t computed = 0;
+    BreakPolicyReason reason = BreakPolicyReason::unauthenticated;
+    TypographyProvenance provenance;
+    std::string authored_property; // alias retained independently of canonical slot
+    bool operator==(const BreakFieldEvidence&) const = default;
+};
+struct BreakPolicyEvidence {
+    std::array<BreakFieldEvidence,2> fields{}; // word-break, overflow-wrap
+    // Final compiler coverage is independently retained in TypographyRecord.inputs.
+    bool operator==(const BreakPolicyEvidence&) const = default;
+};
 struct TypographyEvidence {
+    BreakPolicyEvidence break_policy;
+    // Issued by preparation lineage only, not inferred from a provenance flag.
+    std::array<NoopAbsenceProof,2> noop_absence{}; // font-style, letter-spacing
     std::array<TypographyProvenance,6> provenance{};
     TypographyFieldState family_state = TypographyFieldState::unknown;
     std::vector<TypographyFamily> families;
@@ -51,15 +69,46 @@ struct TypographyEvidence {
     // Bit 1: unrepresented typography pipeline/sheets; bit 2: matched discarded
     // declaration. Never treat absence of a tracked property as an initial value.
     uint32_t coverage_gaps = 1;
-    bool operator==(const TypographyEvidence& v) const {
-        return provenance == v.provenance && family_state == v.family_state && families == v.families &&
+    bool noop_absence_valid(size_t slot) const {
+        if (slot>1) return false;
+        const auto& p=provenance[slot+1];
+        const auto local_absent=[&] {
+            return !p.inherited && !p.declaration && p.accepted_source.empty() && p.resolved_source.empty() &&
+                !p.important && !p.inline_style && !p.layer && !p.source_order && !p.declaration_order;
+        };
+        const bool inherited_absent=p.inherited && !p.declaration && p.accepted_source.empty() && p.resolved_source.empty() &&
+            !p.important && !p.inline_style && !p.layer && !p.source_order && !p.declaration_order;
+        const bool lineage=(noop_absence[slot]==NoopAbsenceProof::local_absence && local_absent()) ||
+            (noop_absence[slot]==NoopAbsenceProof::inherited_absence && inherited_absent);
+        return lineage && (slot==0 ? style_state==TypographyFieldState::unknown && font_style.empty()
+            : spacing_state==TypographyFieldState::unknown && !spacing_normal && spacing_px==0);
+    }
+    // Shared partition keeps strict equality exhaustive without copying owned
+    // evidence. Ignoring gap4 is private to certified final-loss classification.
+    bool same_core_fields(const TypographyEvidence& v, bool ignore_accounting_gap=false) const {
+        for (size_t i : {size_t(0),size_t(3),size_t(4)})
+            if (!(provenance[i] == v.provenance[i])) return false;
+        const uint32_t mask=ignore_accounting_gap ? ~uint32_t(4) : ~uint32_t(0);
+        return break_policy == v.break_policy && family_state == v.family_state && families == v.families &&
+            size_state == v.size_state && weight_state == v.weight_state &&
+            size_px == v.size_px && weight == v.weight && size_dependencies == v.size_dependencies &&
+            coverage_complete == v.coverage_complete && (coverage_gaps&mask) == (v.coverage_gaps&mask);
+    }
+    bool same_noop_fields(const TypographyEvidence& v) const {
+        return noop_absence == v.noop_absence && provenance[1] == v.provenance[1] && provenance[2] == v.provenance[2] &&
             style_state == v.style_state && font_style == v.font_style &&
-            spacing_state == v.spacing_state && spacing_normal == v.spacing_normal &&
-            spacing_px == v.spacing_px && size_state == v.size_state && weight_state == v.weight_state &&
-            line_height_state == v.line_height_state && size_px == v.size_px && weight == v.weight &&
+            spacing_state == v.spacing_state && spacing_normal == v.spacing_normal && spacing_px == v.spacing_px;
+    }
+    bool same_line_height_fields(const TypographyEvidence& v) const {
+        return provenance[5] == v.provenance[5] && line_height_state == v.line_height_state &&
             line_height_kind == v.line_height_kind && line_height_value == v.line_height_value &&
-            line_height_used_px == v.line_height_used_px && size_dependencies == v.size_dependencies &&
-            line_height_dependencies == v.line_height_dependencies && coverage_complete == v.coverage_complete && coverage_gaps == v.coverage_gaps;
+            line_height_used_px == v.line_height_used_px && line_height_dependencies == v.line_height_dependencies;
+    }
+    bool same_non_line_height_fields(const TypographyEvidence& v) const {
+        return same_core_fields(v) && same_noop_fields(v);
+    }
+    bool operator==(const TypographyEvidence& v) const {
+        return same_non_line_height_fields(v) && same_line_height_fields(v);
     }
     bool operator!=(const TypographyEvidence& v) const { return !(*this == v); }
 };
@@ -128,6 +177,7 @@ inline void typography_parse_family(const std::string& source, TypographyEvidenc
     evidence.family_state = state;
 }
 inline void typography_parse_style(const std::string& source, TypographyEvidence& evidence) {
+    evidence.noop_absence[0]=NoopAbsenceProof::unproven;
     std::string value;
     auto state = TypographyFieldState::unsupported;
     if (source.size() <= 65536 && css_single_identifier(source, value) &&
@@ -136,6 +186,7 @@ inline void typography_parse_style(const std::string& source, TypographyEvidence
     evidence.font_style.swap(value); evidence.style_state = state;
 }
 inline void typography_parse_spacing(const std::string& source, TypographyEvidence& evidence) {
+    evidence.noop_absence[1]=NoopAbsenceProof::unproven;
     auto state = TypographyFieldState::unsupported;
     bool normal = false;
     double px = 0;

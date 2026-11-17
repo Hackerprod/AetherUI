@@ -396,7 +396,8 @@ static declaration_compilation_result compile_declarations(
                                  diagnostics_callback, diagnostics_user_data))
             result.properties.push_back(std::move(compiled));
         else {
-          accounting.loss(style_source_loss::rejected_declaration);
+          if (name == "width" && !contains_variable(value)) accounting.reject_direct_width();
+          else accounting.loss(style_source_loss::rejected_declaration);
           if (name == "font-family" || name == "font-style" || name == "letter-spacing" ||
         name == "font-size" || name == "font-weight" || name == "line-height")
             result.typography_discarded = true;
@@ -708,7 +709,7 @@ try {
 
     // Both views have identical byte offsets. Selectors and the focal backdrop
     // consumer retain original tokens; other consumers keep the legacy view.
-    style_source_accounting_s staged_accounting;
+    auto staged_accounting=style_source_accounting_s::tracked();
     staged_accounting.add(staged_accounting.source_bytes, source_size, staged_accounting.max_source_bytes);
     const std::string original(source, source_size);
     if (work) source_work_add(work->work_source_bytes_copied, source_size);
@@ -778,7 +779,7 @@ try {
     auto* registry = style_property_registry_get_global();
     if (!registry) return AETHER_ERROR_INVALID_STATE;
 
-    style_source_accounting_s staged_accounting;
+    auto staged_accounting=style_source_accounting_s::tracked();
     staged_accounting.add(staged_accounting.source_bytes, source_size, staged_accounting.max_source_bytes);
     const std::string original(source, source_size);
     if (work) source_work_add(work->work_source_bytes_copied, source_size);

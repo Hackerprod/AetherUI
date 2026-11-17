@@ -4,6 +4,7 @@
 #include "../src/css/computed_style_handle.h"
 #include "../src/css/measure_state.h"
 #include "../src/style_runtime/frozen_runtime_metadata.h"
+#include "../src/style_runtime/typography_record.h"
 #include "../src/css/style_map_types.h"
 #include "../src/dom/dom_types.h"
 #include <cstdio>
@@ -64,6 +65,11 @@ static void sweep(bool percentage_delta) {
     aether_style_transaction_destroy(initial);
     auto old = lookup(old_revision, x); auto pseudo = x->children.front();
     const auto generation = aether_style_revision_generation(old_revision);
+    const auto retained_typography=old->record->typography();
+    require(retained_typography && retained_typography->prepared_evidence && retained_typography->inputs, "production P/F/A retained");
+    const auto saved_p=*retained_typography->prepared_evidence;
+    const auto saved_f=retained_typography->evidence;
+    const auto saved_a=*retained_typography->inputs;
     aether_style_map_t old_map{};
     require(aether_style_revision_create_map(old_revision, &old_map) == AETHER_OK, "old map");
     require(aether_element_set_attribute(x, "style", percentage_delta
@@ -87,6 +93,10 @@ static void sweep(bool percentage_delta) {
             require(ordinary_test_calls + aligned_test_calls == calls, "zero new calls during commit");
             uint32_t impact{}; auto current = lookup(next, x, &impact);
             require(impact == (percentage_delta ? 7u : 0u), "retry publishes exact R2 mask");
+            const auto next_typography=current->record->typography();
+            require(next_typography && next_typography->prepared_evidence && next_typography->inputs, "new P/F/A published");
+            require(next_typography!=retained_typography && next_typography->prepared_evidence!=retained_typography->prepared_evidence, "new revision owns authentic P");
+            require(*retained_typography->prepared_evidence==saved_p && retained_typography->evidence==saved_f, "success preserves retained P/F");
             require(frozen_measure_test::has_percentage(current->measures.get(), "height", current->style.height) == !percentage_delta, "retry publishes percentage category");
             require((current->measures->dependency("width") & MEASURE_ROOT_FONT) != 0, "retry publishes root dependency");
             require(current->measures->background_positions()[1].x.value == 30, "retry publishes latent list");
@@ -103,6 +113,9 @@ static void sweep(bool percentage_delta) {
         require(frozen_measure_test::has_percentage(unchanged->measures.get(), "height", unchanged->style.height), "OOM preserves percentage category");
         require((unchanged->measures->dependency("width") & MEASURE_ROOT_FONT) == 0, "OOM preserves absent root dependency");
         require(unchanged->measures->background_positions()[1].x.value == 3, "OOM preserves latent list");
+        require(unchanged->record->typography()==retained_typography, "OOM cannot publish candidate P/F/A");
+        require(*retained_typography->prepared_evidence==saved_p && retained_typography->evidence==saved_f, "OOM preserves P/F values");
+        require(retained_typography->inputs->source_bytes==saved_a.source_bytes && retained_typography->inputs->losses==saved_a.losses, "OOM preserves accounting");
         require(x->children.size() == 1 && x->children.front() == pseudo && pseudo->identity->attached, "OOM preserves generated node identity");
         aether_computed_style_handle_destroy(unchanged); aether_style_revision_destroy(published);
     }
@@ -113,6 +126,7 @@ static void sweep(bool percentage_delta) {
     require((old->measures->dependency("width") & MEASURE_ROOT_FONT) == 0 && old->measures->background_positions()[1].x.value == 3, "retained handle preserves complete sidecars");
     aether_style_runtime_destroy(runtime);
     require(old->style.width.value == 16, "snapshot survives runtime destruction");
+    require(*retained_typography->prepared_evidence==saved_p && retained_typography->evidence==saved_f, "P/F survives runtime destruction");
     aether_style_map_destroy(old_map); aether_computed_style_handle_destroy(old_from_map);
     aether_style_revision_destroy(old_revision); aether_computed_style_handle_destroy(old); aether_doc_destroy(doc);
     std::printf("R2 %s OOM: %u failed allocations then success\n", percentage_delta ? "percentage" : "metadata-only", failures);
