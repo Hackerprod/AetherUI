@@ -9,6 +9,7 @@
 #include <set>
 #include <tuple>
 #include <chrono>
+#include <limits>
 namespace aether::rendering::software {
 namespace {
 constexpr std::uint64_t max_work = 50000000;
@@ -53,9 +54,12 @@ bool contains(Rect o,double r,double x,double y) noexcept {
 }
 // Evaluate the immutable ramp in its own coordinate system, not the clipped
 // coverage rectangle. upper_bound picks the LAST coincident stop at a hard edge.
-void gradient_sample(const prep::LinearGradientFill& g,Rect r,double x,double y,double* out) noexcept {
- const double length=(r.r-r.l)*std::abs(g.direction_x)+(r.b-r.t)*std::abs(g.direction_y);
- const double t=.5+((x-(r.l+r.r)*.5)*g.direction_x+(y-(r.t+r.b)*.5)*g.direction_y)/length;
+struct GradientGeometry { double length,cx,cy; };
+GradientGeometry gradient_geometry(const prep::LinearGradientFill& g,Rect r) noexcept {
+ return {(r.r-r.l)*std::abs(g.direction_x)+(r.b-r.t)*std::abs(g.direction_y),(r.l+r.r)*.5,(r.t+r.b)*.5};
+}
+void gradient_sample(const prep::LinearGradientFill& g,const GradientGeometry& r,double x,double y,double* out) noexcept {
+ const double t=.5+((x-r.cx)*g.direction_x+(y-r.cy)*g.direction_y)/r.length;
  const auto upper=std::upper_bound(g.stops.begin(),g.stops.end(),t,[](double t,const auto& stop){return t<stop.offset;});
  const auto& a=upper==g.stops.begin()?g.stops.front():*(upper-1);
  const auto& b=upper==g.stops.end()?g.stops.back():*upper;
@@ -70,6 +74,40 @@ bool central(Rect b,CurvedClip c) noexcept {
  return (b.l>=c.original.l+c.radius && b.r<=c.original.r-c.radius) ||
         (b.t>=c.original.t+c.radius && b.b<=c.original.b-c.radius);
 }
+// Sufficient coverage proof only: curved corners deliberately retain the grid.
+// The outward numerical guard SHRINKS the admitted domain, never bridges stops.
+// Float geometry is promoted to double before arithmetic; its bounded normal
+// products are far above double underflow. 32 eps bounds the projection's
+// additions/subtractions/products/division, including cancellation in centers.
+bool gradient_fast(const Draw& d,Rect b) noexcept {
+ if(empty(b) || (d.radius>0 && !central(b,{d.original,d.radius})) ||
+    (d.clip.radius>0 && !central(b,d.clip))) return false;
+ const auto& g=*d.gradient;const auto r=d.gradient_rect;
+ const double dx=g.direction_x,dy=g.direction_y;
+ const double length=(r.r-r.l)*std::abs(dx)+(r.b-r.t)*std::abs(dy);
+ if(!(length>0) || !std::isfinite(length))return false;
+ const double cx=(r.l+r.r)*.5,cy=(r.t+r.b)*.5;
+ const double xl=dx>=0?b.l:b.r,xh=dx>=0?b.r:b.l;
+ const double yl=dy>=0?b.t:b.b,yh=dy>=0?b.b:b.t;
+ const double low=.5+((xl-cx)*dx+(yl-cy)*dy)/length;
+ const double high=.5+((xh-cx)*dx+(yh-cy)*dy)/length;
+ const double magnitude=1+((std::max(std::abs(b.l),std::abs(b.r))+std::abs(r.l)+std::abs(r.r))*std::abs(dx)+
+                          (std::max(std::abs(b.t),std::abs(b.b))+std::abs(r.t)+std::abs(r.b))*std::abs(dy))/length;
+ const double guard=32*std::numeric_limits<double>::epsilon()*magnitude;
+ const double lo=std::nextafter(low-guard,-std::numeric_limits<double>::infinity());
+ const double hi=std::nextafter(high+guard,std::numeric_limits<double>::infinity());
+ if(!std::isfinite(lo)||!std::isfinite(hi))return false;
+ const auto upper=std::upper_bound(g.stops.begin(),g.stops.end(),lo,[](double t,const auto& stop){return t<stop.offset;});
+ // Strict on BOTH ends, including duplicate stops and constant exterior tails.
+ return (upper==g.stops.begin() || lo>(upper-1)->offset) &&
+        (upper==g.stops.end() || hi<upper->offset);
+}
+// Work units are bounded operations, not CPU instructions: classification =
+// 2 coverage tests + 4 projection blocks + 2 guard blocks + <=7 stop comparisons
+// + 1 interval test. Reserve both passes, then lookup (7), interpolation (1),
+// blend (1). Slow pixels retain all 256*8 historical sample/blend units.
+constexpr std::uint64_t gradient_classify_work=16;
+constexpr std::uint64_t gradient_fast_work=9;
 double joint_area(const Draw& d,Rect b,std::uint64_t& sampled) noexcept {
  ++sampled;unsigned count=0;
  for(int sy=0;sy<16;++sy)for(int sx=0;sx<16;++sx){
@@ -200,12 +238,25 @@ static Result render_impl(FrameStore& store,const prep::PreparedFrame& frame,
        (fill->rect.width<=0 || fill->rect.height<=0 || 2*radius>std::min(fill->rect.width,fill->rect.height))))
      return {Status::unsupported,FrameStatus::ok,index,work};
     const auto original=translated(fill->rect),r=intersect(current,original);
-    // 256 samples, bounded binary stop lookup (<=7 comparisons) and blend.
-    // Charged before candidate allocation; solid draws retain their fast path.
-    if(!charge(work,pixel_count(r),256*8))return {Status::limit_exceeded,FrameStatus::ok,index,work};
     if(!empty(r)) {
+     // Reserve once-per-draw ramp geometry before any candidate allocation.
+     // Empty gradients incur no cache or per-pixel work.
+     if(!charge(work,1,4))return {Status::limit_exceeded,FrameStatus::ok,index,work};
      Draw d{};d.rect=r;d.index=index;d.original=original;d.radius=radius;d.clip=curve;
-     d.gradient=fill;d.gradient_rect=translated(fill->gradient_rect);draws.push_back(d);
+     d.gradient=fill;d.gradient_rect=translated(fill->gradient_rect);
+     // Charge before doing each classification, including the preflight itself.
+     // Reserve the repeated paint classification and actual selected work. No
+     // pixel map allocation, no budget reset per draw, no invisible-overdraw skip.
+     for(int y=int(std::floor(r.t));y<int(std::ceil(r.b));++y) {
+      if(cancelled(cancel))return {Status::cancelled,FrameStatus::ok,index,work};
+      for(int x=int(std::floor(r.l));x<int(std::ceil(r.r));++x) {
+       if(!charge(work,1,gradient_classify_work))return {Status::limit_exceeded,FrameStatus::ok,index,work};
+       const auto b=intersect(r,{double(x),double(y),double(x)+1,double(y)+1});
+       const auto cost=gradient_fast(d,b)?gradient_fast_work:256*8;
+       if(!charge(work,1,gradient_classify_work+cost))return {Status::limit_exceeded,FrameStatus::ok,index,work};
+      }
+     }
+     draws.push_back(d);
     }
    } else if(const auto* fill=std::get_if<prep::Fill>(&command)) {
     const double radius=fill->radii.top_left_x;
@@ -456,6 +507,7 @@ static Result render_impl(FrameStore& store,const prep::PreparedFrame& frame,
      if(status==Status::ok)status=axis(y0,y1,r.t,r.b,draw.source.t,draw.source.b,draw.excluded.t,draw.excluded.b,scratch.data()+2*nx,scratch.data()+2*nx+ny);
      if(status!=Status::ok)return {status,FrameStatus::ok,index,work};
     }
+    GradientGeometry ramp{};if(draw.gradient)ramp=gradient_geometry(*draw.gradient,draw.gradient_rect);
     const unsigned alpha=byte(draw.color.a);
     const unsigned channels[]{byte(draw.color.b),byte(draw.color.g),byte(draw.color.r)};
     for(int y=y0;y<y1;++y) {
@@ -464,11 +516,16 @@ static Result render_impl(FrameStore& store,const prep::PreparedFrame& frame,
       const auto b=intersect(r,{double(x),double(y),double(x)+1,double(y)+1});
       if(draw.gradient) {
        double sums[4]{};
+       if(gradient_fast(draw,b)) {
+        gradient_sample(*draw.gradient,ramp,(b.l+b.r)*.5,(b.t+b.b)*.5,sums);
+        // Multiplication by this power of two is exact; reuse historical blend.
+        for(double& value:sums)value*=256;
+       } else
        for(int sy=0;sy<16;++sy)for(int sx=0;sx<16;++sx) {
         const double px=b.l+(sx+.5)*(b.r-b.l)/16,py=b.t+(sy+.5)*(b.b-b.t)/16;
         if(!contains(draw.original,draw.radius,px,py) ||
            (draw.clip.radius>0&&!contains(draw.clip.original,draw.clip.radius,px,py)))continue;
-        double sample[4];gradient_sample(*draw.gradient,draw.gradient_rect,px,py,sample);
+        double sample[4];gradient_sample(*draw.gradient,ramp,px,py,sample);
         for(int c=0;c<4;++c)sums[c]+=sample[c];
        }
        const double scale=(b.r-b.l)*(b.b-b.t)/256;

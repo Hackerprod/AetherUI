@@ -98,6 +98,9 @@ int main(){
  Cancel count(100000);ck(s::render(store,owned,&count).status==s::Status::ok);const auto saved=frame(store);
  for(int i=1;i<=count.calls;++i){Cancel cancel(i);ck(s::render(store,owned,&cancel).status==s::Status::cancelled);auto f=frame(store);ck(f.sequence==saved.sequence&&f.pixels==saved.pixels);}
  bool fail=false;FrameStore oom([&]{if(fail)throw std::bad_alloc();});ck(oom.resize({24,20,1})==FrameStatus::ok);ck(s::render(oom,owned).status==s::Status::ok);fail=true;ck(s::render(oom,owned).status==s::Status::allocation_failed);fail=false;ck(frame(oom).sequence==1);
- FrameStore big;ck(big.resize({1024,1024,1})==FrameStatus::ok);auto huge=gradient({0,0,1024,1024});ck(s::render(big,prepared({huge})).status==s::Status::limit_exceeded);
+ FrameStore big;ck(big.resize({1024,1024,1})==FrameStatus::ok);auto huge=gradient({0,0,1024,1024});ck(s::render(big,prepared({huge})).status==s::Status::ok);
+ auto large=frame(big);for(int x:{0,127,511,1023}){auto got=pixel(large,x,400);ck(std::abs(got[0]-int(std::floor(255*(x+.5)/1024+.5)))<=1);ck(got[3]==255);}
+ std::vector<p::Command> overpaint(64,huge);ck(s::render(big,prepared(std::move(overpaint))).status==s::Status::limit_exceeded);
+ auto retained=frame(big);ck(retained.sequence==large.sequence&&retained.pixels==large.pixels);
  std::cout<<"G1 independent gradient checks="<<checks<<" oracle=analytic_srgb_premul_grid64 chromium=NOT_RUN\n";
 }
