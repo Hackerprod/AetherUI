@@ -2,6 +2,31 @@
 
 This checkpoint covers a bounded invalidation repair: immutable previous/final evidence, conservative source accounting, four impact channels, classifier/catalog checks, allocation/lifetime checks and the selected renderer/layout/scroll sentinels. It does not close the broader document/rendering milestone.
 
+## Current focused CMake gate
+
+The current `aether_style_diff_classifier_test` target and
+`aether.style-diff-classifier` CTest entry use the inventory20 successor. It
+preserves the original cases and adds independent `background_gradient` coverage.
+The original19 source and the script below remain byte-identical historical
+checkpoint inputs; the script retains its intentional exit-1 contract and is not
+the current acceptance gate. The historical results below are not rewritten.
+
+From the repository root, choose fresh build directories. Compilation and linking
+must succeed before CTest executes the classifier and catalog:
+
+```sh
+cmake -S native -B build-classifier-debug -DAETHERUI_BUILD_TESTS=ON -DCMAKE_BUILD_TYPE=Debug
+cmake --build build-classifier-debug --target aether_style_diff_classifier_test aether_style_diff_catalog_test
+ctest --test-dir build-classifier-debug --output-on-failure -R '^aether\.(style-diff-classifier|style-diff-catalog)$'
+cmake -S native -B build-classifier-release -DAETHERUI_BUILD_TESTS=ON -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_FLAGS_RELEASE='-O3 -UNDEBUG' -DCMAKE_C_FLAGS_RELEASE='-O3 -UNDEBUG'
+cmake --build build-classifier-release --target aether_style_diff_classifier_test aether_style_diff_catalog_test
+ctest --test-dir build-classifier-release --output-on-failure -R '^aether\.(style-diff-classifier|style-diff-catalog)$'
+```
+
+The Release flags keep assertions active. On Linux the CMake classifier retains
+malloc wrapping. A focused PASS does not certify the full test suite or change
+the historical checkpoint outcome.
+
 ## Prerequisites
 
 Use a complete checkout containing the native sources, tests and this script. The reviewed environment was Linux x86_64, Python 3.12.14, GCC 14.2.0 and GNU ld 2.44. Python's standard library is sufficient; no pip installation is required. The compiler must support C++20 and pthreads, and the linker must support GNU --wrap used by the allocation tests. GCC is the validated compiler; --cxx is configurable, not a claim of Clang or Windows validation.

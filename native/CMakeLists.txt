@@ -1474,7 +1474,9 @@ if(AETHERUI_BUILD_TESTS)
     target_compile_definitions(aether_flex_text_test_core PRIVATE AETHER_EXPORTS)
     # The semantic classifier is private. Reuse authentic core objects so its
     # allocation check and exhaustive inventory do not expand the public ABI.
-    add_executable(aether_style_diff_classifier_test tests/test_style_diff_classifier.cpp
+    # inventory20 preserves the original cases and covers the twentieth sidecar.
+    # Keep original19 unchanged for the historical checkpoint recipe.
+    add_executable(aether_style_diff_classifier_test tests/test_style_diff_classifier_inventory20.cpp
         $<TARGET_OBJECTS:aether_flex_text_test_core>)
     target_include_directories(aether_style_diff_classifier_test PRIVATE include src)
     target_compile_definitions(aether_style_diff_classifier_test PRIVATE AETHER_EXPORTS)
