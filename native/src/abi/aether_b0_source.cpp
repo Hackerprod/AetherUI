@@ -25,7 +25,7 @@ aether_status_t frame_status(r::FrameStatus s){switch(s){case r::FrameStatus::ok
 bool overlaps(const void* a,size_t an,const void* b,size_t bn){if(!a||!b||!an||!bn)return false;auto x=reinterpret_cast<uintptr_t>(a),y=reinterpret_cast<uintptr_t>(b);return x<=y?y-x<an:x-y<bn;}
 }
 extern "C" {
-AETHER_API uint32_t aether_b0_source_capabilities(void){return AETHER_B0_SOURCE_STATIC_STYLESHEET_CONTROLS | AETHER_B0_SOURCE_STATIC_SEMANTIC_PAGE | AETHER_B0_SOURCE_STATIC_INLINE_WRAP;}
+AETHER_API uint32_t aether_b0_source_capabilities(void){return AETHER_B0_SOURCE_STATIC_STYLESHEET_CONTROLS | AETHER_B0_SOURCE_STATIC_SEMANTIC_PAGE | AETHER_B0_SOURCE_STATIC_INLINE_WRAP | AETHER_B0_SOURCE_STATIC_ROUNDED_BOXES;}
 AETHER_API size_t aether_b0_source_options_v1_size(void){return sizeof(aether_b0_source_options_v1);}
 AETHER_API size_t aether_b0_source_diagnostic_v1_size(void){return sizeof(aether_b0_source_diagnostic_v1);}
 AETHER_API size_t aether_b0_source_frame_info_v1_size(void){return sizeof(aether_b0_source_frame_info_v1);}

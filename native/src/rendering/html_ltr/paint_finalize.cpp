@@ -33,6 +33,20 @@ void square(aether_corner_radii r) {
  if(r.top_left_x!=0||r.top_left_y!=0||r.top_right_x!=0||r.top_right_y!=0||
     r.bottom_right_x!=0||r.bottom_right_y!=0||r.bottom_left_x!=0||r.bottom_left_y!=0) unsupported();
 }
+// Source authorization is independent of the text/control profile. Clips remain
+// square, and historical profiles retain their exact previous admission.
+float box_radius(aether_rectf box,aether_corner_radii r,BoxPaintPolicy policy) {
+ if(policy==BoxPaintPolicy::square_only){square(r);return 0;}
+ if(policy!=BoxPaintPolicy::source_rounded)internal();
+ const float radius=r.top_left_x;
+ for(float value:{r.top_left_x,r.top_left_y,r.top_right_x,r.top_right_y,
+                  r.bottom_right_x,r.bottom_right_y,r.bottom_left_x,r.bottom_left_y}){
+  if(!std::isfinite(value))internal();
+  if(value<0||value!=radius||value>32)unsupported();
+ }
+ if(radius>0&&(box.width<=0||box.height<=0||2*double(radius)>std::min(box.width,box.height)))unsupported();
+ return radius;
+}
 void opaque(aether_color_rgba c) {
  if(!std::isfinite(c.r)||!std::isfinite(c.g)||!std::isfinite(c.b)||!std::isfinite(c.a))internal();
  if(c.r<0||c.r>1||c.g<0||c.g>1||c.b<0||c.b>1||c.a!=1)unsupported();
@@ -55,7 +69,7 @@ void product_matches(const FinalText& final,const text::ShapedRun* key) {
   if(run.glyphs[i].advance_x!=quantize_absolute(advance))internal();
  }
 }
-void validate_controls(const NativePaintList& native,FontProvider& provider) {
+void validate_controls(const NativePaintList& native,FontProvider& provider,BoxPaintPolicy policy) {
  const auto* list=NativeListAccess::list(native);if(!list)internal();
  if(!native.scroll.empty())unsupported();
  if(!list->border_groups.empty())unsupported(); // nonuniform emitter, outside profile
@@ -71,7 +85,7 @@ void validate_controls(const NativePaintList& native,FontProvider& provider) {
   ++command_index;
   switch(command.tag) {
   case AETHER_PAINT_FILL_ROUNDED_RECT:
-   rect(command.data.fill_rounded_rect.rect);square(command.data.fill_rounded_rect.radii);opaque(command.data.fill_rounded_rect.color);break;
+   rect(command.data.fill_rounded_rect.rect);box_radius(command.data.fill_rounded_rect.rect,command.data.fill_rounded_rect.radii,policy);opaque(command.data.fill_rounded_rect.color);break;
   case AETHER_PAINT_STROKE_ROUNDED_RECT: {
    const auto& s=command.data.stroke_rounded_rect;rect(s.rect);
    if(focus_command){
@@ -79,7 +93,13 @@ void validate_controls(const NativePaintList& native,FontProvider& provider) {
     if(!same(s.rect,expected)||s.stroke_width!=1||s.color.r!=0.145f||s.color.g!=0.388f||s.color.b!=0.922f||s.color.a!=0.75f)internal();
     const auto& r=s.radii;
     if(r.top_left_x!=2||r.top_left_y!=2||r.top_right_x!=2||r.top_right_y!=2||r.bottom_left_x!=2||r.bottom_left_y!=2||r.bottom_right_x!=2||r.bottom_right_y!=2)internal();
-   }else{square(s.radii);opaque(s.color);}
+   }else{
+    const float radius=box_radius(s.rect,s.radii,policy);opaque(s.color);
+    if(!std::isfinite(s.stroke_width))internal();
+    // Stroke rect/radius describe the centre line. Recover the outer radius
+    // without rounding subpixel normalized geometry. b<=R keeps it nonzero.
+    if(radius>0&&(s.stroke_width<=0||s.stroke_width>8||s.stroke_width>double(radius)+double(s.stroke_width)/2||double(radius)+double(s.stroke_width)/2>32))unsupported();
+   }
    if(!std::isfinite(s.stroke_width))internal();
    if(s.stroke_width<0||s.stroke_width>128)unsupported();
    break;
@@ -141,8 +161,8 @@ void validate_generated_mask(const std::shared_ptr<const text::GlyphMaskA8>& mas
 }
 }
 std::vector<std::shared_ptr<const text::GlyphMaskA8>> finalize_paint(
- NativePaintList& native,const FinalTexts& finals,FontProvider& provider,const FinalControls& controls,uint32_t profile,const char* expected_family) {
- validate_controls(native,provider);
+ NativePaintList& native,const FinalTexts& finals,FontProvider& provider,const FinalControls& controls,uint32_t profile,const char* expected_family,BoxPaintPolicy box_policy) {
+ validate_controls(native,provider,box_policy);
  auto* list=NativeListAccess::list(native);
  if(profile!=1&&profile!=2)internal();
  if(profile==1&&(!controls.empty()||!native.control_runs.empty()))internal();

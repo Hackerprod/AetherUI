@@ -12,6 +12,7 @@ struct FinalText {
 };
 struct FinalControl {AtomicControlPlacement placement;aether_rectf clip,rect;};
 using FinalControls=std::map<aether_node_s*,FinalControl>;
+enum class BoxPaintPolicy { square_only, source_rounded };
 using FinalTexts=std::map<const text::ShapedRun*,FinalText>;
-std::vector<std::shared_ptr<const text::GlyphMaskA8>> finalize_paint(NativePaintList&,const FinalTexts&,FontProvider&,const FinalControls& = {},uint32_t profile=1,const char* expected_family="AetherLTR");
+std::vector<std::shared_ptr<const text::GlyphMaskA8>> finalize_paint(NativePaintList&,const FinalTexts&,FontProvider&,const FinalControls& = {},uint32_t profile=1,const char* expected_family="AetherLTR",BoxPaintPolicy box_policy=BoxPaintPolicy::square_only);
 }

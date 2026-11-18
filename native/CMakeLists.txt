@@ -2079,3 +2079,25 @@ if(AETHERUI_BUILD_TESTS AND UNIX)
         "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/fonts/DejaVuSans.ttf"
         "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/fonts/DejaVuSans-Bold.ttf")
 endif()
+
+if(AETHERUI_BUILD_TESTS AND UNIX)
+    add_executable(aether_source_rounded_boxes_test tests/test_source_rounded_boxes.cpp)
+    target_link_libraries(aether_source_rounded_boxes_test PRIVATE AetherUI::Core)
+    target_compile_options(aether_source_rounded_boxes_test PRIVATE -Wall -Wextra -Werror -pedantic)
+    add_test(NAME aether.source-rounded-boxes COMMAND aether_source_rounded_boxes_test
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/fonts/DejaVuSans.ttf"
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/fonts/DejaVuSans-Bold.ttf")
+endif()
+
+if(AETHERUI_BUILD_TESTS AND UNIX)
+    add_executable(aether_source_rounded_policy_test tests/test_source_rounded_policy.cpp
+        src/style_runtime/style_runtime_core.cpp
+        $<TARGET_OBJECTS:aether_rule_index_test_core>)
+    target_include_directories(aether_source_rounded_policy_test PRIVATE include src src/rendering/preparation/include)
+    target_compile_definitions(aether_source_rounded_policy_test PRIVATE AETHER_EXPORTS)
+    target_compile_options(aether_source_rounded_policy_test PRIVATE -Wall -Wextra -pedantic -ffp-contract=off)
+    target_link_libraries(aether_source_rounded_policy_test PRIVATE Threads::Threads)
+    add_test(NAME aether.source-rounded-policy COMMAND aether_source_rounded_policy_test
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/fonts/DejaVuSans.ttf"
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/fonts/DejaVuSans-Bold.ttf")
+endif()

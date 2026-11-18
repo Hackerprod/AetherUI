@@ -3,7 +3,9 @@
 `aether/aether_b0_source.h` is an additive C11 ABI. It is not HTML profile 1/2
 or the interactive R3.1 session. Discovery returns additive bits
 `AETHER_B0_SOURCE_STATIC_STYLESHEET_CONTROLS` and
-`AETHER_B0_SOURCE_STATIC_SEMANTIC_PAGE`. All operations are synchronous
+`AETHER_B0_SOURCE_STATIC_SEMANTIC_PAGE`,
+`AETHER_B0_SOURCE_STATIC_INLINE_WRAP` and
+`AETHER_B0_SOURCE_STATIC_ROUNDED_BOXES` (bit 8). All operations are synchronous
 and confined to the thread that created the session. Wrong-thread calls return
 `INVALID_STATE` without modifying outputs. Destroying NULL succeeds. Stale
 handles and concurrent destruction are caller errors.
@@ -46,7 +48,8 @@ U+2022 bullets, one per scalar, never the authored value.
 * Block/static/content-box, width auto/px, height auto, nonnegative px edges,
   uniform solid/none border, opaque text/solid background or transparent
   background. No authored display:none, flex, positions, percentages, calc,
-  custom properties, gradients, shadows, radii, transforms or overflow.
+  custom properties, gradients, shadows, transforms or authored overflow.
+  Uniform circular radii have the limited additive contract below.
 
 UA v1 is private and precedes authors: zero box edges, auto width/height,
 transparent backgrounds, block display, AetherB0 16/400/24, #202020, nowrap,
@@ -90,3 +93,37 @@ semantic_equivalence/div_control pair changes only element tags, retaining the
 same class selectors, specificity and source order for exact pixel comparison.
 Tag selector identity/cascade is verified independently. No flex, inline text,
 wrapping, extra controls, media queries, automatic fonts or effects are added.
+
+## Static rounded boxes (capability bit 8)
+
+The source session admits one integral numeric `border-radius` value from 0 to
+32px, or unitless zero. Integral forms such as `1.0px` and `1e1px` are allowed;
+fractional values, other units, multiple values, slash syntax and corner
+longhands are not. Unsupported declarations still reject in nonmatching rules.
+The existing CSS compiler and native used-value normalization remain authoritative.
+
+Positive radii are supported on div/main/section/aside/form/h1/h2/p/label and
+static input/button boxes only. html/body, metadata, inline elements and br must
+retain zero radius. Positive-radius boxes must have nonempty used border boxes.
+The radius is normalized against both border-box dimensions and can become
+fractional; it is never rounded to an integer. An effective uniform solid border
+must be no more than 8px and no thicker than that **used** radius. Equality is
+supported (square inner corner and circular outer corner). These new bounds do
+not restrict existing square boxes. Unsupported used geometry rejects at layout
+stage 6 with reason UNSUPPORTED; CSS syntax rejection remains stage 3/CSS_LOSS
+and disallowed computed node styles stage 4/UNSUPPORTED.
+
+Solid backgrounds may be opaque or transparent. Radius does not clip descendants:
+overflow remains visible. Input text retains its existing rectangular content-box
+clip, including long values/placeholders and masked password bullets. Rounded
+clips, nested rounded clipping, shadows, images and gradients are not added.
+Text/control profiles 1/2 and interactive sessions retain their historical square
+box admission and exact focus-ring checks; source box authorization is a separate
+internal policy. Public structure sizes and ABI version 1 are unchanged.
+
+`native/tests/fixtures/b0/source_rounded_boxes.html` is a new, explicitly limited
+example with real static controls and B2 text. Capture it using the installed
+`native-b0-source` adapter (see `tests/visual_compare/B0_SOURCE.md`), at 480x640
+and 320x640. It is not the historical login fixture or a browser-parity test.
+Memory, work and viewport limits, transactional failure and no-op behavior are
+unchanged. Dense pages can still exceed the renderer work budget.

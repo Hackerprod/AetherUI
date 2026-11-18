@@ -360,6 +360,7 @@ static bool b0_declaration_supported(const std::string& name,const std::string& 
     if(name=="width")return word("auto")||number(0,8192,true,false);
     if(name=="color" || name=="border-color")return color();
     if(name=="background-color")return color()||word("transparent");
+    if(name=="border-radius")return number(0,32,true,true);
     if(name=="border-style")return word("solid");
     if(name=="border-width" || name=="margin-top" || name=="margin-right" ||
        name=="margin-bottom" || name=="margin-left" || name=="padding-top" ||

@@ -1,6 +1,7 @@
 #include "b0_source_session.h"
 #include "../../style_runtime/dom_stylesheet.h"
 #include "../../css/style_c_export.h"
+#include "../../css/border_radii.h"
 #include "session_validation.h"
 #include "admission.h"
 #include "measure_bridge.h"
@@ -182,8 +183,11 @@ struct B0SourceSession::State {
   const auto color_ok=[](aether_color_rgba c,bool transparent){return std::isfinite(c.r)&&std::isfinite(c.g)&&std::isfinite(c.b)&&c.r>=0&&c.r<=1&&c.g>=0&&c.g<=1&&c.b>=0&&c.b<=1&&(c.a==1||(transparent&&c.a==0));};
   supported(color_ok(s.color,false)&&color_ok(s.background_color,true));
   if(node->tag_name=="html")supported(s.background_color.a==0);
-  const auto zero_radius=[](aether_corner_radius r){return r.horizontal.value==0&&r.vertical.value==0;};
-  supported(zero_radius(s.border_radii.top_left)&&zero_radius(s.border_radii.top_right)&&zero_radius(s.border_radii.bottom_left)&&zero_radius(s.border_radii.bottom_right));
+  const float radius=s.border_radii.top_left.horizontal.value;
+  for(const auto corner:{s.border_radii.top_left,s.border_radii.top_right,s.border_radii.bottom_left,s.border_radii.bottom_right})
+   for(const auto component:{corner.horizontal,corner.vertical})
+    supported(component.unit==AETHER_CSS_UNIT_PX&&std::isfinite(component.value)&&component.value==radius&&radius>=0&&radius<=32&&std::floor(radius)==radius);
+  if(radius>0)supported(!metadata(node)&&!inline_node(node)&&!br(node)&&node->tag_name!="html"&&node->tag_name!="body");
   const auto length=[&](aether_css_length x,bool aut=false,float max=8192){supported((aut&&x.unit==AETHER_CSS_UNIT_AUTO)||(x.unit==AETHER_CSS_UNIT_PX&&std::isfinite(x.value)&&x.value>=0&&x.value<=max));};
   length(s.width,true);
   for(auto x:{s.margin.top,s.margin.right,s.margin.bottom,s.margin.left,s.padding.top,s.padding.right,s.padding.bottom,s.padding.left})length(x);
@@ -292,6 +296,25 @@ struct B0SourceSession::State {
   }
   for(size_t i=1;i<nodes.size();++i)if(!metadata(nodes[i])&&!inline_node(nodes[i])&&!br(nodes[i]))require(aether_layout_result_find_primary_box(layout,nodes[i]));
   for(const auto& [node,owner]:owners){if(owner.control)require(controls.contains(node));if(!b2_enabled||control(node))require(collected[node]==(owner.control?owner.control->text:visible.at(node)));}
+  // Validate used (normalized) geometry, including transparent/empty boxes which
+  // might emit no paint command. Never test the declared radius against a border.
+  for(size_t i=0;i<nodes.size();++i){
+   auto* node=nodes[i];auto record=map->current->backing()->find_owner(node);require(bool(record));
+   aether::layout::BoxStyleSnapshot st(record->style(),record->measures());
+   if(st.border_radii.top_left.horizontal.value==0)continue;
+   diagnostic_node=i;auto* box=aether_layout_result_find_primary_box(layout,node);require(box);
+   const auto b=box->border_box;
+   if(!std::isfinite(b.width)||!std::isfinite(b.height))throw Error{AETHER_ERROR_INTERNAL};
+   if(b.width<=0||b.height<=0)fail();
+   const auto radii=aether_border_radii_resolve(st.border_radii,b,st.font_size);
+   const float radius=radii.top_left_x;
+   if(!std::isfinite(radius))throw Error{AETHER_ERROR_INTERNAL};
+   if(radius<=0||2*double(radius)>std::min(b.width,b.height))fail();
+   const auto border=box->used_border;
+   if(!std::isfinite(border.top)||!std::isfinite(border.right)||!std::isfinite(border.bottom)||!std::isfinite(border.left))throw Error{AETHER_ERROR_INTERNAL};
+   if(border.top!=border.right||border.top!=border.bottom||border.top!=border.left||border.top<0||border.top>8||border.top>radius)fail();
+  }
+  diagnostic_node=AETHER_B0_NO_INDEX;
   if(provenance)provenance->validate_final(layout);
   stage=AETHER_B0_STAGE_TRANSPORT;
   core(aether_display_list_builder_create(nullptr,nullptr,&builder));core(build_native_opacity(builder,layout,map,nullptr,paint));valid();
@@ -299,7 +322,7 @@ struct B0SourceSession::State {
   testing::inspect(layout,paint.get());
 #endif
   for(const auto& [node,o]:owners)if(o.control){aether::layout::BoxStyleSnapshot st(o.record->style(),o.record->measures());check_control(o.control,node,st);}
-  masks=finalize_paint(*paint,final,fonts,controls,profile,"AetherB0");valid();HTML_LTR_STAGE(snapshot);auto snapshot=preparation::snapshot_native_opacity(*paint);
+  masks=finalize_paint(*paint,final,fonts,controls,profile,"AetherB0",BoxPaintPolicy::source_rounded);valid();HTML_LTR_STAGE(snapshot);auto snapshot=preparation::snapshot_native_opacity(*paint);
   if(auto e=std::get_if<preparation::Error>(&snapshot))throw Error{e->code==preparation::ErrorCode::OUT_OF_MEMORY?AETHER_ERROR_OUT_OF_MEMORY:e->code==preparation::ErrorCode::LIMIT_EXCEEDED?AETHER_ERROR_LIMIT_EXCEEDED:AETHER_ERROR_INTERNAL};
   stage=AETHER_B0_STAGE_PREPARATION;HTML_LTR_STAGE(preparation);auto frame=preparation::prepare(std::get<preparation::Snapshot>(snapshot));if(auto e=std::get_if<preparation::Error>(&frame))throw Error{e->code==preparation::ErrorCode::OUT_OF_MEMORY?AETHER_ERROR_OUT_OF_MEMORY:e->code==preparation::ErrorCode::LIMIT_EXCEEDED?AETHER_ERROR_LIMIT_EXCEEDED:AETHER_ERROR_INTERNAL};valid();prepared.emplace(std::get<preparation::PreparedFrame>(std::move(frame)));
  }

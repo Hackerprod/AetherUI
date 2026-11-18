@@ -62,3 +62,20 @@ must never be represented as support for the rejected feature.
 
 Independent review/rebuild is required before publication. None of these checks
 closes the historical login, browser parity, general HTML or full audit scope.
+
+## Rounded source example
+
+With an installed core advertising `AETHER_B0_SOURCE_STATIC_ROUNDED_BOXES`, run:
+
+```
+python3 scripts/check_rounded_source.py CLI REPOSITORY NEW_OUTPUT ORACLE
+```
+
+This stages `native/tests/fixtures/b0/source_rounded_boxes.html` and the two
+versioned fonts, captures 480x640 and 320x640, and compares independently decoded
+PNG bytes against the installed C11 consumer. A square variant changes only the
+radius declarations. Recorded elapsed times include CLI/process overhead and
+are observations, not performance claims. The public ABI geometry oracle in
+`native/tests/test_source_rounded_boxes.cpp` supplies the separate semantic
+checks. This is still an intentionally limited static example, not historical
+login acceptance or browser parity.
