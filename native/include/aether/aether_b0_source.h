@@ -10,6 +10,7 @@ extern "C" {
 typedef struct aether_b0_source_s* aether_b0_source_t;
 #define AETHER_B0_SOURCE_VERSION 1u
 #define AETHER_B0_SOURCE_STATIC_STYLESHEET_CONTROLS 1u
+#define AETHER_B0_SOURCE_STATIC_SEMANTIC_PAGE 2u
 #define AETHER_B0_NO_INDEX UINT64_MAX
 #define AETHER_B0_STAGE_NONE 0u
 #define AETHER_B0_STAGE_INPUT 1u

@@ -2025,3 +2025,16 @@ if(AETHERUI_BUILD_TESTS AND UNIX)
         "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/fonts/DejaVuSans.ttf"
         "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/fonts/DejaVuSans-Bold.ttf")
 endif()
+
+if(AETHERUI_BUILD_TESTS AND UNIX)
+    add_executable(aether_b1_semantic_page_test tests/test_b1_semantic_page.cpp)
+    target_link_libraries(aether_b1_semantic_page_test PRIVATE AetherUI::Core Threads::Threads)
+    target_compile_options(aether_b1_semantic_page_test PRIVATE -Wall -Wextra -Werror -pedantic)
+    add_test(NAME aether.b1-semantic-page COMMAND aether_b1_semantic_page_test
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/fonts/DejaVuSans.ttf"
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/fonts/DejaVuSans-Bold.ttf")
+    add_test(NAME aether.b1-source-oom COMMAND aether_b0_source_oom_test
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/b0/b1_semantic_page.html"
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/fonts/DejaVuSans.ttf"
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/fonts/DejaVuSans-Bold.ttf")
+endif()

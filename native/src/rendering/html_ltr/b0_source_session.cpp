@@ -67,38 +67,46 @@ struct B0SourceSession::State {
 
  // DOM and style validators below.
  static constexpr const char* b0_ua=
- "html,head,title,style,meta,body,div,h1,h2,p,form,label,input,button {display:block;position:static;box-sizing:content-box;width:auto;height:auto;margin-top:0px;margin-right:0px;margin-bottom:0px;margin-left:0px;padding-top:0px;padding-right:0px;padding-bottom:0px;padding-left:0px;border-width:0px;border-style:none;overflow:visible;opacity:1;background-color:transparent;}"
+ "html,head,title,style,meta,body,div,main,section,aside,h1,h2,p,form,label,input,button {display:block;position:static;box-sizing:content-box;width:auto;height:auto;margin-top:0px;margin-right:0px;margin-bottom:0px;margin-left:0px;padding-top:0px;padding-right:0px;padding-bottom:0px;padding-left:0px;border-width:0px;border-style:none;overflow:visible;opacity:1;background-color:transparent;}"
  "html {overflow-x:clip;overflow-y:clip;font-family:AetherB0;font-size:16px;font-weight:400;line-height:24px;color:#202020;white-space:nowrap;text-align:start;direction:ltr;writing-mode:horizontal-tb;}"
  "head,title,style,meta {display:none;}";
  [[noreturn]] void fail(uint32_t reason=AETHER_B0_REASON_UNSUPPORTED,aether_status_t status=AETHER_ERROR_UNSUPPORTED)const{throw B0SourceError{status,stage,reason,diagnostic_node};}
  static const std::string& attribute(aether_node_t node,const char* name){static const std::string empty;auto i=node->attributes.find(name);return i==node->attributes.end()?empty:i->second;}
  static bool metadata(aether_node_t node){return node->tag_name=="head"||node->tag_name=="title"||node->tag_name=="style"||node->tag_name=="meta";}
  static bool leaf(aether_node_t node){return node->tag_name=="h1"||node->tag_name=="h2"||node->tag_name=="p"||node->tag_name=="label"||node->tag_name=="button";}
+ static bool container(aether_node_t node){const auto& t=node->tag_name;return t=="body"||t=="div"||t=="form"||t=="main"||t=="section"||t=="aside";}
+ static bool control(aether_node_t node){return node->tag_name=="input"||node->tag_name=="button";}
  static bool trivia(std::string_view s){for(char c:s)if(c!=' '&&c!='\t'&&c!='\r'&&c!='\n')return false;return true;}
  size_t scalars(std::string_view s,bool simple){size_t count=0;bool space=false;for(size_t i=0;i<s.size();){auto cp=decode_scalar_utf8(s,i);if(!repertoire_scalar(cp))fail();if(simple&&(cp==32&&(count==0||space||i==s.size())))fail();space=cp==32;++count;}return count;}
  void verify_dom(){
   auto* root=aether_doc_get_document_element(doc);if(!root||root->tag_name!="html"||!aether_doc_get_body(doc))fail();
-  std::vector<std::pair<aether_node_t,size_t>> pending{{root,1}};size_t controls=0,total=0;size_t heads=0,bodies=0;
+  std::vector<std::pair<aether_node_t,size_t>> pending{{root,1}};size_t controls=0,total=0;size_t heads=0,bodies=0,viewports=0;
   while(!pending.empty()){
    auto [node,depth]=pending.back();pending.pop_back();diagnostic_node=nodes.size();
    if(node->type!=AETHER_NODE_ELEMENT||node->is_generated)fail();
    if(depth>16||nodes.size()>=256)fail(AETHER_B0_REASON_LIMIT,AETHER_ERROR_LIMIT_EXCEEDED);
    const auto& t=node->tag_name;
-   if(t!="html"&&t!="head"&&t!="meta"&&t!="title"&&t!="style"&&t!="body"&&t!="div"&&t!="h1"&&t!="h2"&&t!="p"&&t!="form"&&t!="label"&&t!="input"&&t!="button")fail();
+   if(t!="html"&&!metadata(node)&&!container(node)&&!leaf(node)&&!control(node))fail();
    if(t=="html"&&node!=root)fail();
    if(t=="head"){if(node->parent!=root||++heads!=1)fail();}
    if(t=="body"){if(node->parent!=root||++bodies!=1)fail();}
    if(t=="meta"||t=="title"||t=="style"){if(!node->parent||node->parent->tag_name!="head")fail();}
    if(node->parent==root&&t!="head"&&t!="body")fail();
    if(node->parent&&node->parent->tag_name=="head"&&!metadata(node))fail();
+   if(container(node)&&t!="body"&&(!node->parent||!container(node->parent)))fail();
    for(const auto& [key,value]:node->attributes){
     bool ok=key=="id"||key=="class"||key=="lang"||key=="style";
-    ok=ok||(t=="label"&&key=="for")||(t=="input"&&(key=="type"||key=="value"||key=="placeholder"))||(t=="button"&&key=="type")||(t=="meta"&&key=="charset");
+    ok=ok||(t=="label"&&key=="for")||(t=="input"&&(key=="type"||key=="value"||key=="placeholder"))||(t=="button"&&key=="type")||(t=="meta"&&(key=="charset"||key=="name"||key=="content"));
     if(!ok)fail();
-    if(t=="meta"&&(key!="charset"||value!="utf-8"))fail();
+
    }
-   if(t=="meta"&&(node->attributes.size()!=1||attribute(node,"charset")!="utf-8"))fail();
-   if(t=="input"||t=="button")if(++controls>32)fail(AETHER_B0_REASON_LIMIT,AETHER_ERROR_LIMIT_EXCEEDED);
+   if(t=="meta"){
+    const bool charset=node->attributes.size()==1&&attribute(node,"charset")=="utf-8";
+    const bool viewport=node->attributes.size()==2&&attribute(node,"name")=="viewport"&&attribute(node,"content")=="width=device-width, initial-scale=1";
+    if(!charset&&!viewport)fail();
+    if(viewport&&++viewports!=1)fail();
+   }
+   if(control(node))if(++controls>32)fail(AETHER_B0_REASON_LIMIT,AETHER_ERROR_LIMIT_EXCEEDED);
    if(t=="input"){
     if(attribute(node,"type")!="text"&&attribute(node,"type")!="password")fail();
     if(!node->children.empty())fail();

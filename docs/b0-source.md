@@ -1,8 +1,9 @@
 # B0 source session (v1)
 
 `aether/aether_b0_source.h` is an additive C11 ABI. It is not HTML profile 1/2
-or the interactive R3.1 session. Discovery returns only
-`AETHER_B0_SOURCE_STATIC_STYLESHEET_CONTROLS`. All operations are synchronous
+or the interactive R3.1 session. Discovery returns additive bits
+`AETHER_B0_SOURCE_STATIC_STYLESHEET_CONTROLS` and
+`AETHER_B0_SOURCE_STATIC_SEMANTIC_PAGE`. All operations are synchronous
 and confined to the thread that created the session. Wrong-thread calls return
 `INVALID_STATE` without modifying outputs. Destroying NULL succeeds. Stale
 handles and concurrent destruction are caller errors.
@@ -66,3 +67,26 @@ there is no second CSS parser.
 The provider retains its existing cache/payload/raster limits. Those are partial
 instrumented domains, not a total process-memory quota. The historical login,
 full browser coverage, reference-backend parity and P4 remain separate gates.
+
+## B1 static semantic page
+
+B1 adds main/section/aside as ordinary block containers in body or other flow
+containers, with the same UA defaults as div. Native tag identity is preserved
+for selectors and diagnostics. No accessibility, navigation or ARIA behavior is
+implied. Leaf/control and metadata content restrictions still apply to the
+parsed DOM, not to unparsed source spelling.
+
+In head, one exact `meta name="viewport" content="width=device-width, initial-scale=1"`
+is accepted (only those two attributes). Existing `meta charset="utf-8"` remains
+accepted. Values, spelling and whitespace are compared after native HTML parsing.
+This acknowledges a declaration compatible with the caller's fixed CSS viewport
+and physical dimensions at scale 1, not general viewport emulation. Duplicates,
+additional attributes, numeric widths, zoom, viewport-fit, min/max-scale and
+user-scalable are unsupported. Metadata remains unpainted. ABI structs and their
+version stay unchanged; discover this extension by its capability bit.
+
+The new b1_semantic_page fixture is not the historical page. A separate
+semantic_equivalence/div_control pair changes only element tags, retaining the
+same class selectors, specificity and source order for exact pixel comparison.
+Tag selector identity/cascade is verified independently. No flex, inline text,
+wrapping, extra controls, media queries, automatic fonts or effects are added.
