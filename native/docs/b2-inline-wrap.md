@@ -1,0 +1,28 @@
+# B2 static inline paragraphs and wrapping
+
+B2 adds `AETHER_B0_SOURCE_STATIC_INLINE_WRAP` (bit 4) to the existing B0 source API. Structures and version numbers are unchanged. Check capability bits with a mask rather than equality. This remains a static, native LTR renderer, not a browser, interactive form or authentication client.
+
+## Authoring contract
+
+- Flow blocks are the B0/B1 tags. `h1`, `h2`, `p`, and `label` contain text, comments, `span`, `strong`, `a`, and `br`, not blocks or controls. Flow containers may interleave inline sequences and child blocks. Text–block–text creates two parent contexts; a text-bearing child block has its own context.
+- `span` and `a` default to inline; `strong` defaults to inline/700, with an explicit 400 override permitted. Inline boxes are transparent, undecorated, static, auto-sized, with zero margin/padding/border and visible overflow. They are represented by origin participants, not fake primary boxes. Real blocks and controls retain primary-box validation.
+- An `a` may omit `href`, or use exactly `#[A-Za-z][A-Za-z0-9_-]{0,63}` after attribute decoding. There is no navigation or request. Nested anchors are rejected even through another inline element. `br` accepts only id/class attributes, no authored display or changed typography/geometry.
+- B0/B1 defaults remain nowrap/start. Explicit `white-space:normal` enables wrapping; `text-align:center` centers a whole resolved line. Every inline descendant, including empty nodes and br, must have the block context's effective mode and alignment. Differing effective values are rejected before measurement. Controls remain atomic/nowrap/start and do not accept rich markup.
+- Font family is AetherB0, explicit regular/bold font inputs, size 8..48 integer px, weight 400/700, line-height integer px between font size and 96. Opaque text colors and the existing block geometry vocabulary remain supported. Use margin/padding longhands; the `padding`/`margin` shorthands remain outside source-profile accounting.
+- Author whitespace is SP, TAB, LF, CR and FF. Both normal and nowrap collapse it across markup/comments and discard leading/trailing space. VT is rejected at TEXT for flow paragraphs, including entities and implicit nowrap; it is a validation-path signal, not an accepted character. Controls keep their prior text contract and metadata stays inert. Visible characters are U+0020..U+007E and U+00A0..U+00FF except soft hyphen. NBSP is indivisible. A markup boundary introduces neither a space nor a wrap opportunity. Overlong words overflow without splitting or compression.
+
+Each br closes a line, even empty, with at least the containing block's line height. The end of a context emits a line only for remaining visible content; a trailing br adds no extra final line. For H=24 and smaller text metrics: empty=0, br=24, br br=48, x br=24, br x=48, x br br=48, x br y=48. Mixed sizes share one baseline; ascent+descent can increase line height. This is the renderer's explicit contract, not a claim of browser equivalence for all empty-line cases.
+
+## Provenance and safety
+
+The shared source-unit collector and line resolver remain the only wrapping algorithm. An explicit private B2 policy admits the extended repertoire; a failed admission never silently falls back to legacy layout. Sessions with no B2 requirements retain the old B0/B1 path.
+
+A frozen catalog records original decoded-DOM text-node identities, lifetime/epochs, effective style/font owners, comments, inline empties and br. UTF-8 ranges refer to decoded text, not HTML source offsets. One terminal ledger partitions every admitted text byte into visible text, contributors to one collapsed SP, or a justified discard. Every br must close exactly one line.
+
+Global preflight through the same collector checks normalized text before any font measurement. Measurement receipts are distinct from final placements. Every V/C span must carry independent canonical token/fragment references; missing references are an invariant failure, including in standalone ledger use. The collapsed SP uses the first contributor’s owner/style/font. Final validation checks source coverage/order, real runs and font sources, glyph transport, line metrics/alignment, break decisions and exact final boxes. Painting receives already-positioned start/nowrap fragments and must not wrap again. Production contains no corruption-test hooks.
+
+B2 keeps the HTML/font/frame/provider limits. Additional independent bounds include 1024 DOM nodes, 512 text nodes, 256 comments, 65536 DOM text/comment bytes, 8192 author flow scalars, 4096 normalized visible flow+control scalars, 512 contexts, 2048 participants/events, 8192 logical units, 16384 terminal spans/source fragments/final placements/glyphs, 4096 final lines, 32768 bridge/product calls and 65536 token/provider scalar visits. The new catalog, ledger and common resolver workspace use a 4 MiB live PMR budget, including overlapping buffers during growth. Work counters are never refunded. These are independent acceptance limits, not a promise to accept every document below one visible-character threshold.
+
+The parser runs before DOM limits; its allocations and legacy structures are not represented as if instrumented by the new budget. Existing provider payload/mask/raster limits still apply. Failed creation publishes no session; failed first render publishes no frame and can be retried.
+
+Flex, percentages, border-box, effects, media queries, shaping/bidi, fallback fonts, text decoration, navigation and authentication remain out of scope. The historical login's unsupported symbols and controls are not made supported by this increment. P4 remains separate.

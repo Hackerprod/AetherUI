@@ -1,4 +1,7 @@
 #include "font_provider.h"
+#ifdef AETHER_HTML_LTR_TESTING
+#include "session.h"
+#endif
 #include "raster_coordinate.h"
 #include "font_product_kernel.h"
 #include "owned_allocator.h"
@@ -145,6 +148,9 @@ std::shared_ptr<const tt::Outline> FontProvider::outline(const std::shared_ptr<c
  outlines_.emplace(key,ol);usage_.payload-=outline_temporary_max-retained;return ol;
 }
 FontProduct FontProvider::product(std::string_view source,int size,int weight,int line_height){
+#ifdef AETHER_HTML_LTR_TESTING
+ HTML_LTR_STAGE(font_product);
+#endif
  if(persistent_&&!persistent_->active)fail(AETHER_ERROR_INTERNAL);
  reserve(1,usage_.requests,32768);
  if(source.size()>text::max_text_bytes)fail(AETHER_ERROR_LIMIT_EXCEEDED);

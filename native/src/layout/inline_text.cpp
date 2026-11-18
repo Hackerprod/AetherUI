@@ -49,7 +49,7 @@ bool aether_white_space_preserves_spaces(const int32_t white_space) {
 }
 
 std::vector<aether_inline_text_token_s> aether_tokenize_inline_text(
-    const std::string& text, const int32_t white_space) {
+    std::string_view text, const int32_t white_space) {
     std::vector<aether_inline_text_token_s> output;
     const bool preserve_spaces = aether_white_space_preserves_spaces(white_space);
     const bool preserve_breaks = preserves_line_breaks(white_space);
@@ -87,7 +87,7 @@ std::vector<aether_inline_text_token_s> aether_tokenize_inline_text(
     return output;
 }
 
-bool aether_inline_text_has_visible_content(const std::string& text, const int32_t white_space) {
+bool aether_inline_text_has_visible_content(std::string_view text, const int32_t white_space) {
     if (aether_white_space_preserves_spaces(white_space)) return !text.empty();
 
     // Only pre-line preserves breaks here. Unknown modes collapse whitespace
@@ -98,4 +98,21 @@ bool aether_inline_text_has_visible_content(const std::string& text, const int32
             !aether::presentation_space_byte(static_cast<unsigned char>(value))) return true;
     }
     return false;
+}
+
+bool aether_b2_inline_space_byte(unsigned char value) noexcept {
+    return value == ' ' || value == '\t' || value == '\n' || value == '\r' || value == '\f';
+}
+
+bool aether_b2_inline_text_supported(std::string_view text) noexcept {
+    for (size_t i = 0; i < text.size(); ++i) {
+        const auto c = static_cast<unsigned char>(text[i]);
+        if (aether_b2_inline_space_byte(c) || (c >= 0x20 && c <= 0x7e)) continue;
+        // Exactly U+00A0..U+00FF except soft hyphen. Reject malformed UTF-8,
+        // continuation bytes, other controls, overlong encodings and all bidi.
+        if ((c != 0xc2 && c != 0xc3) || i + 1 == text.size()) return false;
+        const auto tail = static_cast<unsigned char>(text[++i]);
+        if (tail < 0x80 || tail > 0xbf || (c == 0xc2 && (tail < 0xa0 || tail == 0xad))) return false;
+    }
+    return true;
 }

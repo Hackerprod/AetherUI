@@ -281,10 +281,17 @@ inline bool layout_box_contains_own_content(const aether_layout_box_s* box, floa
 }
 
 struct inline_item_s {
+    // Raw decoded DOM identity is separate from the effective style owner.
+    // Anonymous/generated joined sequences leave this null. B2 rejects those.
+    aether_node_s* source_node = nullptr;
+    size_t source_begin = 0;
+    size_t source_end = 0;
+
     aether_node_s*        element = nullptr;
     BoxStyleSnapshot style{};
     aether_node_s* presentation_owner = nullptr;
-    std::string           text;
+    std::pmr::string       text;
+    explicit inline_item_s(std::pmr::memory_resource* r=std::pmr::get_default_resource()):text(r){}
     bool is_atomic = false;
     bool is_line_break = false;
     // Collection-time marker: flattened inline decoration disables the entire
@@ -304,8 +311,8 @@ struct inline_item_s {
     }
 
     static inline_item_s text_item(aether_node_s* el, const BoxStyleSnapshot& s,
-                                   const std::string& t) {
-        inline_item_s i;
+                                   std::string_view t, std::pmr::memory_resource* r=std::pmr::get_default_resource()) {
+        inline_item_s i(r);
         i.element = el;
         i.style = s;
         i.text = t;
@@ -323,6 +330,7 @@ struct inline_item_s {
         i.element = el;
         i.style = s;
         i.is_line_break = true;
+        i.source_node = el;
         return i;
     }
 };
