@@ -1,6 +1,7 @@
 #pragma once
 #include "../../layout/b2_inline_ledger.h"
 #include "b2_inline_transport.h"
+#include "b2_translation.h"
 #include "../text/font_source.h"
 #include <aether/aether.h>
 #include <memory>
@@ -9,13 +10,18 @@ namespace aether::rendering::html_ltr {
 #ifdef AETHER_HTML_LTR_TESTING
 namespace testing {void b2_inspect(aether::layout::b2::Ledger&);void b2_result_inspect(B2InlineResult&);}
 #endif
-class B2Provenance final {
+class B2Provenance final : public B2TranslationSink {
  struct State;
  std::unique_ptr<State> state_;
 public:
  B2Provenance(aether_doc_t,aether_style_map_t,std::shared_ptr<const text::FontSource>,std::shared_ptr<const text::FontSource>);
  ~B2Provenance();
  B2Provenance(const B2Provenance&)=delete;
+ void begin(aether_layout_result_s*) override;
+ void end(aether_layout_result_s*) noexcept override;
+ uint64_t operation(aether_layout_result_s*) override;
+ void visit(aether_layout_result_s*) override;
+ void translate(const B2Translation&) override;
  void valid()const;
  std::pmr::memory_resource* resource();
  aether::layout::b2::Counters& counters();

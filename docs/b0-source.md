@@ -127,3 +127,11 @@ example with real static controls and B2 text. Capture it using the installed
 and 320x640. It is not the historical login fixture or a browser-parity test.
 Memory, work and viewport limits, transactional failure and no-op behavior are
 unchanged. Dense pages can still exceed the renderer work budget.
+
+### B2 margins after inline composition
+
+Nonnegative admitted margins now retain B2 provenance across the layout's
+subsequent subtree translations. See [the construction and test contract](b2-margin-translation.md).
+The complete `native/tests/fixtures/b0/source_margin_boxes.html` keeps original
+margins, rounded boxes and authentic controls; the A19 rounded fixture is retained
+unchanged. This correction does not extend CSS admission or add B3 support.

@@ -28,6 +28,7 @@ int main(){
  for(size_t q=0;q<size_t(Quota::count);++q){Counters c;c.charge(Quota(q),0);assert(c.used(Quota(q))==0);c.charge(Quota(q),limits[q]);assert(c.used(Quota(q))==limits[q]);rejects<LimitExceeded>([&]{c.charge(Quota(q));});assert(c.used(Quota(q))==limits[q]);}
  assert(checked_add(0,0)==0&&checked_mul(0,SIZE_MAX)==0);rejects<LimitExceeded>([]{checked_add(SIZE_MAX,1);});rejects<LimitExceeded>([]{checked_mul(SIZE_MAX,2);});
  {MemoryBudget m(16);auto zero=m.allocate(0);assert(m.live()==0);m.deallocate(zero,0);volatile size_t huge=SIZE_MAX;rejects<LimitExceeded>([&]{(void)m.allocate(huge);});auto p=m.allocate(16);assert(m.live()==16);rejects<LimitExceeded>([&]{(void)m.allocate(1);});m.deallocate(p,16);assert(m.live()==0&&m.peak()==16);}
+ {MemoryBudget m(16);m.reserve_fixed(8);assert(m.live()==8&&m.peak()==8);auto p=m.allocate(8);assert(m.live()==16);rejects<LimitExceeded>([&]{m.reserve_fixed(1);});assert(m.live()==16);m.deallocate(p,8);assert(m.live()==8&&m.peak()==16);m.reserve_fixed(8);rejects<LimitExceeded>([&]{(void)m.allocate(1);});assert(m.live()==16);}
  {FailResource f;MemoryBudget m(16,&f);rejects<std::bad_alloc>([&]{(void)m.allocate(8);});assert(m.live()==0);f.fail=false;auto p=m.allocate(8);m.deallocate(p,8);assert(m.live()==0);}
  assert(scalar_count("\xc2\xbfQu\xc3\xa9\xc2\xa0tal?")==9);rejects<InvalidLedger>([]{scalar_count("\xc0\xaf");});rejects<InvalidLedger>([]{scalar_count("\xed\xa0\x80");});
  fixture()->validate();

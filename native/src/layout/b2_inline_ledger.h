@@ -41,6 +41,9 @@ class MemoryBudget final:public std::pmr::memory_resource {
  bool do_is_equal(const std::pmr::memory_resource& other)const noexcept override {return this==&other;}
 public:
  explicit MemoryBudget(size_t limit=4*1024*1024,std::pmr::memory_resource* upstream=std::pmr::get_default_resource()):upstream_(upstream),limit_(limit){}
+ // Account fixed session/result bookkeeping that is not PMR-allocated. It
+ // lives exactly as long as this budget; no synthetic heap allocation needed.
+ void reserve_fixed(size_t bytes){if(bytes>limit_-live_)throw LimitExceeded();live_+=bytes;if(live_>peak_)peak_=live_;}
  size_t live()const noexcept{return live_;} size_t peak()const noexcept{return peak_;}
 };
 using Id=uint32_t;
@@ -75,6 +78,7 @@ public:
  explicit Ledger(std::pmr::memory_resource* upstream=std::pmr::get_default_resource()):memory_(4*1024*1024,upstream){}
  Ledger(const Ledger&)=delete;Ledger& operator=(const Ledger&)=delete;
  std::pmr::memory_resource* resource(){return &memory_;}
+ void reserve_fixed(size_t bytes){memory_.reserve_fixed(bytes);}
  const MemoryBudget& memory()const{return memory_;} Counters& counters(){return counts_;} const Counters& counters()const{return counts_;}
  const auto& origins()const{return origins_;}const auto& contexts()const{return contexts_;}const auto& spans()const{return spans_;}const auto& placements()const{return placements_;}const auto& lines()const{return lines_;}
  Id context(uintptr_t owner,size_t sequence,int mode,int align){require(!frozen_&&owner);counts_.charge(Quota::contexts);auto n=id(contexts_.size());contexts_.push_back({owner,sequence,mode,align});return n;}

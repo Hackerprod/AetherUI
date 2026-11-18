@@ -39,6 +39,7 @@ struct B0SourceSession::State {
  struct Bridge final:HtmlLtrMeasureBridge {State* s;explicit Bridge(State* p):s(p){}
   bool b2_inline_policy()const noexcept override{return s->b2_enabled;}
   bool b2_inline_owner(aether_node_s* n)const noexcept override{return s->b2_enabled&&n&&!State::control(n);}
+  B2TranslationSink* b2_translation_sink()noexcept override{return s->provenance.get();}
   std::pmr::memory_resource* b2_resource()override{return s->guarded([&](){s->valid();require(bool(s->provenance));return s->provenance->resource();});}
   void b2_work(B2Work w,size_t n)override{return s->guarded([&](){s->valid();s->provenance->work(w,n);s->valid();});}
   bool b2_begin_collection(const B2InlineResult& r)override{return s->guarded([&](){s->valid();const auto first=s->provenance->begin_collection(r);s->valid();return first;});}

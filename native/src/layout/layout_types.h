@@ -336,6 +336,8 @@ struct inline_item_s {
 };
 
 struct aether_layout_result_s {
+    // Non-owning, RAII-bound to private construction. Never copied to clones.
+    aether::rendering::html_ltr::B2TranslationSink* b2_translation_sink = nullptr;
     // Built once from the finalized reachable tree. Clones deliberately default
     // to unavailable. Readers never mutate it and painting never consults it.
     std::unique_ptr<const LayoutHitOrderTable> hit_order_cache;

@@ -2,6 +2,7 @@
 #include "../text/shaped_run.h"
 #include "control_presentation.h"
 #include "b2_inline_transport.h"
+#include "b2_translation.h"
 #include <stdexcept>
 namespace aether::layout { class BoxStyleSnapshot; }
 struct aether_node_s;
@@ -14,6 +15,7 @@ public:
  // Explicit opt-in only. Production B0/B1 retains its existing admission.
  virtual bool b2_inline_policy() const noexcept { return false; }
  virtual bool b2_inline_owner(aether_node_s*) const noexcept { return b2_inline_policy(); }
+ virtual B2TranslationSink* b2_translation_sink() noexcept { return nullptr; }
  virtual std::pmr::memory_resource* b2_resource() { throw std::logic_error("B2 resource unavailable"); }
  virtual bool b2_begin_collection(const B2InlineResult&) { throw std::logic_error("B2 collection unavailable"); }
  virtual void b2_work(B2Work,size_t) { throw std::logic_error("B2 work accounting unavailable"); }

@@ -2074,6 +2074,27 @@ if(AETHERUI_BUILD_TESTS AND UNIX)
     add_test(NAME aether.b2-semantics COMMAND aether_b2_semantics_test
         "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/fonts/DejaVuSans.ttf"
         "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/fonts/DejaVuSans-Bold.ttf")
+    add_executable(aether_b2_margin_geometry_test tests/test_b2_margin_geometry.cpp $<TARGET_OBJECTS:aether_b2_semantics_core>)
+    target_include_directories(aether_b2_margin_geometry_test PRIVATE include src src/rendering/preparation/include)
+    target_compile_definitions(aether_b2_margin_geometry_test PRIVATE AETHER_EXPORTS AETHER_HTML_LTR_TESTING)
+    target_compile_options(aether_b2_margin_geometry_test PRIVATE -UNDEBUG -ffp-contract=off)
+    target_link_libraries(aether_b2_margin_geometry_test PRIVATE Threads::Threads)
+    add_test(NAME aether.b2-margin-geometry COMMAND aether_b2_margin_geometry_test
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/fonts/DejaVuSans.ttf"
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/fonts/DejaVuSans-Bold.ttf"
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/b0/source_margin_boxes.html")
+    add_executable(aether_b2_margin_failures_test tests/test_b2_margin_failures.cpp $<TARGET_OBJECTS:aether_b2_semantics_core>)
+    target_include_directories(aether_b2_margin_failures_test PRIVATE include src src/rendering/preparation/include)
+    target_compile_definitions(aether_b2_margin_failures_test PRIVATE AETHER_EXPORTS AETHER_HTML_LTR_TESTING)
+    target_compile_options(aether_b2_margin_failures_test PRIVATE -UNDEBUG -ffp-contract=off)
+    target_link_libraries(aether_b2_margin_failures_test PRIVATE Threads::Threads)
+    add_test(NAME aether.b2-margin-failures COMMAND aether_b2_margin_failures_test
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/fonts/DejaVuSans.ttf"
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/fonts/DejaVuSans-Bold.ttf")
+    add_test(NAME aether.b2-margin-oom COMMAND aether_b0_source_oom_test
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/b0/b2_margin_oom.html"
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/fonts/DejaVuSans.ttf"
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/fonts/DejaVuSans-Bold.ttf")
     add_test(NAME aether.b2-source-oom COMMAND aether_b0_source_oom_test
         "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/b0/b2_inline_oom.html"
         "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/fonts/DejaVuSans.ttf"

@@ -156,7 +156,27 @@ static void offset_rect(aether_rectf& r, float dx, float dy) {
 }
 
 static void offset_box_descendants(aether_layout_box_s* box, float dx, float dy,
-                                   bool local_fixed_container) {
+                                   bool local_fixed_container, uint64_t operation) {
+    auto* sink = box->owner ? box->owner->b2_translation_sink : nullptr;
+    if (sink && box->owner->records_boxes) {
+        sink->visit(box->owner);
+        if (box->kind == LAYOUT_BOX_TEXT && box->element &&
+            box->element->tag_name != "input" && box->element->tag_name != "button") {
+            aether::rendering::html_ltr::B2Translation event{sink,box->owner,operation,
+                box->native_text.run.get(),box->element,box->style.style_owner().get(),
+                box->content_box,box->native_text.baseline,dx,dy};
+#ifdef AETHER_HTML_LTR_TESTING
+            const bool deliver = !aether::rendering::html_ltr::testing::translation_event ||
+                aether::rendering::html_ltr::testing::translation_event(sink,event);
+            if (deliver)
+#endif
+            sink->translate(event);
+#ifdef AETHER_HTML_LTR_TESTING
+            if (aether::rendering::html_ltr::testing::translation_applied)
+                aether::rendering::html_ltr::testing::translation_applied(sink,event);
+#endif
+        }
+    }
     offset_rect(box->margin_box, dx, dy);
     offset_rect(box->border_box, dx, dy);
     offset_rect(box->padding_box, dx, dy);
@@ -177,12 +197,15 @@ static void offset_box_descendants(aether_layout_box_s* box, float dx, float dy,
                 child->style.inset.bottom.unit != AETHER_CSS_UNIT_AUTO) child_dy = 0.f;
         }
         if (child_dx != 0.f || child_dy != 0.f)
-            offset_box_descendants(child, child_dx, child_dy, local_fixed_container);
+            offset_box_descendants(child, child_dx, child_dy, local_fixed_container, operation);
     }
 }
 
 void offset_box(aether_layout_box_s* box, float dx, float dy) {
-    offset_box_descendants(box, dx, dy, false);
+    if (dx == 0.f && dy == 0.f) return;
+    auto* sink = box->owner && box->owner->records_boxes ? box->owner->b2_translation_sink : nullptr;
+    const uint64_t operation = sink ? sink->operation(box->owner) : 0;
+    offset_box_descendants(box, dx, dy, false, operation);
 }
 
 aether_rectf normal_flow_border_box(const aether_layout_box_s* box) {
@@ -2724,6 +2747,14 @@ AETHER_API aether_status_t aether_layout_layout(
     if (result->viewport_overflow_y == AETHER_OVERFLOW_VISIBLE)
         result->viewport_overflow_y = AETHER_OVERFLOW_AUTO;
 
+    struct translation_scope_s {
+        aether_layout_result_s* result;
+        aether::rendering::html_ltr::B2TranslationSink* sink;
+        translation_scope_s(aether_layout_result_s* r, aether::rendering::html_ltr::B2TranslationSink* s)
+            : result(r), sink(s) { if(sink) { sink->begin(result); result->b2_translation_sink=sink; } }
+        void close() noexcept { if(sink) { result->b2_translation_sink=nullptr; sink->end(result); sink=nullptr; } }
+        ~translation_scope_s() { close(); }
+    } translation_scope{result, engine->html_ltr_bridge() ? engine->html_ltr_bridge()->b2_translation_sink() : nullptr};
     const int32_t viewport_overflow[2] = {result->viewport_overflow_x, result->viewport_overflow_y};
     auto* root_box = layout_element(engine, styles, root_el,
                                     {0, 0, viewport_width, viewport_height}, viewport_height,
@@ -2733,16 +2764,17 @@ AETHER_API aether_status_t aether_layout_layout(
     result->root = root_box;
     layout_finalize_fixed_containers(engine, styles, result);
     if (!aether::style::structure_valid(version.get()) || !operation_guard.valid()) {
-        delete result; return AETHER_ERROR_INVALID_STATE;
+        translation_scope.close(); delete result; return AETHER_ERROR_INVALID_STATE;
     }
     NativeTextAccess::finish(engine);
     NativeTextAccess::clear(engine);
     freeze_assets();
     if (version && version->contextual()) {
         const auto status = aether_contextual_transition_finalize_layout(result, nullptr);
-        if (status != AETHER_OK) { delete result; return status; }
+        if (status != AETHER_OK) { translation_scope.close(); delete result; return status; }
     }
     validate_used_geometry(result);
+    translation_scope.close();
     result->build_hit_order_cache();
     result->abandoned = false;
     *out_result = result;

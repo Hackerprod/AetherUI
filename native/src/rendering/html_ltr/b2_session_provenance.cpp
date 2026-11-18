@@ -14,9 +14,10 @@ struct B2Provenance::State {
  uint64_t epoch,nonstate;std::thread::id thread=std::this_thread::get_id();
  struct Source {aether_node_s* node;std::shared_ptr<node_identity_s> identity;aether::style::FrozenNodeRef record; b2::Id origin,context;};
  struct Context {aether_node_s* owner;size_t sequence;bool finalized=false,preflight=false,collection_seen=false;size_t tokens=0,visible=0,token_base=0,range_begin=0,range_count=0;};
- struct FinalRun {std::shared_ptr<const text::ShapedRun> run;aether_node_s* owner;const void* style;aether_rectf rect;float baseline;bool seen=false;};
+ struct FinalRun {std::shared_ptr<const text::ShapedRun> run;aether_node_s* owner;const void* style;aether_rectf rect;float baseline;bool seen=false; uint64_t last_operation=0; b2::Id context; aether::style::FrozenNodeRef record;};
  struct Measurement {std::shared_ptr<const text::ShapedRun> run;aether_node_s* owner;const void* style;size_t id;};
  std::pmr::unordered_map<const text::ShapedRun*,Measurement> measurements{ledger.resource()};
+ aether_layout_result_s* active_layout=nullptr; uint64_t operation_id=0;
  size_t next_token=0,next_fragment=0,next_group=0;
  std::pmr::vector<B2Range> canonical_ranges{ledger.resource()};
  std::pmr::unordered_map<const text::ShapedRun*,FinalRun> final_runs{ledger.resource()};
@@ -24,10 +25,16 @@ struct B2Provenance::State {
  std::pmr::unordered_map<aether_node_s*,Source> sources{ledger.resource()};
  std::pmr::vector<Context> contexts{ledger.resource()};
  State(aether_doc_t d,aether_style_map_t m,std::shared_ptr<const text::FontSource> r,std::shared_ptr<const text::FontSource> b):doc(d),map(m),regular(std::move(r)),bold(std::move(b)),epoch(d->identity->structure_epoch),nonstate(d->identity->non_state_epoch){
+  // FinalRun growth is already charged by its PMR map node allocation.
+  // Reserve the fixed active-layout/id, sink vptr and result link as well.
+  ledger.reserve_fixed(sizeof(active_layout)+sizeof(operation_id)+sizeof(B2TranslationSink)+sizeof(B2TranslationSink*));
   require(doc&&map&&regular&&bold);valid();inventory(doc);catalog(aether_doc_get_body(doc));ledger.freeze();valid();
  }
- void valid()const {
+ void valid_fast()const {
   require(thread==std::this_thread::get_id()&&doc&&doc->identity->alive&&doc->identity->structure_epoch==epoch&&doc->identity->non_state_epoch==nonstate&&aether_style_map_structure_valid(map)&&aether_style_map_inputs_current(map));
+ }
+ void valid()const {
+  valid_fast();
   for(const auto& [node,s]:sources){require(s.identity&&s.identity->alive&&s.identity->attached&&s.identity->owner==node&&node->identity==s.identity);const auto& owner=s.record;require(owner&&owner->node_lifetime()->alive&&owner->node_lifetime()->attached&&owner->node_lifetime()->owner==owner->node());}
  }
  void inventory(aether_node_s* node){
@@ -122,7 +129,7 @@ struct B2Provenance::State {
    validate_run_transport(run.source,run.glyphs,p.width,p.height,p.baseline);
    const auto fragment=id(next_fragment++);require(fragment_ids.emplace(p.fragment,fragment).second);
    placements.push_back(ledger.placement(c,lines[p.line],id(context.token_base+p.token),fragment,group(p.group),reinterpret_cast<uintptr_t>(p.owner),reinterpret_cast<uintptr_t>(p.style),reinterpret_cast<uintptr_t>(run.font->source.get()),p.x,p.y,p.width,p.height,p.baseline,run.glyphs.size(),run.source,false,false));
-   require(final_runs.emplace(p.run.get(),FinalRun{p.run,p.owner,p.style,{p.x,p.y,p.width,p.height},p.baseline,false}).second);
+   require(final_runs.emplace(p.run.get(),FinalRun{p.run,p.owner,p.style,{p.x,p.y,p.width,p.height},p.baseline,false,0,c,record}).second);
   }
   for(const auto& r:result.ranges){
    ledger.counters().charge(b2::Quota::token_visits);auto found=sources.find(r.node);require(found!=sources.end()&&found->second.context==c&&r.end>=r.begin);const auto origin=found->second.origin;
@@ -134,8 +141,31 @@ struct B2Provenance::State {
   for(const auto& b:result.breaks){ledger.counters().charge(b2::Quota::token_visits);auto found=sources.find(b.node);require(found!=sources.end()&&found->second.context==c&&b.line<lines.size());ledger.forced_break(found->second.origin,lines[b.line]);}
   context.finalized=true;valid();
  }
+ // The hot translation path deliberately never calls valid(): that scans all
+ // source participants. Epoch checks + the one retained owner are O(1).
+ void begin(aether_layout_result_s* layout){valid();require(layout&&!active_layout&&!layout->b2_translation_sink);active_layout=layout;operation_id=0;}
+ void end(aether_layout_result_s* layout)noexcept{if(active_layout==layout)active_layout=nullptr;}
+ void visit(aether_layout_result_s* layout){valid_fast();require(layout&&layout==active_layout);ledger.counters().charge(b2::Quota::token_visits);}
+ uint64_t operation(aether_layout_result_s* layout){visit(layout);
+#ifdef AETHER_HTML_LTR_TESTING
+  if(testing::translation_operation)testing::translation_operation(operation_id);
+#endif
+  require(operation_id!=UINT64_MAX);return ++operation_id;
+ }
+ void translate(const B2Translation& e){
+  valid_fast();require(e.layout&&e.layout==active_layout&&e.layout->records_boxes&&e.operation&&e.operation==operation_id);
+  ledger.counters().charge(b2::Quota::token_visits);
+  auto found=final_runs.find(e.run);require(found!=final_runs.end());auto& f=found->second;
+  require(f.context<contexts.size()&&contexts[f.context].finalized&&!f.seen&&e.operation>f.last_operation&&f.owner==e.owner&&f.style==e.style&&f.run.get()==e.run);
+  const auto& owner=f.record;require(owner&&owner->node()==e.owner&&owner->style().get()==e.style&&owner->node_lifetime()&&owner->node_lifetime()->alive&&owner->node_lifetime()->attached&&owner->node_lifetime()->owner==e.owner&&e.owner->identity==owner->node_lifetime());
+  for(float v:{e.before.x,e.before.y,e.before.width,e.before.height,e.baseline,e.dx,e.dy})require(std::isfinite(v));
+  require((e.dx!=0.f||e.dy!=0.f)&&e.before.x==f.rect.x&&e.before.y==f.rect.y&&e.before.width==f.rect.width&&e.before.height==f.rect.height&&e.baseline==f.baseline);
+  // Identical per-operation float additions to offset_rect; no reassociation,
+  // no deriving an expected position from the final output or owner position.
+  f.rect.x+=e.dx;f.rect.y+=e.dy;require(std::isfinite(f.rect.x)&&std::isfinite(f.rect.y));f.last_operation=e.operation;
+ }
  void validate_final(aether_layout_result_s* layout){
-  valid();require(layout&&layout->root);for(const auto& c:contexts)require(c.finalized);
+  valid();require(layout&&layout->root&&!active_layout&&!layout->b2_translation_sink);for(const auto& c:contexts)require(c.finalized);
 #ifdef AETHER_HTML_LTR_TESTING
   testing::b2_inspect(ledger);
 #endif
@@ -152,6 +182,11 @@ struct B2Provenance::State {
 };
 B2Provenance::B2Provenance(aether_doc_t d,aether_style_map_t m,std::shared_ptr<const text::FontSource> r,std::shared_ptr<const text::FontSource> b):state_(std::make_unique<State>(d,m,std::move(r),std::move(b))){}
 B2Provenance::~B2Provenance()=default;
+void B2Provenance::begin(aether_layout_result_s* r){state_->begin(r);}
+void B2Provenance::end(aether_layout_result_s* r)noexcept{state_->end(r);}
+uint64_t B2Provenance::operation(aether_layout_result_s* r){return state_->operation(r);}
+void B2Provenance::visit(aether_layout_result_s* r){state_->visit(r);}
+void B2Provenance::translate(const B2Translation& e){require(e.session==this);state_->translate(e);}
 void B2Provenance::valid()const{state_->valid();}
 std::pmr::memory_resource* B2Provenance::resource(){return state_->ledger.resource();}
 b2::Counters& B2Provenance::counters(){return state_->ledger.counters();}
