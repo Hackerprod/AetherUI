@@ -29,6 +29,11 @@ struct style_source_accounting_s {
     uint32_t losses = 0;
     bool inputs_accounted = true;
     bool external_pending = false;
+    // Capability evidence from the actual compiler, before expansion/discard.
+    // Not a loss exemption and never permission to render by itself.
+    bool b0_subset = true;
+    // No diagnostic is currently classified as harmless for B0.
+    bool b0_diagnostics_clean = true;
     style_source_loss_attribution_s attribution;
     static style_source_accounting_s tracked() noexcept {
         style_source_accounting_s result; result.attribution.complete=true; return result;
@@ -77,6 +82,8 @@ struct style_source_accounting_s {
         losses |= other.losses;
         inputs_accounted = inputs_accounted && other.inputs_accounted;
         external_pending = external_pending || other.external_pending;
+        b0_subset = b0_subset && other.b0_subset;
+        b0_diagnostics_clean = b0_diagnostics_clean && other.b0_diagnostics_clean;
     }
 };
 

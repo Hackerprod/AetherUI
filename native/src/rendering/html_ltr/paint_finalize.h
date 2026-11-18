@@ -13,5 +13,5 @@ struct FinalText {
 struct FinalControl {AtomicControlPlacement placement;aether_rectf clip,rect;};
 using FinalControls=std::map<aether_node_s*,FinalControl>;
 using FinalTexts=std::map<const text::ShapedRun*,FinalText>;
-std::vector<std::shared_ptr<const text::GlyphMaskA8>> finalize_paint(NativePaintList&,const FinalTexts&,FontProvider&,const FinalControls& = {},uint32_t profile=1);
+std::vector<std::shared_ptr<const text::GlyphMaskA8>> finalize_paint(NativePaintList&,const FinalTexts&,FontProvider&,const FinalControls& = {},uint32_t profile=1,const char* expected_family="AetherLTR");
 }

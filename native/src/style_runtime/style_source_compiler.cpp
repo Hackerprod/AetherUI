@@ -39,12 +39,14 @@ static size_t source_charge_bytes(const char* source, style_source_budget_s& bud
 
 // ═══ Comment removal (port of TextSplitter.RemoveComments) ════════════
 
-std::string text_splitter_remove_comments(const std::string& source) {
+static std::string remove_comments_accounted(const std::string& source, style_source_accounting_s* accounting) {
     std::string output = source;
     css_component_lexer lexer(source.data(), source.size());
     for (;;) {
         const auto token = lexer.next();
         if (token.kind == css_variable_token_kind::end) break;
+        if (accounting && token.kind == css_variable_token_kind::error)
+            accounting->incomplete(style_source_loss::incomplete_parse);
         // Include an EOF comment (the lexer reports it as error for variables).
         // Atomic strings and URL tokens protect comment-looking bytes inside.
         if (token.begin + 1 < source.size() && source[token.begin] == '/' && source[token.begin + 1] == '*')
@@ -52,6 +54,10 @@ std::string text_splitter_remove_comments(const std::string& source) {
                 if (output[i] != '\n') output[i] = ' ';
     }
     return output;
+}
+
+std::string text_splitter_remove_comments(const std::string& source) {
+    return remove_comments_accounted(source,nullptr);
 }
 
 // ═══ Internal compilation result ═══════════════════════════════════════
@@ -311,6 +317,66 @@ bool style_source_compile_shorthand(
     return true;
 }
 
+// B0 capability evidence uses the compiler's decoded declaration name and
+// component lexer. It never extracts CSS or reconstructs selector syntax.
+// This is deliberately stricter than general CSS acceptance.
+static bool b0_declaration_supported(const std::string& name,const std::string& value) {
+    css_component_lexer lexer(value.data(),value.size());
+    css_variable_token first; bool found=false;
+    for(;;){auto t=lexer.next();if(t.kind==css_variable_token_kind::end)break;
+        if(t.kind==css_variable_token_kind::whitespace || t.kind==css_variable_token_kind::comment)continue;
+        if(found)return false;
+        first=t;found=true;
+    }
+    if(!found)return false;
+    const std::string token=value.substr(first.begin,first.end-first.begin);
+    auto word=[&](const char* expected){std::string decoded;return
+        css_single_identifier(token,decoded)&&decoded==expected;};
+    auto number=[&](double low,double high,bool pixels,bool integral){
+        using S=css_variable_serialization;
+        if(first.serialization!=S::number && first.serialization!=S::dimension)return false;
+        const auto numeric=token.substr(0,first.numeric_end-first.begin);
+        char* end=nullptr;const double n=std::strtod(numeric.c_str(),&end);
+        if(!end || *end || !std::isfinite(n) || n<low || n>high || (integral && std::floor(n)!=n))return false;
+        if(first.serialization==S::dimension){std::string unit;return pixels &&
+            css_single_identifier(token.substr(first.numeric_end-first.begin),unit)&&unit=="px";}
+        return !pixels || n==0;
+    };
+    auto color=[&](){if(first.serialization!=css_variable_serialization::hash ||
+        (token.size()!=4 && token.size()!=7))return false;
+        return std::all_of(token.begin()+1,token.end(),[](unsigned char c){return std::isxdigit(c)!=0;});};
+    if(name=="display")return word("block");
+    if(name=="position")return word("static");
+    if(name=="box-sizing")return word("content-box");
+    if(name=="font-family")return word("aetherb0");
+    if(name=="font-size")return number(8,48,true,true);
+    if(name=="line-height")return number(8,96,true,true);
+    if(name=="font-weight")return number(400,400,false,true)||number(700,700,false,true);
+    if(name=="white-space")return word("nowrap");
+    if(name=="direction")return word("ltr");
+    if(name=="text-align")return word("start");
+    if(name=="opacity")return number(1,1,false,false);
+    if(name=="height")return word("auto");
+    if(name=="width")return word("auto")||number(0,8192,true,false);
+    if(name=="color" || name=="border-color")return color();
+    if(name=="background-color")return color()||word("transparent");
+    if(name=="border-style")return word("solid");
+    if(name=="border-width" || name=="margin-top" || name=="margin-right" ||
+       name=="margin-bottom" || name=="margin-left" || name=="padding-top" ||
+       name=="padding-right" || name=="padding-bottom" || name=="padding-left")
+        return number(0,8192,true,false);
+    return false;
+}
+static bool b0_selector_supported(const compiled_selector_s& selector) {
+    if(selector.steps.empty() || selector.pseudo_element!=aether_pseudo_element_t::none)return false;
+    for(const auto& step:selector.steps){const auto& c=step.compound;
+        if((step.relation_to_next!=COMB_NONE && step.relation_to_next!=COMB_DESCENDANT) ||
+            !c.attributes.empty() || !c.pseudos.empty() ||
+            (c.type_name.empty() && c.ids.empty() && c.classes.empty()) || c.type_name=="*")return false;
+    }
+    return true;
+}
+
 // ═══ Compile declarations ══════════════════════════════════════════════
 
 static declaration_compilation_result compile_declarations(
@@ -336,6 +402,7 @@ static declaration_compilation_result compile_declarations(
         if (!declaration_name(source, segment, name)) { accounting.loss(style_source_loss::malformed_declaration); continue; }
         std::string value = source.substr(segment.colon + 1, segment.end - segment.colon - 1);
         const bool important = css_strip_important(value);
+        accounting.b0_subset = accounting.b0_subset && b0_declaration_supported(str_to_lower(name),value);
         if (name.empty()) { accounting.loss(style_source_loss::malformed_declaration); continue; }
         // Empty custom properties are valid and must not trigger var() fallback.
 
@@ -545,6 +612,7 @@ static aether_status_t compile_range(
         bool active;
     };
     style_source_block_index_s blocks(source);
+    if(blocks.recovered())accounting.incomplete(style_source_loss::incomplete_parse);
     std::vector<frame_s> frames{{start, end, inherited_condition, true}};
     size_t supports_budget=65536;
     size_t keyframes_budget=65536;
@@ -563,6 +631,7 @@ static aether_status_t compile_range(
         if (work) source_work_add(work->work_rule_starts, 1);
         if (source[index] == '@') {
             accounting.loss(style_source_loss::at_rule);
+            accounting.b0_subset=false;
             int32_t at_offset = index;
             index++;
             css_component_lexer at_lexer(original.data(),static_cast<size_t>(end),static_cast<size_t>(index));
@@ -646,6 +715,7 @@ static aether_status_t compile_range(
             if (!valid || discarded) accounting.loss(style_source_loss::selector);
         }
         if (selectors.empty()) accounting.loss(style_source_loss::selector);
+        for(const auto& selector:selectors)accounting.b0_subset=accounting.b0_subset && b0_selector_supported(selector);
 
         auto declarations = compile_declarations(declaration_text,
             original.substr(opening + 1, extent->body_end - opening - 1),
@@ -685,6 +755,21 @@ static aether_status_t compile_range(
     return AETHER_OK;
 }
 
+// Preserve all diagnostic evidence, even without a public callback. B0 has
+// no harmless-warning allowlist: every emitted compiler warning is currently
+// unclassified and therefore rejected conservatively. General compiler return
+// status and callback behavior remain unchanged.
+struct compiler_diagnostic_accounting_s {
+    style_source_accounting_s& accounting;
+    aether_style_diagnostic_fn callback;
+    void* data;
+    static void emit(const char* code,const char* property,const char* value,const char* message,void* raw) {
+        auto& self=*static_cast<compiler_diagnostic_accounting_s*>(raw);
+        self.accounting.b0_diagnostics_clean=false;
+        if(self.callback)self.callback(code,property,value,message,self.data);
+    }
+};
+
 // ═══ Public API: stylesheet compilation ════════════════════════════════
 
 aether_status_t style_source_compile(
@@ -713,7 +798,7 @@ try {
     staged_accounting.add(staged_accounting.source_bytes, source_size, staged_accounting.max_source_bytes);
     const std::string original(source, source_size);
     if (work) source_work_add(work->work_source_bytes_copied, source_size);
-    const std::string cleaned = text_splitter_remove_comments(original);
+    const std::string cleaned = remove_comments_accounted(original,&staged_accounting);
     if (work) source_work_add(work->work_source_bytes_copied, source_size);
     if (cleaned.size() != original.size()) return AETHER_ERROR_INVALID_STATE;
 
@@ -723,6 +808,7 @@ try {
     media_condition_allocation_scope_s media_scope;
     std::vector<compiled_rule_s> staged;
     int32_t next_rule_id = out_rule_id_counter;
+    compiler_diagnostic_accounting_s diagnostics{staged_accounting,diagnostics_callback,diagnostics_user_data};
     const auto status = compile_range(
         cleaned,
         original,
@@ -734,8 +820,8 @@ try {
         registry,
         next_rule_id,
         staged,
-        diagnostics_callback,
-        diagnostics_user_data,
+        compiler_diagnostic_accounting_s::emit,
+        &diagnostics,
         media_scope, staged_accounting, staged_budget, work);
     if (status != AETHER_OK) return status;
 
@@ -783,9 +869,10 @@ try {
     staged_accounting.add(staged_accounting.source_bytes, source_size, staged_accounting.max_source_bytes);
     const std::string original(source, source_size);
     if (work) source_work_add(work->work_source_bytes_copied, source_size);
-    const std::string cleaned = text_splitter_remove_comments(original);
+    const std::string cleaned = remove_comments_accounted(original,&staged_accounting);
     if (work) source_work_add(work->work_source_bytes_copied, source_size);
-    auto result = compile_declarations(cleaned, original, registry, diagnostics_callback, diagnostics_user_data, staged_accounting, staged_budget, work);
+    compiler_diagnostic_accounting_s diagnostics{staged_accounting,diagnostics_callback,diagnostics_user_data};
+    auto result = compile_declarations(cleaned, original, registry, compiler_diagnostic_accounting_s::emit, &diagnostics, staged_accounting, staged_budget, work);
 
     charge_expansion(result,1,false,staged_budget,staged_accounting);
     if (typography_discarded) *typography_discarded = result.typography_discarded;

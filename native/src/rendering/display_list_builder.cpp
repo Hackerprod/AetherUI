@@ -912,7 +912,9 @@ static AETHER_PAINT_CONTROL_NOINLINE void paint_control(aether_display_list_buil
         command.tag = AETHER_PAINT_DRAW_TEXT;
         command.data.draw_text.text = checked_strdup(presentation->text.c_str());
         command.data.draw_text.rect = evidence.run_rect;
-        strncpy(command.data.draw_text.font_family, "AetherLTR", sizeof(command.data.draw_text.font_family)-1);
+        // The immutable resolved owner supplies the alias, just as for ordinary
+        // text. Native profiles validate the alias against their bound font bytes.
+        strncpy(command.data.draw_text.font_family, box->style.font_family.data(), sizeof(command.data.draw_text.font_family)-1);
         command.data.draw_text.font_size = box->style.font_size;
         command.data.draw_text.font_weight = box->style.font_weight;
         command.data.draw_text.text_align = AETHER_TEXT_ALIGN_START;

@@ -1,4 +1,5 @@
 #pragma once
+namespace aether::rendering::html_ltr { class B0SourceSession; }
 #include <aether/aether.h>
 #include <aether/aether_contextual_layout.h>
 #include <cassert>
@@ -490,6 +491,7 @@ struct aether_layout_engine_s {
 private:
     friend class aether::layout::SyntheticTextTestIssuer;
     friend class aether::rendering::html_ltr::HtmlLtrSession;
+    friend class aether::rendering::html_ltr::B0SourceSession;
     friend class aether::rendering::html_ltr::InteractionNativeDocument;
     std::shared_ptr<aether::rendering::html_ltr::HtmlLtrMeasureBridge> html_ltr_bridge_;
     friend class aether::layout::NativeTextAccess;

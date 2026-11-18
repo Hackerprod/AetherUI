@@ -13,6 +13,8 @@ set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
 add_library(aether_core SHARED
     src/abi/aether_abi.cpp
+    src/abi/aether_b0_source.cpp
+    src/rendering/html_ltr/b0_source_session.cpp
     src/abi/aether_surface.cpp
     src/abi/aether_interaction.cpp
     src/rendering/html_ltr/interaction_state.cpp
@@ -1994,4 +1996,32 @@ if(AETHERUI_BUILD_TESTS AND UNIX)
         "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/fonts/DejaVuSans.ttf"
         "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/fonts/DejaVuSans-Bold.ttf"
         --fractional)
+endif()
+
+if(AETHERUI_BUILD_TESTS AND UNIX)
+    add_executable(aether_b0_source_test tests/test_b0_source.c)
+    set_target_properties(aether_b0_source_test PROPERTIES C_STANDARD 11 C_STANDARD_REQUIRED YES)
+    target_link_libraries(aether_b0_source_test PRIVATE AetherUI::Core Threads::Threads)
+    target_compile_options(aether_b0_source_test PRIVATE -Wall -Wextra -Werror -pedantic)
+    add_test(NAME aether.b0-source COMMAND aether_b0_source_test
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/b0/b0_source_stylesheet_controls.html"
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/fonts/DejaVuSans.ttf"
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/fonts/DejaVuSans-Bold.ttf"
+        "${CMAKE_CURRENT_BINARY_DIR}/b0-source.bgra")
+endif()
+
+if(AETHERUI_BUILD_TESTS AND UNIX)
+    add_executable(aether_b0_dom_stylesheet_test tests/test_b0_dom_stylesheet.cpp
+        $<TARGET_OBJECTS:aether_rule_index_test_core>)
+    target_include_directories(aether_b0_dom_stylesheet_test PRIVATE include src src/rendering/preparation/include)
+    target_compile_definitions(aether_b0_dom_stylesheet_test PRIVATE AETHER_EXPORTS)
+    target_compile_options(aether_b0_dom_stylesheet_test PRIVATE -Wall -Wextra -pedantic -ffp-contract=off)
+    target_link_libraries(aether_b0_dom_stylesheet_test PRIVATE Threads::Threads)
+    add_test(NAME aether.b0-dom-stylesheet COMMAND aether_b0_dom_stylesheet_test)
+    add_executable(aether_b0_source_oom_test tests/test_b0_source_oom.cpp)
+    target_link_libraries(aether_b0_source_oom_test PRIVATE AetherUI::Core Threads::Threads)
+    add_test(NAME aether.b0-source-oom COMMAND aether_b0_source_oom_test
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/b0/b0_source_stylesheet_controls.html"
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/fonts/DejaVuSans.ttf"
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/fonts/DejaVuSans-Bold.ttf")
 endif()

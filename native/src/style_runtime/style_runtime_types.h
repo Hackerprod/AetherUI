@@ -437,7 +437,9 @@ struct compiled_rule_s {
     int32_t source_order = 0;
 };
 
+struct dom_stylesheet_association_s;
 struct compiled_style_sheet_s {
+    std::shared_ptr<const dom_stylesheet_association_s> dom_association;
     style_source_accounting_s accounting;
     int64_t handle = 0;
     style_sheet_layer layer = style_sheet_layer::author;

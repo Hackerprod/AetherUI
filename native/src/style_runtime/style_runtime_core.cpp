@@ -1,4 +1,5 @@
 #include "transaction_preview.h"
+#include "dom_stylesheet.h"
 #include <aether/aether.h>
 #include <aether/aether_contextual_style.h>
 #include "../css/computed_style_handle.h"
@@ -124,6 +125,41 @@ struct SameStageTestHooks {
     void (*before_freeze)(void*, aether_node_s*)=nullptr;
 };
 #endif
+// Strong identity tokens outlive raw DOM storage. Never dereference a retained
+// pointer until both tokens are live and ownership/epoch checks have passed.
+struct dom_stylesheet_association_s {
+    std::shared_ptr<node_identity_s> document, node;
+    aether_doc_t document_owner{};
+    aether_node_t node_owner{};
+    uint64_t structure{}, nonstate{};
+    size_t ordinal{}, preceding_sheets{};
+    int64_t handle{};
+    std::string source;
+};
+static bool dom_style_source(aether_doc_t doc, aether_node_t node, size_t ordinal,
+    std::string& source) {
+    if (!doc || !node || !doc->identity->alive || !doc->identity->attached ||
+        doc->identity->owner!=doc || doc->identity->non_state_exhausted ||
+        !node->identity->alive || !node->identity->attached || node->identity->owner!=node ||
+        node->type!=AETHER_NODE_ELEMENT || node->tag_name!="style" ||
+        aether_dom_root(node)!=doc) return false;
+    size_t count=0; bool found=false;
+    std::vector<aether_node_t> todo{doc};
+    while(!todo.empty()) {
+        auto* n=todo.back();todo.pop_back();
+        if(n->is_generated)continue;
+        if(n->type==AETHER_NODE_ELEMENT && n->tag_name=="style") {
+            if(n==node){found=count==ordinal;break;} ++count;
+        }
+        for(auto it=n->children.rbegin();it!=n->children.rend();++it)todo.push_back(*it);
+    }
+    if(!found)return false;
+    for(auto* child:node->children) {
+        if(child->type!=AETHER_NODE_TEXT || child->is_generated)return false;
+        source+=child->text;
+    }
+    return source.find('\0')==std::string::npos;
+}
 struct aether_style_runtime_s {
 #if AETHER_SAME_STAGE_TEST_HOOKS
     SameStageTestHooks* same_stage_test_hooks=nullptr;
@@ -156,13 +192,45 @@ struct aether_style_runtime_s {
     aether_node_s* legacy_inheritance_root = nullptr; // Candidate-only compatibility boundary.
     std::thread::id owner_thread = std::this_thread::get_id();
     rule_index_s index;
+    // Synchronous preparation borrows published sheet-owned associations.
+    const aether_style_runtime_s* association_runtime=nullptr;
+    size_t visited_style_ordinal=0;
+    aether_node_t association_document=nullptr;
+    bool dom_style_covered(aether_node_t node, size_t ordinal) const {
+        const auto* live=association_runtime;
+        if(!live)return false;
+        for(const auto& entry:live->sheets) {
+            const auto& a=entry.second->dom_association;
+            if(!a || a->node_owner!=node)continue;
+            if(!a->document->alive || !a->document->attached ||
+                !a->node->alive || !a->node->attached ||
+                a->document->owner!=a->document_owner || a->document_owner!=association_document || a->node->owner!=node ||
+                a->node!=node->identity || a->document!=a->document_owner->identity ||
+                a->document->structure_epoch!=a->structure ||
+                a->document->non_state_epoch!=a->nonstate ||
+                a->document->non_state_exhausted || a->handle!=entry.first ||
+                a->handle!=entry.second->handle || a->ordinal!=ordinal ||
+                entry.second->layer!=style_sheet_layer::author)return false;
+            size_t preceding=0;
+            for(const auto& other:live->sheets)if(other.first<entry.first)++preceding;
+            if(preceding!=a->preceding_sheets)return false;
+            std::string current;
+            return dom_style_source(a->document_owner,node,a->ordinal,current) && current==a->source;
+        }
+        return false;
+    }
     // Borrowed only by a synchronous preparation transaction, like index.
     // Final snapshots retain sampled scalar/measure values, never these pointers.
     std::vector<const compiled_rule_s*> paused_rules;
     void copy_index_for_preparation(const aether_style_runtime_s& source) {
         index = source.index;
+        association_runtime=&source;
         source_accounting=style_source_accounting_s::tracked();
-        for (const auto& sheet : source.sheets) source_accounting.merge(sheet.second->accounting);
+        for (const auto& sheet : source.sheets) {
+            auto accounting=sheet.second->accounting;
+            if(sheet.second->layer==style_sheet_layer::engine_defaults)accounting.b0_subset=true;
+            source_accounting.merge(accounting);
+        }
         source_budget.source_bytes=source_accounting.source_bytes;
         source_budget.declarations=source_accounting.declarations;
         source_budget.rules=source_accounting.rules;
@@ -1055,7 +1123,7 @@ static void prepare_tree(aether_style_runtime_s* staged, aether_node_s* node,
     if (node->type == AETHER_NODE_ELEMENT) {
         // DOM sources are not correlated with add_stylesheet handles. Never infer
         // that a link/style was fetched/compiled from an unrelated sheet epoch.
-        if (node->tag_name=="link" || node->tag_name=="style") {
+        if (node->tag_name=="link" || (node->tag_name=="style" && !staged->dom_style_covered(node,staged->visited_style_ordinal))) {
 #if AETHER_EFFECT_CAPTURE
             const auto global_effect=effect_begin(staged,node->tag_name=="link"?CapturedEffectKind::link:CapturedEffectKind::style,node);
 #endif
@@ -1065,6 +1133,7 @@ static void prepare_tree(aether_style_runtime_s* staged, aether_node_s* node,
             effect_end(staged,global_effect);
 #endif
         }
+        if(node->tag_name=="style")++staged->visited_style_ordinal;
         uint32_t impact = 0;
         next_parent = compute_node(staged, node, parent, inherited_parent, impact, next_inherited, selector_context);
         order.push_back(node);
@@ -1114,9 +1183,10 @@ AETHER_API void aether_style_runtime_set_diagnostics_callback(
 
 AETHER_API void aether_style_runtime_destroy(aether_style_runtime_t runtime) { delete runtime; }
 
-AETHER_API aether_status_t aether_style_runtime_add_stylesheet(
+static aether_status_t add_stylesheet_common(
     aether_style_runtime_t runtime, const char* source, int32_t layer, const char* source_name,
-    int64_t* out_handle, int32_t* out_rule_count) {
+    int64_t* out_handle, int32_t* out_rule_count,
+    std::shared_ptr<dom_stylesheet_association_s> association = {}) {
     if (!runtime || !source) return AETHER_ERROR_NULL_ARG;
     if (runtime->preparing || runtime->owner_thread != std::this_thread::get_id()) return AETHER_ERROR_INVALID_STATE;
     try {
@@ -1134,6 +1204,7 @@ AETHER_API aether_status_t aether_style_runtime_add_stylesheet(
         sheet->handle = handle;
         sheet->layer = static_cast<style_sheet_layer>(layer);
         sheet->source_name = source_name ? source_name : "";
+        if(association){association->handle=handle;sheet->dom_association=association;}
         // The new sheet shares the document source budget with all live sheets.
         // No source copying/parsing happens before the compiler reserves it.
         style_source_accounting_s existing;
@@ -1169,6 +1240,54 @@ AETHER_API aether_status_t aether_style_runtime_add_stylesheet(
     return status;
     } catch (const std::bad_alloc&) { return AETHER_ERROR_OUT_OF_MEMORY; }
       catch (...) { return AETHER_ERROR_INVALID_STATE; }
+}
+
+AETHER_API aether_status_t aether_style_runtime_add_stylesheet(
+    aether_style_runtime_t runtime, const char* source, int32_t layer, const char* source_name,
+    int64_t* out_handle, int32_t* out_rule_count) {
+    return add_stylesheet_common(runtime,source,layer,source_name,out_handle,out_rule_count);
+}
+namespace aether::style {
+aether_status_t add_dom_stylesheet(aether_style_runtime_t runtime, aether_doc_t doc,
+    aether_node_t node,size_t ordinal,int64_t* out_handle) {
+    if(!runtime || !doc || !node)return AETHER_ERROR_NULL_ARG;
+    if(runtime->preparing || runtime->owner_thread!=std::this_thread::get_id())return AETHER_ERROR_INVALID_STATE;
+    try {
+        auto a=std::make_shared<dom_stylesheet_association_s>();
+        if(!dom_style_source(doc,node,ordinal,a->source))return AETHER_ERROR_INVALID_ARGUMENT;
+        size_t prior=0;
+        for(const auto& entry:runtime->sheets) {
+            const auto& old=entry.second->dom_association;
+            if(old) {
+                if(old->document!=doc->identity || old->ordinal>=ordinal ||
+                    old->structure!=doc->identity->structure_epoch ||
+                    old->nonstate!=doc->identity->non_state_epoch ||
+                    old->node==node->identity)return AETHER_ERROR_INVALID_STATE;
+                ++prior;
+            }
+        }
+        // unordered sheet iteration cannot define DOM order. Validate each prior ordinal instead.
+        prior=0;
+        for(const auto& entry:runtime->sheets)if(entry.second->dom_association)++prior;
+        if(prior!=ordinal)return AETHER_ERROR_INVALID_ARGUMENT;
+        a->document=doc->identity;a->node=node->identity;a->document_owner=doc;a->node_owner=node;
+        a->structure=doc->identity->structure_epoch;a->nonstate=doc->identity->non_state_epoch;
+        a->ordinal=ordinal;a->preceding_sheets=runtime->sheets.size();
+        // Association is part of the staged sheet. One emplace publishes both.
+        return add_stylesheet_common(runtime,a->source.c_str(),2,"dom-style",out_handle,nullptr,a);
+    }catch(const std::bad_alloc&){return AETHER_ERROR_OUT_OF_MEMORY;}
+     catch(...){return AETHER_ERROR_INVALID_STATE;}
+}
+bool b0_source_stylesheets_accepted(aether_style_runtime_t runtime) {
+    if(!runtime || runtime->owner_thread!=std::this_thread::get_id())return false;
+    for(const auto& entry:runtime->sheets) {
+        const auto& a=entry.second->accounting;
+        if(a.losses || !a.inputs_accounted || a.external_pending ||
+            !a.attribution.complete || !a.attribution_consistent() || !a.b0_diagnostics_clean ||
+            (entry.second->layer!=style_sheet_layer::engine_defaults && !a.b0_subset))return false;
+    }
+    return true;
+}
 }
 
 AETHER_API aether_bool_t aether_style_runtime_remove_stylesheet(
@@ -1283,7 +1402,18 @@ static aether_status_t prepare_revision_impl(
         staged.effect_builder=std::make_unique<CapturedEffects>();
         const auto sheets_effect=effect_begin(&staged,CapturedEffectKind::sheet_aggregate);
 #endif
+        staged.association_document=document;
         staged.copy_index_for_preparation(*runtime);
+        // Verify every published association, not only style nodes encountered
+        // during traversal: detached/deleted nodes and a foreign current document
+        // must not leave a live compiled sheet falsely certified.
+        for(const auto& entry:runtime->sheets) {
+            const auto& association=entry.second->dom_association;
+            if(association && !staged.dom_style_covered(association->node_owner,association->ordinal)) {
+                staged.source_accounting.external_pending=true;
+                staged.source_accounting.incomplete(style_source_loss::external_source);
+            }
+        }
 #if AETHER_EFFECT_CAPTURE
         effect_end(&staged,sheets_effect);
 #endif

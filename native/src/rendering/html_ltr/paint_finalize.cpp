@@ -141,7 +141,7 @@ void validate_generated_mask(const std::shared_ptr<const text::GlyphMaskA8>& mas
 }
 }
 std::vector<std::shared_ptr<const text::GlyphMaskA8>> finalize_paint(
- NativePaintList& native,const FinalTexts& finals,FontProvider& provider,const FinalControls& controls,uint32_t profile) {
+ NativePaintList& native,const FinalTexts& finals,FontProvider& provider,const FinalControls& controls,uint32_t profile,const char* expected_family) {
  validate_controls(native,provider);
  auto* list=NativeListAccess::list(native);
  if(profile!=1&&profile!=2)internal();
@@ -196,7 +196,7 @@ std::vector<std::shared_ptr<const text::GlyphMaskA8>> finalize_paint(
      !std::isfinite(entry.placement.baseline)||
      entry.placement.baseline!=final.rect.y+original->metrics.baseline||
      t.font_size!=float(original->font->size_26_6)/64.f||
-     std::string_view(t.font_family,strnlen(t.font_family,sizeof(t.font_family)))!="AetherLTR"||
+     std::string_view(t.font_family,strnlen(t.font_family,sizeof(t.font_family)))!=expected_family||
      (t.font_weight!=400&&t.font_weight!=700)||t.text_align!=AETHER_TEXT_ALIGN_START||t.wrap)internal();
   if(original->font->source!=(t.font_weight==700?provider.bold_source():provider.regular_source()))internal();
   opaque(t.color);

@@ -33,6 +33,7 @@ public:
             const auto token = lexer.next();
             if (token.kind == css_variable_token_kind::end) break;
             if (work_) ++work_->token_visits;
+            if(token.kind==css_variable_token_kind::error)recovered_=true;
             if (token.kind == css_variable_token_kind::open ||
                 token.kind == css_variable_token_kind::function) {
                 const auto entry = extents_.size();
@@ -49,11 +50,14 @@ public:
                     extent.body_end = static_cast<int32_t>(token.begin);
                     extent.next = static_cast<int32_t>(token.end);
                 }
-            }
+            } else if(token.kind==css_variable_token_kind::close)recovered_=true;
         }
+        if(!pending.empty())recovered_=true;
         // Unclosed braces already carry EOF extents, including those below an
         // unclosed function/bracket. No source bytes or offsets are fabricated.
     }
+
+    bool recovered() const noexcept { return recovered_; }
 
     const style_source_block_extent_s* find(int32_t opening) {
         // Iterative DFS requests openings in strictly increasing source order.
@@ -69,6 +73,7 @@ public:
     }
 
 private:
+    bool recovered_=false;
     std::vector<style_source_block_extent_s> extents_;
     size_t cursor_ = 0;
     style_source_block_work_s* work_;
