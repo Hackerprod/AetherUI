@@ -24,5 +24,8 @@ std::unique_ptr<FileSystem> native_filesystem();
 // Lexical only, no filesystem accesses. Absolute portable paths only.
 bool valid_local_path(std::string_view);
 bool directory_chain(FileSystem&,const fs::path&);
-void inspect_resources(FileSystem&,const Request&,Report&,const CancellationToken&);
+struct ValidatedResource { Resource resource; std::string bytes; };
+struct ValidatedInputs { std::string html; std::vector<ValidatedResource> assets; };
+// Optional owning snapshot contains exactly the bytes whose hashes were validated.
+void inspect_resources(FileSystem&,const Request&,Report&,const CancellationToken&,ValidatedInputs* = nullptr);
 }

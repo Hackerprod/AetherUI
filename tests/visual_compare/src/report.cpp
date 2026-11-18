@@ -1,5 +1,6 @@
 #include "aether_visual_compare/report.hpp"
 #include <algorithm>
+#include "sha256.hpp"
 #include <cmath>
 #include <cstddef>
 #include <iomanip>
@@ -12,7 +13,7 @@ namespace avc {
 namespace {
 constexpr std::array<std::string_view,10> stage_names{"arguments","output_prepare","input_read","manifest_parse","resource_validation","aether_capture","webview2_capture","comparison","coverage","output_commit"};
 constexpr std::array<std::string_view,6> statuses{"not_run","passed","failed","blocked","not_implemented","cancelled"};
-constexpr std::array<std::string_view,19> reasons{"NOT_REQUESTED","OK","OUTSIDE_SCOPE","NOT_IMPLEMENTED","INVALID_ARGUMENTS","INPUT_UNREADABLE","INPUT_INVALID","INPUT_TOO_LARGE","INVALID_UTF8","INVALID_MANIFEST","RESOURCE_INVALID","RESOURCE_UNREADABLE","RESOURCE_MISMATCH","RESOURCE_LIMIT","INVALID_PATH","POLICY_BLOCKED","CANCELLED","OUTPUT_IO","INTERNAL_FAILURE"};
+constexpr std::array<std::string_view,28> reasons{"NOT_REQUESTED","OK","OUTSIDE_SCOPE","NOT_IMPLEMENTED","INVALID_ARGUMENTS","INPUT_UNREADABLE","INPUT_INVALID","INPUT_TOO_LARGE","INVALID_UTF8","INVALID_MANIFEST","RESOURCE_INVALID","RESOURCE_UNREADABLE","RESOURCE_MISMATCH","RESOURCE_LIMIT","INVALID_PATH","POLICY_BLOCKED","CANCELLED","OUTPUT_IO","INTERNAL_FAILURE","NATIVE_INVALID_ARGUMENT","NATIVE_UNSUPPORTED","NATIVE_LIMIT_EXCEEDED","NATIVE_OUT_OF_MEMORY","NATIVE_INTERNAL","NATIVE_ABI_MISMATCH","NATIVE_FRAME_INVALID","NATIVE_RESOURCE_UNSUPPORTED","NATIVE_FONT_SELECTION"};
 constexpr std::array<int,14> priority{13,14,10,12,2,3,4,5,6,7,8,9,11,0};
 template<class T> bool contains(const T& values, std::string_view s) { return std::find(values.begin(),values.end(),s)!=values.end(); }
 std::size_t rank(int c) { const auto p=std::find(priority.begin(),priority.end(),c); return static_cast<std::size_t>(p-priority.begin()); }
@@ -29,16 +30,16 @@ std::string nullable(const std::optional<std::string>& s) {return s?quote(*s):"n
 struct Result {int code;std::string detail;};
 Result result(const Report& r) {
  Result best{0,{}};
- if(r.request.command==Command::capture) best={11,"NOT_IMPLEMENTED"};
- else if(r.request.command!=Command::inspect || std::any_of(r.stages.begin(),r.stages.begin()+5,[](const Stage& s){return s.status!="passed";}) || r.stages[9].status!="passed") best={14,"INTERNAL_FAILURE"};
+ if(r.request.command==Command::capture && r.request.backend.empty()) best={11,"NOT_IMPLEMENTED"};
+ else if((r.request.command!=Command::inspect && r.request.backend!="native-html-ltr") || (r.request.backend=="native-html-ltr" && r.stages[5].status!="passed") || std::any_of(r.stages.begin(),r.stages.begin()+5,[](const Stage& s){return s.status!="passed";}) || r.stages[9].status!="passed") best={14,"INTERNAL_FAILURE"};
  // Incomplete inspection is expected on a recorded failure, not a second error.
  if(!r.errors.empty()) best={0,{}};
  for(const auto& e:r.errors) if(rank(e.code)<rank(best.code)) best={e.code,e.detail_code};
- if(r.request.command==Command::capture && rank(11)<rank(best.code)) best={11,"NOT_IMPLEMENTED"};
+ if(r.request.command==Command::capture && r.request.backend.empty() && rank(11)<rank(best.code)) best={11,"NOT_IMPLEMENTED"};
  return best;
 }
 }
-std::string requested_scope(const Request& r) {return r.command==Command::capture?"visual_capture":"contract_inspection";}
+std::string requested_scope(const Request& r) {return r.backend=="native-html-ltr"?"native_profile_capture":r.command==Command::capture?"visual_capture":"contract_inspection";}
 void add_error(Report& r,Error error) {if(std::find(r.errors.begin(),r.errors.end(),error)==r.errors.end()) r.errors.push_back(std::move(error));}
 int exit_code(const Report& r) {return result(r).code;}
 std::string primary_error(const Report& r) {return result(r).detail;}
@@ -47,6 +48,23 @@ std::string overall_status(const Report& r) {
 }
 bool valid_report(const Report& r) {
  if(!hex(r.run_id,32) || (r.request.command!=Command::inspect && r.request.command!=Command::capture)) return false;
+ const bool native=r.request.backend=="native-html-ltr";
+ if(!r.request.backend.empty()&&!native) return false;
+ if(native && (r.request.command!=Command::capture||(r.request.profile!=1&&r.request.profile!=2))) return false;
+ if(!native && (r.native||!r.png_bytes.empty())) return false;
+ if(r.native) {
+  const auto& n=*r.native;
+  if(n.profile!=r.request.profile || !hex(n.regular_sha256,64)||!hex(n.bold_sha256,64))return false;
+  if(n.runtime_version.size()>64||n.runtime_version.find_first_not_of("0123456789.-")!=std::string::npos)return false;
+  if(n.public_status< -14||n.public_status>0)return false;
+ }
+ if(native && r.stages[5].status=="passed") {
+  if(!r.errors.empty()||std::any_of(r.stages.begin(),r.stages.begin()+5,[](const Stage& x){return x.status!="passed";}))return false;
+  if(!r.native||r.png_bytes.empty())return false;
+  const auto& n=*r.native;const auto& v=r.request.viewport;
+  if(n.public_status!=0||!n.abi_version||n.runtime_version.empty()||!n.sequence||n.width!=v.width||n.height!=v.height||n.stride!=n.width*4||v.scale_quarters!=4||n.width>2048||n.height>2048||n.limitations!=(n.profile==1?3u:15u))return false;
+ }
+ if(!r.png_bytes.empty() && (!native||r.stages[5].status!="passed"))return false;
  const auto& v=r.request.viewport;
  if(v.width<1||v.width>16384||v.height<1||v.height>16384||!(v.scale_quarters==4||v.scale_quarters==5||v.scale_quarters==6||v.scale_quarters==8)) return false;
  if(v.pixel_width!=(v.width*v.scale_quarters+2)/4||v.pixel_height!=(v.height*v.scale_quarters+2)/4||v.pixel_width>32768||v.pixel_height>32768) return false;
@@ -57,13 +75,15 @@ bool valid_report(const Report& r) {
  for(std::size_t i=0;i<r.stages.size();++i) if(r.stages[i].name!=stage_names[i]||!contains(statuses,r.stages[i].status)||!contains(reasons,r.stages[i].reason_code)) return false;
  if(r.stages[0].status!="passed"||r.stages[1].status!="passed") return false;
  if(r.stages[9].status!="passed" && !(r.stages[9].status=="cancelled" && r.stages[9].reason_code=="CANCELLED" && std::any_of(r.errors.begin(),r.errors.end(),[](const Error& e){return e.code==12;}))) return false;
- for(std::size_t i=5;i<9;++i) if(r.stages[i].status!="not_run" && !(i==5 && r.request.command==Command::capture && r.stages[i].status=="not_implemented" && r.stages[i].reason_code=="NOT_IMPLEMENTED")) return false;
- if(r.request.command==Command::capture) {
+ for(std::size_t i=5;i<9;++i) if(!(native&&i==5) && r.stages[i].status!="not_run" && !(i==5 && r.request.command==Command::capture && r.stages[i].status=="not_implemented" && r.stages[i].reason_code=="NOT_IMPLEMENTED")) return false;
+ if(r.request.command==Command::capture && !native) {
   if(r.input_sha256||r.manifest_sha256||r.input_size) return false;
   for(std::size_t i=2;i<5;++i) if(r.stages[i].status!="not_run") return false;
  }
+ if(!native)for(const auto& s:r.stages)if(s.reason_code.starts_with("NATIVE_"))return false;
  for(std::size_t i=0;i<r.errors.size();++i) {
   const auto& e=r.errors[i];
+  if(!native&&e.detail_code.starts_with("NATIVE_"))return false;
   if(e.code==0||rank(e.code)==priority.size()||!contains(stage_names,e.stage)||!contains(reasons,e.detail_code)||(e.resource_label&&!label(*e.resource_label))) return false;
   if(std::find(r.errors.begin(),r.errors.begin()+static_cast<std::ptrdiff_t>(i),e)!=r.errors.begin()+static_cast<std::ptrdiff_t>(i)) return false;
  }
@@ -84,7 +104,24 @@ std::string serialize_report(const Report& r) {
  for(std::size_t i=0;i<r.errors.size();++i) {const auto& e=r.errors[i];if(i)o<<',';o<<"{\"code\":"<<e.code<<",\"stage\":"<<quote(e.stage)<<",\"resource_label\":"<<nullable(e.resource_label)<<",\"detail_code\":"<<quote(e.detail_code)<<'}';}
  const auto primary=primary_error(r);
  o<<"],\n  \"overall\":{\"status\":"<<quote(overall_status(r))<<",\"primary_error\":"<<(primary.empty()?"null":quote(primary))<<",\"exit_code\":"<<exit_code(r)<<"},\n  \"artifacts\":[],\n  \"commit\":{\"state\":\"requires_marker\",\"marker\":\"manifest.json\"}\n}\n";
- return o.str();
+ auto text=o.str();
+ if(r.request.backend=="native-html-ltr") {
+  auto replace=[&](std::string_view a,std::string_view b){auto pos=text.find(a);if(pos!=std::string::npos)text.replace(pos,a.size(),b);};
+  replace("aether.visual-compare.report/1","aether.visual-compare.report/2");
+  replace("\"implementation\":\"contract-only\"","\"implementation\":\"native-html-ltr\"");
+  replace("\"version\":\"0.1.0-contract\"","\"version\":\"0.2.0-native-profile\"");
+  std::ostringstream n;n.imbue(std::locale::classic());n<<",\n  \"native_capture\":{\"profile\":"<<r.request.profile<<",\"metadata\":";
+  if(r.native){const auto& x=*r.native;n<<"{\"profile\":"<<x.profile<<",\"limitations\":"<<x.limitations<<",\"abi_version\":"<<x.abi_version<<",\"runtime_version\":"<<quote(x.runtime_version)<<",\"public_status\":"<<x.public_status<<",\"width\":"<<x.width<<",\"height\":"<<x.height<<",\"stride\":"<<x.stride<<",\"sequence\":"<<x.sequence<<",\"capabilities\":"<<x.capabilities<<",\"regular_sha256\":"<<quote(x.regular_sha256)<<",\"bold_sha256\":"<<quote(x.bold_sha256)<<"}";}else n<<"null";
+  n<<",\"css_complete\":false,\"typography_complete\":false,\"interactive\":false,\"accessibility_evaluated\":false}";
+  text.insert(text.size()-3,n.str());
+  if(r.native)replace("\"aether\":"+std::string(engine),"\"aether\":{\"implementation_status\":\"available\",\"runtime_version\":"+quote(r.native->runtime_version)+",\"capture_status\":"+quote(r.stages[5].status)+",\"content_status\":"+quote(r.stages[5].status=="passed"?"native_profile_only":"not_evaluated")+",\"metrics\":null}");
+  else if(r.stages[5].status!="not_implemented")replace("\"aether\":"+std::string(engine),"\"aether\":{\"implementation_status\":\"not_evaluated\",\"runtime_version\":null,\"capture_status\":"+quote(r.stages[5].status)+",\"content_status\":\"not_evaluated\",\"metrics\":null}");
+  if(r.stages[5].status=="passed") {
+   replace("\"effective\":null","\"effective\":{\"width\":"+std::to_string(v.width)+",\"height\":"+std::to_string(v.height)+"}");
+   replace("\"artifacts\":[]","\"artifacts\":[{\"name\":\"aether.png\",\"size_bytes\":"+std::to_string(r.png_bytes.size())+",\"sha256\":"+quote(sha256(r.png_bytes))+"}]");
+  }
+ }
+ return text;
 }
 std::string serialize_log(const Report& r) {
  if(!valid_report(r)) throw std::invalid_argument("INVALID_REPORT");
@@ -96,6 +133,20 @@ std::string serialize_log(const Report& r) {
  o<<"\nclock=steady_clock\n";
  for(const auto& e:r.errors)o<<"error="<<e.code<<" stage="<<e.stage<<" resource="<<(e.resource_label?*e.resource_label:"unavailable")<<" detail="<<e.detail_code<<'\n';
  o<<"overall="<<overall_status(r)<<" primary_error="<<(primary_error(r).empty()?"none":primary_error(r))<<" exit_code="<<exit_code(r)<<"\nartifacts=none\ncommit=requires_marker; marker=manifest.json\nThis report is a candidate until the complete marker and both report hashes are verified.\n";
- return o.str();
+ auto text=o.str();
+ if(r.request.backend=="native-html-ltr") {
+  text.replace(0,text.find('\n'),"aether_visual_compare 0.2.0-native-profile (native-html-ltr)");
+  auto replace=[&](std::string_view a,const std::string& b){auto pos=text.find(a);if(pos!=std::string::npos)text.replace(pos,a.size(),b);};
+  if(r.native)replace("aether.implementation=not_implemented; capture=not_run; content=not_evaluated; runtime_version=unavailable; metrics=unavailable","aether.implementation=available; capture="+r.stages[5].status+"; content="+(r.stages[5].status=="passed"?"native_profile_only":"not_evaluated")+"; runtime_version="+r.native->runtime_version+"; metrics=unavailable");
+  else if(r.stages[5].status!="not_implemented")replace("aether.implementation=not_implemented; capture=not_run; content=not_evaluated; runtime_version=unavailable; metrics=unavailable","aether.implementation=not_evaluated; capture="+r.stages[5].status+"; content=not_evaluated; runtime_version=unavailable; metrics=unavailable");
+  if(r.stages[5].status=="passed") {
+   replace("viewport.effective=unavailable","viewport.effective="+std::to_string(r.native->width)+"x"+std::to_string(r.native->height));
+   replace("artifacts=none","artifacts=aether.png");
+  }
+  text+="native.profile="+std::to_string(r.request.profile)+"; css_complete=false; typography_complete=false; interactive=false; accessibility_evaluated=false\n";
+  if(r.native){const auto& n=*r.native;text+="native.public_status="+std::to_string(n.public_status)+"; abi="+std::to_string(n.abi_version)+"; runtime="+n.runtime_version+"; limitations="+std::to_string(n.limitations)+"\n";}
+  if(!r.png_bytes.empty())text+="native.artifact=aether.png; size="+std::to_string(r.png_bytes.size())+"; sha256="+sha256(r.png_bytes)+"\n";
+ }
+ return text;
 }
 }

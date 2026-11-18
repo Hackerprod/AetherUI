@@ -21,10 +21,15 @@ std::optional<std::string> read_closed(FileSystem& f,const fs::path& p,std::size
  return bytes;
 }
 std::string marker_bytes(const Report& r,std::string_view log,std::string_view json) {
- return "{\"schema_version\":\"aether.visual-compare.artifacts/1\",\"commit_state\":\"complete\",\"run_id\":\""+r.run_id+
+ std::string marker="{\"schema_version\":\"aether.visual-compare.artifacts/1\",\"commit_state\":\"complete\",\"run_id\":\""+r.run_id+
  "\",\"requested_scope\":\""+requested_scope(r.request)+"\",\"overall_status\":\""+overall_status(r)+"\",\"exit_code\":"+std::to_string(exit_code(r))+
  ",\"artifacts\":[{\"name\":\"report.log\",\"size_bytes\":"+std::to_string(log.size())+",\"sha256\":\""+sha256(log)+
  "\"},{\"name\":\"report.json\",\"size_bytes\":"+std::to_string(json.size())+",\"sha256\":\""+sha256(json)+"\"}]}\n";
+ if(r.request.backend=="native-html-ltr") {
+  marker.replace(marker.find("artifacts/1"),11,"artifacts/2");
+  if(!r.png_bytes.empty())marker.insert(marker.size()-3,",{\"name\":\"aether.png\",\"size_bytes\":"+std::to_string(r.png_bytes.size())+",\"sha256\":\""+sha256(r.png_bytes)+"\"}");
+ }
+ return marker;
 }
 const Json& get(const Json& o,std::string_view key) {auto p=o.get(key);if(!p)throw std::invalid_argument("INVALID_MANIFEST");return *p;}
 std::string string(const Json& o) {if(o.kind!=Json::Kind::string)throw std::invalid_argument("INVALID_MANIFEST");return o.scalar;}
@@ -32,7 +37,16 @@ template<class T> T number(const Json& o) {if(o.kind!=Json::Kind::number)throw s
 std::optional<std::string> nullable_string(const Json& o) {if(o.kind==Json::Kind::null_value)return {};return string(o);}
 Report restore_report(const Json& j) {
  Report r;r.run_id=string(get(j,"run_id"));
- auto scope=string(get(j,"requested_scope"));if(scope=="contract_inspection")r.request.command=Command::inspect;else if(scope=="visual_capture")r.request.command=Command::capture;else throw std::invalid_argument("INVALID_MANIFEST");
+ auto scope=string(get(j,"requested_scope"));if(scope=="contract_inspection")r.request.command=Command::inspect;else if(scope=="visual_capture")r.request.command=Command::capture;else if(scope=="native_profile_capture") {r.request.command=Command::capture;r.request.backend="native-html-ltr";} else throw std::invalid_argument("INVALID_MANIFEST");
+ if(!r.request.backend.empty()) {
+  const auto& nc=get(j,"native_capture");r.request.profile=number<unsigned>(get(nc,"profile"));
+  const auto& m=get(nc,"metadata");
+  if(m.kind!=Json::Kind::null_value) {NativeCaptureMetadata n;
+   n.profile=number<unsigned>(get(m,"profile"));n.limitations=number<unsigned>(get(m,"limitations"));n.abi_version=number<unsigned>(get(m,"abi_version"));n.runtime_version=string(get(m,"runtime_version"));n.public_status=number<int>(get(m,"public_status"));
+   n.width=number<unsigned>(get(m,"width"));n.height=number<unsigned>(get(m,"height"));n.stride=number<unsigned>(get(m,"stride"));n.sequence=number<std::uint64_t>(get(m,"sequence"));n.capabilities=number<std::uint64_t>(get(m,"capabilities"));
+   n.regular_sha256=string(get(m,"regular_sha256"));n.bold_sha256=string(get(m,"bold_sha256"));r.native=n;
+  }
+ }
  auto& input=get(j,"input");r.input_sha256=nullable_string(get(input,"sha256"));r.manifest_sha256=nullable_string(get(input,"manifest_sha256"));
  auto& size=get(input,"size_bytes");if(size.kind!=Json::Kind::null_value)r.input_size=number<std::uint64_t>(size);
  auto& v=get(j,"viewport");r.request.viewport.width=number<unsigned>(get(v,"css_width"));r.request.viewport.height=number<unsigned>(get(v,"css_height"));
@@ -56,6 +70,7 @@ bool prepare_output(FileSystem& f,const Request& q) {
 int commit_report(FileSystem& f,Report& r,const CancellationToken& token) {
  // This is the only final cancellation sample. Publication has no later samples.
  if(token.cancelled()){
+  if(!r.png_bytes.empty()){r.png_bytes.clear();r.stages[5]={"aether_capture","cancelled","CANCELLED"};}
   add_error(r,{12,"output_commit","CANCELLED",{}});r.stages[9].status="cancelled";r.stages[9].reason_code="CANCELLED";
  }else{r.stages[9].status="passed";r.stages[9].reason_code="OK";}
  std::string log,json,marker;
@@ -63,6 +78,10 @@ int commit_report(FileSystem& f,Report& r,const CancellationToken& token) {
  catch(...){return 14;}
  try {
   const fs::path dir(r.request.out);
+  if(!r.png_bytes.empty()) {
+   if(!write_closed(f,dir/"aether.png.tmp",r.png_bytes)||!f.rename(dir/"aether.png.tmp",dir/"aether.png"))return 13;
+   auto png=read_closed(f,dir/"aether.png",r.png_bytes.size());if(!png||*png!=r.png_bytes)return 13;
+  }
   if(!write_closed(f,dir/"report.log.tmp",log)||!write_closed(f,dir/"report.json.tmp",json))return 13;
   if(!f.rename(dir/"report.log.tmp",dir/"report.log"))return 13;
   if(!f.rename(dir/"report.json.tmp",dir/"report.json"))return 13;
@@ -77,10 +96,10 @@ int commit_report(FileSystem& f,Report& r,const CancellationToken& token) {
   return exit_code(r);
  }catch(...){return 13;}
 }
-bool verify_committed(std::string_view marker,std::string_view json,std::string_view log) {
+bool verify_committed(std::string_view marker,std::string_view json,std::string_view log,std::string_view png) {
  try {
   auto parsed=parse_json(json),m=parse_json(marker);if(!parsed||!m)return false;
-  auto r=restore_report(*parsed);if(!valid_report(r))return false;
+  auto r=restore_report(*parsed);r.png_bytes=std::string(png);if(!valid_report(r))return false;
   // Closed v1 canonical serialization validates every field, including unknown
   // keys, fixed engine nulls and scope semantics. Noncanonical encodings reject.
   return serialize_report(r)==json&&serialize_log(r)==log&&marker_bytes(r,log,json)==marker;

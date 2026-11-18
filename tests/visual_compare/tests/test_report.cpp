@@ -70,5 +70,32 @@ int main() {
  CHECK(valid_report(c)&&exit_code(c)==12&&overall_status(c)=="cancelled");
  invalid=c;invalid.input_size=0;rejected(invalid);
  auto tied=r;add_error(tied,{4,"input_read","INPUT_INVALID",{}});add_error(tied,{4,"manifest_parse","INVALID_MANIFEST",{}});CHECK(primary_error(tied)=="INPUT_INVALID");
+ auto native=completed();native.request.command=Command::capture;native.request.backend="native-html-ltr";
+ native.stages[5]={"aether_capture","passed","OK"};native.png_bytes="encoded-png";
+ NativeCaptureMetadata meta;meta.profile=1;meta.limitations=3;meta.abi_version=1;meta.runtime_version="0.1.0";
+ meta.width=1;meta.height=1;meta.stride=4;meta.sequence=1;meta.regular_sha256=std::string(64,'0');meta.bold_sha256=std::string(64,'1');native.native=meta;
+ CHECK(valid_report(native));CHECK(exit_code(native)==0);
+ CHECK(serialize_report(native).find("native_profile_capture")!=std::string::npos);
+ CHECK(serialize_report(native).find("\"interactive\":false")!=std::string::npos);
+ CHECK(serialize_log(native).find("capture=passed")!=std::string::npos);
+ invalid=native;invalid.native.reset();rejected(invalid);
+ invalid=native;invalid.native->limitations=15;rejected(invalid);
+ invalid=native;invalid.png_bytes.clear();rejected(invalid);
+ invalid=native;invalid.native->stride=3;rejected(invalid);
+ invalid=native;invalid.native->regular_sha256="private-font";rejected(invalid);
+ invalid=native;invalid.native->runtime_version="/private/path";rejected(invalid);
+ invalid=native;invalid.native->public_status=-10;rejected(invalid);
+ invalid=native;invalid.stages[4].status="not_run";rejected(invalid);
+ invalid=native;add_error(invalid,{10,"aether_capture","NATIVE_UNSUPPORTED",{}});rejected(invalid);
+ native.png_bytes.clear();native.native->public_status=-10;native.stages[5]={"aether_capture","blocked","NATIVE_UNSUPPORTED"};add_error(native,{10,"aether_capture","NATIVE_UNSUPPORTED",{}});
+ CHECK(valid_report(native));CHECK(exit_code(native)==10);CHECK(serialize_log(native).find("capture=blocked")!=std::string::npos);
+ invalid=completed();invalid.stages[5].reason_code="NATIVE_UNSUPPORTED";rejected(invalid);
+ for(const auto& reason:{"NATIVE_UNSUPPORTED","NATIVE_FONT_SELECTION","NATIVE_LIMIT_EXCEEDED","CANCELLED"}) {
+  auto early=completed();early.request.command=Command::capture;early.request.backend="native-html-ltr";
+  const bool cancelled=std::string_view(reason)=="CANCELLED";
+  early.stages[5]={"aether_capture",cancelled?"cancelled":"blocked",reason};add_error(early,{cancelled?12:10,"aether_capture",reason,{}});
+  CHECK(valid_report(early));CHECK(serialize_report(early).find("\"metadata\":null")!=std::string::npos);
+  CHECK(serialize_log(early).find("aether.implementation=not_evaluated")!=std::string::npos);
+ }
  return 0;
 }

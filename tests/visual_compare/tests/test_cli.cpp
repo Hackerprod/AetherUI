@@ -27,4 +27,18 @@ int main(){
  {FakeFileSystem f;std::ostringstream out,err;auto a=arguments();CHECK(run_cli(views(a),f,{},[]{throw std::runtime_error("untrusted detail");return std::string{};},out,err)==14);CHECK(f.events.empty());CHECK(err.str().find("untrusted detail")==std::string::npos);}
  {FakeFileSystem f;std::ostringstream out,err;auto a=arguments();CHECK(run_cli(views(a),f,{},[]{return std::string("invalid-id");},out,err)==14);CHECK(f.events.empty());}
 
+ {auto native=arguments(Command::capture);native.insert(native.end(),{"--backend","native-html-ltr","--profile","2","--regular-font","regular.ttf","--bold-font","bold.ttf"});
+  auto q=parse_cli(views(native));CHECK(q&&q->backend=="native-html-ltr"&&q->profile==2);
+  auto a=native;a[0]="inspect";CHECK(!parse_cli(views(a)));
+  a=native;a[14]="browser";CHECK(!parse_cli(views(a)));
+  a=native;a[16]="3";CHECK(!parse_cli(views(a)));
+  a=native;a[18]="../font.ttf";CHECK(!parse_cli(views(a)));
+  a=native;a[20]="regular.ttf";CHECK(!parse_cli(views(a)));
+  a=native;a.resize(15);CHECK(!parse_cli(views(a)));
+#ifndef AVC_NATIVE_HTML_LTR
+  FakeFileSystem f;std::ostringstream out,err;CHECK(run_cli(views(native),f,{},[]{return "0123456789abcdef0123456789abcdef";},out,err)==11);
+  CHECK(f.count("canonical:")==0); // never opens source inputs without backend
+#endif
+ }
+
 }

@@ -1,0 +1,19 @@
+{
+  "schema_version": "aether.resources/1",
+  "entries": [
+    {
+      "path": "fonts/DejaVuSans.ttf",
+      "mime": "font/ttf",
+      "size_bytes": 759720,
+      "sha256": "57f73e11f51999432bf7ab22ce55b6f945d5eca1bf824404cfa9ec2e3718c84e",
+      "role": "font"
+    },
+    {
+      "path": "fonts/DejaVuSans-Bold.ttf",
+      "mime": "font/ttf",
+      "size_bytes": 708920,
+      "sha256": "a4c5bc453ca281d90ea079e596da7ae0dfeb5777497c29ec254e76d97ff6f890",
+      "role": "font"
+    }
+  ]
+}

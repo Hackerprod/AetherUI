@@ -81,18 +81,23 @@ bool directory_chain(FileSystem& f,const fs::path& p) {
  for(const auto& part:p.relative_path()) {if(part=="."||part==".."||part.empty())return false;current/=part;if(f.stat(current).kind!=FileKind::directory)return false;}
  return true;
 }
-void inspect_resources(FileSystem& f,const Request& q,Report& r,const CancellationToken& token) {
+void inspect_resources(FileSystem& f,const Request& q,Report& r,const CancellationToken& token,ValidatedInputs* snapshot) {
+ if(snapshot)*snapshot={};
+ ValidatedInputs validated;
  auto cancelled=[&](std::size_t s){if(!token.cancelled())return false;fail(r,s,12,"CANCELLED");return true;};
  if(cancelled(2))return;
  fs::path root(q.resource_root),html(q.html),manifest(q.manifest);
  if(!directory_chain(f,root)){fail(r,2,4,"INPUT_UNREADABLE");return;}
  auto cr=f.canonical(root);if(!cr){fail(r,2,4,"INPUT_UNREADABLE");return;}
+ const std::uint64_t html_limit=q.backend.empty()?2*1024*1024:65536;
+ const std::uint64_t asset_limit=q.backend.empty()?64*1024*1024:16*1024*1024;
  FileInfo hi,mi;
- if(!regular_contained(f,*cr,html,2*1024*1024,hi)||!regular_contained(f,*cr,manifest,1024*1024,mi)){fail(r,2,4,"INPUT_UNREADABLE");return;}
- auto hb=read_bounded(f,html,2*1024*1024,token);if(cancelled(2))return;
+ if(!regular_contained(f,*cr,html,html_limit,hi)||!regular_contained(f,*cr,manifest,1024*1024,mi)){fail(r,2,4,"INPUT_UNREADABLE");return;}
+ auto hb=read_bounded(f,html,html_limit,token);if(cancelled(2))return;
  if(!hb||hb->size()!=hi.size){fail(r,2,4,"INPUT_UNREADABLE");return;}
  if(!valid_utf8(*hb)){fail(r,2,4,"INVALID_UTF8");return;}
  r.input_sha256=sha256(*hb);r.input_size=hb->size();
+ if(snapshot)validated.html=std::move(*hb);
  auto mb=read_bounded(f,manifest,1024*1024,token);if(cancelled(2))return;
  if(!mb||mb->size()!=mi.size){fail(r,2,4,"INPUT_UNREADABLE");return;}
  r.manifest_sha256=sha256(*mb);r.stages[2].status="passed";r.stages[2].reason_code="OK";
@@ -103,14 +108,16 @@ void inspect_resources(FileSystem& f,const Request& q,Report& r,const Cancellati
  for(std::size_t i=0;i<m->entries.size();++i){
   if(cancelled(4))return;
   const auto& e=m->entries[i];auto number=std::to_string(i+1);std::string label="r"+std::string(4-number.size(),'0')+number;
-  if(e.size_bytes>64*1024*1024-total){fail(r,4,4,"RESOURCE_LIMIT",label);return;}total+=e.size_bytes;
+  if(e.size_bytes>asset_limit-total){fail(r,4,4,"RESOURCE_LIMIT",label);return;}total+=e.size_bytes;
   FileInfo ri;auto p=root/fs::path(e.path);
   if(!regular_contained(f,*cr,p,16*1024*1024,ri)){fail(r,4,4,"RESOURCE_UNREADABLE",label);return;}
   if(ri.size!=e.size_bytes){fail(r,4,4,"RESOURCE_MISMATCH",label);return;}
   auto bytes=read_bounded(f,p,16*1024*1024,token);if(cancelled(4))return;
   if(!bytes){fail(r,4,4,"RESOURCE_UNREADABLE",label);return;}
   if(bytes->size()!=e.size_bytes||sha256(*bytes)!=e.sha256){fail(r,4,4,"RESOURCE_MISMATCH",label);return;}
+  if(snapshot)validated.assets.push_back({e,std::move(*bytes)});
  }
  r.stages[4].status="passed";r.stages[4].reason_code="OK";
+ if(snapshot)*snapshot=std::move(validated);
 }
 }

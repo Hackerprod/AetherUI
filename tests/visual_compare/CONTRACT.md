@@ -264,3 +264,102 @@ clock samples in tests demonstrate arithmetic only.
 Capture remains NOT_IMPLEMENTED, report-v1 and its engine null/not_run values are
 unchanged. No snapshot or sink trace is an image; this subset does not establish
 fixture, SVG/text, raster or visual-comparison coverage.
+
+## Opt-in public native profile capture (report/2, artifacts/2)
+
+Legacy invocation without `--backend` retains report/1 and `capture` exit 11,
+without reading inputs or creating a PNG. `inspect` retains report/1 and rejects
+native-only flags. No browser fallback or automatic build/test/CI execution is added.
+
+Configure this standalone consumer with an **installed** package:
+
+```sh
+cmake -S tests/visual_compare -B /absolute/new-build \
+  -DAETHER_VISUAL_COMPARE_NATIVE_HTML_LTR=ON \
+  -DAETHER_VISUAL_COMPARE_BUILD_CONTRACT_TESTS=ON \
+  -DCMAKE_PREFIX_PATH=/absolute/installed-prefix
+cmake --build /absolute/new-build
+/absolute/new-build/aether_visual_compare capture \
+  --html /absolute/fixtures/native/profile2-static-controls.html \
+  --resource-root /absolute/fixtures/native \
+  --manifest /absolute/fixtures/native/resources.json \
+  --out /absolute/new-output --viewport 480x320 --scale 1 \
+  --backend native-html-ltr --profile 2 \
+  --regular-font fonts/DejaVuSans.ttf --bold-font fonts/DejaVuSans-Bold.ttf
+```
+
+`AETHER_VISUAL_COMPARE_NATIVE_HTML_LTR` defaults OFF. Explicit native invocation
+in that build returns NOT_IMPLEMENTED with report/2, never another renderer.
+All four native options are mandatory together, accepted only for capture.
+Font selection uses distinct portable relative paths, not filename/order inference.
+Both must be inventoried `font/ttf` with role `font`. Missing/empty/duplicate
+selection is `NATIVE_FONT_SELECTION`; any extra/unconsumed or incompatible asset
+is `NATIVE_RESOURCE_UNSUPPORTED`. Actual TTF decoding remains in the core.
+
+Inspection optionally transfers owning snapshots of HTML and verified resources.
+Rendering never reopens input files. Report hashes identify those exact bytes.
+Containment, link refusal, sanitized errors and cancellation checks are retained;
+this is not race-free filesystem sandboxing. HTML is limited before/during reading
+to 65536 bytes (over-limit read is INPUT_UNREADABLE); assets total at most 16 MiB.
+Native scale is exactly 1 and viewport 1..2048 per axis. No image rescaling occurs.
+Frame buffers, encoded PNG and library temporaries can coexist; the per-frame
+limit is not a total-process-memory promise.
+
+The adapter calls only installed public `aether/aether.h` symbols. It checks ABI
+version/capabilities and struct sizes, creates and destroys the surface on the
+calling thread, and verifies queried/copied BGRA8 metadata and sequence. The
+manifest parser's older preparation include dependency is unchanged and is not
+renderer access. The synchronous ABI cannot be interrupted: cancellation is
+sampled before and after rendering/copy/encoding; cancelled pixels are discarded.
+
+Public status maps to closed `NATIVE_INVALID_ARGUMENT` (exit 2),
+`NATIVE_UNSUPPORTED` (10), `NATIVE_LIMIT_EXCEEDED` (8), and
+`NATIVE_OUT_OF_MEMORY`/`NATIVE_INTERNAL` (14). ABI/frame mismatches also use 14;
+resource selection/type uses 6. Existing input (4), cancellation (12), and output
+publication (13) precedence remains. Reports preserve the actual public status
+when available; no HTML line/column is invented.
+
+The original dependency-free encoder emits RGBA8 PNG with stored DEFLATE blocks,
+not compressed-size optimization. For each premultiplied channel c and alpha a,
+straight channel = `min(255,(c*255+a/2)/a)`; a=0 gives RGB=0. See
+`src/NATIVE_PNG.md`. This is file encoding, not a host renderer.
+
+Native report/2's scope is `native_profile_capture`. Exit 0 certifies only this
+capture, not pixel parity, general CSS/HTML, functional login or completed audit
+stages. Comparison/WebView2/coverage remain unexecuted. Profile 1 mask 3 and
+profile 2 mask 15 are published; profile 1's absent bits do not certify interaction
+or accessibility. Both profiles remain noninteractive here. Fonts and input/output
+hashes, effective viewport, ABI/runtime identity and frame sequence are explicit.
+The runtime version identifies ABI version, not a Git commit or loaded file path.
+For deployment provenance, record the relocated installed DSO's hash and loader
+resolution alongside the run (for example `ldd` on Linux); do not infer provenance
+from a version number alone.
+
+The output directory must be new. PNG and reports are written, flushed, closed,
+read back and hash-checked before publishing `manifest.json` last. artifacts/2
+binds run_id, scope, status, exit code, artifact names, sizes and SHA-256. A PNG by
+itself is not acceptance. `verify_committed(marker,json,log,png)` verifies native
+success; the three-argument API still verifies historical v1. Each invocation has
+a fresh run_id; frame sequence is 1 in this synchronous one-shot adapter. There is
+no asynchronous generation or stale worker acceptance. Cancellation sampled at
+commit removes successful capture from the accepted report; leftover candidates
+are not accepted. A publication failure leaves no trustworthy committed set.
+
+Manual validation (output directories must not exist except PNG test directory):
+
+```sh
+/absolute/new-build/aether_visual_compare_test_native_capture \
+  /absolute/fixtures/native /absolute/existing-png-test-dir
+python3 scripts/check_native_png.py /absolute/installed/lib/libaether_core.so \
+  /absolute/fixtures/native /absolute/existing-png-test-dir
+python3 scripts/check_native_cli.py /absolute/new-build/aether_visual_compare \
+  /absolute/fixtures /absolute/new-integration-output
+```
+
+The PNG oracle needs Pillow and independently calls the public ABI through ctypes;
+it compares all decoded pixels, including transparent and fractional-alpha samples.
+The CLI matrix uses Python's standard library. Run the six legacy contract tests,
+four optional preparation tests, the installed-package gate documented in
+`native/README.md`, and native surface/HTML/static-controls regressions as well.
+Do not reinterpret original solid_text or flexbox rejection as rendered pages.
+Independent D must rebuild and inspect actual PNG pixels before publication.

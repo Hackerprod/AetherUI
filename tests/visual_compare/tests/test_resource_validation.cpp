@@ -48,4 +48,16 @@ int main(){
  {FakeFileSystem f;inputs(f,std::string(50000,'a'));bool cancel=false;f.on_operation=[&](std::string_view op){if(op.starts_with("read:"))cancel=true;};auto r=inspect(f,request(),{[&]{return cancel;}});CHECK(exit_code(r)==12);CHECK(f.count("read:")==1);CHECK(r.stages[3].status=="not_run");}
  // No HTML/CSS URL extraction, font resolution or resource decoding is claimed.
  {FakeFileSystem f;inputs(f,"<img src='missing.png'><style>@import 'missing.css';</style>");auto r=inspect(f);CHECK(exit_code(r)==0);CHECK(f.count("open_read:")==2);}
+ // Owning snapshots preserve the exact validated bytes even if backing files change.
+ {FakeFileSystem f;inputs(f,"snapshot",manifest("style.css",3,sha256("abc")));f.file(base()/"style.css","abc");
+  auto q=request();Report r;r.request=q;ValidatedInputs snapshot;inspect_resources(f,q,r,{},&snapshot);
+  CHECK(r.errors.empty());CHECK(snapshot.html=="snapshot");CHECK(snapshot.assets.size()==1);CHECK(snapshot.assets[0].bytes=="abc");
+  CHECK(snapshot.assets[0].resource.sha256==sha256(snapshot.assets[0].bytes));
+  f.file(base()/"input.html","changed");f.file(base()/"style.css","changed");CHECK(snapshot.html=="snapshot");CHECK(snapshot.assets[0].bytes=="abc");
+ }
+ {FakeFileSystem f;inputs(f,"snapshot",manifest("style.css",3,sha256("abc")));f.file(base()/"style.css","bad");
+  Report r;ValidatedInputs snapshot;snapshot.html="stale";inspect_resources(f,request(),r,{},&snapshot);
+  CHECK(!r.errors.empty());CHECK(snapshot.html.empty());CHECK(snapshot.assets.empty());
+ }
+
 }
