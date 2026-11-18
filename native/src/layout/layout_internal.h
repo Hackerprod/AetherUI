@@ -45,6 +45,19 @@ private:
     bool previous_;
 };
 
+// Semantic inline-size context follows the actual recursive construction, not
+// primary_boxes (which can point to a previous generation during stretch).
+class b3_width_scope_s {
+    aether_layout_result_s* result_;
+    const B3WidthFrame* previous_;
+public:
+    b3_width_scope_s(aether_layout_result_s* r, const B3WidthFrame& frame, bool enabled)
+        : result_(r), previous_(r->b3_width_frame) { if (enabled) r->b3_width_frame = &frame; }
+    ~b3_width_scope_s() { result_->b3_width_frame = previous_; }
+    b3_width_scope_s(const b3_width_scope_s&) = delete;
+    b3_width_scope_s& operator=(const b3_width_scope_s&) = delete;
+};
+
 /* Entry points and cross-file helpers. Definitions live in the concern
    modules; linkage is ordinary external (hidden by the shared-library
    visibility preset). */
@@ -114,7 +127,8 @@ aether_layout_box_s* layout_element(
     element_completion_s* deferred_completion = nullptr,
     const intrinsic_measurement_s* intrinsic_measurement = nullptr,
     // OOF inset span for intrinsic keywords only; percentages use containing_block.
-    float intrinsic_available_width = NAN);
+    float intrinsic_available_width = NAN,
+    forced_width_kind_e forced_width_kind = forced_width_kind_e::none);
 
 float layout_flow_children(
     const aether_layout_engine_s* engine,

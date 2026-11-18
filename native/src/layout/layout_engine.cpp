@@ -157,6 +157,8 @@ static void offset_rect(aether_rectf& r, float dx, float dy) {
 
 static void offset_box_descendants(aether_layout_box_s* box, float dx, float dy,
                                    bool local_fixed_container) {
+    if (box->owner && box->owner->b3_bridge && box->b3_box_id && (dx!=0.f || dy!=0.f))
+        box->owner->b3_bridge->b3_offset(box,dx,dy);
     offset_rect(box->margin_box, dx, dy);
     offset_rect(box->border_box, dx, dy);
     offset_rect(box->padding_box, dx, dy);
@@ -462,8 +464,13 @@ aether_layout_box_s* layout_element(
     const int32_t* viewport_overflow_override,
     element_completion_s* deferred_completion,
     const intrinsic_measurement_s* intrinsic_measurement,
-    float intrinsic_available_width)
+    float intrinsic_available_width, forced_width_kind_e forced_width_kind)
 {
+    const auto& b3_bridge = engine->html_ltr_bridge();
+    const bool b3_width_enabled = b3_bridge && b3_bridge->b3_policy();
+    const auto* b3_reference = b3_width_enabled ? result->b3_width_frame : nullptr;
+    const bool b3_reference_definite = b3_reference && b3_reference->definite &&
+        b3_reference->content_width == containing_block.width;
     auto style = get_style(styles, element);
     if (style.display == AETHER_DISPLAY_CONTENTS)
         throw std::invalid_argument("CONTENTS_BOX_CONTEXT_UNSUPPORTED");
@@ -471,12 +478,24 @@ aether_layout_box_s* layout_element(
         intrinsic_measurement->ignores(element, intrinsic_axis_e::width);
     const bool intrinsic_height = intrinsic_measurement &&
         intrinsic_measurement->ignores(element, intrinsic_axis_e::height);
+    struct b3_generation_scope {
+        aether_layout_result_s* result; uint64_t previous; aether_layout_box_s* anchor;
+        explicit b3_generation_scope(aether_layout_result_s* r):result(r),previous(r->b3_current_generation_id),anchor(r->b3_current_anchor) {
+            if (r->b3_bridge && r->records_boxes) { if(r->b3_next_generation_id>=4096) throw aether::layout::b2::LimitExceeded(); r->b3_current_generation_id=++r->b3_next_generation_id; }
+        }
+        ~b3_generation_scope(){result->b3_current_generation_id=previous;result->b3_current_anchor=anchor;}
+    } b3_scope(result);
     auto* box = result->create_box();
     box->kind = LAYOUT_BOX_ELEMENT;
     box->element = element;
     box->style = style;
     box->presentation_owner = element ? element->anonymous_flex_owner : nullptr;
     register_box(result, box);
+    if (result->b3_bridge && result->records_boxes) {
+        box->b3_parent_generation_id=b3_scope.previous;
+        result->b3_current_anchor=box;
+        result->b3_bridge->b3_box(result,box,box->b3_box_id,box->b3_generation_id,box->b3_parent_generation_id);
+    }
 
     if (style.display == AETHER_DISPLAY_NONE) {
         return box;
@@ -560,6 +579,22 @@ aether_layout_box_s* layout_element(
     float content_x = border_x + border.left + padding.left;
     float content_y = border_y + border.top + padding.top;
     float content_width = std::max(0.f, border_width - aether_thicknessf_horizontal(border) - aether_thicknessf_horizontal(padding));
+
+    // Preserve semantic width facts separately from the numeric available
+    // rectangle. In particular, shrink-to-fit and intrinsic widths are not
+    // normal block fill, and forced flex widths require their explicit flag.
+    const bool b3_percentage_width = style.width.unit == AETHER_CSS_UNIT_PERCENT;
+    const auto b3_reason = b3_selected_width_reason(intrinsic_width, has_forced_border_width,
+        forced_width_kind, style.width.unit == AETHER_CSS_UNIT_PX && std::isfinite(specified_width),
+        b3_percentage_width && std::isfinite(specified_width),
+        !std::isfinite(specified_width) && force_available_width, b3_reference_definite,
+        b3_reference ? b3_reference->reason : B3WidthReason::indefinite);
+    const B3WidthFrame b3_child_width{box, content_width, b3_reason,
+        b3_reason != B3WidthReason::indefinite};
+    if (b3_width_enabled && result->records_boxes)
+        engine->html_ltr_bridge()->b3_width(result, box, b3_reference ? b3_reference->box : nullptr,
+            containing_block.width, content_width, b3_reason, b3_percentage_width, b3_reference_definite);
+    b3_width_scope_s b3_child_scope(result, b3_child_width, b3_width_enabled);
 
     float explicit_height;
     bool has_explicit_height;
@@ -760,6 +795,7 @@ aether_layout_box_s* layout_element(
     } else {
         layout_complete_element(engine, styles, completion, natural_border, result);
     }
+    if (result->b3_bridge && box->b3_box_id) result->b3_bridge->b3_complete(box);
     return box;
 }
 
@@ -1306,12 +1342,12 @@ template<class EmitLine>
 static float resolve_source_inline_lines(
     const aether_layout_engine_s* engine, const std::pmr::vector<inline_item_s>& items,
     int32_t mode, float available_width, float minimum_line_height, EmitLine emit_line,
-    bool final_pass=false,aether_node_s* block_owner=nullptr,float start_x=0,float start_y=0)
+    bool final_pass=false,aether_node_s* block_owner=nullptr,float start_x=0,float start_y=0,aether_layout_box_s* anchor=nullptr)
 {
     auto collection = collect_source_units(engine,items,mode,block_owner);
     const auto& units=collection.units;
     auto* output=collection.b2&&final_pass?&collection.provenance:nullptr;
-    if(output){output->block_owner=block_owner;output->start_x=start_x;output->start_y=start_y;
+    if(output){output->anchor_box=anchor;output->result_id=anchor&&anchor->owner?anchor->owner->b3_result_id:0;output->generation_id=anchor?anchor->b3_generation_id:0;output->anchor_box_id=anchor?anchor->b3_box_id:0;output->block_owner=block_owner;output->start_x=start_x;output->start_y=start_y;
         output->available_width=available_width;output->minimum_line_height=minimum_line_height;}
     const bool wrap = aether_white_space_allows_soft_wrap(mode);
     auto* resource=collection.units.get_allocator().resource();
@@ -1575,13 +1611,18 @@ static float layout_resolved_inline_items(
                     (void)aether_scroll_own_bounds(box);
                 }
                 if (result->records_boxes) result->paint_order.push_back(box);
+                if (result->b3_bridge && box->b3_box_id) {
+                    box->b3_parent_generation_id=parent_box->b3_parent_generation_id;
+                    result->b3_bridge->b3_box(result,box,box->b3_box_id,box->b3_generation_id,box->b3_parent_generation_id);
+                    result->b3_bridge->b3_complete(box);
+                }
             }
             if(output){
                 if(!fragment.native_text.run||fragment.source_first_range==b2_no_index)throw std::logic_error("B2 final fragment missing provenance");
                 const auto r=box->content_box;const size_t placement=output->placements.size();
                 output->placements.push_back({fragment.native_text.run,item.element,item.style.style_owner().get(),
                     fragment.source_token,fragment.source_fragment,fragment.source_group,b2_line,
-                    r.x,r.y,r.width,r.height,fragment.native_text.baseline});
+                    r.x,r.y,r.width,r.height,fragment.native_text.baseline,box,box->b3_box_id});
                 for(size_t k=0;k<fragment.source_range_count;++k){auto& range=output->ranges.at(fragment.source_first_range+k);
                     range.placement=placement;range.line=b2_line;}
             }
@@ -1591,7 +1632,7 @@ static float layout_resolved_inline_items(
     };
     if (source_units)
         return resolve_source_inline_lines(engine, items, parent_style.white_space,
-            available_width, minimum, emit,result->records_boxes,parent_box->element,start_x,start_y);
+            available_width, minimum, emit,result->records_boxes,parent_box->element,start_x,start_y,parent_box);
     return resolve_hanging_inline_lines(engine, items, available_width, minimum, atomic, emit);
 }
 
@@ -2648,6 +2689,11 @@ AETHER_API aether_status_t aether_layout_layout(
     result->abandoned = true;
     struct measure_scope_s { aether_layout_engine_s* e; ~measure_scope_s() { NativeTextAccess::clear(e); e->measure_styles = nullptr; e->measure_document.reset(); } } measure_scope{engine};
     try {
+    if (engine->html_ltr_bridge() && engine->html_ltr_bridge()->b3_policy()) {
+        result->b3_bridge=engine->html_ltr_bridge();
+        result->b3_result_id=engine->next_b3_result_id();
+        result->b3_bridge->b3_begin_result(result,result->b3_result_id);
+    }
     const auto text_selection = engine->text_selection();
     if(text_selection && ((text_selection->mode==aether::rendering::text::MeasurementMode::native &&
         (!text_selection->provider || !text_selection->font || engine->text_measurer || engine->contextual_text_measurer)) ||
@@ -2725,6 +2771,9 @@ AETHER_API aether_status_t aether_layout_layout(
         result->viewport_overflow_y = AETHER_OVERFLOW_AUTO;
 
     const int32_t viewport_overflow[2] = {result->viewport_overflow_x, result->viewport_overflow_y};
+    const B3WidthFrame b3_viewport_width{nullptr, viewport_width, B3WidthReason::viewport, true};
+    b3_width_scope_s b3_viewport_scope(result, b3_viewport_width,
+        engine->html_ltr_bridge() && engine->html_ltr_bridge()->b3_policy());
     auto* root_box = layout_element(engine, styles, root_el,
                                     {0, 0, viewport_width, viewport_height}, viewport_height,
                                     0, true,

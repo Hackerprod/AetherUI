@@ -22,7 +22,7 @@ using namespace session_validation;
 struct B0SourceSession::State {
  struct Owner {size_t ordinal; aether::style::FrozenNodeRef record;std::shared_ptr<const FontProduct> whole;std::shared_ptr<const ControlPresentation> control;};
  struct Occurrence {std::shared_ptr<const text::ShapedRun> run;std::shared_ptr<const FontProduct> product;aether_node_s* owner;uint64_t id;};
- bool b2_enabled=false;std::unique_ptr<B2Provenance> provenance;
+ bool b3_enabled=false;bool b2_enabled=false;std::unique_ptr<B2Provenance> provenance;
  uint32_t profile=2;std::string html;FontProvider fonts;Viewport viewport;
  uint32_t stage=AETHER_B0_STAGE_INPUT;uint64_t diagnostic_node=AETHER_B0_NO_INDEX;
  std::map<aether_node_t,std::string> visible;std::vector<aether_node_t> styles;
@@ -36,6 +36,14 @@ struct B0SourceSession::State {
  void valid()const {require(thread==std::this_thread::get_id()&&doc&&doc->identity->alive&&doc->identity->structure_epoch==epoch&&doc->identity->non_state_epoch==nonstate&&aether_style_map_structure_valid(map)&&aether_style_map_inputs_current(map));}
  template<class F> decltype(auto) guarded(F&& f){try{return f();}catch(const Error& e){bridge_error=e.status;throw;}catch(const BoundaryError& e){bridge_error=e.status;throw;}catch(const aether::layout::b2::LimitExceeded&){bridge_error=AETHER_ERROR_LIMIT_EXCEEDED;throw;}catch(const aether::layout::b2::InvalidLedger&){bridge_error=AETHER_ERROR_INTERNAL;throw;}}
  struct Bridge final:HtmlLtrMeasureBridge {State* s;explicit Bridge(State* p):s(p){}
+  bool b3_policy()const noexcept override{return s->b3_enabled;}
+  void b3_begin_result(aether_layout_result_s* r,uint64_t id)override{s->guarded([&](){s->provenance->b3_begin_result(r,id);});}
+  void b3_box(aether_layout_result_s* r,aether_layout_box_s* b,uint64_t id,uint64_t g,uint64_t p)override{s->guarded([&](){s->provenance->b3_box(r,b,id,g,p);});}
+  void b3_complete(aether_layout_box_s* b)override{s->guarded([&](){s->provenance->b3_complete(b);});}
+  void b3_replace(aether_layout_result_s* r,aether_layout_box_s* b)override{s->guarded([&](){s->provenance->b3_replace(r,b);});}
+  void b3_offset(aether_layout_box_s* b,float dx,float dy)override{s->guarded([&](){s->provenance->b3_offset(b,dx,dy);});}
+  void b3_discard(aether_layout_result_s* r,aether_layout_box_s* b,const B2InlineResult& data,std::span<aether_node_s* const> items)override{s->guarded([&](){s->provenance->b3_discard(r,b,data,items);});}
+  void b3_width(aether_layout_result_s* r,aether_layout_box_s* b,aether_layout_box_s* p,float ref,float used,B3WidthReason reason,bool percentage,bool definite)override{s->guarded([&](){s->provenance->b3_width(r,b,p,ref,used,reason,percentage,definite);});}
   bool b2_inline_policy()const noexcept override{return s->b2_enabled;}
   bool b2_inline_owner(aether_node_s* n)const noexcept override{return s->b2_enabled&&n&&!State::control(n);}
   std::pmr::memory_resource* b2_resource()override{return s->guarded([&](){s->valid();require(bool(s->provenance));return s->provenance->resource();});}
@@ -177,7 +185,8 @@ struct B0SourceSession::State {
   Flat flat;core(aether::style::export_owned_flat(record->style_view(),&flat.s));const auto& s=flat.s;
   const auto supported=[&](bool v){if(!v)fail();};
   supported(std::string_view(s.font_family)=="AetherB0"&&std::isfinite(s.font_size)&&s.font_size>=8&&s.font_size<=48&&std::floor(s.font_size)==s.font_size&&(s.font_weight==400||s.font_weight==700)&&std::isfinite(s.line_height)&&s.line_height>=s.font_size&&s.line_height<=96&&std::floor(s.line_height)==s.line_height);
-  supported(s.display==(metadata(node)?AETHER_DISPLAY_NONE:br(node)?AETHER_DISPLAY_LINE_BREAK:inline_node(node)?AETHER_DISPLAY_INLINE:AETHER_DISPLAY_BLOCK)&&s.position==AETHER_POSITION_STATIC&&s.box_sizing==AETHER_BOX_SIZING_CONTENT_BOX&&s.height.unit==AETHER_CSS_UNIT_AUTO&&s.opacity==1&&s.visible&&(s.white_space==AETHER_WHITE_SPACE_NOWRAP||(!control(node)&&s.white_space==AETHER_WHITE_SPACE_NORMAL))&&(s.text_align==AETHER_TEXT_ALIGN_START||(!control(node)&&s.text_align==AETHER_TEXT_ALIGN_CENTER))&&s.text_transform==AETHER_TEXT_TRANSFORM_NONE&&s.overflow_x==(node->tag_name=="html"?AETHER_OVERFLOW_CLIP:AETHER_OVERFLOW_VISIBLE)&&s.overflow_y==(node->tag_name=="html"?AETHER_OVERFLOW_CLIP:AETHER_OVERFLOW_VISIBLE));
+  const bool flex=s.display==AETHER_DISPLAY_FLEX;
+  supported((s.display==(metadata(node)?AETHER_DISPLAY_NONE:br(node)?AETHER_DISPLAY_LINE_BREAK:inline_node(node)?AETHER_DISPLAY_INLINE:AETHER_DISPLAY_BLOCK)||(b3_enabled&&flex&&container(node)))&&s.position==AETHER_POSITION_STATIC&&(s.box_sizing==AETHER_BOX_SIZING_CONTENT_BOX||(b3_enabled&&s.box_sizing==AETHER_BOX_SIZING_BORDER_BOX))&&(b3_enabled||s.height.unit==AETHER_CSS_UNIT_AUTO)&&s.opacity==1&&s.visible&&(s.white_space==AETHER_WHITE_SPACE_NOWRAP||(!control(node)&&s.white_space==AETHER_WHITE_SPACE_NORMAL))&&(s.text_align==AETHER_TEXT_ALIGN_START||(!control(node)&&s.text_align==AETHER_TEXT_ALIGN_CENTER))&&s.text_transform==AETHER_TEXT_TRANSFORM_NONE&&s.overflow_x==(node->tag_name=="html"?AETHER_OVERFLOW_CLIP:AETHER_OVERFLOW_VISIBLE)&&s.overflow_y==(node->tag_name=="html"?AETHER_OVERFLOW_CLIP:AETHER_OVERFLOW_VISIBLE));
   supported(!s.has_text_gradient&&!s.background_layers.count&&!s.backdrop_filters.count&&!s.transforms.count&&!s.text_shadows.count&&!s.box_shadows.count&&!s.transition_properties&&!s.transition_duration&&!s.transition_delay&&s.z_index_kind==AETHER_Z_INDEX_AUTO);
   const auto color_ok=[](aether_color_rgba c,bool transparent){return std::isfinite(c.r)&&std::isfinite(c.g)&&std::isfinite(c.b)&&c.r>=0&&c.r<=1&&c.g>=0&&c.g<=1&&c.b>=0&&c.b<=1&&(c.a==1||(transparent&&c.a==0));};
   supported(color_ok(s.color,false)&&color_ok(s.background_color,true));
@@ -185,7 +194,27 @@ struct B0SourceSession::State {
   const auto zero_radius=[](aether_corner_radius r){return r.horizontal.value==0&&r.vertical.value==0;};
   supported(zero_radius(s.border_radii.top_left)&&zero_radius(s.border_radii.top_right)&&zero_radius(s.border_radii.bottom_left)&&zero_radius(s.border_radii.bottom_right));
   const auto length=[&](aether_css_length x,bool aut=false,float max=8192){supported((aut&&x.unit==AETHER_CSS_UNIT_AUTO)||(x.unit==AETHER_CSS_UNIT_PX&&std::isfinite(x.value)&&x.value>=0&&x.value<=max));};
-  length(s.width,true);
+  if(b3_enabled&&s.width.unit==AETHER_CSS_UNIT_PERCENT)supported(std::isfinite(s.width.value)&&s.width.value>=0&&s.width.value<=100);
+  else length(s.width,true);
+  if(b3_enabled){
+   length(s.height,true);length(s.min_width,true);length(s.min_height,true);length(s.max_width,true);length(s.max_height,true);
+   if(s.min_width.unit==AETHER_CSS_UNIT_PX&&s.max_width.unit==AETHER_CSS_UNIT_PX)supported(s.min_width.value<=s.max_width.value);
+   if(s.min_height.unit==AETHER_CSS_UNIT_PX&&s.max_height.unit==AETHER_CSS_UNIT_PX)supported(s.min_height.value<=s.max_height.value);
+   const auto context_status=aether::style::b3_source_node_context_status(runtime,node,flex);
+   if(context_status==AETHER_ERROR_UNSUPPORTED)fail();
+   core(context_status);
+   if(flex){
+    supported(s.flex_direction==AETHER_FLEX_DIRECTION_ROW||s.flex_direction==AETHER_FLEX_DIRECTION_COLUMN);
+    supported(!s.flex_wrap&&s.flex_grow==0&&s.flex_shrink==1&&s.flex_basis.kind==AETHER_FLEX_BASIS_AUTO&&s.align_self==AETHER_ALIGN_SELF_AUTO);
+    supported(s.justify_content==AETHER_JUSTIFY_START||s.justify_content==AETHER_JUSTIFY_LOGICAL_START||s.justify_content==AETHER_JUSTIFY_CENTER||s.justify_content==AETHER_JUSTIFY_SPACE_BETWEEN);
+    supported(s.align_items==AETHER_ALIGN_START||s.align_items==AETHER_ALIGN_CENTER||s.align_items==AETHER_ALIGN_STRETCH);
+    if(measures){length(measures->scalars().row_gap);length(measures->scalars().column_gap);}
+    for(auto* child:node->children){
+     if(child->type==AETHER_NODE_TEXT){for(unsigned char c:child->text)supported(aether_b2_inline_space_byte(c));}
+     else if(child->type!=AETHER_NODE_COMMENT)supported(child->type==AETHER_NODE_ELEMENT&&!inline_node(child)&&!br(child));
+    }
+   }
+  }
   for(auto x:{s.margin.top,s.margin.right,s.margin.bottom,s.margin.left,s.padding.top,s.padding.right,s.padding.bottom,s.padding.left})length(x);
   for(auto x:{s.border_width.top,s.border_width.right,s.border_width.bottom,s.border_width.left})length(x,false,128);
   supported(s.border_width.top.value==s.border_width.right.value&&s.border_width.top.value==s.border_width.bottom.value&&s.border_width.top.value==s.border_width.left.value);
@@ -214,11 +243,29 @@ struct B0SourceSession::State {
   aether_style_runtime_options_t options{};aether_style_environment_t env{float(viewport.width),float(viewport.height),1,16,0,0,0};core(aether_style_runtime_create(&options,&env,nullptr,nullptr,&runtime));int64_t id{};
   core(aether_style_runtime_add_stylesheet(runtime,b0_ua,0,"private-b0-source-v1",&id,nullptr));
   for(size_t i=0;i<styles.size();++i)core(aether::style::add_dom_stylesheet(runtime,doc,styles[i],i,&id));
-  if(!aether::style::b0_source_stylesheets_accepted(runtime))fail(AETHER_B0_REASON_CSS_LOSS);
-  aether_style_transaction_t tx{};core(aether_style_runtime_prepare_revision(runtime,nodes[0],&env,&tx));const auto committed=aether_style_runtime_commit_revision(runtime,tx,&revision);aether_style_transaction_destroy(tx);core(committed);core(aether_style_revision_create_map(revision,&map));
+  const bool old_stylesheets_accepted=aether::style::b0_source_stylesheets_accepted(runtime);
+  aether_style_transaction_t tx{};const auto classified=aether_style_runtime_prepare_revision(runtime,nodes[0],&env,&tx);
+  // Classification failures are not evidence of unsupported CSS. Preserve
+  // physical allocation and quota errors before the legacy rejection mapping.
+  if(classified==AETHER_ERROR_OUT_OF_MEMORY||classified==AETHER_ERROR_LIMIT_EXCEEDED)core(classified);
+  if(classified!=AETHER_OK&&!old_stylesheets_accepted)fail(AETHER_B0_REASON_CSS_LOSS);
+  core(classified);const auto committed=aether_style_runtime_commit_revision(runtime,tx,&revision);aether_style_transaction_destroy(tx);core(committed);core(aether_style_revision_create_map(revision,&map));
   epoch=doc->identity->structure_epoch;nonstate=doc->identity->non_state_epoch;
+  // Classify the actual computed display before any profile-specific rejection.
+  // This does not lay out, measure text, create owners, or publish a frame.
+  for(auto* node:nodes){const auto record=map->current->backing()->find_owner(node);require(bool(record));
+   if(container(node)&&record->style_view().scalars().display==AETHER_DISPLAY_FLEX)b3_enabled=true;
+  }
+  if(b3_enabled){
+   b2_enabled=true;
+   // Rejection evidence is compiler-owned and source-ordinal, never a claimed
+   // culprit DOM node. Special values win over other CSS errors deterministically.
+   const auto record=map->current->backing()->find_owner(nodes[0]);require(record&&record->typography()&&record->typography()->inputs);
+   if(record->typography()->inputs->b3_has_value_rejection()){stage=AETHER_B0_STAGE_STYLE;diagnostic_node=AETHER_B0_NO_INDEX;fail();}
+  }
+  if(!aether::style::b0_source_stylesheets_accepted(runtime,b3_enabled))fail(AETHER_B0_REASON_CSS_LOSS);
   for(size_t i=0;i<nodes.size();++i){auto record=map->current->backing()->find_owner(nodes[i]);require(bool(record));
-   if(!record->typography()||!record->typography()->inputs||!aether::style::b0_source_accounting_accepted(*record->typography()->inputs))fail(AETHER_B0_REASON_CSS_LOSS);
+   if(!record->typography()||!record->typography()->inputs||!aether::style::b0_source_accounting_accepted(*record->typography()->inputs,b3_enabled))fail(AETHER_B0_REASON_CSS_LOSS);
   }
   stage=AETHER_B0_STAGE_STYLE;
   for(size_t i=0;i<nodes.size();++i){diagnostic_node=i;verify_style(nodes[i]);}
@@ -230,7 +277,7 @@ struct B0SourceSession::State {
   stage=AETHER_B0_STAGE_TEXT;
   if(b2_enabled){
    for(auto* n:nodes)if(!metadata(n)&&!control(n))for(auto* c:n->children)if(c->type==AETHER_NODE_TEXT)if(!aether_b2_inline_text_supported(c->text))fail();
-   provenance=std::make_unique<B2Provenance>(doc,map,fonts.regular_source(),fonts.bold_source());
+   provenance=std::make_unique<B2Provenance>(doc,map,fonts.regular_source(),fonts.bold_source(),b3_enabled);
   }
   core(aether_layout_create(nullptr,nullptr,&engine));B0SourceSession::install(engine,std::make_shared<Bridge>(this));
   if(provenance){
@@ -274,6 +321,16 @@ struct B0SourceSession::State {
 #endif
   FinalTexts final;FinalControls controls;std::map<aether_node_t,std::string> collected;std::map<aether_node_t,float> baselines;std::vector<const aether_layout_box_s*> todo{layout->root};size_t placed=0;
   while(!todo.empty()){auto* box=todo.back();todo.pop_back();require(box);auto r=box->content_box;for(double d:{double(r.x),double(r.y),double(r.width),double(r.height)})if(!std::isfinite(d))throw Error{AETHER_ERROR_INTERNAL};
+   if(b3_enabled){
+    const auto bounded=[&](double value){if(!std::isfinite(value)||value<0||value>8192)fail(AETHER_B0_REASON_LIMIT,AETHER_ERROR_LIMIT_EXCEEDED);};
+    for(const auto rect:{box->content_box,box->padding_box,box->border_box,box->margin_box}){
+     bounded(rect.width);bounded(rect.height);bounded(std::abs(double(rect.x))+double(rect.width));bounded(std::abs(double(rect.y))+double(rect.height));
+    }
+    if(box->kind==LAYOUT_BOX_ELEMENT){const auto& st=box->style;
+     bounded(double(r.width)+st.padding.left.value+st.padding.right.value+box->used_border.left+box->used_border.right+st.margin.left.value+st.margin.right.value);
+     bounded(double(r.height)+st.padding.top.value+st.padding.bottom.value+box->used_border.top+box->used_border.bottom+st.margin.top.value+st.margin.bottom.value);
+    }
+   }
    if(box->is_atomic_control){
     require(profile==2&&owners.contains(box->element));const auto& o=owners.at(box->element);const auto& a=box->atomic_control;check_control(a.presentation,box->element,box->style);require(a.presentation==o.control&&box->control_display_text==o.control->text&&box->control_shows_placeholder==o.control->shows_placeholder);
     require(std::isfinite(r.width)&&std::isfinite(r.height)&&r.width>=0&&r.height>=0);
@@ -309,6 +366,7 @@ B0SourceSession::B0SourceSession(std::string h,std::vector<uint8_t> r,std::vecto
 B0SourceSession::~B0SourceSession()=default;
 const preparation::PreparedFrame& B0SourceSession::prepare(){try{state_->run();return *state_->prepared;}catch(const aether::layout::b2::LimitExceeded&){throw B0SourceError{AETHER_ERROR_LIMIT_EXCEEDED,state_->stage,AETHER_B0_REASON_LIMIT,state_->diagnostic_node};}catch(const aether::layout::b2::InvalidLedger&){throw B0SourceError{AETHER_ERROR_INTERNAL,state_->stage,AETHER_B0_REASON_INVARIANT,state_->diagnostic_node};}catch(const Error& e){throw B0SourceError{e.status,state_->stage,e.status==AETHER_ERROR_LIMIT_EXCEEDED?AETHER_B0_REASON_LIMIT:e.status==AETHER_ERROR_OUT_OF_MEMORY?AETHER_B0_REASON_ALLOCATION:e.status==AETHER_ERROR_UNSUPPORTED?AETHER_B0_REASON_UNSUPPORTED:AETHER_B0_REASON_INVARIANT,state_->diagnostic_node};}}
 const std::vector<std::shared_ptr<const text::GlyphMaskA8>>& B0SourceSession::masks()const noexcept{return state_->masks;}
+bool B0SourceSession::uses_fractional_a8_clip() const noexcept{return state_->prepared.has_value()&&state_->b3_enabled;}
 uint32_t B0SourceSession::diagnostic_stage()const noexcept{return state_->stage;}
 uint64_t B0SourceSession::diagnostic_node()const noexcept{return state_->diagnostic_node;}
 }

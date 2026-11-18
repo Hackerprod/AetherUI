@@ -167,6 +167,52 @@ void validate_contents_wrappers(const StyleLookup* styles) {
     }
 }
 
+// To be inserted in layout_flex.cpp before collect_flex_items. B3 only.
+static void replay_b3_flex_collector(const StyleLookup* styles,
+    aether_layout_result_s* result, aether_node_s* parent,
+    const std::vector<aether_node_s*>& items) {
+    if (!result->b3_bridge) return;
+    using namespace aether::rendering::html_ltr;
+    auto& bridge=*result->b3_bridge;
+    auto* resource=bridge.b2_resource();
+    // Revalidate item boundaries before authorizing any discard. The approved
+    // B3 subset contains no display:contents, out-of-flow or anonymous item.
+    size_t index=0;
+    for(auto* child:parent->children) {
+        bridge.b2_work(B2Work::token_visits,1);
+        if(child->type==AETHER_NODE_ELEMENT) {
+            if(index>=items.size() || items[index++]!=child)
+                throw std::logic_error("B3 flex cache item sequence mismatch");
+        } else if(child->type!=AETHER_NODE_TEXT && child->type!=AETHER_NODE_COMMENT)
+            throw std::logic_error("B3 flex collector node mismatch");
+    }
+    if(index!=items.size()) throw std::logic_error("B3 flex cache item count mismatch");
+    B2InlineResult receipt(resource); receipt.block_owner=parent;
+    auto* anchor=result->records_boxes && result->b3_current_anchor &&
+        result->b3_current_anchor->element==parent ? result->b3_current_anchor : nullptr;
+    receipt.anchor_box=anchor;
+    receipt.result_id=anchor?result->b3_result_id:0;receipt.generation_id=anchor?anchor->b3_generation_id:0;receipt.anchor_box_id=anchor?anchor->b3_box_id:0;
+    const auto flush=[&](){
+        if(receipt.participants.empty()) return;
+        bridge.b3_discard(result,anchor,receipt,items);
+        receipt.participants.clear();receipt.ranges.clear();
+    };
+    for(auto* child:parent->children) {
+        bridge.b2_work(B2Work::token_visits,1);
+        if(child->type==AETHER_NODE_ELEMENT) {flush();continue;}
+        const auto style=get_style(styles,parent);
+        bridge.b2_work(B2Work::token_visits,child->text.size());
+        if(child->type==AETHER_NODE_TEXT) {
+            for(unsigned char c:child->text) if(!aether_b2_inline_space_byte(c))
+                throw std::logic_error("B3 nontrivia flex discard");
+        }
+        receipt.participants.push_back({child,parent,style.style_owner().get()});
+        if(child->type==AETHER_NODE_TEXT && !child->text.empty())
+            receipt.ranges.push_back({child,0,child->text.size(),B2Disposition::flex_whitespace});
+    }
+    flush();
+}
+
 const std::vector<aether_node_s*>& collect_flex_items(
     const StyleLookup* styles,
     aether_layout_result_s* result,
@@ -176,7 +222,7 @@ const std::vector<aether_node_s*>& collect_flex_items(
     static const std::vector<aether_node_s*> empty;
     if (!parent || !result) return empty;
     const auto existing = result->anonymous_flex_items.find(parent);
-    if (existing != result->anonymous_flex_items.end()) return existing->second;
+    if (existing != result->anonymous_flex_items.end()) { replay_b3_flex_collector(styles,result,parent,existing->second); return existing->second; }
 
     auto [entry, inserted] = result->anonymous_flex_items.emplace(parent, std::vector<aether_node_s*>{});
     (void)inserted;
@@ -225,6 +271,7 @@ const std::vector<aether_node_s*>& collect_flex_items(
         const auto am = layout_measures(styles, a), bm = layout_measures(styles, b);
         return (am ? am->flex_order() : 0) < (bm ? bm->flex_order() : 0);
     });
+    replay_b3_flex_collector(styles,result,parent,items);
     return items;
 }
 
@@ -601,7 +648,9 @@ static resolved_flex_children_s resolve_flex_children(
             horizontal ? 0.f : target_main_size,
             horizontal ? forced_height_kind_e::none : output.definite_main_heights[index]
                 ? forced_height_kind_e::definite : forced_height_kind_e::indefinite,
-            true, result));
+            true, result, nullptr, nullptr, nullptr, NAN,
+            horizontal && main_size_is_definite && result->b3_width_frame && result->b3_width_frame->definite
+                ? forced_width_kind_e::definite : forced_width_kind_e::indefinite));
     }
     return output;
 }
@@ -656,6 +705,8 @@ static void stretch_flex_line_items(
         if (pending && (!std::isfinite(cross_margins) || !std::isfinite(available_border_cross_size)))
             throw std::overflow_error("Non-finite deferred flex stretch size");
         const float forced_border_cross_size = std::max(0.f, available_border_cross_size);
+        if (previous && result->b3_bridge && result->records_boxes)
+            result->b3_bridge->b3_replace(result,previous);
         delete previous;
 
         resolved.boxes[index] = layout_element(engine, styles, children[index],
@@ -665,7 +716,9 @@ static void stretch_flex_line_items(
             horizontal ? forced_border_cross_size : main_size,
             horizontal || resolved.definite_main_heights[index]
                 ? forced_height_kind_e::definite : forced_height_kind_e::indefinite,
-            true, result);
+            true, result, nullptr, nullptr, nullptr, NAN,
+            result->b3_width_frame && result->b3_width_frame->definite
+                ? forced_width_kind_e::definite : forced_width_kind_e::indefinite);
         if (pending) resolved.pending_stretch[index].pending = false;
     }
 }

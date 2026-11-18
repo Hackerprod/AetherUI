@@ -76,6 +76,15 @@ static bool bi_try_non_negative_length(const char* src, std::string& out) {
     return false;
 }
 
+// B3: explicit automatic minimum; preserve prior numeric parser and defaults.
+static bool bi_try_minimum_size(const char* source, std::string& out) {
+    std::string identifier;
+    if (source && css_single_identifier(source, identifier) && identifier == "auto") {
+        out = "auto"; return true;
+    }
+    return bi_try_non_negative_length(source, out);
+}
+
 static bool bi_try_gap_length(const char* source, std::string& out) {
     if (!source) return false;
     std::string normalized;
@@ -873,13 +882,13 @@ void builtin_properties_register(style_property_registry_s* reg) {
     // min-width
     reg->register_property("min-width", false,
         STYLE_IMPACT_LAYOUT | STYLE_IMPACT_PAINT | STYLE_IMPACT_HITTEST,
-        "0", bi_try_non_negative_length,
+        "0", bi_try_minimum_size,
         [](aether_computed_style_t* st, const std::string& v) { apply_length_field(&st->min_width, v); });
 
     // min-height
     reg->register_property("min-height", false,
         STYLE_IMPACT_LAYOUT | STYLE_IMPACT_PAINT | STYLE_IMPACT_HITTEST,
-        "0", bi_try_non_negative_length,
+        "0", bi_try_minimum_size,
         [](aether_computed_style_t* st, const std::string& v) { apply_length_field(&st->min_height, v); });
 
     // max-width

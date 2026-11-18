@@ -58,6 +58,10 @@ aether_layout_box_s* aether_layout_result_s::create_box() {
     allocated_boxes.link(box);
     box->owner = this;
     ++live_box_count;
+    if (b3_bridge && records_boxes) {
+        box->b3_box_id=++b3_next_box_id;
+        box->b3_generation_id=b3_current_generation_id;
+    }
     return box_owner.release();
 }
 

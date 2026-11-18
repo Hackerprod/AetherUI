@@ -19,6 +19,7 @@ class B0SourceSession final {
 public:
  B0SourceSession(std::string,std::vector<uint8_t>,std::vector<uint8_t>,Viewport);
  ~B0SourceSession();
+ bool uses_fractional_a8_clip() const noexcept;
  uint32_t diagnostic_stage()const noexcept;
  uint64_t diagnostic_node()const noexcept;
  B0SourceSession(const B0SourceSession&)=delete;

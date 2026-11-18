@@ -27,6 +27,7 @@ using aether::layout::CallbackEpochGuard;
 #include "../rendering/text/measurement_provider.h"
 #include "synthetic_text_policy.h"
 #include "../rendering/html_ltr/measure_bridge.h"
+#include "b3_width_evidence.h"
 
 /* ── Internal layout types (mirrors C# LayoutBox/LayoutResult) ──── */
 
@@ -99,6 +100,7 @@ struct layout_scroll_proxy_s {
 };
 
 struct aether_layout_box_s {
+    uint64_t b3_box_id=0,b3_generation_id=0,b3_parent_generation_id=0;
     aether_layout_result_s* owner = nullptr;
     layout_box_kind_t kind = LAYOUT_BOX_ELEMENT;
     aether_node_s*    element = nullptr;
@@ -336,6 +338,10 @@ struct inline_item_s {
 };
 
 struct aether_layout_result_s {
+    const B3WidthFrame* b3_width_frame=nullptr;
+    std::shared_ptr<aether::rendering::html_ltr::HtmlLtrMeasureBridge> b3_bridge;
+    uint64_t b3_result_id=0,b3_next_box_id=0,b3_next_generation_id=0,b3_current_generation_id=0;
+    aether_layout_box_s* b3_current_anchor=nullptr;
     // Built once from the finalized reachable tree. Clones deliberately default
     // to unavailable. Readers never mutate it and painting never consults it.
     std::unique_ptr<const LayoutHitOrderTable> hit_order_cache;
@@ -501,6 +507,7 @@ private:
     friend class aether::rendering::html_ltr::HtmlLtrSession;
     friend class aether::rendering::html_ltr::B0SourceSession;
     friend class aether::rendering::html_ltr::InteractionNativeDocument;
+    uint64_t b3_next_result_id=0;
     std::shared_ptr<aether::rendering::html_ltr::HtmlLtrMeasureBridge> html_ltr_bridge_;
     friend class aether::layout::NativeTextAccess;
     friend class aether::layout::NativeTextTransaction;
@@ -515,6 +522,7 @@ public:
         text_selection_=std::move(s); return true;
     }
     const auto& text_selection() const { return text_selection_; }
+    uint64_t next_b3_result_id() { return ++b3_next_result_id; }
     const auto& html_ltr_bridge() const { return html_ltr_bridge_; }
     bool initial_canvas_mode = false;
     std::unordered_map<aether_node_s*, initial_canvas_dimensions> initial_canvas_entries;

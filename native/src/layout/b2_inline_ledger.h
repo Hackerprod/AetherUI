@@ -20,8 +20,8 @@ struct InvalidLedger : std::runtime_error { InvalidLedger():runtime_error("Inval
 inline void require(bool ok) { if(!ok) throw InvalidLedger(); }
 inline size_t checked_add(size_t a,size_t b) { if(b>std::numeric_limits<size_t>::max()-a)throw LimitExceeded();return a+b; }
 inline size_t checked_mul(size_t a,size_t b) { if(a&&b>std::numeric_limits<size_t>::max()/a)throw LimitExceeded();return a*b; }
-enum class Quota : size_t { dom_nodes,text_nodes,comments,dom_bytes,author_scalars,visible_scalars,contexts,participants,spans,tokens,fragments,lines,placements,glyphs,bridge_calls,products,provider_visits,token_visits,count };
-inline constexpr std::array<size_t,size_t(Quota::count)> limits{1024,512,256,65536,8192,4096,512,2048,16384,8192,16384,4096,16384,16384,32768,32768,65536,65536};
+enum class Quota : size_t { dom_nodes,text_nodes,comments,dom_bytes,author_scalars,visible_scalars,contexts,participants,spans,tokens,fragments,lines,placements,glyphs,bridge_calls,products,provider_visits,token_visits,candidates,generations,bindings,events,final_visits,count };
+inline constexpr std::array<size_t,size_t(Quota::count)> limits{1024,512,256,65536,8192,4096,512,2048,16384,8192,16384,4096,16384,16384,32768,32768,65536,65536,4096,4096,16384,65536,65536};
 class Counters {
  std::array<size_t,size_t(Quota::count)> values_{};
 public:
@@ -47,7 +47,7 @@ using Id=uint32_t;
 inline constexpr Id none=std::numeric_limits<Id>::max();
 enum class Kind {text,comment,inline_node,br};
 enum class Fate {visible,contributor,discarded};
-enum class Discard {none,leading,trailing,soft_break,empty_context};
+enum class Discard {none,leading,trailing,soft_break,empty_context,flex_whitespace};
 inline bool boundary(std::string_view text,size_t at){return at<=text.size()&&(at==text.size()||(static_cast<unsigned char>(text[at])&0xc0)!=0x80);}
 inline bool whitespace(std::string_view text){for(char c:text)if(c!=' '&&c!='\t'&&c!='\r'&&c!='\n'&&c!='\f')return false;return true;}
 inline size_t scalar_count(std::string_view text){size_t n=0;for(size_t i=0;i<text.size();){auto c=static_cast<unsigned char>(text[i++]);if(c<0x80){++n;continue;}unsigned extra=c>=0xc2&&c<=0xdf?1:c>=0xe0&&c<=0xef?2:c>=0xf0&&c<=0xf4?3:99;require(extra!=99&&extra<=text.size()-i);uint32_t cp=c&((1u<<(6-extra))-1);for(unsigned j=0;j<extra;++j){auto d=static_cast<unsigned char>(text[i++]);require((d&0xc0)==0x80);cp=(cp<<6)|(d&63);}require(cp>=(extra==1?0x80u:extra==2?0x800u:0x10000u)&&cp<=0x10ffff&&!(cp>=0xd800&&cp<=0xdfff));++n;}return n;}
@@ -58,10 +58,10 @@ struct Origin {
 struct Context {uintptr_t owner;size_t sequence;int mode,align;};
 struct Decision {Id context,line;Discard reason;};
 struct Span {Id origin;size_t begin,end;Fate fate;Id placement=none,group=none,decision=none;size_t run_begin=0,run_end=0;Id expected_token=none,expected_fragment=none;};
-struct Line {Id context;float baseline,x,width;};
+struct Line {Id context;float baseline,x,width; float original_baseline,original_x; float expected_baseline,expected_x;};
 struct Placement {
- Id context,line,token,fragment,group;uintptr_t owner,style,font;float x,y,width,height,baseline;size_t glyphs;std::pmr::string text;
- Placement(Id c,Id l,Id t,Id f,Id g,uintptr_t o,uintptr_t s,uintptr_t b,float xx,float yy,float w,float h,float base,size_t gs,std::string_view str,std::pmr::memory_resource* r):context(c),line(l),token(t),fragment(f),group(g),owner(o),style(s),font(b),x(xx),y(yy),width(w),height(h),baseline(base),glyphs(gs),text(str,r){}
+ Id context,line,token,fragment,group;uintptr_t owner,style,font;float x,y,width,height,baseline;size_t glyphs;float original_x,original_y,expected_x,expected_y;std::pmr::string text;
+ Placement(Id c,Id l,Id t,Id f,Id g,uintptr_t o,uintptr_t s,uintptr_t b,float xx,float yy,float w,float h,float base,size_t gs,std::string_view str,std::pmr::memory_resource* r):context(c),line(l),token(t),fragment(f),group(g),owner(o),style(s),font(b),x(xx),y(yy),width(w),height(h),baseline(base),glyphs(gs),original_x(xx),original_y(yy),expected_x(xx),expected_y(yy),text(str,r){}
 };
 struct Break {Id origin,line;};
 class Ledger {
@@ -90,11 +90,14 @@ public:
  void freeze(){require(!frozen_);frozen_=true;}
  Id decision(Id context,Id line,Discard reason){require(frozen_&&context<contexts_.size()&&reason!=Discard::none);if(decisions_.size()>=limits[size_t(Quota::spans)])throw LimitExceeded();auto n=id(decisions_.size());decisions_.push_back({context,line,reason});return n;}
  void span(Span s){require(frozen_);counts_.charge(Quota::spans);spans_.push_back(s);}
- Id line(Id context,float baseline,float x,float width,bool charge=true){require(frozen_&&context<contexts_.size());if(charge)counts_.charge(Quota::lines);auto n=id(lines_.size());lines_.push_back({context,baseline,x,width});return n;}
+ Id line(Id context,float baseline,float x,float width,bool charge=true){require(frozen_&&context<contexts_.size());if(charge)counts_.charge(Quota::lines);auto n=id(lines_.size());lines_.push_back({context,baseline,x,width,baseline,x,baseline,x});return n;}
  Id placement(Id context,Id line,Id token,Id fragment,Id group,uintptr_t owner,uintptr_t style,uintptr_t font,float x,float y,float width,float height,float baseline,size_t glyphs,std::string_view text,bool charge_visible=true,bool charge_final=true){
   require(frozen_);if(charge_final){counts_.charge(Quota::placements);counts_.charge(Quota::glyphs,glyphs);}if(charge_visible)counts_.charge(Quota::visible_scalars,scalar_count(text));auto n=id(placements_.size());placements_.emplace_back(context,line,token,fragment,group,owner,style,font,x,y,width,height,baseline,glyphs,text,&memory_);return n;
  }
  void forced_break(Id origin,Id line){require(frozen_);counts_.charge(Quota::participants);breaks_.push_back({origin,line});}
+ // Called only after local geometry validation and authenticated journal replay.
+ void transport_line(Id line,float x,float baseline){require(line<lines_.size()&&std::isfinite(x)&&std::isfinite(baseline));lines_[line].x=lines_[line].expected_x=x;lines_[line].baseline=lines_[line].expected_baseline=baseline;}
+ void transport_placement(Id placement,float x,float y){require(placement<placements_.size()&&std::isfinite(x)&&std::isfinite(y));placements_[placement].x=placements_[placement].expected_x=x;placements_[placement].y=placements_[placement].expected_y=y;}
  // Validation uses bounded PMR scratch and exact origin/range identity. The
  // transport caller additionally checks epochs, run glyph clusters/metrics and
  // real resolver decisions; a caller-supplied string alone is not that proof.
@@ -104,7 +107,7 @@ public:
   std::pmr::vector<size_t> covered(origins_.size(),0,&memory_),placement_bytes(placements_.size(),0,&memory_);
   std::pmr::vector<unsigned> break_counts(origins_.size(),0,&memory_),seen(origins_.size(),0,&memory_);
   for(auto p:participants_){require(p<origins_.size());require(++seen[p]==1);}for(auto n:seen)require(n==1);
-  for(size_t i=0;i<lines_.size();++i){const auto& l=lines_[i];require(l.context<contexts_.size()&&std::isfinite(l.baseline)&&std::isfinite(l.x)&&std::isfinite(l.width)&&l.width>=0);if(i&&lines_[i-1].context==l.context)require(lines_[i-1].baseline<=l.baseline);}
+  for(size_t i=0;i<lines_.size();++i){const auto& l=lines_[i];require(l.x==l.expected_x&&l.baseline==l.expected_baseline);require(l.context<contexts_.size()&&std::isfinite(l.baseline)&&std::isfinite(l.x)&&std::isfinite(l.width)&&l.width>=0);if(i&&lines_[i-1].context==l.context)require(lines_[i-1].baseline<=l.baseline);}
   std::pmr::vector<Id> last_origin(contexts_.size(),none,&memory_),last_placement(contexts_.size(),none,&memory_);
   for(const auto& s:spans_){
    counts_.charge(Quota::token_visits);
@@ -130,11 +133,11 @@ public:
    const bool leading=before==none||break_between(spans_[before].origin,s.origin,c);
    const bool trailing=after==none||break_between(s.origin,spans_[after].origin,c);
    if(s.fate==Fate::contributor){require(!leading&&!trailing);const auto& p=placements_[s.placement];require(placements_[spans_[before].placement].line==p.line&&placements_[spans_[after].placement].line==p.line);}
-   else {const auto& d=decisions_[s.decision];switch(d.reason){case Discard::leading:require(leading);break;case Discard::trailing:require(trailing);break;case Discard::empty_context:require(before==none&&after==none);break;case Discard::soft_break:require(!leading&&!trailing&&placements_[spans_[before].placement].line==d.line&&placements_[spans_[after].placement].line>d.line);break;default:require(false);}}
+   else {const auto& d=decisions_[s.decision];switch(d.reason){case Discard::leading:require(leading);break;case Discard::trailing:require(trailing);break;case Discard::empty_context:require(before==none&&after==none);break;case Discard::flex_whitespace:require(before==none&&after==none&&d.line==none);for(const auto& p:placements_)require(p.context!=c);for(const auto& l:lines_)require(l.context!=c);break;case Discard::soft_break:require(!leading&&!trailing&&placements_[spans_[before].placement].line==d.line&&placements_[spans_[after].placement].line>d.line);break;default:require(false);}}
   }
 
   std::pmr::unordered_set<Id> fragments{&memory_},groups{&memory_};
-  for(size_t i=0;i<placements_.size();++i){counts_.charge(Quota::token_visits);const auto& p=placements_[i];require(p.context<contexts_.size()&&p.line<lines_.size()&&lines_[p.line].context==p.context&&p.token!=none&&p.fragment!=none&&p.owner&&p.style&&p.font&&!p.text.empty()&&placement_bytes[i]==p.text.size());for(float f:{p.x,p.y,p.width,p.height,p.baseline})require(std::isfinite(f));require(p.width>=0&&p.height>=0&&p.baseline>=0&&p.y+p.baseline==lines_[p.line].baseline);require(fragments.insert(p.fragment).second);if(p.group!=none)require(groups.insert(p.group).second);if(i&&placements_[i-1].context==p.context){require(placements_[i-1].line<=p.line);if(placements_[i-1].line==p.line)require(placements_[i-1].x+placements_[i-1].width<=p.x);}}
+  for(size_t i=0;i<placements_.size();++i){counts_.charge(Quota::token_visits);const auto& p=placements_[i];require(p.x==p.expected_x&&p.y==p.expected_y);require(p.context<contexts_.size()&&p.line<lines_.size()&&lines_[p.line].context==p.context&&p.token!=none&&p.fragment!=none&&p.owner&&p.style&&p.font&&!p.text.empty()&&placement_bytes[i]==p.text.size());for(float f:{p.x,p.y,p.width,p.height,p.baseline})require(std::isfinite(f));require(p.width>=0&&p.height>=0&&p.baseline>=0&&p.original_y+p.baseline==lines_[p.line].original_baseline);require(fragments.insert(p.fragment).second);if(p.group!=none)require(groups.insert(p.group).second);if(i&&placements_[i-1].context==p.context){require(placements_[i-1].line<=p.line);if(placements_[i-1].line==p.line)require(placements_[i-1].original_x+placements_[i-1].width<=p.original_x);}}
   for(const auto& b:breaks_){require(b.origin<origins_.size()&&origins_[b.origin].kind==Kind::br&&b.line<lines_.size()&&lines_[b.line].context==origins_[b.origin].context&&++break_counts[b.origin]==1);}
   for(size_t i=0;i<origins_.size();++i)require(break_counts[i]==(origins_[i].kind==Kind::br?1u:0u));
  }

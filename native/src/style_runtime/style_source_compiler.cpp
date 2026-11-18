@@ -367,6 +367,67 @@ static bool b0_declaration_supported(const std::string& name,const std::string& 
         return number(0,8192,true,false);
     return false;
 }
+// B3 extends admission only; expansion uses the same registered shorthand.
+static bool b3_declaration_supported(const std::string& name,const std::string& value,
+                                     style_property_registry_s* registry,unsigned depth=0) {
+    if(depth>1)return false;
+    if(name=="margin"||name=="padding"||name=="border"||name=="border-width"||
+       name=="border-style"||name=="border-color"||name=="gap") {
+        const auto* shorthand=registry->try_get_shorthand(name.c_str());
+        style_shorthand_writer_s expanded;
+        if(!shorthand||contains_variable(value)||!shorthand->expand(value.c_str(),expanded)||expanded.items.empty())return false;
+        for(const auto& item:expanded.items)if(!b3_declaration_supported(item.name,item.value,registry,depth+1))return false;
+        return true;
+    }
+    std::string key; const bool identifier=css_single_identifier(value,key);
+    auto word=[&](const char* expected){return identifier&&key==expected;};
+    css_component_lexer lexer(value.data(),value.size());css_variable_token token;bool found=false;
+    for(;;){auto t=lexer.next();if(t.kind==css_variable_token_kind::end)break;
+        if(t.kind==css_variable_token_kind::whitespace||t.kind==css_variable_token_kind::comment)continue;
+        if(found)return false;
+        token=t;found=true;}
+    if(!found)return false;
+    auto numeric=[&](double high,bool percent=false){
+        using S=css_variable_serialization;
+        if(token.serialization!=S::number&&token.serialization!=S::dimension&&!(percent&&token.serialization==S::percentage))return false;
+        const auto raw=value.substr(token.begin,token.numeric_end-token.begin);char* end=nullptr;
+        double n=std::strtod(raw.c_str(),&end);if(!end||*end||!std::isfinite(n)||n<0||n>high)return false;
+        if(token.serialization==S::percentage)return percent;
+        if(token.serialization==S::number)return n==0;
+        std::string unit;return css_single_identifier(value.substr(token.numeric_end,token.end-token.numeric_end),unit)&&unit=="px";
+    };
+    if(name=="display")return word("flex")||word("block")||word("inline");
+    if(name=="box-sizing")return word("border-box")||word("content-box");
+    if(name=="width")return word("auto")||numeric(8192)||numeric(100,true);
+    if(name=="height"||name=="min-width"||name=="min-height")return word("auto")||numeric(8192);
+    if(name=="max-width"||name=="max-height")return word("none")||numeric(8192);
+    if(name=="flex-direction")return word("row")||word("column");
+    if(name=="flex-wrap")return word("nowrap");
+    if(name=="justify-content")return word("start")||word("flex-start")||word("center")||word("space-between");
+    if(name=="align-items")return word("start")||word("flex-start")||word("center")||word("stretch");
+    if(name=="row-gap"||name=="column-gap")return numeric(8192);
+    if(name.starts_with("border-")&&name.ends_with("-width"))return numeric(128);
+    if(name.starts_with("border-")&&name.ends_with("-style"))return word("solid")||word("none");
+    if(name.starts_with("border-")&&name.ends_with("-color"))return b0_declaration_supported("border-color",value);
+    return b0_declaration_supported(name,value);
+}
+static void b3_capture_rejection(const std::string& name,const std::string& value,style_source_accounting_s& a) {
+    if(name=="width"||name=="height"){
+        css_component_lexer lexer(value.data(),value.size());css_variable_token first;bool found=false;
+        for(;;){auto t=lexer.next();if(t.kind==css_variable_token_kind::end)break;
+            if(t.kind==css_variable_token_kind::whitespace||t.kind==css_variable_token_kind::comment)continue;
+            if(found)return;first=t;found=true;}
+        if(found&&first.serialization==css_variable_serialization::percentage){
+            const auto raw=value.substr(first.begin,first.numeric_end-first.begin);char* end=nullptr;const auto n=std::strtod(raw.c_str(),&end);
+            if(end&&!*end&&std::isfinite(n)&&(name=="height"||n<0||n>100))a.b3_reject_value(name=="height"?5:4,n);
+        }
+    }
+    std::string token;if(!css_single_identifier(value,token))return;
+    if(name=="min-width"&&token=="none")a.b3_reject_value(0);
+    if(name=="min-height"&&token=="none")a.b3_reject_value(1);
+    if(name=="max-width"&&token=="auto")a.b3_reject_value(2);
+    if(name=="max-height"&&token=="auto")a.b3_reject_value(3);
+}
 static bool b0_selector_supported(const compiled_selector_s& selector) {
     if(selector.steps.empty() || selector.pseudo_element!=aether_pseudo_element_t::none)return false;
     for(const auto& step:selector.steps){const auto& c=step.compound;
@@ -403,6 +464,8 @@ static declaration_compilation_result compile_declarations(
         std::string value = source.substr(segment.colon + 1, segment.end - segment.colon - 1);
         const bool important = css_strip_important(value);
         accounting.b0_subset = accounting.b0_subset && b0_declaration_supported(str_to_lower(name),value);
+        accounting.b3_subset = accounting.b3_subset && b3_declaration_supported(str_to_lower(name),value,registry);
+        b3_capture_rejection(str_to_lower(name),value,accounting);
         if (name.empty()) { accounting.loss(style_source_loss::malformed_declaration); continue; }
         // Empty custom properties are valid and must not trigger var() fallback.
 
@@ -631,7 +694,7 @@ static aether_status_t compile_range(
         if (work) source_work_add(work->work_rule_starts, 1);
         if (source[index] == '@') {
             accounting.loss(style_source_loss::at_rule);
-            accounting.b0_subset=false;
+            accounting.b0_subset=false;accounting.b3_subset=false;
             int32_t at_offset = index;
             index++;
             css_component_lexer at_lexer(original.data(),static_cast<size_t>(end),static_cast<size_t>(index));
@@ -715,7 +778,7 @@ static aether_status_t compile_range(
             if (!valid || discarded) accounting.loss(style_source_loss::selector);
         }
         if (selectors.empty()) accounting.loss(style_source_loss::selector);
-        for(const auto& selector:selectors)accounting.b0_subset=accounting.b0_subset && b0_selector_supported(selector);
+        for(const auto& selector:selectors){const bool accepted=b0_selector_supported(selector);accounting.b0_subset=accounting.b0_subset&&accepted;accounting.b3_subset=accounting.b3_subset&&accepted;}
 
         auto declarations = compile_declarations(declaration_text,
             original.substr(opening + 1, extent->body_end - opening - 1),

@@ -228,7 +228,7 @@ struct aether_style_runtime_s {
         source_accounting=style_source_accounting_s::tracked();
         for (const auto& sheet : source.sheets) {
             auto accounting=sheet.second->accounting;
-            if(sheet.second->layer==style_sheet_layer::engine_defaults)accounting.b0_subset=true;
+            if(sheet.second->layer==style_sheet_layer::engine_defaults){accounting.b0_subset=true;accounting.b3_subset=true;}
             source_accounting.merge(accounting);
         }
         source_budget.source_bytes=source_accounting.source_bytes;
@@ -1278,16 +1278,41 @@ aether_status_t add_dom_stylesheet(aether_style_runtime_t runtime, aether_doc_t 
     }catch(const std::bad_alloc&){return AETHER_ERROR_OUT_OF_MEMORY;}
      catch(...){return AETHER_ERROR_INVALID_STATE;}
 }
-bool b0_source_stylesheets_accepted(aether_style_runtime_t runtime) {
+bool b0_source_stylesheets_accepted(aether_style_runtime_t runtime,bool b3) {
     if(!runtime || runtime->owner_thread!=std::this_thread::get_id())return false;
     for(const auto& entry:runtime->sheets) {
         const auto& a=entry.second->accounting;
         if(a.losses || !a.inputs_accounted || a.external_pending ||
             !a.attribution.complete || !a.attribution_consistent() || !a.b0_diagnostics_clean ||
-            (entry.second->layer!=style_sheet_layer::engine_defaults && !a.b0_subset))return false;
+            (entry.second->layer!=style_sheet_layer::engine_defaults && !(b3?a.b3_subset:a.b0_subset)))return false;
     }
     return true;
 }
+// Reject authored flex layout properties on a non-flex target, even when the
+// value happens to equal an initial computed scalar. No second selector/parser.
+aether_status_t b3_source_node_context_status(aether_style_runtime_t runtime,aether_node_t node,bool flex) {
+    if(!runtime||!node||runtime->owner_thread!=std::this_thread::get_id())return AETHER_ERROR_INVALID_STATE;
+    if(flex)return AETHER_OK;
+    const auto* registry=style_property_registry_get_global();
+    const auto accepted=[&](const auto& declarations){for(const auto& d:declarations){
+        if(d.property_id<0||d.property_id>=registry->property_count())return false;
+        const auto& name=registry->definitions[d.property_id].name;
+        if(name=="flex-direction"||name=="flex-wrap"||name=="justify-content"||name=="align-items"||name=="row-gap"||name=="column-gap")return false;
+    }return true;};
+    for(const auto& sheet:runtime->sheets)if(sheet.second->layer!=style_sheet_layer::engine_defaults)
+        for(const auto& rule:sheet.second->rules)if(selector_match(rule.selector,node)&&!accepted(rule.declarations))return AETHER_ERROR_UNSUPPORTED;
+    const auto authored=node->attributes.find("style");
+    if(authored!=node->attributes.end()){
+        std::vector<compiled_property_declaration_s> properties;
+        std::vector<custom_property_declaration_s> custom;
+        std::vector<compiled_shorthand_declaration_s> shorthands;
+        const auto status=style_source_compile_inline(authored->second.c_str(),properties,custom,shorthands,nullptr,nullptr);
+        if(status!=AETHER_OK)return status;
+        if(!custom.empty()||!shorthands.empty()||!accepted(properties))return AETHER_ERROR_UNSUPPORTED;
+    }
+    return AETHER_OK;
+}
+
 }
 
 AETHER_API aether_bool_t aether_style_runtime_remove_stylesheet(

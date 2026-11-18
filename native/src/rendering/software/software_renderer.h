@@ -28,4 +28,9 @@ Result render(FrameStore&, const prep::PreparedFrame&, prep::Cancellation* = nul
 // No provider registration, HTML gate, or public ABI change.
 Result render_a8(FrameStore&, const prep::PreparedFrame&,
  std::span<const std::shared_ptr<const text::GlyphMaskA8>>, prep::Cancellation* = nullptr) noexcept;
+// B3 source-only opt-in. Same FrameStore/LegacyRenderStorage transaction,
+// existing R3.1 rectangular fractional A8 filtering; no legacy default change.
+Result render_a8_b3(FrameStore&, const prep::PreparedFrame&,
+ std::span<const std::shared_ptr<const text::GlyphMaskA8>>, prep::Cancellation* = nullptr) noexcept;
+
 }

@@ -1,6 +1,8 @@
 #pragma once
 #include <cstddef>
 #include <cstdint>
+#include <array>
+#include <cmath>
 
 // Private, bounded diagnostic accounting. Never a typography/font authority.
 // Counts refer to compiler input, not declarations winning the cascade.
@@ -32,6 +34,31 @@ struct style_source_accounting_s {
     // Capability evidence from the actual compiler, before expansion/discard.
     // Not a loss exemption and never permission to render by itself.
     bool b0_subset = true;
+    bool b3_subset = true;
+    // Rejection-only compiler provenance. Fixed storage, no unbudgeted allocation.
+    // Index spells the exact property/token pair: min-width:none,
+    // min-height:none, max-width:auto, max-height:auto, invalid width%, height%.
+    std::array<size_t,6> b3_rejected_values{};
+    size_t b3_first_rejection_declaration = 0;
+    unsigned b3_first_rejection_kind = 6;
+    double b3_first_rejection_number = 0;
+    bool b3_rejection_integrity = true;
+    bool b3_has_value_rejection() const noexcept {
+        size_t total=0;
+        for(auto n:b3_rejected_values){if(n>declarations-total)return false;total+=n;}
+        const bool token_valid=std::isfinite(b3_first_rejection_number) &&
+            (b3_first_rejection_kind<4?b3_first_rejection_number==0:
+             b3_first_rejection_kind==4?(b3_first_rejection_number<0||b3_first_rejection_number>100):b3_first_rejection_kind==5);
+        return token_valid && b3_rejection_integrity && total>0 && b3_first_rejection_kind<6 &&
+            b3_rejected_values[b3_first_rejection_kind]>0 &&
+            b3_first_rejection_declaration<declarations;
+    }
+    void b3_reject_value(unsigned kind,double number=0) noexcept {
+        if(kind>=6 || !declarations || declarations>max_declarations) {b3_rejection_integrity=false;return;}
+        if(b3_rejected_values[kind]>=max_declarations){b3_rejection_integrity=false;return;}
+        ++b3_rejected_values[kind];
+        if(b3_first_rejection_kind==6){b3_first_rejection_kind=kind;b3_first_rejection_declaration=declarations-1;b3_first_rejection_number=number;}
+    }
     // No diagnostic is currently classified as harmless for B0.
     bool b0_diagnostics_clean = true;
     style_source_loss_attribution_s attribution;
@@ -65,6 +92,15 @@ struct style_source_accounting_s {
         else value += increment;
     }
     void merge(const style_source_accounting_s& other) noexcept {
+        b3_rejection_integrity = b3_rejection_integrity && other.b3_rejection_integrity;
+        if(other.b3_first_rejection_kind<6 && b3_first_rejection_kind==6){
+            b3_first_rejection_kind=other.b3_first_rejection_kind;b3_first_rejection_number=other.b3_first_rejection_number;
+            if(other.b3_first_rejection_declaration>max_declarations-declarations)b3_rejection_integrity=false;
+            else b3_first_rejection_declaration=declarations+other.b3_first_rejection_declaration;
+        }
+        for(size_t i=0;i<6;++i){if(other.b3_rejected_values[i]>max_declarations-b3_rejected_values[i])b3_rejection_integrity=false;
+            else b3_rejected_values[i]+=other.b3_rejected_values[i];}
+        b3_subset = b3_subset && other.b3_subset;
         attribution.complete=attribution.complete && other.attribution.complete &&
             attribution_consistent() && other.attribution_consistent();
         attribution.unattributed |= other.attribution.unattributed;

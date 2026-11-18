@@ -21,4 +21,9 @@ Result render_a8(FrameStore& store,const prep::PreparedFrame& frame,
  std::span<const std::shared_ptr<const text::GlyphMaskA8>> masks,prep::Cancellation* cancel) noexcept {
  return render_kernel::render_impl(LegacyRenderStorage{},store,frame,&masks,cancel);
 }
+Result render_a8_b3(FrameStore& store,const prep::PreparedFrame& frame,
+ std::span<const std::shared_ptr<const text::GlyphMaskA8>> masks,prep::Cancellation* cancel) noexcept {
+ return render_kernel::render_impl<render_kernel::FractionalRectA8Clip>(LegacyRenderStorage{},store,frame,&masks,cancel);
+}
+
 }

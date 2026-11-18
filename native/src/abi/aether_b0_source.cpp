@@ -59,7 +59,11 @@ AETHER_API aether_status_t aether_b0_source_render(aether_b0_source_t s,aether_b
  if(!s)return report(d,AETHER_ERROR_NULL_ARG,AETHER_B0_STAGE_INPUT,AETHER_B0_REASON_ARGUMENT);
  if(s->thread!=std::this_thread::get_id())return AETHER_ERROR_INVALID_STATE;
  if(s->rendered)return report(d,AETHER_OK);
- auto result=r::software::render_a8(s->frames,*s->prepared,s->scene->masks(),nullptr);
+ // Only a fully validated B3 source session opts into the existing fractional
+ // rectangular A8 clip policy. All older profiles retain render_a8 unchanged.
+ auto result=s->scene->uses_fractional_a8_clip()
+     ? r::software::render_a8_b3(s->frames,*s->prepared,s->scene->masks(),nullptr)
+     : r::software::render_a8(s->frames,*s->prepared,s->scene->masks(),nullptr);
  using S=r::software::Status; aether_status_t code=AETHER_ERROR_INTERNAL;
  switch(result.status){case S::ok:s->rendered=true;return report(d,AETHER_OK);case S::allocation_failed:code=AETHER_ERROR_OUT_OF_MEMORY;break;case S::limit_exceeded:code=AETHER_ERROR_LIMIT_EXCEEDED;break;case S::unsupported:code=AETHER_ERROR_UNSUPPORTED;break;case S::frame_failed:code=frame_status(result.frame_status);break;default:break;}
  return report(d,code,AETHER_B0_STAGE_RASTER,reason(code),UINT64_MAX,result.command_index);
