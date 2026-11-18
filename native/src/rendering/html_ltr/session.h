@@ -25,7 +25,7 @@ public:
 
 #ifdef AETHER_HTML_LTR_TESTING
 namespace aether::rendering::html_ltr::testing {
-enum class Stage {html_copy,font_copy,inventory,runtime,layout,occurrence,masks,staging,snapshot,preparation,candidate,control_presentation,control_transport,control_clip,a8_pixels};
+enum class Stage {html_copy,font_copy,inventory,runtime,layout,occurrence,masks,staging,snapshot,preparation,candidate,control_presentation,control_transport,control_clip,a8_pixels,font_product};
 void stage(Stage);
 void inspect(aether_layout_result_s*,aether::rendering::NativePaintList*);
 }

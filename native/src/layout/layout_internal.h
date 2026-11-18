@@ -130,7 +130,7 @@ float layout_inline_items(
     const aether_layout_engine_s* engine,
     const StyleLookup* styles,
     aether_layout_box_s* parent_box,
-    const std::vector<inline_item_s>& items,
+    const std::pmr::vector<inline_item_s>& items,
     float start_x, float start_y, float available_width,
     float available_height, percentage_height_s containing_height,
     const BoxStyleSnapshot& parent_style,
@@ -356,3 +356,7 @@ inline float layout_used_gap(const StyleLookup* styles, aether_node_s* element,
 
 // H18 bounded box-tree promotion; DOM parents and style inheritance stay unchanged.
 void validate_contents_wrappers(const StyleLookup* styles);
+
+// B2 common-collector document preflight. Does not measure or build boxes.
+// The installed bridge authenticates the frozen catalog and applies quotas.
+void aether_b2_preflight_document(const aether_layout_engine_s*,aether_doc_t,aether_style_map_t);

@@ -1204,3 +1204,9 @@ measure or paint text. Password presentation contains generated bullets, but
 source HTML/DOM still exists during rendering: masking is not secure erasure.
 There are no editing, focus, caret, event, authentication or accessibility APIs
 in this release. General HTML/CSS and gradients remain outside this profile.
+
+### Static inline paragraphs (B2)
+
+See [B2 source contract](docs/b2-inline-wrap.md) and [test layers](docs/b2-tests.md).
+The additive capability extends B0/B1 with static inline text, wrapping and
+centered lines. It does not enable navigation, authentication or full HTML/CSS.

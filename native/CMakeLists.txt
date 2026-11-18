@@ -15,6 +15,7 @@ add_library(aether_core SHARED
     src/abi/aether_abi.cpp
     src/abi/aether_b0_source.cpp
     src/rendering/html_ltr/b0_source_session.cpp
+    src/rendering/html_ltr/b2_session_provenance.cpp
     src/abi/aether_surface.cpp
     src/abi/aether_interaction.cpp
     src/rendering/html_ltr/interaction_state.cpp
@@ -2035,6 +2036,46 @@ if(AETHERUI_BUILD_TESTS AND UNIX)
         "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/fonts/DejaVuSans-Bold.ttf")
     add_test(NAME aether.b1-source-oom COMMAND aether_b0_source_oom_test
         "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/b0/b1_semantic_page.html"
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/fonts/DejaVuSans.ttf"
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/fonts/DejaVuSans-Bold.ttf")
+endif()
+
+if(AETHERUI_BUILD_TESTS AND UNIX)
+    foreach(test b2_inline_wrap b2_inline_failures)
+        add_executable(aether_${test}_test tests/test_${test}.cpp)
+        target_link_libraries(aether_${test}_test PRIVATE AetherUI::Core Threads::Threads)
+        target_compile_options(aether_${test}_test PRIVATE -Wall -Wextra -Werror -pedantic)
+        add_test(NAME aether.${test} COMMAND aether_${test}_test
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/fonts/DejaVuSans.ttf"
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/fonts/DejaVuSans-Bold.ttf")
+    endforeach()
+    add_executable(aether_b2_ledger_test tests/test_b2_inline_ledger.cpp)
+    target_compile_features(aether_b2_ledger_test PRIVATE cxx_std_20)
+    add_test(NAME aether.b2-ledger COMMAND aether_b2_ledger_test)
+    add_executable(aether_b2_repertoire_test tests/test_b2_repertoire.cpp src/layout/inline_text.cpp)
+    target_include_directories(aether_b2_repertoire_test PRIVATE include src/layout)
+    add_test(NAME aether.b2-repertoire COMMAND aether_b2_repertoire_test)
+    add_executable(aether_b2_parsed_dom_test tests/test_b2_parsed_dom.cpp)
+    target_link_libraries(aether_b2_parsed_dom_test PRIVATE AetherUI::Core)
+    add_test(NAME aether.b2-parsed-dom COMMAND aether_b2_parsed_dom_test)
+endif()
+
+if(AETHERUI_BUILD_TESTS AND UNIX)
+    # Private corruption build: never add these hooks to aether_core or its ABI.
+    get_target_property(b2_semantics_sources aether_core SOURCES)
+    add_library(aether_b2_semantics_core OBJECT ${b2_semantics_sources})
+    target_include_directories(aether_b2_semantics_core PRIVATE include src src/rendering/preparation/include)
+    target_compile_definitions(aether_b2_semantics_core PRIVATE AETHER_EXPORTS AETHER_HTML_LTR_TESTING)
+    target_compile_options(aether_b2_semantics_core PRIVATE -UNDEBUG -ffp-contract=off)
+    add_executable(aether_b2_semantics_test tests/test_b2_inline_semantics.cpp $<TARGET_OBJECTS:aether_b2_semantics_core>)
+    target_include_directories(aether_b2_semantics_test PRIVATE include src src/rendering/preparation/include)
+    target_compile_definitions(aether_b2_semantics_test PRIVATE AETHER_EXPORTS AETHER_HTML_LTR_TESTING)
+    target_link_libraries(aether_b2_semantics_test PRIVATE Threads::Threads)
+    add_test(NAME aether.b2-semantics COMMAND aether_b2_semantics_test
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/fonts/DejaVuSans.ttf"
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/fonts/DejaVuSans-Bold.ttf")
+    add_test(NAME aether.b2-source-oom COMMAND aether_b0_source_oom_test
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/b0/b2_inline_oom.html"
         "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/fonts/DejaVuSans.ttf"
         "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/fonts/DejaVuSans-Bold.ttf")
 endif()

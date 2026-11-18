@@ -5,6 +5,7 @@
 #include <cmath>
 #include <stdexcept>
 #include <vector>
+#include <memory_resource>
 
 // Operation-local, pure line decisions. The caller owns text, style snapshots,
 // owners and boxes; this class never measures text or invokes external code.
@@ -23,10 +24,10 @@ struct inline_line_summary {
 };
 class inline_line_resolver {
     float available_, minimum_, physical_ = 0.f, height_, ascent_ = 0.f, descent_ = 0.f;
-    std::vector<inline_line_metrics> fragments_;
+    std::pmr::vector<inline_line_metrics> fragments_;
 public:
-    inline_line_resolver(float available, float minimum)
-        : available_(available), minimum_(minimum), height_(minimum) {}
+    inline_line_resolver(float available, float minimum,std::pmr::memory_resource* resource=std::pmr::get_default_resource())
+        : available_(available), minimum_(minimum), height_(minimum),fragments_(resource) {}
     bool empty() const { return fragments_.empty(); }
     float physical_width() const { return physical_; }
     bool needs_break(float unit_width, bool opportunity) const {
