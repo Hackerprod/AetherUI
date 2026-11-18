@@ -15,6 +15,7 @@ add_library(aether_core SHARED
     src/abi/aether_abi.cpp
     src/abi/aether_b0_source.cpp
     src/rendering/html_ltr/b0_source_session.cpp
+    src/rendering/html_ltr/b2_session_provenance.cpp
     src/abi/aether_surface.cpp
     src/abi/aether_interaction.cpp
     src/rendering/html_ltr/interaction_state.cpp

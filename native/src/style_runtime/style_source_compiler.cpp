@@ -345,16 +345,16 @@ static bool b0_declaration_supported(const std::string& name,const std::string& 
     auto color=[&](){if(first.serialization!=css_variable_serialization::hash ||
         (token.size()!=4 && token.size()!=7))return false;
         return std::all_of(token.begin()+1,token.end(),[](unsigned char c){return std::isxdigit(c)!=0;});};
-    if(name=="display")return word("block");
+    if(name=="display")return word("block")||word("inline");
     if(name=="position")return word("static");
     if(name=="box-sizing")return word("content-box");
     if(name=="font-family")return word("aetherb0");
     if(name=="font-size")return number(8,48,true,true);
     if(name=="line-height")return number(8,96,true,true);
     if(name=="font-weight")return number(400,400,false,true)||number(700,700,false,true);
-    if(name=="white-space")return word("nowrap");
+    if(name=="white-space")return word("nowrap")||word("normal");
     if(name=="direction")return word("ltr");
-    if(name=="text-align")return word("start");
+    if(name=="text-align")return word("start")||word("center");
     if(name=="opacity")return number(1,1,false,false);
     if(name=="height")return word("auto");
     if(name=="width")return word("auto")||number(0,8192,true,false);

@@ -130,7 +130,7 @@ float layout_inline_items(
     const aether_layout_engine_s* engine,
     const StyleLookup* styles,
     aether_layout_box_s* parent_box,
-    const std::vector<inline_item_s>& items,
+    const std::pmr::vector<inline_item_s>& items,
     float start_x, float start_y, float available_width,
     float available_height, percentage_height_s containing_height,
     const BoxStyleSnapshot& parent_style,
