@@ -445,17 +445,67 @@ cmake --install artifacts/build/native/$(uname -m)
 ```
 
 `AETHERUI_BUILD_TESTS` defaults to CMake's own `BUILD_TESTING`; pass it explicitly if your generator
-doesn't set that automatically. Two test binaries run under CTest:
+doesn't set that automatically. The build-tree suite contains many tests. For example,
+`aether.smoke` (`tests/test_smoke.cpp`) links the **build-tree** target, and `aether.abi-c`
+(`tests/test_abi_c.c`) checks the public header in a C11 translation unit. Neither is an
+independent installed-package test. Use `ctest -N` from the build directory to list the suite.
+For CMake 3.16 compatibility, run CTest from that directory instead of using the newer
+`ctest --test-dir` option shown in the convenience commands above.
 
-- `aether.smoke` (`tests/test_smoke.cpp`) — a C++ compile/link smoke test against the installed target.
-- `aether.abi-c` (`tests/test_abi_c.c`) — a **C11** consumer, compiled and linked with no C++ in its
-  translation unit, proving the header is genuinely C-clean and not "C++ wearing an `extern "C"` hat."
+### Explicit local installed-package gate
 
-`tests/package_consumer/` is a separate, standalone CMake project (its own `CMakeLists.txt`, not part
-of the main build) that runs `find_package(AetherUI CONFIG REQUIRED)` against an *installed* tree and
-links `AetherUI::Core` — this is the regression test for the install/export step itself, not for the
-library's behavior. Run it after `cmake --install` to catch a broken `AetherUIConfig.cmake` or a
-missing installed header before a downstream binding does.
+Direct configuration and the gate require **CMake/CTest 3.16 or later**, a C compiler, a C++
+compiler supporting the core's C++20 requirement, and a build tool (Unix Makefiles by default).
+The separate C++ ABI consumer needs only C++11. `CMakePresets.json` uses schema 3 and requires
+**CMake 3.21 or later**; that does not raise the direct-build minimum. Compatibility with a
+version is not evidence that it has been executed on that version.
+
+`tests/package_consumer/` is a standalone C11 project; `tests/package_consumer_cpp/` is a
+separate C++11 project. Both link only `AetherUI::Core` from `find_package`, use the public
+`aether/aether.h`, and retain explicit runtime checks in Release. The C consumer also retains
+its existing public-API regression checks. They are not part of the default product build.
+
+Run this **locally**, from the repository root, with a new or empty work directory outside
+(and not a parent of) the checkout. Paths are absolute; spaces are supported:
+
+```sh
+cmake -DSOURCE_DIR="$PWD/native" \
+  -DWORK_DIR="/tmp/aether-package-release" -DCONFIG=Release \
+  -P native/cmake/VerifyInstalledPackage.cmake
+
+# Required alternate install layout, with fresh caches and a work path with spaces:
+cmake -DSOURCE_DIR="$PWD/native" \
+  -DWORK_DIR="/tmp/aether package lib64" -DCONFIG=Release -DINSTALL_LIBDIR=lib64 \
+  -P native/cmake/VerifyInstalledPackage.cmake
+```
+
+The runner refuses nonempty work directories rather than deleting them. It builds only
+`aether_core`, with producer tests/capture disabled, installs it, copies only consumer test
+sources outside the checkout, configures with the exact installed config directory (without
+package registries/default search), builds both consumers and runs their expected CTest tests.
+It verifies imported paths and the actual loaded ABI symbol's library in each process, then
+moves the whole prefix to a path with spaces and repeats with fresh consumer caches. It also
+checks installed metadata for checkout/build paths, requires an absent-package configure to
+fail for that reason, and tests subprocess failure propagation. No loader path workaround is
+used: inherited `LD_*`/`DYLD_*` overrides checked by the runner must be unset first.
+
+The runtime origin instrumentation uses POSIX `dladdr` and currently rejects Windows. Linux
+is the minimum validation target; macOS support and CMake 3.16 compatibility are not certified
+without actual runs. An optional Debug run uses `-DCONFIG=Debug` and another empty work directory.
+`-DGENERATOR=...` can select another installed generator; Ninja is not required. Build parallelism
+is limited to two. Stage logs, compiler/cache details, source SHA/status, selected target paths,
+metadata hashes and a final `PASS.txt` (only on success) remain in the work directory. These local
+logs are not intended for blind publication. Keep the exact reviewed patch/hash with them.
+
+This is a recipe, **not a claim of a successful execution**. Missing CMake/CTest blocks validation;
+static review or a manual compilation does not replace configure/build/install/CTest. The gate
+does not run the full product suite, validate real-page rendering, prove bit-identical builds,
+or certify untested platforms. It neither changes nor replaces existing gates or expected tests.
+
+No GitHub Actions workflow is modified, enabled or executed by this gate. It is explicitly opt-in,
+not wired into CI or the default build, and rejects CI invocation. Installed-consumer coverage
+in CI remains pending and requires separate authorization. Publication must also remain pending
+if it would trigger Actions.
 
 ## Installed package
 
@@ -473,11 +523,13 @@ pkg-config --cflags --libs aetherui-core
 ```
 
 Both are generated from `cmake/AetherUIConfig.cmake.in` and `cmake/aetherui-core.pc.in` at configure
-time and installed under `<prefix>/lib/cmake/AetherUI/` and `<prefix>/lib/pkgconfig/` respectively —
+time and installed under `<prefix>/<CMAKE_INSTALL_LIBDIR>/cmake/AetherUI/` and
+`<prefix>/<CMAKE_INSTALL_LIBDIR>/pkgconfig/` respectively —
 private headers and build-tree binaries (`native/build/`) are never a distribution interface, only
 `<prefix>/include/aether/aether.h` and the installed library are.
 
-See [`examples/cpp/abi-info`](../examples/cpp/abi-info/) for the minimal working consumer: it links
+See [`examples/cpp/abi-info`](../examples/cpp/abi-info/) for a minimal **C** consumer (despite the
+directory name): it links
 against the installed package, calls `aether_abi_version()`/`aether_abi_capabilities()`/
 `aether_paint_command_size()`, and fails the build if the loaded ABI's major version doesn't match
 what it was compiled against. Copy that project's `CMakeLists.txt` as the starting point for a new

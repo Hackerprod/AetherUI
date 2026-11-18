@@ -1,0 +1,22 @@
+cmake_minimum_required(VERSION 3.16)
+project(AetherUIPackageConsumerCpp LANGUAGES CXX)
+
+if(AETHER_EXPECTED_PREFIX)
+    find_package(AetherUI 0.1 CONFIG REQUIRED PATHS "${AetherUI_DIR}" NO_DEFAULT_PATH NO_CMAKE_FIND_ROOT_PATH)
+else()
+    find_package(AetherUI 0.1 CONFIG REQUIRED)
+endif()
+add_executable(aether_package_consumer_cpp main.cpp)
+target_link_libraries(aether_package_consumer_cpp PRIVATE AetherUI::Core)
+set_target_properties(aether_package_consumer_cpp PROPERTIES CXX_STANDARD 11 CXX_STANDARD_REQUIRED YES)
+if(AETHER_EXPECTED_PREFIX)
+    include("${CMAKE_CURRENT_LIST_DIR}/../VerifyConsumerPaths.cmake")
+    verify_package_consumer(aether_package_consumer_cpp)
+endif()
+if(WIN32)
+    add_custom_command(TARGET aether_package_consumer_cpp POST_BUILD
+        COMMAND "${CMAKE_COMMAND}" -E copy_if_different "$<TARGET_FILE:AetherUI::Core>"
+        "$<TARGET_FILE_DIR:aether_package_consumer_cpp>" VERBATIM)
+endif()
+enable_testing()
+add_test(NAME aether.package-consumer-cpp COMMAND aether_package_consumer_cpp)

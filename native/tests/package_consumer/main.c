@@ -2,6 +2,9 @@
 
 #include <stdio.h>
 #include <string.h>
+#ifdef AETHER_VERIFY_INSTALLED_ORIGIN
+#include "installed_origin.h"
+#endif
 
 /* Installed public headers only; calls and checks remain active under NDEBUG. */
 static int installed_attribute_values(void) {
@@ -83,6 +86,9 @@ static int installed_attribute_values(void) {
 }
 
 int main(void) {
+#ifdef AETHER_VERIFY_INSTALLED_ORIGIN
+    if (!aether_verify_installed_origin()) return 1;
+#endif
     if (aether_abi_version() != AETHER_ABI_VERSION_CURRENT) {
         fputs("installed header and runtime ABI versions differ\n", stderr);
         return 1;
