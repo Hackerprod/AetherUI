@@ -22,10 +22,9 @@ struct Reader {
 };
 }
 FontVerticalMetricsResult read_vertical_metrics(
- const std::shared_ptr<const RealFontBinding>& binding) noexcept {
+ std::span<const std::uint8_t> bytes,std::uint16_t units_per_em) noexcept {
  try {
-  if(!binding)return BindingError::invalid_input;
-  Reader r{binding->source()->bytes};
+  Reader r{bytes};
   const auto count=r.u16(4);
   if(!count||count>max_tables)return BindingError::malformed;
   r.range(12,std::size_t(count)*16);
@@ -41,7 +40,7 @@ FontVerticalMetricsResult read_vertical_metrics(
   if(!found_hhea)return BindingError::malformed;
   hhea.range(0,36);if(hhea.u32(0)!=0x00010000)return BindingError::malformed;
   FontVerticalMetrics result{};
-  result.units_per_em=binding->face()->units_per_em();
+  result.units_per_em=units_per_em;
   result.os2_present=found_os2;
   Reader selected=hhea;std::size_t offset=4;
   if(found_os2){
@@ -67,4 +66,9 @@ FontVerticalMetricsResult read_vertical_metrics(
   return result;
  }catch(BindingError error){return error;}
 }
+FontVerticalMetricsResult read_vertical_metrics(const std::shared_ptr<const RealFontBinding>& binding) noexcept {
+ if(!binding)return BindingError::invalid_input;
+ return read_vertical_metrics(binding->source()->byte_view(),binding->face()->units_per_em());
+}
+
 }

@@ -62,12 +62,24 @@ void validate_controls(const NativePaintList& native,FontProvider& provider) {
  if(list->native_gradient_unproven||!list->native_srgb_gradients.empty()||list->native_gradient_stop_count)unsupported();
  reserve_items(provider,list->commands.size(),sizeof(std::pair<int,std::int64_t>));
  std::vector<std::pair<int,std::int64_t>> controls;
+ const auto& focus=native.interaction_focus;
+ if(focus.owner){if(focus.owner!=focus.requested||focus.command_index>=list->commands.size()||list->commands[focus.command_index].tag!=AETHER_PAINT_STROKE_ROUNDED_RECT)internal();rect(focus.border);if(focus.border.width<=0||focus.border.height<=0)internal();}
+ else if(focus.command_index!=SIZE_MAX)internal();
+ std::size_t command_index=0;
  for(const auto& command:list->commands) {
+  const bool focus_command=focus.owner&&command_index==focus.command_index;
+  ++command_index;
   switch(command.tag) {
   case AETHER_PAINT_FILL_ROUNDED_RECT:
    rect(command.data.fill_rounded_rect.rect);square(command.data.fill_rounded_rect.radii);opaque(command.data.fill_rounded_rect.color);break;
   case AETHER_PAINT_STROKE_ROUNDED_RECT: {
-   const auto& s=command.data.stroke_rounded_rect;rect(s.rect);square(s.radii);opaque(s.color);
+   const auto& s=command.data.stroke_rounded_rect;rect(s.rect);
+   if(focus_command){
+    const aether_rectf expected{focus.border.x-2,focus.border.y-2,focus.border.width+4,focus.border.height+4};
+    if(!same(s.rect,expected)||s.stroke_width!=1||s.color.r!=0.145f||s.color.g!=0.388f||s.color.b!=0.922f||s.color.a!=0.75f)internal();
+    const auto& r=s.radii;
+    if(r.top_left_x!=2||r.top_left_y!=2||r.top_right_x!=2||r.top_right_y!=2||r.bottom_left_x!=2||r.bottom_left_y!=2||r.bottom_right_x!=2||r.bottom_right_y!=2)internal();
+   }else{square(s.radii);opaque(s.color);}
    if(!std::isfinite(s.stroke_width))internal();
    if(s.stroke_width<0||s.stroke_width>128)unsupported();
    break;

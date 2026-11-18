@@ -2,6 +2,7 @@
 #include "font_source.h"
 #include <variant>
 namespace aether::rendering::text::truetype {
+namespace detail { struct FontKernel; struct LegacyFontStorage; }
 inline constexpr std::size_t max_tables=128, max_contours=256, max_points=4096, max_segments=8192;
 enum class Error { malformed, unsupported, limit_exceeded, out_of_memory, cancelled };
 // Synchronous, noexcept; no reentry or mutation of inputs from this callback.
@@ -18,6 +19,8 @@ struct Bounds { std::int16_t x_min{},y_min{},x_max{},y_max{}; };
 // expanded references. Outline limits are aggregate, including repeated DAG leaves.
 // Segment cap is defensive (dominated by the point cap for admitted geometry).
 class Outline final {
+ friend struct detail::FontKernel;
+ friend struct detail::LegacyFontStorage;
  const std::shared_ptr<const FontSource> source_;
  const std::uint16_t units_;
  friend class ValidatedFace;
@@ -40,6 +43,8 @@ using FaceResult=std::variant<std::shared_ptr<const ValidatedFace>,Error>;
 // Directory/metrics/loca validation does not imply support for every glyph.
 class UnicodeMap;
 class ValidatedFace final {
+ friend struct detail::FontKernel;
+ friend struct detail::LegacyFontStorage;
  friend class UnicodeMap;
  struct Table { std::size_t offset{},length{}; };
  std::shared_ptr<const FontSource> source_;

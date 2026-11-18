@@ -14,8 +14,13 @@ set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 add_library(aether_core SHARED
     src/abi/aether_abi.cpp
     src/abi/aether_surface.cpp
+    src/abi/aether_interaction.cpp
+    src/rendering/html_ltr/interaction_state.cpp
+    src/rendering/html_ltr/interaction_native.cpp
     src/rendering/html_ltr/admission.cpp
     src/rendering/html_ltr/font_provider.cpp
+    src/rendering/html_ltr/persistent_font_provider.cpp
+    src/rendering/html_ltr/interaction_preparation.cpp
     src/rendering/html_ltr/session.cpp
     src/rendering/html_ltr/paint_finalize.cpp
     src/rendering/text/truetype_outline.cpp
@@ -1960,4 +1965,33 @@ if(AETHERUI_BUILD_TESTS AND UNIX)
         "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/fonts/DejaVuSans.ttf"
         "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/fonts/DejaVuSans-Bold.ttf"
         "${CMAKE_CURRENT_BINARY_DIR}/native-html-ltr")
+endif()
+
+if(AETHERUI_BUILD_TESTS AND UNIX)
+    add_executable(aether_native_interaction_test tests/test_native_interaction.c)
+    set_target_properties(aether_native_interaction_test PROPERTIES C_STANDARD 11 C_STANDARD_REQUIRED YES)
+    target_link_libraries(aether_native_interaction_test PRIVATE AetherUI::Core Threads::Threads)
+    target_compile_options(aether_native_interaction_test PRIVATE -Wall -Wextra -Werror -pedantic)
+    file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/native-interaction")
+    add_test(NAME aether.native-interaction COMMAND aether_native_interaction_test
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/fonts/DejaVuSans.ttf"
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/fonts/DejaVuSans-Bold.ttf"
+        "${CMAKE_CURRENT_BINARY_DIR}/native-interaction")
+endif()
+
+if(AETHERUI_BUILD_TESTS AND UNIX)
+    add_executable(aether_native_interaction_geometry_test tests/test_native_interaction_geometry.c)
+    set_target_properties(aether_native_interaction_geometry_test PROPERTIES C_STANDARD 11 C_STANDARD_REQUIRED YES)
+    target_link_libraries(aether_native_interaction_geometry_test PRIVATE AetherUI::Core Threads::Threads)
+    target_compile_options(aether_native_interaction_geometry_test PRIVATE -Wall -Wextra -Werror -pedantic)
+    add_test(NAME aether.native-interaction-geometry COMMAND aether_native_interaction_geometry_test
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/fonts/DejaVuSans.ttf"
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/fonts/DejaVuSans-Bold.ttf")
+endif()
+
+if(AETHERUI_BUILD_TESTS AND UNIX)
+    add_test(NAME aether.native-interaction-fractional COMMAND aether_native_interaction_geometry_test
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/fonts/DejaVuSans.ttf"
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/fonts/DejaVuSans-Bold.ttf"
+        --fractional)
 endif()

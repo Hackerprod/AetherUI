@@ -1,3 +1,4 @@
+#include "transaction_preview.h"
 #include <aether/aether.h>
 #include <aether/aether_contextual_style.h>
 #include "../css/computed_style_handle.h"
@@ -1636,6 +1637,13 @@ static aether_status_t create_revision_map(aether_style_revision_t revision,aeth
         auto status=make_map_version(input,map->current);if(status!=AETHER_OK)return status;
         *out_map=map.release();return AETHER_OK;
     }catch(const std::bad_alloc&){return AETHER_ERROR_OUT_OF_MEMORY;}catch(...){return AETHER_ERROR_INVALID_STATE;}
+}
+aether_status_t aether::style::transaction_create_pending_map(aether_style_transaction_t tx, aether_style_map_t* out) noexcept {
+    if (out) *out = nullptr;
+    if (!tx || !out) return AETHER_ERROR_NULL_ARG;
+    if (!tx->owner || tx->committed || !tx->output ||
+        tx->owner->owner_thread != std::this_thread::get_id()) return AETHER_ERROR_INVALID_STATE;
+    return create_revision_map(tx->output.get(), out);
 }
 AETHER_API aether_status_t aether_style_revision_create_map(aether_style_revision_t revision, aether_style_map_t* out_map) {
     if (out_map) *out_map = nullptr;

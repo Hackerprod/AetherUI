@@ -34,8 +34,8 @@ struct NativeTextBudget {
   if(run.glyphs.size()>text::max_frame_glyphs-glyphs)return ErrorCode::LIMIT_EXCEEDED;
   glyphs+=run.glyphs.size();
   if(fonts.insert(run.font.get()).second){
-   if(run.font->bytes.size()>max_frame_font_bytes-font_bytes)return ErrorCode::LIMIT_EXCEEDED;
-   font_bytes+=run.font->bytes.size();
+   if(run.font->byte_view().size()>max_frame_font_bytes-font_bytes)return ErrorCode::LIMIT_EXCEEDED;
+   font_bytes+=run.font->byte_view().size();
   }
   return {};
  }

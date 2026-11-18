@@ -7,6 +7,7 @@
 
 namespace aether::rendering::html_ltr {
 namespace tt = text::truetype;
+class OwnedBudget;
 struct FontProduct {
  std::shared_ptr<const tt::RealFontBinding> binding;
  std::string source;
@@ -27,6 +28,11 @@ class FontProvider final {
  std::map<std::pair<const text::FontSource*,std::uint32_t>,std::shared_ptr<const tt::Outline>> outlines_;
  FontProviderUsage usage_{};
  const std::uint32_t profile_;
+ struct PersistentState;
+ std::shared_ptr<PersistentState> persistent_;
+ std::size_t cached_payload()const noexcept;
+ void start_operation();
+ void finish_operation()noexcept;
  void validate_source(const std::shared_ptr<const text::FontSource>&);
  std::shared_ptr<const tt::RealFontBinding> binding(int size, int weight);
  static void reserve(std::size_t n,std::size_t& used,std::size_t limit);
@@ -36,6 +42,19 @@ public:
  tt::AggregateBudget raster_budget{512000000u};
  tt::AggregateBudget mask_budget{16u*1024u*1024u};
  FontProvider(std::vector<std::uint8_t> regular,std::vector<std::uint8_t> bold,std::uint32_t profile=1);
+ // M1: only font bytes and new auxiliary state are instrumented; existing
+ // derived legacy cache/product containers remain explicitly outside that quota.
+ struct PersistentInteractionTag {OwnedBudget& budget;};
+ FontProvider(std::shared_ptr<const text::FontSource> regular,
+              std::shared_ptr<const text::FontSource> bold,PersistentInteractionTag);
+ class Operation final {
+  FontProvider* provider_;
+ public:
+  explicit Operation(FontProvider& p):provider_(&p){p.start_operation();}
+  ~Operation(){provider_->finish_operation();}
+  Operation(const Operation&)=delete;
+ };
+ Operation operation(){return Operation(*this);}
  FontProvider(const FontProvider&)=delete;
  FontProvider& operator=(const FontProvider&)=delete;
  void reserve_payload(std::size_t bytes);

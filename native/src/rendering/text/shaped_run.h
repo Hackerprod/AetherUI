@@ -36,6 +36,7 @@ public:
    face_index(face), size_26_6(size), raster_flags(flags) {
   if(size<=0 || size>65536*64) throw std::invalid_argument("font transport bounds");
  }
+ std::span<const std::uint8_t> byte_view()const noexcept{return source->byte_view();}
  // Compatibility constructor: the old supplied label is provenance, never a
  // trusted hash. Providers should reuse a FontSource across sizes/runs instead.
  FontInstance(std::vector<std::uint8_t> b, std::string provenance, std::uint32_t face,

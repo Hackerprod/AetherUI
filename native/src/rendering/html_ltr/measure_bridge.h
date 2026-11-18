@@ -5,6 +5,7 @@ namespace aether::layout { class BoxStyleSnapshot; }
 struct aether_node_s;
 namespace aether::rendering::html_ltr {
 class HtmlLtrSession;
+class InteractionNativeDocument;
 class HtmlLtrMeasureBridge {
 public:
  virtual ~HtmlLtrMeasureBridge()=default;

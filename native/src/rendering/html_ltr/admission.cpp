@@ -3,6 +3,20 @@
 #include <limits>
 
 namespace aether::rendering::html_ltr {
+std::uint32_t decode_scalar_utf8(std::string_view s, std::size_t& i) {
+    if(i>=s.size()) throw Error{AETHER_ERROR_INVALID_ARGUMENT};
+    unsigned c=static_cast<unsigned char>(s[i++]);
+    if(c<0x80) { if(c==0) throw Error{AETHER_ERROR_INVALID_ARGUMENT}; return c; }
+    unsigned count=0;std::uint32_t value=0,minimum=0;
+    if(c>=0xc2 && c<=0xdf) {count=1;value=c&31;minimum=0x80;}
+    else if(c>=0xe0 && c<=0xef) {count=2;value=c&15;minimum=0x800;}
+    else if(c>=0xf0 && c<=0xf4) {count=3;value=c&7;minimum=0x10000;}
+    else throw Error{AETHER_ERROR_INVALID_ARGUMENT};
+    if(count>s.size()-i) throw Error{AETHER_ERROR_INVALID_ARGUMENT};
+    for(unsigned n=0;n<count;++n) {unsigned next=static_cast<unsigned char>(s[i++]);if((next&0xc0)!=0x80)throw Error{AETHER_ERROR_INVALID_ARGUMENT};value=(value<<6)|(next&63);}
+    if(value<minimum || value>0x10ffff || (value>=0xd800&&value<=0xdfff)) throw Error{AETHER_ERROR_INVALID_ARGUMENT};
+    return value;
+}
 namespace {
 [[noreturn]] void invalid() { throw Error{AETHER_ERROR_INVALID_ARGUMENT}; }
 [[noreturn]] void unsupported() { throw Error{AETHER_ERROR_UNSUPPORTED}; }
@@ -11,20 +25,7 @@ bool ws(char c) noexcept { return c==' ' || c=='\t' || c=='\r' || c=='\n'; }
 bool css_ws(char c) noexcept { return ws(c) || c=='\f'; }
 bool alpha(char c) noexcept { return (c>='a'&&c<='z') || (c>='A'&&c<='Z'); }
 bool name_char(char c) noexcept { return alpha(c) || (c>='0'&&c<='9') || c=='-' || c==':' || c=='_'; }
-std::uint32_t scalar(std::string_view s, std::size_t& i) {
-    if(i>=s.size()) invalid();
-    unsigned c=static_cast<unsigned char>(s[i++]);
-    if(c<0x80) { if(c==0) invalid(); return c; }
-    unsigned count=0;std::uint32_t value=0,minimum=0;
-    if(c>=0xc2 && c<=0xdf) {count=1;value=c&31;minimum=0x80;}
-    else if(c>=0xe0 && c<=0xef) {count=2;value=c&15;minimum=0x800;}
-    else if(c>=0xf0 && c<=0xf4) {count=3;value=c&7;minimum=0x10000;}
-    else invalid();
-    if(count>s.size()-i) invalid();
-    for(unsigned n=0;n<count;++n) {unsigned next=static_cast<unsigned char>(s[i++]);if((next&0xc0)!=0x80)invalid();value=(value<<6)|(next&63);}
-    if(value<minimum || value>0x10ffff || (value>=0xd800&&value<=0xdfff)) invalid();
-    return value;
-}
+
 std::string_view trim(std::string_view s) {while(!s.empty()&&css_ws(s.front()))s.remove_prefix(1);while(!s.empty()&&css_ws(s.back()))s.remove_suffix(1);return s;}
 unsigned hex(char c) {if(c>='0'&&c<='9')return c-'0';if(c>='a'&&c<='f')return c-'a'+10;if(c>='A'&&c<='F')return c-'A'+10;unsupported();}
 std::uint32_t color(std::string_view v) {if(v.size()!=7||v.front()!='#')unsupported();std::uint32_t c=0;for(std::size_t i=1;i<v.size();++i)c=(c<<4)|hex(v[i]);return c;}
@@ -86,9 +87,9 @@ class Recognizer {
     void text(Node& n,std::string_view s) {
         bool previous=false;
         for(std::size_t i=0;i<s.size();) {
-            const auto cp=scalar(s,i);
+            const auto cp=decode_scalar_utf8(s,i);
             if(cp=='&')unsupported();
-            if(!((cp>=32&&cp<=126)||(cp>=160&&cp<=255&&cp!=173)))unsupported();
+            if(!repertoire_scalar(cp))unsupported();
             if(cp==' '&&(previous||i==1||i==s.size()))unsupported();
             previous=cp==' ';
             if(result.scalar_count==4096)limit();
@@ -99,8 +100,8 @@ class Recognizer {
     void attribute_text(std::string& destination,std::string_view value) {
         std::size_t count=0;
         for(std::size_t i=0;i<value.size();) {
-            const auto cp=scalar(value,i);
-            if(cp=='&'||cp=='<'||!((cp>=32&&cp<=126)||(cp>=160&&cp<=255&&cp!=173)))unsupported();
+            const auto cp=decode_scalar_utf8(value,i);
+            if(cp=='&'||cp=='<'||!repertoire_scalar(cp))unsupported();
             if(count==256||result.scalar_count==4096)limit();
             ++count;++result.scalar_count;
         }
@@ -201,7 +202,7 @@ public:
         if(source.empty())invalid();
         if(source.size()>65536)limit();
         // Validate complete bytes, including rejected markup and style values.
-        for(std::size_t i=0;i<source.size();) (void)scalar(source,i);
+        for(std::size_t i=0;i<source.size();) (void)decode_scalar_utf8(source,i);
         if(starts("<!doctype html>"))at+=15;
         element(Node::no_parent,1);
         if(at!=source.size())invalid();

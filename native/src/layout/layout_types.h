@@ -490,6 +490,7 @@ struct aether_layout_engine_s {
 private:
     friend class aether::layout::SyntheticTextTestIssuer;
     friend class aether::rendering::html_ltr::HtmlLtrSession;
+    friend class aether::rendering::html_ltr::InteractionNativeDocument;
     std::shared_ptr<aether::rendering::html_ltr::HtmlLtrMeasureBridge> html_ltr_bridge_;
     friend class aether::layout::NativeTextAccess;
     friend class aether::layout::NativeTextTransaction;

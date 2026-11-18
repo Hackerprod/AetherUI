@@ -9,12 +9,15 @@
 #include <cstdint>
 #include <string>
 #include <string_view>
+#include <span>
+namespace aether::rendering::html_ltr::owned_text { struct SourceBridge; }
 namespace aether::rendering::text::detail {
 class Sha256 {
  std::array<std::uint32_t,8> state_{{0x6a09e667,0xbb67ae85,0x3c6ef372,0xa54ff53a,0x510e527f,0x9b05688c,0x1f83d9ab,0x5be0cd19}};
  std::array<unsigned char,64> block_{}; std::uint64_t bytes_=0; std::size_t used_=0;
  void compress();
 public: void update(std::string_view); std::string finish() const;
+ template<class String> void finish_into(String&) const;
 };
 std::string sha256(std::string_view);
 // SHA-256, FIPS PUB 180-4 sections 4.1.2, 4.2.2, 5 and 6.2.
@@ -41,7 +44,7 @@ inline void Sha256::update(std::string_view input) {
  bytes_+=input.size();
  for(unsigned char c:input) {block_[used_++]=c;if(used_==64){compress();used_=0;}}
 }
-inline std::string Sha256::finish() const {
+template<class String> inline void Sha256::finish_into(String& out) const {
  auto s=*this;const auto bits=s.bytes_*8;s.block_[s.used_++]=0x80;
  if(s.used_>56) {while(s.used_<64)s.block_[s.used_++]=0;s.compress();s.used_=0;}
  while(s.used_<56)s.block_[s.used_++]=0;
@@ -49,14 +52,14 @@ inline std::string Sha256::finish() const {
   s.block_[s.used_++]=static_cast<unsigned char>(bits>>(i*8));
  }
  s.compress();
- constexpr char hex[]="0123456789abcdef";std::string out;out.reserve(64);
+ constexpr char hex[]="0123456789abcdef";out.reserve(64);
  for(auto word:s.state_) {
   for(int shift=28;shift>=0;shift-=4) {
    out+=hex[(word>>shift)&15];
   }
  }
- return out;
 }
+inline std::string Sha256::finish() const { std::string out;finish_into(out);return out; }
 inline std::string sha256(std::string_view input){Sha256 s;s.update(input);return s.finish();}
 }
 
@@ -65,21 +68,40 @@ inline constexpr std::size_t max_font_bytes = 16 * 1024 * 1024;
 // Digest identifies the retained bytes, not authenticity, validity or licensing.
 // No external font-library handles, paths or borrowed byte storage are retained.
 class FontSource final {
+ struct LegacyStorageLayout {std::vector<std::uint8_t> bytes;std::string digest,provenance;};
+ std::span<const std::uint8_t> shared_bytes_{};
+ std::shared_ptr<const void> shared_owner_;
+
  static std::vector<std::uint8_t> bounded(std::vector<std::uint8_t> bytes) {
   if(bytes.empty() || bytes.size()>max_font_bytes)
    throw std::invalid_argument("font source bounds");
   return bytes;
  }
 public:
+ // Only the typed internal bridge may create this token. It cannot wrap caller
+ // memory through the C API; the owner is the immutable owned Source itself.
+ class SharedBytes final {
+  friend struct ::aether::rendering::html_ltr::owned_text::SourceBridge;
+  friend class FontSource;
+  std::shared_ptr<const void> owner;
+  std::span<const std::uint8_t> view;
+  SharedBytes(std::shared_ptr<const void> p,std::span<const std::uint8_t> v):owner(std::move(p)),view(v){}
+ };
+ static constexpr std::size_t legacy_reservation_bytes()noexcept{return sizeof(LegacyStorageLayout)+128;}
+ std::span<const std::uint8_t> byte_view()const noexcept{return shared_owner_?shared_bytes_:std::span<const std::uint8_t>(bytes);}
+ bool shares_bytes()const noexcept{return bool(shared_owner_);}
  const std::vector<std::uint8_t> bytes;
  const std::string digest;
  const std::string provenance;
  explicit FontSource(std::vector<std::uint8_t> b, std::string origin = {})
  : bytes(bounded(std::move(b))),
-   digest(detail::sha256(std::string_view(reinterpret_cast<const char*>(bytes.data()),bytes.size()))),
+   digest(detail::sha256(std::string_view(reinterpret_cast<const char*>(byte_view().data()),byte_view().size()))),
    provenance(std::move(origin)) {
   if(provenance.size()>4096) throw std::invalid_argument("font provenance bounds");
  }
+ explicit FontSource(SharedBytes shared)
+ :shared_bytes_(shared.view),shared_owner_(std::move(shared.owner)),bytes(),
+ digest([&]{if(!shared_owner_||shared_bytes_.empty()||!shared_bytes_.data()||shared_bytes_.size()>max_font_bytes)throw std::invalid_argument("font source bounds");return detail::sha256(std::string_view(reinterpret_cast<const char*>(byte_view().data()),byte_view().size()));}()),provenance() {}
  // Caller supplies the expected bounded length from its source manifest. Read
  // once into owned storage, rejecting both truncation and trailing bytes. Hash
  // only that retained buffer; never reopen or hash a path separately.

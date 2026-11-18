@@ -1,6 +1,7 @@
 #pragma once
 #include "truetype_outline.h"
 namespace aether::rendering::text::truetype {
+namespace detail { struct FontKernel; struct LegacyFontStorage; }
 inline constexpr std::size_t max_cmap_bytes=1024*1024, max_cmap_records=128,
  max_cmap_segments=8192, max_cmap_groups=65536, max_cmap_work=1000000;
 enum class CmapError { invalid_input, malformed, unsupported, limit_exceeded, cancelled, out_of_memory };
@@ -11,6 +12,8 @@ using LookupResult=std::variant<Mapped,Missing,CmapError>;
 class UnicodeMap;
 using CmapResult=std::variant<std::shared_ptr<const UnicodeMap>,CmapError>;
 class UnicodeMap final {
+ friend struct detail::FontKernel;
+ friend struct detail::LegacyFontStorage;
  struct Range { std::uint32_t first,last,glyph; std::uint16_t delta; std::size_t array; };
  std::shared_ptr<const ValidatedFace> face_;
  std::vector<Range> ranges_;

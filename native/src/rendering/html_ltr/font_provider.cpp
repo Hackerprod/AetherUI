@@ -1,5 +1,7 @@
 #include "font_provider.h"
 #include "raster_coordinate.h"
+#include "font_product_kernel.h"
+#include "owned_allocator.h"
 #include <cmath>
 #include <limits>
 
@@ -57,7 +59,40 @@ void FontProvider::reserve(std::size_t n,std::size_t& used,std::size_t limit){
  if(used>limit||n>limit-used)fail(AETHER_ERROR_LIMIT_EXCEEDED);
  used+=n;
 }
-void FontProvider::reserve_payload(std::size_t n){reserve(n,usage_.payload,payload_limit);}
+struct FontProvider::PersistentState {bool active{};std::size_t base_extra{};};
+void FontProvider::reserve_payload(std::size_t n){
+ reserve(n,usage_.payload,payload_limit);
+ if(persistent_&&!persistent_->active)persistent_->base_extra+=n;
+}
+std::size_t FontProvider::cached_payload()const noexcept {
+ // This is the inherited logical operation allowance, NOT owned accounting.
+ // All map/buffer storage here is legacy-derived and excluded by M1.
+ std::size_t n=persistent_?persistent_->base_extra:0;
+ const auto add=[&](std::size_t x){if(n>payload_limit||x>payload_limit-n)n=payload_limit+1;else n+=x;};
+ for(const auto& source:{regular_,bold_})if(source)add(source->byte_view().size()+text::FontSource::legacy_reservation_bytes());
+ for(const auto& [_,b]:bindings_)add(map_entry_overhead+b->face()->logical_payload_bytes()+b->map()->logical_payload_bytes()+sizeof(text::FontInstance)+sizeof(tt::RealFontBinding));
+ add(cmap_.size()*(sizeof(decltype(cmap_)::value_type)+map_entry_overhead));
+ for(const auto& [_,o]:outlines_)add(map_entry_overhead+sizeof(tt::Outline)+o->segments.size()*sizeof(tt::Segment)+o->contours.size()*sizeof(tt::Contour));
+ return n;
+}
+void FontProvider::start_operation(){
+ if(!persistent_||persistent_->active)fail(AETHER_ERROR_INTERNAL);
+ const auto cached=cached_payload();if(cached>payload_limit)fail(AETHER_ERROR_LIMIT_EXCEEDED);
+ usage_={};usage_.payload=cached;usage_.instances=bindings_.size();usage_.outlines=outlines_.size();
+ raster_budget={512000000u};mask_budget={16u*1024u*1024u};persistent_->active=true;
+}
+void FontProvider::finish_operation()noexcept {
+ usage_.payload=cached_payload();usage_.instances=bindings_.size();usage_.outlines=outlines_.size();persistent_->active=false;
+}
+FontProvider::FontProvider(std::shared_ptr<const text::FontSource> regular,std::shared_ptr<const text::FontSource> bold,PersistentInteractionTag tag)
+ :regular_(std::move(regular)),bold_(std::move(bold)),profile_(2){
+ if(!regular_||!regular_->shares_bytes()||(bold_&&!bold_->shares_bytes()))fail(AETHER_ERROR_INVALID_ARGUMENT);
+ const auto rn=regular_->byte_view().size(),bn=bold_?bold_->byte_view().size():0;
+ if(!rn||rn>16u*1024u*1024u||bn>16u*1024u*1024u-rn)fail(AETHER_ERROR_LIMIT_EXCEEDED);
+ reserve_payload(rn+text::FontSource::legacy_reservation_bytes());validate_source(regular_);
+ if(bold_){reserve_payload(bn+text::FontSource::legacy_reservation_bytes());validate_source(bold_);}
+ persistent_=std::allocate_shared<PersistentState>(OwnedAllocator<PersistentState>(tag.budget,OwnedCategory::glyphs));
+}
 void FontProvider::validate_source(const std::shared_ptr<const text::FontSource>& source){
  reserve_payload(binding_temporary_max);
  auto face_result=tt::ValidatedFace::create(source);if(auto e=std::get_if<tt::Error>(&face_result))check(*e);
@@ -71,9 +106,9 @@ FontProvider::FontProvider(std::vector<std::uint8_t> regular,std::vector<std::ui
  if(profile_!=1&&profile_!=2)fail(AETHER_ERROR_INVALID_ARGUMENT);
  if(regular.empty())fail(AETHER_ERROR_INVALID_ARGUMENT);
  if(regular.size()>16u*1024u*1024u||bold.size()>16u*1024u*1024u-regular.size())fail(AETHER_ERROR_LIMIT_EXCEEDED);
- reserve_payload(regular.size()+sizeof(text::FontSource)+128);
+ reserve_payload(regular.size()+text::FontSource::legacy_reservation_bytes());
  regular_=std::make_shared<const text::FontSource>(std::move(regular),"HTML LTR regular");validate_source(regular_);
- if(!bold.empty()){reserve_payload(bold.size()+sizeof(text::FontSource)+128);bold_=std::make_shared<const text::FontSource>(std::move(bold),"HTML LTR bold");validate_source(bold_);}
+ if(!bold.empty()){reserve_payload(bold.size()+text::FontSource::legacy_reservation_bytes());bold_=std::make_shared<const text::FontSource>(std::move(bold),"HTML LTR bold");validate_source(bold_);}
 }
 std::shared_ptr<const tt::RealFontBinding> FontProvider::binding(int size,int weight){
  if(size<8||size>48||(weight!=400&&weight!=700))fail(AETHER_ERROR_INTERNAL);
@@ -87,9 +122,16 @@ std::shared_ptr<const tt::RealFontBinding> FontProvider::binding(int size,int we
  bindings_.emplace(key,b);usage_.payload-=binding_temporary_max-retained;return b;
 }
 std::shared_ptr<const tt::Outline> FontProvider::outline(const std::shared_ptr<const tt::RealFontBinding>& b,std::uint32_t glyph){
+ if(persistent_&&!persistent_->active)fail(AETHER_ERROR_INTERNAL);
  if(!b||(b->source()!=regular_&&b->source()!=bold_))fail(AETHER_ERROR_INTERNAL);
  bool owned=false;for(const auto& [_,candidate]:bindings_)if(candidate==b){owned=true;break;}if(!owned)fail(AETHER_ERROR_INTERNAL);
  const auto key=std::pair{b->source().get(),glyph};if(auto it=outlines_.find(key);it!=outlines_.end())return it->second;
+ if(persistent_&&outlines_.size()==256){
+  auto victim=outlines_.begin();while(victim!=outlines_.end()&&victim->second.use_count()!=1)++victim;
+  if(victim==outlines_.end())fail(AETHER_ERROR_LIMIT_EXCEEDED);
+  const auto& o=victim->second;const auto released=map_entry_overhead+sizeof(tt::Outline)+o->segments.size()*sizeof(tt::Segment)+o->contours.size()*sizeof(tt::Contour);
+  outlines_.erase(victim);usage_.payload-=released;--usage_.outlines;
+ }
  reserve(1,usage_.outlines,256);
  constexpr std::uint64_t work=1000000;
  if(work>outline_work_limit-usage_.outline_work_reserved)fail(AETHER_ERROR_LIMIT_EXCEEDED);
@@ -103,6 +145,7 @@ std::shared_ptr<const tt::Outline> FontProvider::outline(const std::shared_ptr<c
  outlines_.emplace(key,ol);usage_.payload-=outline_temporary_max-retained;return ol;
 }
 FontProduct FontProvider::product(std::string_view source,int size,int weight,int line_height){
+ if(persistent_&&!persistent_->active)fail(AETHER_ERROR_INTERNAL);
  reserve(1,usage_.requests,32768);
  if(source.size()>text::max_text_bytes)fail(AETHER_ERROR_LIMIT_EXCEEDED);
  if(line_height<8||line_height>96)fail(AETHER_ERROR_INTERNAL);
@@ -114,25 +157,14 @@ FontProduct FontProvider::product(std::string_view source,int size,int weight,in
  reserve_payload(sizeof(FontProduct)+source.size()+n*sizeof(text::Glyph)+(n+1)*sizeof(std::uint64_t));
  FontProduct product;product.binding=binding(size,weight);product.source=source;product.glyphs.reserve(n);product.prefixes.reserve(n+1);product.prefixes.push_back(0);
  auto vertical=tt::read_vertical_metrics(product.binding);if(auto e=std::get_if<tt::BindingError>(&vertical))check(*e);
- const auto vm=std::get<tt::FontVerticalMetrics>(vertical);if(!vm.units_per_em)fail(AETHER_ERROR_INTERNAL);
- const double scale=double(size)/vm.units_per_em;
- const double baseline=double(vm.ascent)*scale+(double(line_height)-(double(vm.ascent)+vm.descent)*scale)/2;
- if(!std::isfinite(baseline)||baseline<0||baseline>line_height)fail(AETHER_ERROR_UNSUPPORTED);
- std::uint64_t sum=0;
- for(std::size_t at=0;at<source.size();){reserve(1,usage_.scalar_visits,65536);const auto cluster=at;const auto cp=scalar(source,at,profile_);const auto key=std::pair{product.binding->source().get(),cp};std::uint16_t glyph;
+ const auto vm=std::get<tt::FontVerticalMetrics>(vertical);
+ product.metrics=shape_font_product(source,product.glyphs,product.prefixes,vm,size,line_height,
+  [&](std::string_view value,std::size_t& at){reserve(1,usage_.scalar_visits,65536);return scalar(value,at,profile_);},
+  [&](uint32_t cp){const auto key=std::pair{product.binding->source().get(),cp};std::uint16_t glyph;
   if(auto it=cmap_.find(key);it!=cmap_.end())glyph=it->second;
   else {reserve(1,usage_.cmap_lookups,4352);reserve_payload(sizeof(decltype(cmap_)::value_type)+map_entry_overhead);auto mapped=product.binding->map()->lookup(cp);if(auto e=std::get_if<tt::CmapError>(&mapped))check(*e);if(std::holds_alternative<tt::Missing>(mapped))fail(AETHER_ERROR_UNSUPPORTED);glyph=std::get<tt::Mapped>(mapped).glyph_id;cmap_.emplace(key,glyph);}
-  auto ol=outline(product.binding,glyph);const auto delta=std::uint64_t(ol->metrics.advance);sum=checked_design_add(sum,delta);
-  const double width=scaled_design_prefix(sum,scale);
-  (void)width;
-  // Operands are bounded (uint16 hmtx, size<=48, unitsPerEm validated) before
-  // multiplication; validate again before round/cast, never abs(int32_min).
-  const auto q=quantize_absolute(scaled_design_prefix(delta,scale));
-  product.prefixes.push_back(sum);product.glyphs.push_back({glyph,std::uint32_t(cluster),std::int32_t(q),0,0,0});
- }
- const double width=scaled_design_prefix(sum,scale);
- product.metrics=checked_metrics(width,line_height,baseline);
- if(!source.empty())validate_run_transport(source,product.glyphs,width,line_height,baseline);
+  auto ol=outline(product.binding,glyph);return std::pair{uint32_t(glyph),uint64_t(ol->metrics.advance)};
+ });
  return product;
 }
 }

@@ -1,5 +1,6 @@
 #pragma once
 #include "real_font_binding.h"
+#include <span>
 
 namespace aether::rendering::text::truetype {
 enum class VerticalMetricPolicy { hhea, os2_typo };
@@ -13,6 +14,8 @@ struct FontVerticalMetrics {
  std::uint16_t os2_version{};
 };
 using FontVerticalMetricsResult=std::variant<FontVerticalMetrics,BindingError>;
+// Same allocation-free kernel for owned interaction sources (no legacy copies).
+FontVerticalMetricsResult read_vertical_metrics(std::span<const std::uint8_t> bytes,std::uint16_t units_per_em) noexcept;
 // Bounded, allocation-free reading from the immutable, validated binding source.
 // Unknown OS/2 versions are unsupported, truncated present tables are malformed.
 FontVerticalMetricsResult read_vertical_metrics(

@@ -122,7 +122,8 @@ static const html_entity html_entities[] = {
 };
 static const int html_entity_count = sizeof(html_entities) / sizeof(html_entities[0]);
 
-inline void utf8_encode(uint32_t cp, std::string& out) {
+template<class String>
+inline void utf8_encode_into(uint32_t cp, String& out) {
     if (cp < 0x80) {
         out += static_cast<char>(cp);
     } else if (cp < 0x800) {
@@ -140,8 +141,13 @@ inline void utf8_encode(uint32_t cp, std::string& out) {
     }
 }
 
-inline std::string html_decode(const char* input) {
-    std::string result;
+inline void utf8_encode(uint32_t cp, std::string& out) {
+    utf8_encode_into(cp,out);
+}
+
+// One decoder kernel; callers select only storage, never decoding semantics.
+template<class String>
+inline String html_decode_storage(const char* input, String result) {
     if (!input) return result;
     result.reserve(std::strlen(input));
 
@@ -196,7 +202,7 @@ inline std::string html_decode(const char* input) {
             else if (codepoint >= 0x80 && codepoint <= 0x9F)
                 codepoint = c1_replacements[codepoint - 0x80];
 
-            utf8_encode(codepoint, result);
+            utf8_encode_into(codepoint, result);
             p = cursor;
             continue;
         }
@@ -206,7 +212,7 @@ inline std::string html_decode(const char* input) {
         for (int i = 0; i < html_entity_count; i++) {
             size_t nlen = std::strlen(html_entities[i].name);
             if (std::strncmp(p + 1, html_entities[i].name, nlen) == 0 && p[1 + nlen] == ';') {
-                utf8_encode(html_entities[i].codepoint, result);
+                utf8_encode_into(html_entities[i].codepoint, result);
                 p += nlen + 2;
                 found = true;
                 break;
@@ -217,6 +223,10 @@ inline std::string html_decode(const char* input) {
         }
     }
     return result;
+}
+
+inline std::string html_decode(const char* input) {
+    return html_decode_storage(input,std::string{});
 }
 
 } // namespace aether

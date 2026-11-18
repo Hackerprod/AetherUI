@@ -1,5 +1,8 @@
 #include "dom_types.h"
 #include "html_attribute_name.h"
+#include "owned_parser.h"
+#include "../rendering/html_ltr/owned_allocator.h"
+#include <type_traits>
 #include "../abi/aether_abi.h"
 #include <cctype>
 #include <cstring>
@@ -35,7 +38,11 @@ static bool is_raw_text_end_boundary(char c) {
 
 /* ── Parser ───────────────────────────────────────────────────────── */
 
+template<class TemporaryAllocator>
 class HtmlParser {
+    using String=std::basic_string<char,std::char_traits<char>,TemporaryAllocator>;
+    using Stack=std::vector<aether_node_s*,typename std::allocator_traits<TemporaryAllocator>::template rebind_alloc<aether_node_s*>>;
+    TemporaryAllocator allocator;
     const char* src;
     size_t len;
     size_t pos;
@@ -55,11 +62,11 @@ class HtmlParser {
             pos++;
     }
 
-    std::string read_name() {
+    String read_name() {
         size_t start = pos;
         while (!end() && is_name_char(current()))
             pos++;
-        return std::string(src + start, pos - start);
+        return String(src + start, pos - start, allocator);
     }
 
     void skip_until_tag_end() {
@@ -68,11 +75,11 @@ class HtmlParser {
         if (!end()) pos++;
     }
 
-    std::string read_attribute_value() {
+    String read_attribute_value() {
         // Only HTML whitespace precedes a value; VT starts unquoted data.
         while (!end() && aether::is_html_space(static_cast<unsigned char>(current())))
             pos++;
-        if (end()) return {};
+        if (end()) return String(allocator);
 
         if (current() == '\'' || current() == '"') {
             char quote = current();
@@ -80,7 +87,7 @@ class HtmlParser {
             size_t start = pos;
             while (!end() && current() != quote)
                 pos++;
-            std::string val(src + start, pos - start);
+            String val(src + start, pos - start, allocator);
             if (!end()) pos++;
             return val;
         }
@@ -91,31 +98,39 @@ class HtmlParser {
         while (!end() && !aether::is_html_space(static_cast<unsigned char>(current()))
                && current() != '>')
             pos++;
-        return std::string(src + start, pos - start);
+        return String(src + start, pos - start, allocator);
     }
 
     /* ── Node creation helpers ─────────────────────────────── */
 
-    aether_node_s* create_text(const std::string& text, aether_doc_s* doc) {
-        auto* n = new aether_node_s();
+    std::unique_ptr<aether_node_s> create_text(std::string_view text, aether_doc_s* doc) {
+        auto n = std::make_unique<aether_node_s>();
         n->type = AETHER_NODE_TEXT;
-        n->text = text;
+        n->text.assign(text.data(),text.size());
         n->style_node_id = doc->next_style_node_id++;
         return n;
     }
 
-    aether_node_s* create_comment(const std::string& text, aether_doc_s* doc) {
-        auto* n = new aether_node_s();
+    std::unique_ptr<aether_node_s> create_comment(std::string_view text, aether_doc_s* doc) {
+        auto n = std::make_unique<aether_node_s>();
         n->type = AETHER_NODE_COMMENT;
-        n->text = text;
+        n->text.assign(text.data(),text.size());
         n->style_node_id = doc->next_style_node_id++;
         return n;
     }
 
-    std::unique_ptr<aether_node_s> create_element(const std::string& tag, aether_doc_s* doc) {
+    // Keep each pending node owned across text assignment and vector growth.
+    // Legacy parsing is still replacement, not a transactional DOM operation.
+    static void append_owned(aether_node_s* parent, std::unique_ptr<aether_node_s> node) {
+        parent->children.push_back(node.get());
+        node->parent = parent;
+        (void)node.release();
+    }
+
+    std::unique_ptr<aether_node_s> create_element(std::string_view tag, aether_doc_s* doc) {
         auto n = std::make_unique<aether_node_s>();
         n->type = AETHER_NODE_ELEMENT;
-        n->tag_name = tag;
+        n->tag_name.assign(tag.data(),tag.size());
         n->style_node_id = doc->next_style_node_id++;
         return n;
     }
@@ -128,8 +143,8 @@ class HtmlParser {
         pos = (next == std::string_view::npos) ? len : next;
         if (pos <= start) return;
 
-        std::string raw(src + start, pos - start);
-        std::string decoded = aether::html_decode(raw.c_str());
+        String raw(src + start, pos - start, allocator);
+        String decoded = aether::html_decode_storage(raw.c_str(),String(allocator));
         // pre/listing suppress exactly one eligible character token, after
         // source preprocessing and reference decoding, never at DOM mutation.
         if (skip_leading_lf) {
@@ -137,8 +152,7 @@ class HtmlParser {
             if (!decoded.empty() && decoded.front() == '\n') decoded.erase(0, 1);
         }
         if (!decoded.empty()) {
-            parent->children.push_back(create_text(decoded, doc));
-            parent->children.back()->parent = parent;
+            append_owned(parent, create_text(decoded, doc));
         }
     }
 
@@ -189,9 +203,8 @@ class HtmlParser {
         // C-string boundary makes an embedded NUL EOF before this parser runs.
         constexpr size_t pending[] = {0, 1, 0, 1, 2, 3};
         const size_t text_end = pos - pending[static_cast<size_t>(state)];
-        parent->children.push_back(
-            create_comment(std::string(src + start, text_end - start), doc));
-        parent->children.back()->parent = parent;
+        append_owned(parent,
+            create_comment(String(src + start, text_end - start, allocator), doc));
         if (closed) ++pos; // Consume exactly the closing '>', never the tail.
     }
 
@@ -205,12 +218,12 @@ class HtmlParser {
         pos = (end_pos == std::string_view::npos) ? len : end_pos + 2;
     }
 
-    void parse_end_tag(std::vector<aether_node_s*>& stack, aether_doc_s* doc) {
+    void parse_end_tag(Stack& stack, aether_doc_s* doc) {
         (void)doc;
         pos += 2;
         const bool immediate_ascii_name = !end() && is_ascii_alpha(current());
         skip_whitespace();
-        std::string name = read_name();
+        String name = read_name();
         // Restrict the shared tokenizer to recognized names and delimiters.
         // Keep legacy handling for malformed openers, truncated names and EOF
         // immediately after a name, outside this suffix-consumption contract.
@@ -261,9 +274,8 @@ class HtmlParser {
         }
 
         if (pos < text_end) {
-            element->children.push_back(
-                create_text(std::string(src + pos, text_end - pos), doc));
-            element->children.back()->parent = element;
+            append_owned(element,
+                create_text(String(src + pos, text_end - pos, allocator), doc));
         }
         // The existing end-tag parser consumes the accepted close and pops the
         // stack. This shared scan does not implement escaped ScriptData states.
@@ -364,35 +376,33 @@ class HtmlParser {
         }
         if (text_end == len) pos = len;
 
-        std::string raw(src + text_start, text_end - text_start);
+        String raw(src + text_start, text_end - text_start, allocator);
         // Keep the existing HTML4 named-reference decoder. A decoded CR is not
         // source preprocessing, and decoded markup must never be tokenized.
-        std::string decoded = aether::html_decode(raw.c_str());
+        String decoded = aether::html_decode_storage(raw.c_str(),String(allocator));
         if (name == "textarea" && !decoded.empty() && decoded.front() == '\n')
             decoded.erase(0, 1);
         if (!decoded.empty()) {
-            element->children.push_back(create_text(decoded, doc));
-            element->children.back()->parent = element;
+            append_owned(element, create_text(decoded, doc));
         }
     }
 
-    void parse_start_tag(std::vector<aether_node_s*>& stack, aether_doc_s* doc) {
+    void parse_start_tag(Stack& stack, aether_doc_s* doc) {
         pos++;
         // Only an immediate ASCII letter opens an ordinary start tag. Emit
         // just '<' otherwise, leaving the next byte for the normal dispatcher.
         if (end() || !is_ascii_alpha(current())) {
-            stack.back()->children.push_back(create_text("<", doc));
-            stack.back()->children.back()->parent = stack.back();
+            append_owned(stack.back(), create_text("<", doc));
             return;
         }
-        std::string tag_name = read_name();
+        String tag_name = read_name();
         // read_name still has its narrower legacy alphabet. Do not let a
         // truncated name such as "textarea+foo" or "pre+foo" enable special
         // text handling just because its stored DOM name matches.
         const bool special_text_name_boundary = !end() && is_raw_text_end_boundary(current());
         // Canonical HTML element identity. Attribute names are normalized at
         // their own storage boundary below; values remain untouched.
-        tag_name = aether::ascii_lowercase(std::move(tag_name));
+        for(char& byte:tag_name)byte=static_cast<char>(aether::ascii_lower_byte(static_cast<unsigned char>(byte)));
 
         // Stage the token separately from the DOM: EOF in any attribute state
         // discards the entire opening without allocating a node or style ID.
@@ -417,22 +427,33 @@ class HtmlParser {
                 break;
             }
 
-            std::string attr_name = aether::canonical_html_attribute_name(read_name());
+            String attr_name = read_name();
+            for(char& byte:attr_name)byte=static_cast<char>(aether::ascii_lower_byte(static_cast<unsigned char>(byte)));
             if (attr_name.empty()) {
                 pos++;
                 continue;
             }
 
             skip_whitespace();
-            std::string attr_value;
+            String attr_value(allocator);
             if (!end() && current() == '=') {
                 pos++;
                 attr_value = read_attribute_value();
             }
 
-            std::string decoded_val = aether::html_decode(attr_value.c_str());
+            String decoded_val = aether::html_decode_storage(attr_value.c_str(),String(allocator));
             // First source occurrence per ASCII name, after consuming each value.
-            attributes.try_emplace(attr_name, decoded_val);
+            if constexpr(std::is_same_v<TemporaryAllocator,std::allocator<char>>) {
+                attributes.try_emplace(attr_name, decoded_val);
+            } else {
+                // This map is moved into the unchanged legacy DOM. It is
+                // retained DOM storage, explicitly NOT counted as temporary.
+                const std::string_view key(attr_name.data(),attr_name.size());
+                if(attributes.find(key)==attributes.end())attributes.emplace(
+                    std::piecewise_construct,
+                    std::forward_as_tuple(key.data(),key.size()),
+                    std::forward_as_tuple(decoded_val.data(),decoded_val.size()));
+            }
         }
 
         // Only a syntactic terminator confirms the token. In particular, '>'
@@ -466,11 +487,11 @@ class HtmlParser {
     }
 
 public:
-    HtmlParser(const char* source, size_t length)
-        : src(source), len(length), pos(0) {}
+    HtmlParser(const char* source, size_t length,TemporaryAllocator a)
+        : allocator(a),src(source), len(length), pos(0) {}
 
     aether_node_s* parse_document(aether_doc_s* doc) {
-        std::vector<aether_node_s*> stack;
+        Stack stack{typename Stack::allocator_type(allocator)};
         stack.push_back(doc);
 
         while (!end()) {
@@ -518,14 +539,15 @@ public:
 
 /* ── C ABI entry point ────────────────────────────────────────────── */
 
-AETHER_API aether_status_t aether_doc_parse_html(aether_doc_t doc, const char* html) {
+template<class TemporaryAllocator>
+static aether_status_t parse_html_storage(aether_doc_t doc, const char* html,TemporaryAllocator allocator) {
     if (!doc || !html) return AETHER_ERROR_NULL_ARG;
 
     // WHATWG input preprocessing applies to the whole source, before tokenization
     // and reference decoding. Keep the original pointer on the no-CR fast path.
     // The owned buffer, when needed, outlives every parser view; DOM strings copy.
     size_t length = std::strlen(html);
-    std::string normalized;
+    std::basic_string<char,std::char_traits<char>,TemporaryAllocator> normalized(allocator);
     const char* first_cr = static_cast<const char*>(std::memchr(html, '\r', length));
     if (first_cr) {
         // Allocate before replacing the previous DOM. This particular failure
@@ -555,8 +577,22 @@ AETHER_API aether_status_t aether_doc_parse_html(aether_doc_t doc, const char* h
     doc->id_index.clear();
     doc->next_style_node_id = 1;
 
-    HtmlParser parser(html, length);
+    HtmlParser<TemporaryAllocator> parser(html, length,allocator);
     parser.parse_document(doc);
     doc->version++;
     return AETHER_OK;
+}
+
+AETHER_API aether_status_t aether_doc_parse_html(aether_doc_t doc, const char* html) {
+    return parse_html_storage(doc,html,std::allocator<char>{});
+}
+
+namespace aether::dom {
+aether_status_t parse_html_owned_temporaries(aether_doc_t doc,const char* html,
+    rendering::html_ltr::OwnedBudget::Handle domain) {
+    using namespace rendering::html_ltr;
+    try {return parse_html_storage(doc,html,OwnedAllocator<char>(std::move(domain),OwnedCategory::temporary));}
+    catch(const Error& e){return e.status;}
+    catch(const std::bad_alloc&){return AETHER_ERROR_OUT_OF_MEMORY;}
+}
 }

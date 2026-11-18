@@ -552,6 +552,11 @@ static void paint_box(aether_display_list_builder_s* builder,
         float* values = &focus_radii.top_left_x;
         for (int i = 0; i < 8; ++i) values[i] += 2.f;
         aether_rectf inflated = aether_rectf_inflate(box->border_box, 2);
+        if(builder->native_interaction) {
+            auto& focus=*builder->native_interaction;
+            if(focus.owner || focus.requested!=box->element)throw std::runtime_error("native focus identity mismatch");
+            focus.owner=box->element;focus.border=box->border_box;focus.command_index=cmds.size();
+        }
         emit_stroke_rounded_rect(cmds, inflated, focus_radii, 1,
                                  {0.145f, 0.388f, 0.922f, 0.75f});
     }
@@ -863,6 +868,18 @@ static AETHER_PAINT_CONTROL_NOINLINE void paint_control(aether_display_list_buil
             box->control_display_text != presentation->text ||
             box->control_shows_placeholder != presentation->shows_placeholder || box->native_text.run)
             throw std::runtime_error("native control identity missing");
+        const auto caret = [&] {
+            if(!builder->native_interaction || box->element!=focused_element)return;
+            const auto& c=box->content_box;
+            if(c.width<=0 || c.height<=0)return;
+            const float advance=presentation->shows_placeholder || presentation->text.empty()?0.f:atomic.text.run->metrics.width;
+            if(!std::isfinite(advance)||advance<0)throw std::runtime_error("native caret metrics invalid");
+            const float width=std::min(1.f,c.width),height=std::min(c.height,std::max(1.f,box->style.font_size*1.15f));
+            const aether_rectf r{c.x+std::min(advance,std::max(0.f,c.width-width)),c.y+(c.height-height)/2.f,width,height};
+            emit_push_clip(cmds,c,{});
+            emit_fill_rounded_rect(cmds,r,{},box->style.color);
+            emit_pop_clip(cmds);
+        };
         HTML_LTR_STAGE(control_clip);
         NativeControlEntry evidence;
         evidence.owner = box->element;
@@ -873,6 +890,7 @@ static AETHER_PAINT_CONTROL_NOINLINE void paint_control(aether_display_list_buil
                 presentation->kind != html_ltr::ControlKind::empty)
                 throw std::runtime_error("native empty control has text");
             builder->native_control_runs->push_back(std::move(evidence));
+            caret();
             return;
         }
         const auto& run = atomic.text.run;
@@ -908,6 +926,7 @@ static AETHER_PAINT_CONTROL_NOINLINE void paint_control(aether_display_list_buil
         evidence.pop_index = cmds.size();
         emit_pop_clip(cmds);
         builder->native_control_runs->push_back(std::move(evidence));
+        caret();
         return;
     }
     auto* element = box->element;
@@ -1272,18 +1291,19 @@ AETHER_API void aether_display_list_builder_set_contextual_text_measurer(aether_
 namespace aether::rendering {
 namespace {
 aether_status_t build_scroll(aether_display_list_builder_t b,aether_layout_result_t l,
- aether_style_map_t styles,aether_node_t node,const NativeScrollInput* input,std::unique_ptr<NativePaintList>& out) noexcept {
+ aether_style_map_t styles,aether_node_t node,const NativeScrollInput* input,std::unique_ptr<NativePaintList>& out,aether_node_t focused=nullptr,bool interaction=false) noexcept {
  if(!b||!l)return AETHER_ERROR_NULL_ARG;
  if(b->style_pin||b->opacity_events)return AETHER_ERROR_INVALID_STATE;
  try {
   if(input && input->size()>65536)return AETHER_ERROR_INVALID_STATE;
   auto candidate=std::make_unique<NativePaintList>();
-  struct Reset {aether_display_list_builder_t b; ~Reset(){b->opacity_events=nullptr;b->native_text_runs=nullptr;b->native_control_runs=nullptr;b->opacity_parents.clear();b->opacity_serial=0;b->native_scroll_depth=0;}} reset{b};
+  struct Reset {aether_display_list_builder_t b; ~Reset(){b->opacity_events=nullptr;b->native_text_runs=nullptr;b->native_control_runs=nullptr;b->native_interaction=nullptr;b->opacity_parents.clear();b->opacity_serial=0;b->native_scroll_depth=0;}} reset{b};
   b->opacity_events=&candidate->events;
   b->native_text_runs=&candidate->text_runs;
   b->native_control_runs=&candidate->control_runs;
-  const auto status=node?aether_display_list_build_node_with_styles(b,l,styles,node,nullptr,&NativeListAccess::list(*candidate)):
-    aether_display_list_build_with_styles(b,l,styles,nullptr,&NativeListAccess::list(*candidate));
+  if(interaction){candidate->interaction_focus.requested=focused;b->native_interaction=&candidate->interaction_focus;}
+  const auto status=node?aether_display_list_build_node_with_styles(b,l,styles,node,focused,&NativeListAccess::list(*candidate)):
+    aether_display_list_build_with_styles(b,l,styles,focused,&NativeListAccess::list(*candidate));
   if(status!=AETHER_OK)return status;
   auto list=NativeListAccess::list(*candidate);
   if(list->commands.size()>65536)return AETHER_ERROR_INVALID_STATE;
@@ -1341,4 +1361,9 @@ aether_status_t build_native_opacity(aether_display_list_builder_t b,aether_layo
  aether_style_map_t styles,aether_node_t node,const NativeScrollInput& input,std::unique_ptr<NativePaintList>& out) noexcept {
  return build_scroll(b,l,styles,node,&input,out);
 }
+aether_status_t build_native_interaction(aether_display_list_builder_t b,aether_layout_result_t l,
+ aether_style_map_t styles,aether_node_t focused,std::unique_ptr<NativePaintList>& out) noexcept {
+ return build_scroll(b,l,styles,nullptr,nullptr,out,focused,true);
+}
+
 }

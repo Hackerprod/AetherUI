@@ -27,7 +27,7 @@ extern "C" {
  * ABI 1.0, a major-version change denotes an incompatible ABI.
  */
 #define AETHER_ABI_VERSION_MAJOR 0u
-#define AETHER_ABI_VERSION_MINOR 37u
+#define AETHER_ABI_VERSION_MINOR 38u
 #define AETHER_ABI_VERSION_PATCH 0u
 
 #define AETHER_ABI_VERSION_MAKE(major, minor, patch) \
@@ -1202,6 +1202,118 @@ AETHER_API aether_status_t aether_style_runtime_update_resolved_style_map(
     int32_t node_count);
 
 AETHER_API void aether_style_runtime_clear_cache(aether_style_runtime_t runtime);
+
+/* Native bounded interaction v1. Independent of surfaces and one-shot profiles.
+ * Owner-thread only; no callbacks/reentry. Values are private (no getter).
+ * The 256 MiB limit covers instrumented interaction storage only. DOM/style/
+ * layout and inherited backend allocations are not exhaustively accounted;
+ * this is NOT a total session/process/RSS memory guarantee.
+ */
+typedef struct aether_interaction_s* aether_interaction_t;
+#define AETHER_INTERACTION_CONTROL_TEXT 1u
+#define AETHER_INTERACTION_CONTROL_PASSWORD 2u
+#define AETHER_INTERACTION_CONTROL_BUTTON 3u
+#define AETHER_INTERACTION_POINTER_DOWN 1u
+#define AETHER_INTERACTION_POINTER_UP 2u
+#define AETHER_INTERACTION_POINTER_CANCEL 3u
+#define AETHER_INTERACTION_KEY_DOWN 4u
+#define AETHER_INTERACTION_KEY_UP 5u
+#define AETHER_INTERACTION_TEXT 6u
+#define AETHER_INTERACTION_BLUR 7u
+#define AETHER_INTERACTION_KEY_NONE 0u
+#define AETHER_INTERACTION_KEY_TAB 1u
+#define AETHER_INTERACTION_KEY_ENTER 2u
+#define AETHER_INTERACTION_KEY_SPACE 3u
+#define AETHER_INTERACTION_KEY_BACKSPACE 4u
+#define AETHER_INTERACTION_MOD_SHIFT 1u
+#define AETHER_INTERACTION_ARM_NONE 0u
+#define AETHER_INTERACTION_ARM_POINTER 1u
+#define AETHER_INTERACTION_ARM_SPACE 2u
+#define AETHER_INTERACTION_ENTER_DOWN 1u
+#define AETHER_INTERACTION_SPACE_DOWN 2u
+
+typedef struct aether_interaction_options_v1 {
+    uint32_t struct_size;
+    uint32_t flags;
+    const uint8_t* regular_font;
+    size_t regular_font_size;
+    const uint8_t* bold_font;
+    size_t bold_font_size;
+    uint32_t reserved[4];
+} aether_interaction_options_v1;
+typedef struct aether_interaction_control_info_v1 {
+    uint32_t struct_size;
+    uint32_t control_id;
+    uint32_t kind;
+    uint32_t reserved[4];
+} aether_interaction_control_info_v1;
+typedef struct aether_interaction_event_v1 {
+    uint32_t struct_size;
+    uint32_t kind;
+    uint32_t key;
+    uint32_t modifiers;
+    float x;
+    float y;
+    const uint8_t* text;
+    size_t text_length;
+    uint32_t reserved[4];
+} aether_interaction_event_v1;
+typedef struct aether_interaction_result_v1 {
+    uint32_t struct_size;
+    uint32_t changed;
+    uint64_t state_version;
+    uint32_t activated_control_id;
+    uint32_t reserved[4];
+} aether_interaction_result_v1;
+typedef struct aether_interaction_state_v1 {
+    uint32_t struct_size;
+    int32_t width;
+    int32_t height;
+    uint32_t focus_id;
+    uint32_t arm_kind;
+    uint32_t arm_id;
+    uint32_t keys_down;
+    uint32_t pointer_primary_down;
+    uint64_t state_version;
+    uint64_t frame_version;
+    uint64_t sequence;
+    uint32_t reserved[4];
+} aether_interaction_state_v1;
+typedef struct aether_interaction_frame_info_v1 {
+    uint32_t struct_size;
+    int32_t width;
+    int32_t height;
+    uint32_t format;
+    uint64_t stride;
+    uint64_t byte_count;
+    uint64_t sequence;
+    uint64_t state_version;
+    uint32_t reserved[4];
+} aether_interaction_frame_info_v1;
+
+AETHER_API size_t aether_interaction_options_v1_size(void);
+AETHER_API size_t aether_interaction_control_info_v1_size(void);
+AETHER_API size_t aether_interaction_event_v1_size(void);
+AETHER_API size_t aether_interaction_result_v1_size(void);
+AETHER_API size_t aether_interaction_state_v1_size(void);
+AETHER_API size_t aether_interaction_frame_info_v1_size(void);
+AETHER_API aether_status_t aether_interaction_create(int32_t width, int32_t height,
+    const char* html, size_t html_length, const aether_interaction_options_v1* options,
+    aether_interaction_t* out_session);
+AETHER_API aether_status_t aether_interaction_destroy(aether_interaction_t session);
+AETHER_API aether_status_t aether_interaction_control_count(aether_interaction_t session, uint32_t* out_count);
+AETHER_API aether_status_t aether_interaction_control_info(aether_interaction_t session, uint32_t index,
+    aether_interaction_control_info_v1* out_info);
+AETHER_API aether_status_t aether_interaction_dispatch(aether_interaction_t session,
+    const aether_interaction_event_v1* event, aether_interaction_result_v1* out_result);
+AETHER_API aether_status_t aether_interaction_resize(aether_interaction_t session,
+    int32_t width, int32_t height, aether_interaction_result_v1* out_result);
+AETHER_API aether_status_t aether_interaction_render(aether_interaction_t session,
+    aether_interaction_result_v1* out_result);
+AETHER_API aether_status_t aether_interaction_copy_frame(aether_interaction_t session,
+    aether_interaction_frame_info_v1* out_info, uint8_t* destination, size_t capacity);
+AETHER_API aether_status_t aether_interaction_state(aether_interaction_t session,
+    aether_interaction_state_v1* out_state);
 
 #ifdef __cplusplus
 }
