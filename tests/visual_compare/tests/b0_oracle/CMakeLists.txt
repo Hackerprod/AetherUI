@@ -1,0 +1,6 @@
+cmake_minimum_required(VERSION 3.20)
+project(AetherB0TransportOracle LANGUAGES C)
+find_package(AetherUI CONFIG REQUIRED)
+add_executable(aether_b0_transport_oracle ../b0_source_oracle.c)
+set_target_properties(aether_b0_transport_oracle PROPERTIES C_STANDARD 11 C_STANDARD_REQUIRED YES C_EXTENSIONS NO)
+target_link_libraries(aether_b0_transport_oracle PRIVATE AetherUI::Core)

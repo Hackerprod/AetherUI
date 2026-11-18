@@ -25,8 +25,8 @@ std::string marker_bytes(const Report& r,std::string_view log,std::string_view j
  "\",\"requested_scope\":\""+requested_scope(r.request)+"\",\"overall_status\":\""+overall_status(r)+"\",\"exit_code\":"+std::to_string(exit_code(r))+
  ",\"artifacts\":[{\"name\":\"report.log\",\"size_bytes\":"+std::to_string(log.size())+",\"sha256\":\""+sha256(log)+
  "\"},{\"name\":\"report.json\",\"size_bytes\":"+std::to_string(json.size())+",\"sha256\":\""+sha256(json)+"\"}]}\n";
- if(r.request.backend=="native-html-ltr") {
-  marker.replace(marker.find("artifacts/1"),11,"artifacts/2");
+ if(!r.request.backend.empty()) {
+  marker.replace(marker.find("artifacts/1"),11,r.request.backend=="native-b0-source"?"artifacts/3":"artifacts/2");
   if(!r.png_bytes.empty())marker.insert(marker.size()-3,",{\"name\":\"aether.png\",\"size_bytes\":"+std::to_string(r.png_bytes.size())+",\"sha256\":\""+sha256(r.png_bytes)+"\"}");
  }
  return marker;
@@ -37,14 +37,28 @@ template<class T> T number(const Json& o) {if(o.kind!=Json::Kind::number)throw s
 std::optional<std::string> nullable_string(const Json& o) {if(o.kind==Json::Kind::null_value)return {};return string(o);}
 Report restore_report(const Json& j) {
  Report r;r.run_id=string(get(j,"run_id"));
- auto scope=string(get(j,"requested_scope"));if(scope=="contract_inspection")r.request.command=Command::inspect;else if(scope=="visual_capture")r.request.command=Command::capture;else if(scope=="native_profile_capture") {r.request.command=Command::capture;r.request.backend="native-html-ltr";} else throw std::invalid_argument("INVALID_MANIFEST");
- if(!r.request.backend.empty()) {
+ auto scope=string(get(j,"requested_scope"));if(scope=="contract_inspection")r.request.command=Command::inspect;else if(scope=="visual_capture")r.request.command=Command::capture;else if(scope=="native_profile_capture") {r.request.command=Command::capture;r.request.backend="native-html-ltr";} else if(scope=="native_b0_source_capture"){r.request.command=Command::capture;r.request.backend="native-b0-source";r.request.profile=0;} else throw std::invalid_argument("INVALID_MANIFEST");
+ if(r.request.backend=="native-html-ltr") {
   const auto& nc=get(j,"native_capture");r.request.profile=number<unsigned>(get(nc,"profile"));
   const auto& m=get(nc,"metadata");
   if(m.kind!=Json::Kind::null_value) {NativeCaptureMetadata n;
    n.profile=number<unsigned>(get(m,"profile"));n.limitations=number<unsigned>(get(m,"limitations"));n.abi_version=number<unsigned>(get(m,"abi_version"));n.runtime_version=string(get(m,"runtime_version"));n.public_status=number<int>(get(m,"public_status"));
    n.width=number<unsigned>(get(m,"width"));n.height=number<unsigned>(get(m,"height"));n.stride=number<unsigned>(get(m,"stride"));n.sequence=number<std::uint64_t>(get(m,"sequence"));n.capabilities=number<std::uint64_t>(get(m,"capabilities"));
    n.regular_sha256=string(get(m,"regular_sha256"));n.bold_sha256=string(get(m,"bold_sha256"));r.native=n;
+  }
+ }
+ if(r.request.backend=="native-b0-source") {
+  const auto& m=get(get(j,"b0_source_capture"),"metadata");
+  if(m.kind!=Json::Kind::null_value){B0CaptureMetadata n;
+   n.abi_version=number<unsigned>(get(m,"abi_version"));n.source_version=number<unsigned>(get(m,"source_version"));n.runtime_version=string(get(m,"runtime_version"));
+   const auto& status=get(m,"public_status");if(status.kind!=Json::Kind::null_value)n.public_status=number<int>(status);
+   const auto& diag=get(m,"diagnostic");if(diag.kind!=Json::Kind::null_value){B0Diagnostic d;
+    d.status=number<int>(get(diag,"status"));d.stage=number<unsigned>(get(diag,"stage"));d.reason=number<unsigned>(get(diag,"reason"));
+    const auto index=[&](const char* key)->std::optional<std::uint64_t>{const auto& v=get(diag,key);if(v.kind==Json::Kind::null_value)return {};return number<std::uint64_t>(v);};
+    d.node_ordinal=index("node_ordinal");d.command_index=index("command_index");d.source_byte_offset=index("source_byte_offset");n.diagnostic=d;
+   }
+   n.width=number<unsigned>(get(m,"width"));n.height=number<unsigned>(get(m,"height"));n.stride=number<unsigned>(get(m,"stride"));n.sequence=number<std::uint64_t>(get(m,"sequence"));n.capabilities=number<std::uint64_t>(get(m,"capabilities"));
+   n.regular_sha256=string(get(m,"regular_sha256"));n.bold_sha256=string(get(m,"bold_sha256"));r.b0=n;
   }
  }
  auto& input=get(j,"input");r.input_sha256=nullable_string(get(input,"sha256"));r.manifest_sha256=nullable_string(get(input,"manifest_sha256"));

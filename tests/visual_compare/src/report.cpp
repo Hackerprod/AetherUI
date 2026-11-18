@@ -27,11 +27,42 @@ std::string quote(std::string_view s) {
  return result+'"';
 }
 std::string nullable(const std::optional<std::string>& s) {return s?quote(*s):"null";}
+// v3 accepts only the bounded, canonical RGBA8/stored-DEFLATE encoder format.
+// This validates pixels and checksums, not visual semantics.
+bool valid_b0_png(std::string_view s,unsigned w,unsigned h) {
+ if(!w||!h||w>2048||h>2048||s.size()<57||s.substr(0,8)!=std::string_view("\x89PNG\r\n\x1a\n",8))return false;
+ const auto be=[](std::string_view b,std::size_t p){return (std::uint32_t(static_cast<unsigned char>(b[p]))<<24)|(std::uint32_t(static_cast<unsigned char>(b[p+1]))<<16)|(std::uint32_t(static_cast<unsigned char>(b[p+2]))<<8)|static_cast<unsigned char>(b[p+3]);};
+ const auto crc=[](std::string_view b){std::uint32_t v=~0u;for(unsigned char c:b){v^=c;for(int i=0;i<8;++i)v=(v>>1)^(0xedb88320u&(0u-(v&1u)));}return ~v;};
+ std::size_t p=8;std::string_view data;
+ for(auto kind:{"IHDR","IDAT","IEND"}) {
+  if(s.size()-p<12)return false;
+  const auto len=be(s,p);if(len>s.size()-p-12||s.substr(p+4,4)!=kind)return false;
+  if(crc(s.substr(p+4,len+4))!=be(s,p+8+len))return false;
+  auto chunk=s.substr(p+8,len);
+  if(std::string_view(kind)=="IHDR") {if(len!=13||be(chunk,0)!=w||be(chunk,4)!=h||chunk.substr(8)!=std::string_view("\x08\x06\0\0\0",5))return false;}
+  else if(std::string_view(kind)=="IDAT")data=chunk;
+  else if(len)return false;
+  p+=len+12;
+ }
+ if(p!=s.size()||data.size()<11||data.substr(0,2)!=std::string_view("\x78\x01",2))return false;
+ const std::size_t expected=(std::size_t(w)*4+1)*h,row=std::size_t(w)*4+1;
+ std::size_t pos=2,total=0;std::uint32_t a=1,b=0;bool last=false;
+ while(!last) {
+  if(data.size()-pos<9)return false;
+  const auto flag=static_cast<unsigned char>(data[pos++]);if(flag>1)return false;last=flag==1;
+  unsigned n=static_cast<unsigned char>(data[pos])|(unsigned(static_cast<unsigned char>(data[pos+1]))<<8);
+  unsigned nn=static_cast<unsigned char>(data[pos+2])|(unsigned(static_cast<unsigned char>(data[pos+3]))<<8);pos+=4;
+  if((n^nn)!=65535||!n||n>data.size()-pos-4||n>expected-total||(!last&&n!=65535))return false;
+  for(unsigned i=0;i<n;++i){auto c=static_cast<unsigned char>(data[pos+i]);if((total+i)%row==0&&c!=0)return false;a=(a+c)%65521;b=(b+a)%65521;}
+  total+=n;pos+=n;
+ }
+ return total==expected&&pos+4==data.size()&&be(data,pos)==((b<<16)|a);
+}
 struct Result {int code;std::string detail;};
 Result result(const Report& r) {
  Result best{0,{}};
  if(r.request.command==Command::capture && r.request.backend.empty()) best={11,"NOT_IMPLEMENTED"};
- else if((r.request.command!=Command::inspect && r.request.backend!="native-html-ltr") || (r.request.backend=="native-html-ltr" && r.stages[5].status!="passed") || std::any_of(r.stages.begin(),r.stages.begin()+5,[](const Stage& s){return s.status!="passed";}) || r.stages[9].status!="passed") best={14,"INTERNAL_FAILURE"};
+ else if((r.request.command!=Command::inspect && r.request.backend!="native-html-ltr" && r.request.backend!="native-b0-source") || (!r.request.backend.empty() && r.stages[5].status!="passed") || std::any_of(r.stages.begin(),r.stages.begin()+5,[](const Stage& s){return s.status!="passed";}) || r.stages[9].status!="passed") best={14,"INTERNAL_FAILURE"};
  // Incomplete inspection is expected on a recorded failure, not a second error.
  if(!r.errors.empty()) best={0,{}};
  for(const auto& e:r.errors) if(rank(e.code)<rank(best.code)) best={e.code,e.detail_code};
@@ -39,7 +70,7 @@ Result result(const Report& r) {
  return best;
 }
 }
-std::string requested_scope(const Request& r) {return r.backend=="native-html-ltr"?"native_profile_capture":r.command==Command::capture?"visual_capture":"contract_inspection";}
+std::string requested_scope(const Request& r) {return r.backend=="native-b0-source"?"native_b0_source_capture":r.backend=="native-html-ltr"?"native_profile_capture":r.command==Command::capture?"visual_capture":"contract_inspection";}
 void add_error(Report& r,Error error) {if(std::find(r.errors.begin(),r.errors.end(),error)==r.errors.end()) r.errors.push_back(std::move(error));}
 int exit_code(const Report& r) {return result(r).code;}
 std::string primary_error(const Report& r) {return result(r).detail;}
@@ -48,21 +79,37 @@ std::string overall_status(const Report& r) {
 }
 bool valid_report(const Report& r) {
  if(!hex(r.run_id,32) || (r.request.command!=Command::inspect && r.request.command!=Command::capture)) return false;
- const bool native=r.request.backend=="native-html-ltr";
+ const bool b0=r.request.backend=="native-b0-source";
+ const bool native=r.request.backend=="native-html-ltr"||b0;
  if(!r.request.backend.empty()&&!native) return false;
- if(native && (r.request.command!=Command::capture||(r.request.profile!=1&&r.request.profile!=2))) return false;
- if(!native && (r.native||!r.png_bytes.empty())) return false;
+ if(native && (r.request.command!=Command::capture||(b0?r.request.profile!=0:(r.request.profile!=1&&r.request.profile!=2)))) return false;
+ if((b0&&r.native)||(!b0&&r.b0))return false;
+ if(!native && (r.native||r.b0||!r.png_bytes.empty())) return false;
  if(r.native) {
   const auto& n=*r.native;
   if(n.profile!=r.request.profile || !hex(n.regular_sha256,64)||!hex(n.bold_sha256,64))return false;
   if(n.runtime_version.size()>64||n.runtime_version.find_first_not_of("0123456789.-")!=std::string::npos)return false;
   if(n.public_status< -14||n.public_status>0)return false;
  }
- if(native && r.stages[5].status=="passed") {
+ if(native && !b0 && r.stages[5].status=="passed") {
   if(!r.errors.empty()||std::any_of(r.stages.begin(),r.stages.begin()+5,[](const Stage& x){return x.status!="passed";}))return false;
   if(!r.native||r.png_bytes.empty())return false;
   const auto& n=*r.native;const auto& v=r.request.viewport;
   if(n.public_status!=0||!n.abi_version||n.runtime_version.empty()||!n.sequence||n.width!=v.width||n.height!=v.height||n.stride!=n.width*4||v.scale_quarters!=4||n.width>2048||n.height>2048||n.limitations!=(n.profile==1?3u:15u))return false;
+ }
+ if(r.b0) {
+  const auto& n=*r.b0;
+  if(!hex(n.regular_sha256,64)||!hex(n.bold_sha256,64)||!n.abi_version||n.source_version!=1||n.runtime_version.empty()||n.runtime_version.size()>64||n.runtime_version.find_first_not_of("0123456789.-")!=std::string::npos)return false;
+  if(n.public_status&&(*n.public_status< -14||*n.public_status>0))return false;
+  if(n.diagnostic) {const auto& d=*n.diagnostic;
+   if(!n.public_status||d.status!=*n.public_status||d.stage>9||d.reason>7)return false;
+   for(auto i:{d.node_ordinal,d.command_index,d.source_byte_offset})if(i&&*i==UINT64_MAX)return false;
+  }
+ }
+ if(b0&&r.stages[5].status=="passed") {
+  if(!r.b0||r.png_bytes.empty()||!r.errors.empty()||std::any_of(r.stages.begin(),r.stages.begin()+5,[](const Stage& x){return x.status!="passed";}))return false;
+  const auto& n=*r.b0;const auto& v=r.request.viewport;
+  if(!valid_b0_png(r.png_bytes,n.width,n.height)||n.public_status!=0||n.sequence!=1||n.width!=v.width||n.height!=v.height||n.stride!=n.width*4||v.scale_quarters!=4||n.width>2048||n.height>2048||(n.capabilities&7)!=7)return false;
  }
  if(!r.png_bytes.empty() && (!native||r.stages[5].status!="passed"))return false;
  const auto& v=r.request.viewport;
@@ -121,6 +168,30 @@ std::string serialize_report(const Report& r) {
    replace("\"artifacts\":[]","\"artifacts\":[{\"name\":\"aether.png\",\"size_bytes\":"+std::to_string(r.png_bytes.size())+",\"sha256\":"+quote(sha256(r.png_bytes))+"}]");
   }
  }
+ if(r.request.backend=="native-b0-source") {
+  auto replace=[&](std::string_view a,const std::string& b){auto pos=text.find(a);if(pos!=std::string::npos)text.replace(pos,a.size(),b);};
+  replace("aether.visual-compare.report/1","aether.visual-compare.report/3");
+  replace("\"implementation\":\"contract-only\"","\"implementation\":\"native-b0-source\"");
+  replace("\"version\":\"0.1.0-contract\"","\"version\":\"0.3.0-b0-source\"");
+  std::ostringstream n;n.imbue(std::locale::classic());n<<",\n  \"b0_source_capture\":{\"metadata\":";
+  if(r.b0){const auto& x=*r.b0;
+   n<<"{\"abi_version\":"<<x.abi_version<<",\"source_version\":"<<x.source_version<<",\"runtime_version\":"<<quote(x.runtime_version)<<",\"public_status\":";
+   if(x.public_status)n<<*x.public_status;else n<<"null";
+   n<<",\"diagnostic\":";
+   if(x.diagnostic){const auto& d=*x.diagnostic;n<<"{\"status\":"<<d.status<<",\"stage\":"<<d.stage<<",\"reason\":"<<d.reason;
+    const auto index=[&](const char* key,const std::optional<std::uint64_t>& v){n<<",\""<<key<<"\":";if(v)n<<*v;else n<<"null";};
+    index("node_ordinal",d.node_ordinal);index("command_index",d.command_index);index("source_byte_offset",d.source_byte_offset);n<<"}";
+   }else n<<"null";
+   n<<",\"width\":"<<x.width<<",\"height\":"<<x.height<<",\"stride\":"<<x.stride<<",\"sequence\":"<<x.sequence<<",\"capabilities\":"<<x.capabilities<<",\"regular_sha256\":"<<quote(x.regular_sha256)<<",\"bold_sha256\":"<<quote(x.bold_sha256)<<"}";
+  }else n<<"null";
+  n<<",\"css_complete\":false,\"typography_complete\":false,\"interactive\":false,\"accessibility_evaluated\":false}";text.insert(text.size()-3,n.str());
+  if(r.b0)replace("\"aether\":"+std::string(engine),"\"aether\":{\"implementation_status\":\"available\",\"runtime_version\":"+quote(r.b0->runtime_version)+",\"capture_status\":"+quote(r.stages[5].status)+",\"content_status\":"+quote(r.stages[5].status=="passed"?"b0_source_subset_only":"not_evaluated")+",\"metrics\":null}");
+  else if(r.stages[5].status!="not_implemented")replace("\"aether\":"+std::string(engine),"\"aether\":{\"implementation_status\":\"not_evaluated\",\"runtime_version\":null,\"capture_status\":"+quote(r.stages[5].status)+",\"content_status\":\"not_evaluated\",\"metrics\":null}");
+  if(r.stages[5].status=="passed") {
+   replace("\"effective\":null","\"effective\":{\"width\":"+std::to_string(v.width)+",\"height\":"+std::to_string(v.height)+"}");
+   replace("\"artifacts\":[]","\"artifacts\":[{\"name\":\"aether.png\",\"size_bytes\":"+std::to_string(r.png_bytes.size())+",\"sha256\":"+quote(sha256(r.png_bytes))+"}]");
+  }
+ }
  return text;
 }
 std::string serialize_log(const Report& r) {
@@ -146,6 +217,15 @@ std::string serialize_log(const Report& r) {
   text+="native.profile="+std::to_string(r.request.profile)+"; css_complete=false; typography_complete=false; interactive=false; accessibility_evaluated=false\n";
   if(r.native){const auto& n=*r.native;text+="native.public_status="+std::to_string(n.public_status)+"; abi="+std::to_string(n.abi_version)+"; runtime="+n.runtime_version+"; limitations="+std::to_string(n.limitations)+"\n";}
   if(!r.png_bytes.empty())text+="native.artifact=aether.png; size="+std::to_string(r.png_bytes.size())+"; sha256="+sha256(r.png_bytes)+"\n";
+ }
+ if(r.request.backend=="native-b0-source") {
+  text.replace(0,text.find('\n'),"aether_visual_compare 0.3.0-b0-source (native-b0-source)");
+  auto replace=[&](std::string_view a,const std::string& b){auto pos=text.find(a);if(pos!=std::string::npos)text.replace(pos,a.size(),b);};
+  replace("aether.implementation=not_implemented; capture=not_run; content=not_evaluated; runtime_version=unavailable; metrics=unavailable","aether.implementation="+std::string(r.b0?"available":r.stages[5].status=="not_implemented"?"not_implemented":"not_evaluated")+"; capture="+r.stages[5].status+"; content="+(r.stages[5].status=="passed"?"b0_source_subset_only":"not_evaluated")+"; runtime_version="+(r.b0?r.b0->runtime_version:"unavailable")+"; metrics=unavailable");
+  if(r.stages[5].status=="passed") {replace("viewport.effective=unavailable","viewport.effective="+std::to_string(r.b0->width)+"x"+std::to_string(r.b0->height));replace("artifacts=none","artifacts=aether.png");}
+  text+="b0.source_version=1; css_complete=false; typography_complete=false; interactive=false; accessibility_evaluated=false\n";
+  if(r.b0){const auto& n=*r.b0;text+="b0.public_status="+(n.public_status?std::to_string(*n.public_status):"unavailable")+"; abi="+std::to_string(n.abi_version)+"; capabilities="+std::to_string(n.capabilities)+"\n";}
+  if(!r.png_bytes.empty())text+="b0.artifact=aether.png; size="+std::to_string(r.png_bytes.size())+"; sha256="+sha256(r.png_bytes)+"\n";
  }
  return text;
 }

@@ -363,3 +363,43 @@ four optional preparation tests, the installed-package gate documented in
 `native/README.md`, and native surface/HTML/static-controls regressions as well.
 Do not reinterpret original solid_text or flexbox rejection as rendered pages.
 Independent D must rebuild and inspect actual PNG pixels before publication.
+
+## Opt-in B0 source report/3 and artifacts/3
+
+`capture --backend native-b0-source --regular-font INVENTORY_PATH --bold-font
+INVENTORY_PATH` uses the independent installed B0 source ABI. `--profile` is
+forbidden. The six original input/output options remain mandatory. This is
+capture only; the existing native build option enables both public ABI adapters.
+Backend-disabled requests produce exit 11 / NOT_IMPLEMENTED, never fallback.
+The scope is `native_b0_source_capture`, tool implementation `native-b0-source`,
+version `0.3.0-b0-source`. Report/1 and report/2 serialization is unchanged.
+
+The v3 report adds `b0_source_capture` (not `native_capture`). Its `metadata` is
+null before ABI discovery, otherwise contains `abi_version`, `source_version`,
+`runtime_version`, nullable `public_status`, nullable `diagnostic`, frame width,
+height, stride, sequence, B0 `capabilities`, and the two consumed font hashes.
+`public_status` is null until an actual status-returning ABI call. Diagnostics
+contain numeric status/stage/reason and nullable node_ordinal, command_index and
+source_byte_offset; UINT64_MAX is represented as null. An unavailable, unchanged
+or malformed diagnostic is not promoted into authentic diagnostic evidence.
+There are no invented line/column positions, HTML strings or private paths.
+Copy/destroy errors carry status with no diagnostic. Pre-ABI failures do not
+invent a public status. All required capability bits (1|2|4) must be present;
+future bits are permitted, and no LTR profile limitations are used.
+
+Error exits follow the existing native vocabulary: invalid arguments/parse 2,
+resource/selection 6, limit 8, unsupported 10, disabled 11, cancellation 12,
+publication I/O 13, ABI/frame/internal/allocation failure 14. Successful frames
+require sequence 1, source version 1, bounded 2048x2048 DPI-1 RGBA PNG; the
+verifier validates the encoder's canonical stored-DEFLATE PNG structure, CRC,
+Adler32, dimensions and scanline lengths before accepting a success set.
+
+Artifacts/3 follows manifest-last publication and binds report, log and PNG
+hashes, sizes, run_id, schema and scope. The verifier restores the closed v3
+model and requires exact canonical reserialization of report/log/manifest;
+unknown fields, version/scope mixing, altered diagnostics and artifacts reject.
+Only the successful capture includes `aether.png`. Committed failure reports
+are not successful capture sets. Cancellation before commit removes the PNG
+from the report; synchronous ABI work is not internally interruptible.
+Comparison, browser parity, general CSS/typography, interaction and accessibility
+remain unexecuted/not evaluated. Filesystem checks are not race-proof sandboxing.

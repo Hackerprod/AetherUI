@@ -16,7 +16,18 @@ struct NativeCaptureMetadata {
  unsigned profile=1, limitations=0, abi_version=0; std::string runtime_version; int public_status=0;
  unsigned width=0,height=0,stride=0; std::uint64_t sequence=0, capabilities=0; std::string regular_sha256,bold_sha256;
 };
+struct B0Diagnostic {
+ int status=0; unsigned stage=0,reason=0;
+ std::optional<std::uint64_t> node_ordinal,command_index,source_byte_offset;
+};
+struct B0CaptureMetadata {
+ unsigned abi_version=0,source_version=1; std::string runtime_version;
+ std::optional<int> public_status; std::optional<B0Diagnostic> diagnostic;
+ unsigned width=0,height=0,stride=0; std::uint64_t sequence=0,capabilities=0;
+ std::string regular_sha256,bold_sha256;
+};
 struct Report {
+ std::optional<B0CaptureMetadata> b0;
  std::optional<NativeCaptureMetadata> native; std::string png_bytes;
  std::string run_id; Request request;
  std::optional<std::string> input_sha256, manifest_sha256;

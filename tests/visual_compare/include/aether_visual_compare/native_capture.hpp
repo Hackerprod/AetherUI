@@ -15,3 +15,13 @@ NativeCaptureResult capture_native(const Request&,const ValidatedInputs&,const C
 // a=0 => RGB=0. Rejects malformed dimensions/size; maximum 2048 x 2048.
 std::string encode_native_png(unsigned width,unsigned height,std::span<const std::uint8_t> bgra);
 }
+namespace avc {
+struct B0CaptureResult {
+ B0CaptureMetadata metadata;
+ bool has_metadata=false,captured=false;
+ int exit_code=14;
+ std::string reason_code="NATIVE_INTERNAL",png;
+};
+B0CaptureResult capture_b0(const Request&,const ValidatedInputs&,const CancellationToken&);
+void apply_b0_capture(Report&,const B0CaptureResult&);
+}
