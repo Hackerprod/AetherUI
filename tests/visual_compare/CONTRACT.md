@@ -1,17 +1,74 @@
-# C++ visual comparison contracts, version 1
+# C++ visual comparison contracts
 
-This is a **contract-only** increment, not a visual renderer. The independent
-C++20 target `aether_visual_compare` uses the C++ standard library. It does not
-require .NET, Aether binaries, Windows headers or a WebView2 SDK to build these
-contracts. Capture is **NOT IMPLEMENTED**. There are no PNG outputs, replacement
-images, engine timing samples or claims of CSS, font, pixel or flexbox coverage.
+The C++20 tool `aether_visual_compare` has separate routes for contract
+inspection, opt-in static native capture, and future visual comparison. The
+default build uses the C++ standard library and does not require .NET, Aether
+binaries, Windows headers or a WebView2 SDK. It produces no PNGs.
+
+## Choose a route
+
+| Request | Binary built with adapters OFF | Binary built with adapters ON | What the result establishes |
+| --- | --- | --- | --- |
+| `inspect` without native flags | v1 inspection | Same | Exit 0 and a validated v1 set establish byte and inventory inspection only |
+| `capture` without `--backend` | v1, normally exit 11 | Same | No inputs read, no PNG; the marker may commit a failure report |
+| `capture --backend native-html-ltr --profile 1` or `2`, with two fonts | v2, normally exit 11 | Capture using the selected LTR profile | Exit 0 and a validated v2 success set establish capture for that profile only |
+| `capture --backend native-b0-source`, with two fonts and no `--profile` | v3, normally exit 11 | Capture using the installed B0 source ABI | Exit 0 and a validated v3 success set establish static capture through that ABI only |
+
+“Normally” assumes valid CLI arguments, a new permitted output directory, and
+no cancellation or publication failure. For well-formed native requests, an OFF
+binary neither reads the inputs nor falls back to another engine. Despite its
+name, `AETHER_VISUAL_COMPARE_NATIVE_HTML_LTR` enables both adapters. When ON,
+CMake uses `find_package(AetherUI CONFIG REQUIRED)`: an unresolvable package
+fails configuration, not a tool invocation with exit 11. An enabled adapter
+that detects an ABI mismatch reports `NATIVE_ABI_MISMATCH` (exit 14).
+
+Both native CLI routes use scale 1, viewports of 1–2048 per axis, and two
+distinct inventoried TTF files selected by `--regular-font` and `--bold-font`.
+Follow the capture adapter's input limits below, not the general parser scale
+range or the limits of a direct ABI caller.
+
+- **v1 inspection:** replace `/abs/fixtures` with the absolute path to
+  [the actual fixture directory](fixtures/). Use a new output directory whose
+  parent already exists. An empty inventory does not certify self-containment.
+
+  ```sh
+  aether_visual_compare inspect --html /abs/fixtures/solid_text.html \
+    --resource-root /abs/fixtures --manifest /abs/fixtures/resources-empty.json \
+    --out /abs/new-inspect --viewport 480x320 --scale 1
+  ```
+
+- **v2 LTR capture:** see the [profile 2 command](#opt-in-public-native-profile-capture-report2-artifacts2)
+  for `profile2-static-controls.html` and its two inventoried fonts from
+  [the native resources manifest](fixtures/native/resources.json).
+- **v3 B0 source capture:** see [the B0 source guide](B0_SOURCE.md) for the
+  command using a prepared input directory. The
+  [B0 check script](scripts/check_b0_source.py) shows how the page, versioned
+  fonts and byte inventory are prepared. B0 source is a backend, not profile 3.
+
+The tool publishes the marker last. A `complete` marker does not imply exit 0,
+and a PNG alone does not imply success. See the
+[v1 marker contract](#v1-candidate-reports-and-commit-marker) and the native
+artifact contracts below. Check the result's version, scope,
+identity, status, exit code, and artifact sizes and hashes. All three versions
+reconstruct the result by scope and compare regenerated JSON, log and marker
+byte for byte. For a successful capture, require exit 0 and use the verifier
+with the PNG. v3 uses the closed B0 report model and additionally checks the
+success PNG structure via `valid_b0_png`; see the
+[v3 report and artifact contract](#opt-in-b0-source-report3-and-artifacts3).
+
+Capture is not comparison against an independent browser reference, fixture
+coverage, focus/hover/scroll validation, or multi-DPI validation. The B0 C11
+oracle shares the renderer and checks transport and encoding, not independent
+visual parity.
+
+## v1 contract inspection and legacy capture
 
 The source includes six opt-in contract-test executables. Their CMake option
 `AETHER_VISUAL_COMPARE_BUILD_CONTRACT_TESTS` defaults to `OFF`; enabling it only
 adds build targets. Configuration/build do not register or launch tests. Source,
 compilation, test execution and visual validation are separate milestones.
 
-## Command line
+### v1 command line
 
 - `--help` and `--version` are standalone informational commands without file I/O.
 - `inspect --html PATH --resource-root PATH --manifest PATH --out PATH --viewport WIDTHxHEIGHT --scale SCALE`
@@ -39,7 +96,7 @@ or resource inputs, check their existence, or initialize engines. Input sizes
 and hashes are null, and input inspection stages remain `not_run`. Cancellation,
 output I/O and internal failures can take precedence over exit 11.
 
-## Resource manifest and file policy
+### v1 resource manifest and file policy
 
 `schema/resources-v1.schema.json` defines `aether.resources/1`. Root keys are
 exactly `schema_version` and `entries`. Each of at most 1024 entries has exactly
@@ -75,7 +132,7 @@ This policy is for stable, user-controlled files. `std::filesystem` checks do
 reparse mechanism. `filesystem_race_hardening=not_implemented` is explicit. The
 inspection is not a sandbox for adversarial content or a future capture engine.
 
-## Reports and error aggregation
+### v1 reports, states and exit codes
 
 `schema/report-v1.schema.json` defines the closed report and its
 `$defs/artifactMarker` defines the commit marker. `report.json` is UTF-8/LF in a
@@ -122,7 +179,7 @@ error at the highest priority is primary. The error list preserves discovery
 order and removes identical `(code, stage, resource_label, detail_code)` tuples.
 Reserved engine codes do not mean that any engine operation has been run.
 
-## Candidate reports and commit marker
+### v1 candidate reports and commit marker
 
 The output directory must not exist, and its immediate parent must already
 exist. All existing parent ancestors must be non-symlink directories. The tool
@@ -162,22 +219,24 @@ or fails without a valid marker; a later signal cannot revoke a completed
 result. Forceful process termination may leave no report. Tests inject a token
 rather than send signals. No console-window handler is installed.
 
-## Future visual implementation
+### v1 notes on future visual comparison
 
-Capture interfaces describe request generation, cancellation, approved assets
+The v1 capture interfaces describe request generation, cancellation, approved assets
 and explicit pixel-buffer ownership. They do not instantiate an adapter or
 claim runtime lifecycle correctness. A future implementation must reject stale
 generations and validate that captured pixels really exist. Host callbacks,
 stream lifetimes and platform shutdown need independent implementation/testing.
 
-A native visual build will still require Windows, suitable Aether and platform
-SDKs, WebView2 Runtime/loader, system libraries and an explicitly identified C++
-toolchain/architecture. Depending on linkage, a Visual C++ Redistributable may
-be needed. Avoiding .NET does not mean a self-contained executable; CRT linkage
-is not changed or chosen by this increment. Invisible capture, fresh raster
-pixels, rendering support, SVG text, comparison and full fixture coverage remain
-future work. The public flexbox fixture's declared 403 cases are provenance, not
-a result. No claim of visual validation follows from compiling these contracts.
+The future WebView2 reference route requires Windows, suitable Aether and
+platform SDKs, WebView2 Runtime/loader, system libraries and an explicitly
+identified C++ toolchain/architecture. Depending on linkage, a Visual C++
+Redistributable may be needed. These are not requirements for the current
+installed-package native adapters. Avoiding .NET does not mean a self-contained
+executable; CRT linkage is not changed or chosen by this increment. Invisible
+capture and fresh raster pixels from the reference engine, validated SVG/text
+rendering, comparison and full fixture coverage remain future work for that
+route. The public flexbox fixture's declared 403 cases are provenance, not a
+result. No claim of visual validation follows from compiling these contracts.
 
 ## Experimental command preparation (internal version 1)
 
@@ -261,9 +320,11 @@ not_run slots never invent zero. Only adapter copy/preflight may use these slots
 not replay, layout, drawing, image encoding, GPU or process metrics. Synthetic
 clock samples in tests demonstrate arithmetic only.
 
-Capture remains NOT_IMPLEMENTED, report-v1 and its engine null/not_run values are
-unchanged. No snapshot or sink trace is an image; this subset does not establish
-fixture, SVG/text, raster or visual-comparison coverage.
+This experimental preparation path does not capture an image. Legacy capture
+without a backend still reports `NOT_IMPLEMENTED` in report/1, with its engine
+null/`not_run` values unchanged; that status does not describe the opt-in
+native routes below. No snapshot or sink trace is an image; preparation does
+not establish fixture, SVG/text, raster or visual-comparison coverage.
 
 ## Opt-in public native profile capture (report/2, artifacts/2)
 
