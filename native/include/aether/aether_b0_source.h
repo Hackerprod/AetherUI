@@ -46,6 +46,23 @@ typedef struct {
     uint32_t stage, reason, reserved;
     uint64_t node_ordinal, command_index, source_byte_offset;
 } aether_b0_source_diagnostic_v1;
+/* Imagen de entrada para create_v2 (ciclo 01, §2.8): la clave `source` debe
+ * coincidir con el url('...') del CSS; los bytes son PNG/JPEG/GIF. */
+typedef struct {
+    const char* source;
+    const uint8_t* bytes;
+    size_t byte_count;
+} aether_b0_source_image_v1;
+typedef struct {
+    uint32_t struct_size, version;
+    const uint8_t* regular_font;
+    size_t regular_font_size;
+    const uint8_t* bold_font;
+    size_t bold_font_size;
+    const aether_b0_source_image_v1* images;
+    size_t image_count;
+    uint32_t reserved[4];
+} aether_b0_source_options_v2;
 typedef struct {
     uint32_t struct_size, version;
     int32_t width, height;
@@ -54,11 +71,21 @@ typedef struct {
 } aether_b0_source_frame_info_v1;
 AETHER_API uint32_t aether_b0_source_capabilities(void);
 AETHER_API size_t aether_b0_source_options_v1_size(void);
+AETHER_API size_t aether_b0_source_options_v2_size(void);
 AETHER_API size_t aether_b0_source_diagnostic_v1_size(void);
 AETHER_API size_t aether_b0_source_frame_info_v1_size(void);
 AETHER_API aether_status_t aether_b0_source_create(
     int32_t width, int32_t height, const char* html, size_t html_length,
     const aether_b0_source_options_v1* options,
+    aether_b0_source_t* out_session,
+    aether_b0_source_diagnostic_v1* diagnostic);
+/* Como create(), pero con imágenes de entrada (options_v2, version == 2).
+ * Las imágenes se registran antes de prepare(); un decode fallido se reporta
+ * en etapa INPUT: LIMIT_EXCEEDED si excede presupuesto, UNSUPPORTED si no
+ * decodifica. */
+AETHER_API aether_status_t aether_b0_source_create_v2(
+    int32_t width, int32_t height, const char* html, size_t html_length,
+    const aether_b0_source_options_v2* options,
     aether_b0_source_t* out_session,
     aether_b0_source_diagnostic_v1* diagnostic);
 AETHER_API aether_status_t aether_b0_source_render(

@@ -6,6 +6,7 @@
 #include "../native_paint_list.h"
 #include "../display_list_types.h"
 #include <algorithm>
+#include <unordered_set>
 #include "native_text_validation.h"
 
 namespace aether::rendering::preparation {
@@ -26,7 +27,8 @@ std::optional<std::size_t> bounded_length(const char* text, std::size_t capacity
 }
 using CopyResult = std::variant<Command, ErrorCode>;
 CopyResult copy_command(const aether_paint_command_t& source, std::size_t string_bytes,
- std::span<const NativeScrollState> scroll, bool native_scroll, bool trusted_gradient) {
+ std::span<const NativeScrollState> scroll, bool native_scroll, bool trusted_gradient,
+ std::span<const NativeImageEntry> images, std::size_t command_index) {
  const auto lookup=[&](std::int64_t id)->const NativeScrollState* {
   const auto it=std::lower_bound(scroll.begin(),scroll.end(),id,[](const auto& a,auto key){return a.id<key;});
   return it!=scroll.end()&&it->id==id?&*it:nullptr;
@@ -53,7 +55,7 @@ CopyResult copy_command(const aether_paint_command_t& source, std::size_t string
    return ErrorCode::LIMIT_EXCEEDED;
   return Command{Text{std::string(p.text, *text_length), p.rect,
    std::string(p.font_family, *family_length), p.font_size, p.font_weight,
-   p.text_align, p.color, p.wrap}};
+   p.text_align, p.color, p.wrap, std::nullopt}};
  }
  case AETHER_PAINT_PUSH_CLIP: {
   const auto& p = source.data.push_clip;
@@ -82,10 +84,34 @@ CopyResult copy_command(const aether_paint_command_t& source, std::size_t string
   for(std::size_t i=0;i<std::size_t(p.gradient.stop_count);++i)g.stops.push_back({p.gradient.stops[i].offset,p.gradient.stops[i].color});
   return Command{std::move(g)};
  }
+ case AETHER_PAINT_DRAW_BACKGROUND_IMAGE: {
+  const auto& p = source.data.draw_background_image;
+  // Regla 1 (orden fijado por test_aether_command_source.cpp): la geometría
+  // sin resolver rechaza antes que cualquier validación de payload — un
+  // comando a cero (rects a cero) daría INVALID_PAYLOAD por la regla 3.
+  if (!p.has_resolved_geometry) return ErrorCode::UNSUPPORTED_TAG;
+  // Regla 2: sin entrada en el sidecar con command_index == i → recurso ausente.
+  const auto it = std::lower_bound(images.begin(), images.end(), command_index,
+    [](const NativeImageEntry& e, std::size_t index) { return e.command_index < index; });
+  if (it == images.end() || it->command_index != command_index) return ErrorCode::UNSUPPORTED_TAG;
+  // Regla 3: payload inválido. (Una imagen nula pasa a validate_command, que
+  // la rechaza con INVALID_PAYLOAD; aquí solo se valida el payload ABI.)
+  if (!std::isfinite(p.source_rect.x) || !std::isfinite(p.source_rect.y) ||
+      !std::isfinite(p.source_rect.width) || !std::isfinite(p.source_rect.height) ||
+      p.source_rect.width <= 0 || p.source_rect.height <= 0 ||
+      !std::isfinite(p.destination_rect.x) || !std::isfinite(p.destination_rect.y) ||
+      !std::isfinite(p.destination_rect.width) || !std::isfinite(p.destination_rect.height) ||
+      p.destination_rect.width <= 0 || p.destination_rect.height <= 0 ||
+      !std::isfinite(p.opacity) || p.opacity < 0 || p.opacity > 1 ||
+      p.repeat_x < AETHER_BACKGROUND_REPEAT || p.repeat_x > AETHER_BACKGROUND_ROUND ||
+      p.repeat_y < AETHER_BACKGROUND_REPEAT || p.repeat_y > AETHER_BACKGROUND_ROUND ||
+      p.size_kind < AETHER_BACKGROUND_SIZE_AUTO || p.size_kind > AETHER_BACKGROUND_SIZE_CONTAIN)
+   return ErrorCode::INVALID_PAYLOAD;
+  return Command{Image{p.destination_rect, p.source_rect, p.opacity, it->image}};
+ }
  case AETHER_PAINT_DRAW_TEXT_GRADIENT:
  case AETHER_PAINT_FILL_BORDER_SIDE:
  case AETHER_PAINT_DRAW_TEXT_SHADOW:
- case AETHER_PAINT_DRAW_BACKGROUND_IMAGE:
  case AETHER_PAINT_APPLY_BACKDROP_FILTER:
   return ErrorCode::UNSUPPORTED_TAG;
  case AETHER_PAINT_PUSH_SCROLL_OFFSET: {
@@ -109,7 +135,7 @@ CopyResult copy_command(const aether_paint_command_t& source, std::size_t string
 } // namespace
 
 SnapshotResult snapshot_with_border_groups(const AetherApi& api, aether_display_list_t list,
-                                 std::span<const aether_border_group_range> groups, Cancellation* cancellation, std::span<const NativeScrollState> scroll, bool native_scroll, std::span<const NativeTextEntry> text_runs, bool native_text, bool native_gradients) noexcept {
+                                 std::span<const aether_border_group_range> groups, Cancellation* cancellation, std::span<const NativeScrollState> scroll, bool native_scroll, std::span<const NativeTextEntry> text_runs, bool native_text, bool native_gradients, std::span<const NativeImageEntry> images) noexcept {
  std::optional<std::size_t> index;
  std::optional<int> tag;
  try {
@@ -155,7 +181,21 @@ SnapshotResult snapshot_with_border_groups(const AetherApi& api, aether_display_
    while(text_group<groups.size() && groups[text_group].first+groups[text_group].count<=entry.command_index)++text_group;
    if(text_group<groups.size() && entry.command_index>=groups[text_group].first)return Error{ErrorCode::INVALID_PAYLOAD};
   }
+  // Imagen: mismo patrón que text_runs (índices estrictamente crecientes,
+  // dentro de rango y fuera de los grupos de bordes).
+  std::size_t previous_image=0;
+  bool first_image=true;
+  std::size_t image_group=0;
+  for(const auto& entry:images) {
+   if(entry.command_index>=std::size_t(count) || (!first_image && entry.command_index<=previous_image))return Error{ErrorCode::INVALID_PAYLOAD};
+   first_image=false;previous_image=entry.command_index;
+   while(image_group<groups.size() && groups[image_group].first+groups[image_group].count<=entry.command_index)++image_group;
+   if(image_group<groups.size() && entry.command_index>=groups[image_group].first)return Error{ErrorCode::INVALID_PAYLOAD};
+  }
   std::size_t text_index=0;
+  std::size_t image_index=0;
+  std::unordered_set<const DecodedImage*> seen_images;
+  std::uint64_t frame_image_bytes=0;
   NativeTextBudget native_budget;
   std::size_t group_index=0;
   Snapshot snapshot;
@@ -191,7 +231,7 @@ SnapshotResult snapshot_with_border_groups(const AetherApi& api, aether_display_
    const CommandGuard guard{api, source};
    tag = static_cast<int>(source.tag);
    if (cancelled(cancellation)) return Error{ErrorCode::CANCELLED, index, tag};
-   auto copied = copy_command(source, string_bytes,scroll,native_scroll,native_gradients && source.tag==AETHER_PAINT_FILL_ROUNDED_RECT_GRADIENT);
+   auto copied = copy_command(source, string_bytes,scroll,native_scroll,native_gradients && source.tag==AETHER_PAINT_FILL_ROUNDED_RECT_GRADIENT,images,std::size_t(i));
    if (const auto* error = std::get_if<ErrorCode>(&copied)) return Error{*error, index, tag};
    auto& command = std::get<Command>(copied);
    if(native_text) {
@@ -204,17 +244,37 @@ SnapshotResult snapshot_with_border_groups(const AetherApi& api, aether_display_
      if(auto e=native_budget.add(*t))return Error{*e,index,tag};
     }
    }
+   // Regla 2b (§2.2.6): espejo exacto del chequeo de texto — la siguiente
+   // entrada del sidecar debe corresponder a este comando si y solo si el
+   // comando copiado es un Image resuelto. Sin resolver, la regla 1 ya
+   // disparó en copy_command y nunca se consume entrada.
+   const bool has_image_entry=image_index<images.size() && images[image_index].command_index==std::size_t(i);
+   auto* img=std::get_if<Image>(&command);
+   if(bool(img)!=has_image_entry)return Error{ErrorCode::INVALID_PAYLOAD,index,tag};
+   if(img) {
+    ++image_index;
+    // Acumulación total por frame (§2.2.5): cada DecodedImage suma una sola
+    // vez, por identidad del shared_ptr; el rechazo por presupuesto precede
+    // a la validación de campos. Suma con guarda anti-overflow.
+    if(img->image && seen_images.insert(img->image.get()).second) {
+     const auto bytes=img->image->pixels.size();
+     constexpr std::uint64_t max_frame_image_bytes=64u*1024u*1024u;
+     if(bytes>max_frame_image_bytes-frame_image_bytes)return Error{ErrorCode::LIMIT_EXCEEDED,index,tag};
+     frame_image_bytes+=bytes;
+    }
+   }
    if (const auto error = validate_command(command, string_bytes)) return Error{*error, index, tag};
    snapshot.commands.push_back(std::move(command));
   }
   if (cancelled(cancellation)) return Error{ErrorCode::CANCELLED, index, tag};
   if(text_index!=text_runs.size())return Error{ErrorCode::INVALID_PAYLOAD,index,tag};
+  if(image_index!=images.size())return Error{ErrorCode::INVALID_PAYLOAD,index,tag};
   return snapshot;
  } catch (const std::bad_alloc&) {
   return Error{ErrorCode::OUT_OF_MEMORY, index, tag};
  }
 }
 SnapshotResult snapshot_commands(const AetherApi& api,aether_display_list_t list,Cancellation* c) noexcept {
- return snapshot_with_border_groups(api,list,{},c,{},false,{},false,false);
+ return snapshot_with_border_groups(api,list,{},c,{},false,{},false,false,{});
 }
 } // namespace aether::rendering::preparation

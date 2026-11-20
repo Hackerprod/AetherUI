@@ -4,11 +4,11 @@
 #include <cmath>
 #include <algorithm>
 namespace aether::rendering::preparation {
-SnapshotResult snapshot_with_border_groups(const AetherApi&,aether_display_list_t,std::span<const aether_border_group_range>,Cancellation*,std::span<const NativeScrollState>,bool,std::span<const NativeTextEntry>,bool,bool) noexcept;
+SnapshotResult snapshot_with_border_groups(const AetherApi&,aether_display_list_t,std::span<const aether_border_group_range>,Cancellation*,std::span<const NativeScrollState>,bool,std::span<const NativeTextEntry>,bool,bool,std::span<const NativeImageEntry>) noexcept;
 SnapshotResult snapshot_native_commands(aether_display_list_t list,Cancellation* c) noexcept {
  if(!list)return Error{ErrorCode::INVALID_LIST};
  const AetherApi api{aether_abi_version,aether_abi_capabilities,aether_paint_command_size,aether_display_list_get_count,aether_display_list_get_command,aether_paint_command_free};
- return snapshot_with_border_groups(api,list,list->border_groups,c,{},false,{},false,true);
+ return snapshot_with_border_groups(api,list,list->border_groups,c,{},false,{},false,true,{});
 }
 }
 namespace aether::rendering::preparation {
@@ -16,7 +16,7 @@ SnapshotResult snapshot_native_opacity(const aether::rendering::NativePaintList&
  try {
   const auto list=NativeListAccess::list(native);
   if(!list)return Error{ErrorCode::INVALID_LIST};
-  if(native.events.size()>max_commands || native.text_runs.size()>max_commands || native.scroll.size()>max_commands)return Error{ErrorCode::LIMIT_EXCEEDED};
+  if(native.events.size()>max_commands || native.text_runs.size()>max_commands || native.scroll.size()>max_commands || native.image_runs.size()>max_commands)return Error{ErrorCode::LIMIT_EXCEEDED};
   std::vector<std::int64_t> ids;
   for(const auto& cmd:list->commands) {
    if(cmd.tag==AETHER_PAINT_PUSH_SCROLL_OFFSET)ids.push_back(cmd.data.push_scroll_offset.scroll_container_id);
@@ -31,7 +31,7 @@ SnapshotResult snapshot_native_opacity(const aether::rendering::NativePaintList&
    last=s.id;
   }
   const AetherApi api{aether_abi_version,aether_abi_capabilities,aether_paint_command_size,aether_display_list_get_count,aether_display_list_get_command,aether_paint_command_free};
-  auto captured=snapshot_with_border_groups(api,list,list->border_groups,cancel,native.scroll,true,native.text_runs,true,true);
+  auto captured=snapshot_with_border_groups(api,list,list->border_groups,cancel,native.scroll,true,native.text_runs,true,true,native.image_runs);
   if(auto* e=std::get_if<Error>(&captured))return *e;
   auto& base=std::get<Snapshot>(captured);
   Snapshot out; out.native_text_required=base.native_text_required; std::size_t event=0,command=0,range=0;

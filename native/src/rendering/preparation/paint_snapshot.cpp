@@ -42,9 +42,10 @@ bool cancelled(Cancellation* c) noexcept { return c && c->cancelled(); }
 
 }
 int command_tag(const Command& command) noexcept {
- constexpr std::array<int,17> tags{AETHER_PAINT_FILL_ROUNDED_RECT,AETHER_PAINT_STROKE_ROUNDED_RECT,
+ static_assert(std::variant_size_v<Command> == 18, "command_tag must cover every Command alternative");
+ constexpr std::array<int,18> tags{AETHER_PAINT_FILL_ROUNDED_RECT,AETHER_PAINT_STROKE_ROUNDED_RECT,
  AETHER_PAINT_DRAW_TEXT,AETHER_PAINT_PUSH_CLIP,AETHER_PAINT_POP_CLIP,AETHER_PAINT_PUSH_TRANSFORM,
- AETHER_PAINT_POP_TRANSFORM,AETHER_PAINT_BEGIN_PAINT_CHUNK,AETHER_PAINT_END_PAINT_CHUNK,AETHER_PAINT_DRAW_BOX_SHADOW,AETHER_PAINT_FILL_BORDER_SIDE,-100,-101,AETHER_PAINT_PUSH_SCROLL_OFFSET,AETHER_PAINT_POP_SCROLL_OFFSET,AETHER_PAINT_DRAW_SCROLLBAR_CHROME,AETHER_PAINT_FILL_ROUNDED_RECT_GRADIENT};
+ AETHER_PAINT_POP_TRANSFORM,AETHER_PAINT_BEGIN_PAINT_CHUNK,AETHER_PAINT_END_PAINT_CHUNK,AETHER_PAINT_DRAW_BOX_SHADOW,AETHER_PAINT_FILL_BORDER_SIDE,-100,-101,AETHER_PAINT_PUSH_SCROLL_OFFSET,AETHER_PAINT_POP_SCROLL_OFFSET,AETHER_PAINT_DRAW_SCROLLBAR_CHROME,AETHER_PAINT_FILL_ROUNDED_RECT_GRADIENT,AETHER_PAINT_DRAW_BACKGROUND_IMAGE};
  return command.valueless_by_exception() ? -1 : tags[command.index()];
 }
 std::optional<ErrorCode> validate_text_fields(TextFieldsView value, std::size_t& bytes,NativeTextCheck check,const void* native) noexcept {
@@ -110,6 +111,21 @@ std::optional<ErrorCode> validate_command(const Command& command, std::size_t& b
        (value.shadow.inset != AETHER_FALSE && value.shadow.inset != AETHER_TRUE)) return ErrorCode::INVALID_PAYLOAD;
   } else if constexpr (std::is_same_v<T,Text>) {
    return validate_text(value, bytes);
+  } else if constexpr (std::is_same_v<T,Image>) {
+   if (!value.image) return ErrorCode::INVALID_PAYLOAD;
+   if (value.image->width < 1 || value.image->height < 1) return ErrorCode::INVALID_PAYLOAD;
+   if (value.image->width > 8192 || value.image->height > 8192 ||
+       value.image->pixels.size() > 16u * 1024u * 1024u) return ErrorCode::LIMIT_EXCEEDED;
+   if (value.image->pixels.size() !=
+       static_cast<std::uint64_t>(value.image->width) * static_cast<std::uint64_t>(value.image->height) * 4u)
+    return ErrorCode::INVALID_PAYLOAD;
+   const auto finite_rect = [](Rect r) {
+    return std::isfinite(r.x) && std::isfinite(r.y) && std::isfinite(r.width) &&
+           std::isfinite(r.height) && r.width > 0 && r.height > 0;
+   };
+   if (!finite_rect(value.destination) || !finite_rect(value.source) ||
+       !std::isfinite(value.opacity) || value.opacity < 0 || value.opacity > 1)
+    return ErrorCode::INVALID_PAYLOAD;
   } else if constexpr (std::is_same_v<T,PushClip>) {
    if (!valid(value.rect) || !valid(value.radii)) return ErrorCode::INVALID_PAYLOAD;
   } else if constexpr (std::is_same_v<T,PushTransform>) {

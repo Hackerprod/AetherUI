@@ -45,6 +45,17 @@ struct Text { std::string text; Rect rect{}; std::string font_family; float font
 struct BorderSide { bool present{}; int style{}; Color color{}; };
 struct BorderGroup { Rect outer{}, inner{}; Radii outer_radii{}, inner_radii{}; std::array<BorderSide,4> sides{}; };
 struct BoxShadow { Rect rect{}; Radii radii{}; aether_shadow shadow{}; };
+struct DecodedImage {
+ std::int32_t width{}, height{};
+ std::vector<std::uint8_t> pixels; // BGRA8 premultiplied, width*4 bytes per row,
+                                    // size == width*height*4. Invariant validated in §2.2.
+};
+struct Image {
+ Rect destination{}; // tile destino en espacio de pintado (== ABI destination_rect)
+ Rect source{};      // tile origen en píxeles intrínsecos (== ABI source_rect)
+ float opacity{1};   // opacidad de capa 0..1 (ya plegada por el builder)
+ std::shared_ptr<const DecodedImage> image; // nulo solo si no asignado: la validación lo rechaza
+};
 struct PushClip { Rect rect{}; Radii radii{}; };
 struct PopClip {};
 struct PushTransform { Matrix matrix{identity}; };
@@ -57,7 +68,7 @@ struct PushScroll { std::int64_t id{}; double x{},y{}; };
 struct PopScroll {};
 struct ScrollChrome { aether_scrollbar_geometry_t geometry{}; };
 using Command = std::variant<Fill, Stroke, Text, PushClip, PopClip, PushTransform,
- PopTransform, BeginChunk, EndChunk, BoxShadow, BorderGroup, BeginOpacity, EndOpacity, PushScroll, PopScroll, ScrollChrome, LinearGradientFill>;
+ PopTransform, BeginChunk, EndChunk, BoxShadow, BorderGroup, BeginOpacity, EndOpacity, PushScroll, PopScroll, ScrollChrome, LinearGradientFill, Image>;
 struct Snapshot { std::vector<Command> commands; bool native_text_required{}; };
 int command_tag(const Command&) noexcept;
 // Shared field validation; updates string budget only on success. Does not check scopes.

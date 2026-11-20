@@ -321,6 +321,23 @@ bool style_source_compile_shorthand(
 // component lexer. It never extracts CSS or reconstructs selector syntax.
 // This is deliberately stricter than general CSS acceptance.
 static bool b0_declaration_supported(const std::string& name,const std::string& value) {
+    // background-image: un solo url(...). El url('...') entrecomillado lexa
+    // como varios tokens (función + string + cierre), así que el bucle
+    // genérico de un token lo rechazaría; decode_url acepta ambas formas y
+    // exige que todo el valor sea la url (url(a), url(b) falla → CSS_LOSS).
+    // Sin data-URLs en el ciclo 01 (§6).
+    if(name=="background-image") {
+        css_variable_lexer lexer(value.data(),value.size());
+        std::string source;
+        if(!lexer.decode_url(source)) return false;
+        if(source.empty()) return false;
+        if(source.size()>=5) {
+            std::string head=source.substr(0,5);
+            for(auto& c:head) c=char(std::tolower(static_cast<unsigned char>(c)));
+            if(head=="data:") return false;
+        }
+        return true;
+    }
     css_component_lexer lexer(value.data(),value.size());
     css_variable_token first; bool found=false;
     for(;;){auto t=lexer.next();if(t.kind==css_variable_token_kind::end)break;
@@ -342,6 +359,13 @@ static bool b0_declaration_supported(const std::string& name,const std::string& 
             css_single_identifier(token.substr(first.numeric_end-first.begin),unit)&&unit=="px";}
         return !pixels || n==0;
     };
+    auto percent=[&](double low,double high,bool integral){
+        using S=css_variable_serialization;
+        if(first.serialization!=S::percentage)return false;
+        const auto numeric=token.substr(0,first.numeric_end-first.begin);
+        char* end=nullptr;const double n=std::strtod(numeric.c_str(),&end);
+        return end&&!*end&&std::isfinite(n)&&n>=low&&n<=high&&(!integral||std::floor(n)==n);
+    };
     auto color=[&](){if(first.serialization!=css_variable_serialization::hash ||
         (token.size()!=4 && token.size()!=7))return false;
         return std::all_of(token.begin()+1,token.end(),[](unsigned char c){return std::isxdigit(c)!=0;});};
@@ -360,6 +384,9 @@ static bool b0_declaration_supported(const std::string& name,const std::string& 
     if(name=="width")return word("auto")||number(0,8192,true,false);
     if(name=="color" || name=="border-color")return color();
     if(name=="background-color")return color()||word("transparent");
+    if(name=="background-repeat")return word("repeat")||word("no-repeat")||word("repeat-x")||word("repeat-y")||word("space")||word("round");
+    if(name=="background-position")return word("left")||word("center")||word("right")||word("top")||word("bottom")||number(0,8192,true,false)||percent(0,100,false);
+    if(name=="background-size")return word("auto")||word("cover")||word("contain")||number(0,8192,true,false)||percent(0,8192,false);
     if(name=="border-radius")return number(0,32,true,true);
     if(name=="border-style")return word("solid");
     if(name=="border-width" || name=="margin-top" || name=="margin-right" ||

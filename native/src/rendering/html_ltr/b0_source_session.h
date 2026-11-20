@@ -11,6 +11,7 @@ struct aether_layout_result_s;
 namespace aether::rendering { class NativePaintList; }
 namespace aether::rendering::html_ltr {
 class HtmlLtrMeasureBridge;
+class ImageRegistry;
 struct B0SourceError { aether_status_t status; uint32_t stage,reason; uint64_t node_ordinal=AETHER_B0_NO_INDEX,command_index=AETHER_B0_NO_INDEX,source_byte_offset=AETHER_B0_NO_INDEX; };
 class B0SourceSession final {
  struct State;
@@ -19,6 +20,9 @@ class B0SourceSession final {
 public:
  B0SourceSession(std::string,std::vector<uint8_t>,std::vector<uint8_t>,Viewport);
  ~B0SourceSession();
+ // Registro de imágenes (ciclo 01, propuesta A1): llamable antes de prepare().
+ // Sin registro, todo background-image rechaza como antes.
+ void set_image_registry(std::shared_ptr<const ImageRegistry> registry);
  uint32_t diagnostic_stage()const noexcept;
  uint64_t diagnostic_node()const noexcept;
  B0SourceSession(const B0SourceSession&)=delete;

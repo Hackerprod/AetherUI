@@ -124,6 +124,24 @@ void validate_controls(const NativePaintList& native,FontProvider& provider,BoxP
   case AETHER_PAINT_END_PAINT_CHUNK:
    if(controls.empty()||controls.back()!=std::pair<int,std::int64_t>{AETHER_PAINT_BEGIN_PAINT_CHUNK,command.data.paint_chunk.style_node_id})internal();
    controls.pop_back();break;
+  case AETHER_PAINT_DRAW_BACKGROUND_IMAGE: {
+   const auto& d = command.data.draw_background_image;
+   if (!d.has_resolved_geometry) break; // Sin resolver: NO rechazar aquí.
+   // Snapshot lo rechaza con UNSUPPORTED_TAG (§2.2.4, regla 1) y §2.6.5 lo
+   // mapea a PREPARATION (8) con command_index. Si este caso exigiera
+   // has_resolved_geometry == TRUE (Rev 2), finalize_paint rechazaría antes
+   // de snapshot — etapa TRANSPORT (7), sin índice — y B2/R9 fallarían.
+   rect(d.paint_rect);
+   if (!std::isfinite(d.opacity) || d.opacity < 0 || d.opacity > 1) unsupported();
+   if (!d.source || !*d.source) unsupported();
+   if (!std::isfinite(d.source_rect.x) || !std::isfinite(d.source_rect.y) ||
+       !std::isfinite(d.source_rect.width) || !std::isfinite(d.source_rect.height) ||
+       d.source_rect.width <= 0 || d.source_rect.height <= 0) unsupported();
+   if (!std::isfinite(d.destination_rect.x) || !std::isfinite(d.destination_rect.y) ||
+       !std::isfinite(d.destination_rect.width) || !std::isfinite(d.destination_rect.height) ||
+       d.destination_rect.width <= 0 || d.destination_rect.height <= 0) unsupported();
+   break;
+  }
   default:unsupported();
   }
  }

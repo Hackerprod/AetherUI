@@ -675,6 +675,7 @@ static void paint_background_layers(aether_display_list_builder_s* builder,
                     aether_background_image_geometry_context_s context{};
                     context.paint_rect = paint_rect;
                     context.image_size = image_size;
+                    context.max_tiles = 16384; // §2.3: el desbordamiento de tiles rechaza en snapshot (R1), nunca pinta parcial.
                     context.position_x = layer.position_x;
                     context.position_y = layer.position_y;
                     context.size_kind = layer.size_kind;

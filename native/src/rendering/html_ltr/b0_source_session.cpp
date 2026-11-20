@@ -1,4 +1,5 @@
 #include "b0_source_session.h"
+#include "image_registry.h"
 #include "../../style_runtime/dom_stylesheet.h"
 #include "../../css/style_c_export.h"
 #include "../../css/border_radii.h"
@@ -25,10 +26,10 @@ struct B0SourceSession::State {
  struct Occurrence {std::shared_ptr<const text::ShapedRun> run;std::shared_ptr<const FontProduct> product;aether_node_s* owner;uint64_t id;};
  bool b2_enabled=false;std::unique_ptr<B2Provenance> provenance;
  uint32_t profile=2;std::string html;FontProvider fonts;Viewport viewport;
- uint32_t stage=AETHER_B0_STAGE_INPUT;uint64_t diagnostic_node=AETHER_B0_NO_INDEX;
+ uint32_t stage=AETHER_B0_STAGE_INPUT;uint64_t diagnostic_node=AETHER_B0_NO_INDEX;uint64_t diagnostic_command_index=AETHER_B0_NO_INDEX;
  std::map<aether_node_t,std::string> visible;std::vector<aether_node_t> styles;
  aether_doc_t doc{};aether_style_runtime_t runtime{};aether_style_revision_t revision{};aether_style_map_t map{};aether_layout_engine_t engine{};aether_layout_result_t layout{};aether_display_list_builder_t builder{};
- std::vector<aether_node_t> nodes;std::map<aether_node_t,Owner> owners;std::map<const text::ShapedRun*,Occurrence> occurrences;std::unique_ptr<NativePaintList> paint;
+ std::vector<aether_node_t> nodes;std::map<aether_node_t,Owner> owners;std::map<const text::ShapedRun*,Occurrence> occurrences;std::unique_ptr<NativePaintList> paint;std::shared_ptr<const ImageRegistry> registry;
  std::vector<std::shared_ptr<const text::GlyphMaskA8>> masks;std::optional<preparation::PreparedFrame> prepared;
  uint64_t epoch{},nonstate{},serial{};std::thread::id thread=std::this_thread::get_id();aether_status_t bridge_error=AETHER_OK;
  State(std::string h,std::vector<uint8_t> r,std::vector<uint8_t> b,Viewport v):html(std::move(h)),fonts(std::move(r),std::move(b),2),viewport(v){fonts.reserve_payload(html.size()+1024*1024);if(!fonts.has_bold())throw Error{AETHER_ERROR_INVALID_ARGUMENT};}
@@ -180,7 +181,7 @@ struct B0SourceSession::State {
   const auto supported=[&](bool v){if(!v)fail();};
   supported(std::string_view(s.font_family)=="AetherB0"&&std::isfinite(s.font_size)&&s.font_size>=8&&s.font_size<=48&&std::floor(s.font_size)==s.font_size&&(s.font_weight==400||s.font_weight==700)&&std::isfinite(s.line_height)&&s.line_height>=s.font_size&&s.line_height<=96&&std::floor(s.line_height)==s.line_height);
   supported(s.display==(metadata(node)?AETHER_DISPLAY_NONE:br(node)?AETHER_DISPLAY_LINE_BREAK:inline_node(node)?AETHER_DISPLAY_INLINE:AETHER_DISPLAY_BLOCK)&&s.position==AETHER_POSITION_STATIC&&s.box_sizing==AETHER_BOX_SIZING_CONTENT_BOX&&s.height.unit==AETHER_CSS_UNIT_AUTO&&s.opacity==1&&s.visible&&(s.white_space==AETHER_WHITE_SPACE_NOWRAP||(!control(node)&&s.white_space==AETHER_WHITE_SPACE_NORMAL))&&(s.text_align==AETHER_TEXT_ALIGN_START||(!control(node)&&s.text_align==AETHER_TEXT_ALIGN_CENTER))&&s.text_transform==AETHER_TEXT_TRANSFORM_NONE&&s.overflow_x==(node->tag_name=="html"?AETHER_OVERFLOW_CLIP:AETHER_OVERFLOW_VISIBLE)&&s.overflow_y==(node->tag_name=="html"?AETHER_OVERFLOW_CLIP:AETHER_OVERFLOW_VISIBLE));
-  supported(!s.has_text_gradient&&!s.background_layers.count&&!s.backdrop_filters.count&&!s.transforms.count&&!s.text_shadows.count&&!s.box_shadows.count&&!s.transition_properties&&!s.transition_duration&&!s.transition_delay&&s.z_index_kind==AETHER_Z_INDEX_AUTO);
+  supported(!s.has_text_gradient&&!s.backdrop_filters.count&&!s.transforms.count&&!s.text_shadows.count&&!s.box_shadows.count&&!s.transition_properties&&!s.transition_duration&&!s.transition_delay&&s.z_index_kind==AETHER_Z_INDEX_AUTO&&(s.background_layers.count==0||(s.background_layers.count==1&&s.background_layers.items[0].kind==AETHER_BACKGROUND_LAYER_IMAGE_URL&&s.background_layers.items[0].image_source&&*s.background_layers.items[0].image_source)));
   const auto color_ok=[](aether_color_rgba c,bool transparent){return std::isfinite(c.r)&&std::isfinite(c.g)&&std::isfinite(c.b)&&c.r>=0&&c.r<=1&&c.g>=0&&c.g<=1&&c.b>=0&&c.b<=1&&(c.a==1||(transparent&&c.a==0));};
   supported(color_ok(s.color,false)&&color_ok(s.background_color,true));
   if(node->tag_name=="html")supported(s.background_color.a==0);
@@ -189,6 +190,10 @@ struct B0SourceSession::State {
    for(const auto component:{corner.horizontal,corner.vertical})
     supported(component.unit==AETHER_CSS_UNIT_PX&&std::isfinite(component.value)&&component.value==radius&&radius>=0&&radius<=32&&std::floor(radius)==radius);
   if(radius>0)supported(!metadata(node)&&!inline_node(node)&&!br(node)&&node->tag_name!="html"&&node->tag_name!="body");
+  // B0 e2e solo admite imágenes en cajas de radio 0 (§2.7.2, m2): el radio se
+  // evalúa aquí, tras el bucle de radios, no en la línea de background_layers.
+  // El rechazo es en etapa STYLE, no en validate_controls (m7).
+  if(s.background_layers.count==1&&s.background_layers.items[0].kind==AETHER_BACKGROUND_LAYER_IMAGE_URL)supported(radius==0);
   const auto length=[&](aether_css_length x,bool aut=false,float max=8192){supported((aut&&x.unit==AETHER_CSS_UNIT_AUTO)||(x.unit==AETHER_CSS_UNIT_PX&&std::isfinite(x.value)&&x.value>=0&&x.value<=max));};
   length(s.width,true);
   for(auto x:{s.margin.top,s.margin.right,s.margin.bottom,s.margin.left,s.padding.top,s.padding.right,s.padding.bottom,s.padding.left})length(x);
@@ -315,23 +320,34 @@ struct B0SourceSession::State {
    if(!std::isfinite(border.top)||!std::isfinite(border.right)||!std::isfinite(border.bottom)||!std::isfinite(border.left))throw Error{AETHER_ERROR_INTERNAL};
    if(border.top!=border.right||border.top!=border.bottom||border.top!=border.left||border.top<0||border.top>8||border.top>radius)fail();
   }
-  diagnostic_node=AETHER_B0_NO_INDEX;
+  diagnostic_node=AETHER_B0_NO_INDEX;diagnostic_command_index=AETHER_B0_NO_INDEX;
   if(provenance)provenance->validate_final(layout);
   stage=AETHER_B0_STAGE_TRANSPORT;
-  core(aether_display_list_builder_create(nullptr,nullptr,&builder));core(build_native_opacity(builder,layout,map,nullptr,paint));valid();
+  core(aether_display_list_builder_create(nullptr,nullptr,&builder));
+  if(registry)aether_display_list_builder_set_image_dimensions_callback(builder,&ImageRegistry::dimensions,const_cast<ImageRegistry*>(registry.get()));
+  core(build_native_opacity(builder,layout,map,nullptr,paint));valid();
   #ifdef AETHER_HTML_LTR_TESTING
   testing::inspect(layout,paint.get());
 #endif
   for(const auto& [node,o]:owners)if(o.control){aether::layout::BoxStyleSnapshot st(o.record->style(),o.record->measures());check_control(o.control,node,st);}
+  if(registry)registry->attach(NativeListAccess::list(*paint),*paint);
   masks=finalize_paint(*paint,final,fonts,controls,profile,"AetherB0",BoxPaintPolicy::source_rounded);valid();HTML_LTR_STAGE(snapshot);auto snapshot=preparation::snapshot_native_opacity(*paint);
-  if(auto e=std::get_if<preparation::Error>(&snapshot))throw Error{e->code==preparation::ErrorCode::OUT_OF_MEMORY?AETHER_ERROR_OUT_OF_MEMORY:e->code==preparation::ErrorCode::LIMIT_EXCEEDED?AETHER_ERROR_LIMIT_EXCEEDED:AETHER_ERROR_INTERNAL};
+  if(auto e=std::get_if<preparation::Error>(&snapshot)) {
+   if(e->code==preparation::ErrorCode::UNSUPPORTED_TAG) {
+    stage=AETHER_B0_STAGE_PREPARATION;
+    if(e->index)diagnostic_command_index=*e->index;
+    throw Error{AETHER_ERROR_UNSUPPORTED};
+   }
+   throw Error{e->code==preparation::ErrorCode::OUT_OF_MEMORY?AETHER_ERROR_OUT_OF_MEMORY:e->code==preparation::ErrorCode::LIMIT_EXCEEDED?AETHER_ERROR_LIMIT_EXCEEDED:AETHER_ERROR_INTERNAL};
+  }
   stage=AETHER_B0_STAGE_PREPARATION;HTML_LTR_STAGE(preparation);auto frame=preparation::prepare(std::get<preparation::Snapshot>(snapshot));if(auto e=std::get_if<preparation::Error>(&frame))throw Error{e->code==preparation::ErrorCode::OUT_OF_MEMORY?AETHER_ERROR_OUT_OF_MEMORY:e->code==preparation::ErrorCode::LIMIT_EXCEEDED?AETHER_ERROR_LIMIT_EXCEEDED:AETHER_ERROR_INTERNAL};valid();prepared.emplace(std::get<preparation::PreparedFrame>(std::move(frame)));
  }
 };
 void B0SourceSession::install(aether_layout_engine_s* e,std::shared_ptr<HtmlLtrMeasureBridge> b){require(e&&!e->layout_in_progress&&!e->html_ltr_bridge_&&!e->text_selection_&&!e->synthetic_text_policy_&&!e->text_measurer&&!e->contextual_text_measurer);e->html_ltr_bridge_=std::move(b);}
 B0SourceSession::B0SourceSession(std::string h,std::vector<uint8_t> r,std::vector<uint8_t> b,Viewport v):state_(std::make_unique<State>(std::move(h),std::move(r),std::move(b),v)){}
+void B0SourceSession::set_image_registry(std::shared_ptr<const ImageRegistry> registry){state_->registry=std::move(registry);}
 B0SourceSession::~B0SourceSession()=default;
-const preparation::PreparedFrame& B0SourceSession::prepare(){try{state_->run();return *state_->prepared;}catch(const aether::layout::b2::LimitExceeded&){throw B0SourceError{AETHER_ERROR_LIMIT_EXCEEDED,state_->stage,AETHER_B0_REASON_LIMIT,state_->diagnostic_node};}catch(const aether::layout::b2::InvalidLedger&){throw B0SourceError{AETHER_ERROR_INTERNAL,state_->stage,AETHER_B0_REASON_INVARIANT,state_->diagnostic_node};}catch(const Error& e){throw B0SourceError{e.status,state_->stage,e.status==AETHER_ERROR_LIMIT_EXCEEDED?AETHER_B0_REASON_LIMIT:e.status==AETHER_ERROR_OUT_OF_MEMORY?AETHER_B0_REASON_ALLOCATION:e.status==AETHER_ERROR_UNSUPPORTED?AETHER_B0_REASON_UNSUPPORTED:AETHER_B0_REASON_INVARIANT,state_->diagnostic_node};}}
+const preparation::PreparedFrame& B0SourceSession::prepare(){try{state_->run();return *state_->prepared;}catch(const aether::layout::b2::LimitExceeded&){throw B0SourceError{AETHER_ERROR_LIMIT_EXCEEDED,state_->stage,AETHER_B0_REASON_LIMIT,state_->diagnostic_node};}catch(const aether::layout::b2::InvalidLedger&){throw B0SourceError{AETHER_ERROR_INTERNAL,state_->stage,AETHER_B0_REASON_INVARIANT,state_->diagnostic_node};}catch(const Error& e){throw B0SourceError{e.status,state_->stage,e.status==AETHER_ERROR_LIMIT_EXCEEDED?AETHER_B0_REASON_LIMIT:e.status==AETHER_ERROR_OUT_OF_MEMORY?AETHER_B0_REASON_ALLOCATION:e.status==AETHER_ERROR_UNSUPPORTED?AETHER_B0_REASON_UNSUPPORTED:AETHER_B0_REASON_INVARIANT,state_->diagnostic_node,state_->diagnostic_command_index};}}
 const std::vector<std::shared_ptr<const text::GlyphMaskA8>>& B0SourceSession::masks()const noexcept{return state_->masks;}
 uint32_t B0SourceSession::diagnostic_stage()const noexcept{return state_->stage;}
 uint64_t B0SourceSession::diagnostic_node()const noexcept{return state_->diagnostic_node;}

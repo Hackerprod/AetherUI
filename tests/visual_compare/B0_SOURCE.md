@@ -2,8 +2,11 @@
 
 This opt-in adapter captures the existing static B0 stylesheet-controls, B1
 semantic-page and B2 inline-wrap public ABI. It does not add layout/CSS support,
-interaction, images, effects, browser comparison or general HTML support.
+interaction, effects, browser comparison or general HTML support.
 It is not LTR profile 3. No engine admission rules are changed.
+Background images are supported through the v2 ABI (`create_v2`): image assets
+in the manifest (role `image`, raster PNG/JPEG/GIF) are registered by manifest
+path, which must match the `url('...')` in the CSS.
 
 Build/install `native` with CMake, then configure this directory with
 `-DAETHER_VISUAL_COMPARE_NATIVE_HTML_LTR=ON -DCMAKE_PREFIX_PATH=<installed-prefix>`.
@@ -22,7 +25,7 @@ aether_visual_compare capture --html /absolute/inputs/page.html \
 Do not pass `--profile`. Supply exactly the two inventoried TTF fonts. HTML and
 fonts are rendered from verified snapshots, not reopened after hashing. This is
 not a filesystem race-resistant sandbox. Caps: scale 1; dimensions <=2048;
-HTML <=64 KiB; combined fonts <=16 MiB. Source ABI capabilities are separate
+HTML <=64 KiB; combined fonts <=16 MiB; each image <=16 MiB. Source ABI capabilities are separate
 from LTR limitations. Diagnostics contain only validated numeric values;
 unavailable indices, statuses and diagnostics are explicitly null. Synchronous
 ABI work is not internally interruptible; cancellation is sampled around calls,

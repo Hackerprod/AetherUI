@@ -11,7 +11,9 @@ struct OpacityEvent { std::size_t boundary{}; bool open{}; std::uint64_t id{}, p
 struct NativeScrollOffset { std::int64_t id{}; double x{},y{}; };
 using NativeScrollInput = std::vector<NativeScrollOffset>;
 struct NativeScrollState { std::int64_t id{}; double x{},y{},range_x{},range_y{}; aether_scrollbar_geometry_t chrome{}; };
+namespace preparation { struct DecodedImage; } // Defined in paint_snapshot.hpp; shared_ptr tolerates the incomplete type here (same pattern as NativeText::run).
 struct NativeTextEntry { std::size_t command_index{}; text::Placement placement; };
+struct NativeImageEntry { std::size_t command_index{}; std::shared_ptr<const preparation::DecodedImage> image; };
 struct NativeControlEntry {
  aether_node_s* owner{};
  html_ltr::AtomicControlPlacement placement;
@@ -30,6 +32,7 @@ class NativePaintList {
  public:
  NativeInteractionFocus interaction_focus;
  std::vector<NativeTextEntry> text_runs;
+ std::vector<NativeImageEntry> image_runs;
  std::vector<NativeControlEntry> control_runs;
  std::vector<OpacityEvent> events;
  std::vector<NativeScrollState> scroll;

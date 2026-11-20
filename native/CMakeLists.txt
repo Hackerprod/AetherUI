@@ -41,6 +41,7 @@ add_library(aether_core SHARED
     src/dom/document_node.cpp
     src/dom/html_parser.cpp
     src/images/image_decode.cpp
+    src/rendering/html_ltr/image_registry.cpp
     src/css/css_length.cpp
     src/css/color_rgba.cpp
     src/css/computed_style.cpp
@@ -639,6 +640,42 @@ if(AETHERUI_BUILD_TESTS)
     add_executable(aether_background_image_display_list_test tests/test_background_image_display_list.cpp)
     target_link_libraries(aether_background_image_display_list_test PRIVATE AetherUI::Core)
     add_test(NAME aether.background-image-display-list COMMAND aether_background_image_display_list_test)
+
+    # Ciclo 01: los tests de background-image usan símbolos internos del core
+    # (prepare/snapshot/B0SourceSession/finalize_paint/ImageRegistry), no
+    # exportados por la .so (visibilidad oculta). Se compilan las fuentes
+    # reales del core en los ejecutables, como aether_b2_semantics_core.
+    # -UNDEBUG: los tests usan assert() y deben comprobar también en Release.
+    get_target_property(background_image_test_sources aether_core SOURCES)
+    add_library(aether_background_image_test_core OBJECT ${background_image_test_sources})
+    target_include_directories(aether_background_image_test_core PRIVATE include src src/rendering/preparation/include)
+    target_compile_definitions(aether_background_image_test_core PRIVATE AETHER_EXPORTS)
+    target_compile_options(aether_background_image_test_core PRIVATE -Wall -Wextra -pedantic -ffp-contract=off -UNDEBUG)
+    add_executable(aether_background_image_render_test tests/test_background_image_render.cpp
+        $<TARGET_OBJECTS:aether_background_image_test_core>)
+    target_include_directories(aether_background_image_render_test PRIVATE include src src/rendering/preparation/include)
+    target_compile_definitions(aether_background_image_render_test PRIVATE AETHER_EXPORTS)
+    target_compile_options(aether_background_image_render_test PRIVATE -Wall -Wextra -pedantic -ffp-contract=off -UNDEBUG)
+    target_link_libraries(aether_background_image_render_test PRIVATE Threads::Threads)
+    add_test(NAME aether.background-image-render COMMAND aether_background_image_render_test)
+    add_executable(aether_background_image_snapshot_test tests/test_background_image_snapshot.cpp
+        $<TARGET_OBJECTS:aether_background_image_test_core>)
+    target_include_directories(aether_background_image_snapshot_test PRIVATE include src src/rendering/preparation/include)
+    target_compile_definitions(aether_background_image_snapshot_test PRIVATE AETHER_EXPORTS)
+    target_compile_options(aether_background_image_snapshot_test PRIVATE -Wall -Wextra -pedantic -ffp-contract=off -UNDEBUG)
+    target_link_libraries(aether_background_image_snapshot_test PRIVATE Threads::Threads)
+    add_test(NAME aether.background-image-snapshot COMMAND aether_background_image_snapshot_test
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/fonts/DejaVuSans.ttf"
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/fonts/DejaVuSans-Bold.ttf")
+    add_executable(aether_b0_background_image_test tests/test_b0_background_image.cpp
+        $<TARGET_OBJECTS:aether_background_image_test_core>)
+    target_include_directories(aether_b0_background_image_test PRIVATE include src src/rendering/preparation/include)
+    target_compile_definitions(aether_b0_background_image_test PRIVATE AETHER_EXPORTS)
+    target_compile_options(aether_b0_background_image_test PRIVATE -Wall -Wextra -pedantic -ffp-contract=off -UNDEBUG)
+    target_link_libraries(aether_b0_background_image_test PRIVATE Threads::Threads)
+    add_test(NAME aether.b0-background-image COMMAND aether_b0_background_image_test
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/fonts/DejaVuSans.ttf"
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/fonts/DejaVuSans-Bold.ttf")
 
     add_executable(aether_background_position_parser_test tests/test_background_position_parser.cpp
         src/style_runtime/builtin_properties.cpp src/style_runtime/transition_properties.cpp
@@ -2011,6 +2048,20 @@ if(AETHERUI_BUILD_TESTS AND UNIX)
         "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/fonts/DejaVuSans.ttf"
         "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/fonts/DejaVuSans-Bold.ttf"
         "${CMAKE_CURRENT_BINARY_DIR}/b0-source.bgra")
+endif()
+
+if(AETHERUI_BUILD_TESTS AND UNIX)
+    # Ciclo 01 (§3.5): ABI v2 con imágenes. Incluye background_image_fixtures.h
+    # (mismo directorio); estilo require() sin assert() para que -DNDEBUG no
+    # vacíe las comprobaciones (ver test_b0_source_v2.c).
+    add_executable(aether_b0_source_v2_test tests/test_b0_source_v2.c)
+    set_target_properties(aether_b0_source_v2_test PROPERTIES C_STANDARD 11 C_STANDARD_REQUIRED YES)
+    target_include_directories(aether_b0_source_v2_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/tests")
+    target_link_libraries(aether_b0_source_v2_test PRIVATE AetherUI::Core Threads::Threads)
+    target_compile_options(aether_b0_source_v2_test PRIVATE -Wall -Wextra -Werror -pedantic)
+    add_test(NAME aether.b0-source-v2 COMMAND aether_b0_source_v2_test
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/fonts/DejaVuSans.ttf"
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/fonts/DejaVuSans-Bold.ttf")
 endif()
 
 if(AETHERUI_BUILD_TESTS AND UNIX)

@@ -29,7 +29,7 @@ entries=[{'path':name,'role':'font','mime':'font/ttf','size_bytes':(source/name)
 def manifest(name,items): (source/name).write_text(json.dumps({'schema_version':'aether.resources/1','entries':items}))
 manifest('resources.json',entries)
 
-def run(name, expected, html=fixtures[1], viewport='480x640', scale='1', inventory='resources.json', bold_path=bold):
+def run(name, expected, html=fixtures[1], viewport='480x640', scale='1', inventory='resources.json', bold_path=bold, images=[]):
     dest=output/name
     args=[str(exe),'capture','--html',str(source/html),'--resource-root',str(source),'--manifest',str(source/inventory),'--out',str(dest),'--viewport',viewport,'--scale',scale,'--backend','native-b0-source','--regular-font',regular,'--bold-font',bold_path]
     p=subprocess.run(args,capture_output=True,text=True)
@@ -48,7 +48,9 @@ def run(name, expected, html=fixtures[1], viewport='480x640', scale='1', invento
         assert report['input']['sha256']==digest((source/html).read_bytes())
         w,h=map(int,viewport.split('x'))
         rgba=output/(name+'.rgba')
-        subprocess.run([str(oracle),str(source/html),str(source/regular),str(source/bold),str(w),str(h),str(rgba)],check=True)
+        oracle_args=[str(oracle),str(source/html),str(source/regular),str(source/bold),str(w),str(h),str(rgba)]
+        for key,path in images: oracle_args+=[key,str(source/path)]
+        subprocess.run(oracle_args,check=True)
         image=Image.open(dest/'aether.png');image.load()
         assert image.mode=='RGBA' and image.size==(w,h)
         assert image.tobytes()==rgba.read_bytes(),'independent C11 ABI transport mismatch'
@@ -80,4 +82,17 @@ manifest('corrupt.json',[entries[0],corrupt]);run('corrupt-font',10,inventory='c
 accepted=(output/'b1-full/manifest.json').read_bytes();args=json.loads((output/'b1-full.process.json').read_text())['args']
 assert subprocess.run(args,capture_output=True).returncode==13
 assert (output/'b1-full/manifest.json').read_bytes()==accepted
+# Ciclo 01 (§3.5): fixture background-image por la ABI v2 (create_v2). El
+# manifest lleva las 2 fuentes + la imagen (rol image); el oráculo recibe la
+# misma imagen y compara byte a byte contra la captura del CLI.
+bg_html='background_image.html';bg_image='rgbw2.png'
+for name in [bg_html,bg_image]:
+    original=repo/'native/tests/fixtures/b0'/name
+    shutil.copyfile(original,source/name)
+    assert (source/name).read_bytes()==original.read_bytes()
+    provenance.append({'source':str(original.relative_to(repo)),'staged':name,'sha256':digest(original.read_bytes())})
+(output/'source-provenance.json').write_text(json.dumps(provenance,indent=2))
+bg_entries=entries+[{'path':bg_image,'role':'image','mime':'image/png','size_bytes':(source/bg_image).stat().st_size,'sha256':digest((source/bg_image).read_bytes())}]
+manifest('resources-image.json',bg_entries)
+run('bg-image',0,html=bg_html,inventory='resources-image.json',images=[(bg_image,bg_image)])
 print('PASS original B0/B1/B2 capture, independent C11 pixel transport, resource and rejection matrix; NOT browser parity')

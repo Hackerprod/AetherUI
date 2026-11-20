@@ -94,5 +94,21 @@ int main() {
         require(!aether_background_image_resolve_geometry(context, tiles) && tiles.empty(),
             "unknown intrinsic dimensions must not fabricate image geometry");
     }
+
+    // R6 (ciclo 01, M4): imagen 1x1 con repeat sobre viewport 8192x8192 y
+    // max_tiles = 16384 -> resolve_geometry devuelve false (67M tiles).
+    // El rechazo en snapshot es el de R1 (comando sin resolver ->
+    // UNSUPPORTED_TAG), no se re-prueba aquí.
+    {
+        auto context = base_context();
+        context.paint_rect = {0, 0, 8192, 8192};
+        context.image_size = {1, 1};
+        context.size_kind = AETHER_BACKGROUND_SIZE_AUTO;
+        context.repeat_x = AETHER_BACKGROUND_REPEAT;
+        context.repeat_y = AETHER_BACKGROUND_REPEAT;
+        context.max_tiles = 16384;
+        require(!aether_background_image_resolve_geometry(context, tiles) && tiles.empty(),
+            "tile overflow must refuse geometry instead of emitting 67M tiles");
+    }
     return 0;
 }

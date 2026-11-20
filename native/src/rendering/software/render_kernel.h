@@ -15,7 +15,7 @@ constexpr std::uint64_t max_work = 50000000;
 struct Rect { double l, t, r, b; };
 struct CurvedClip { Rect original{}; double radius{}; };
 struct ClipState { Rect bounds; CurvedClip curve; };
-template<class Mask,class Gradient> struct DrawData { Rect rect; Rect inner; prep::Color color; std::size_t index; Rect original{}; double radius{}; Rect inner_original{}; double inner_radius{}; CurvedClip clip{}; bool shadow{}; Rect source{}; Rect excluded{}; double sigma{}; const prep::BorderGroup* border{}; int layer_event{}; float layer_opacity{1}; double displacement_x{},displacement_y{}; std::shared_ptr<const Mask> mask{}; const Gradient* gradient{}; Rect gradient_rect{}; };
+template<class Mask,class Gradient> struct DrawData { Rect rect; Rect inner; prep::Color color; std::size_t index; Rect original{}; double radius{}; Rect inner_original{}; double inner_radius{}; CurvedClip clip{}; bool shadow{}; Rect source{}; Rect excluded{}; double sigma{}; const prep::BorderGroup* border{}; int layer_event{}; float layer_opacity{1}; double displacement_x{},displacement_y{}; std::shared_ptr<const Mask> mask{}; const Gradient* gradient{}; Rect gradient_rect{}; const prep::Image* image{}; Rect image_src{}; };
 inline Rect intersect(Rect a, Rect b) noexcept {
  return {std::max(a.l,b.l),std::max(a.t,b.t),std::min(a.r,b.r),std::min(a.b,b.b)};
 }
@@ -110,6 +110,17 @@ inline unsigned mul(unsigned a,unsigned b) noexcept {return (a*b+127)/255;}
 inline Result failed(FrameStatus s) noexcept {
  return {s==FrameStatus::allocation_failed?Status::allocation_failed:Status::frame_failed,s};
 }
+// prep::Image solo existe en prep::Command: el kernel es una plantilla
+// instanciada también para InteractionCommand (sin imágenes), y un
+// std::get_if<prep::Image> incondicional no compila ahí. El acceso
+// genérico devuelve nullptr en ese caso y la rama nunca se toma.
+template<class T, class V> struct variant_contains : std::false_type {};
+template<class T, class... Ts> struct variant_contains<T, std::variant<Ts...>> : std::bool_constant<(std::is_same_v<T, Ts> || ...)> {};
+template<class T, class V> inline constexpr bool variant_contains_v = variant_contains<T, V>::value;
+template<class Cmd> constexpr const prep::Image* image_command(const Cmd& cmd) {
+ if constexpr (variant_contains_v<prep::Image, std::decay_t<Cmd>>) return std::get_if<prep::Image>(&cmd);
+ else return nullptr;
+}
 template<class Store> struct Guard {
  Store& store; typename Store::Token token; bool active{true};
  ~Guard() {if(active) (void)store.discard(token);}
@@ -135,7 +146,7 @@ template<class ClipPolicy=IntegerA8Clip,class Storage> Result render_impl(Storag
  std::uint64_t work=std::uint64_t(v.width)*std::uint64_t(v.height);
  if(work>max_work) return {Status::limit_exceeded};
  std::size_t index=0;
- std::uint64_t mask_bytes=0,glyph_uses=0,mask_pixels=0,metadata_bytes=0;
+ std::uint64_t mask_bytes=0,glyph_uses=0,mask_pixels=0,metadata_bytes=0,image_bytes=0,image_uses=0;
  std::uint64_t corner_pixels=0,sampled_pixels=0,inner_corner_pixels=0,inner_sampled_pixels=0,clip_corner_pixels=0,joint_sampled_pixels=0;
  try {
   if(cancelled(cancel)) return {Status::cancelled};
@@ -167,7 +178,19 @@ template<class ClipPolicy=IntegerA8Clip,class Storage> Result render_impl(Storag
   CurvedClip curve;
   std::size_t layer_depth=0,max_layer_depth=0;
   const auto surface_bytes=std::uint64_t(v.width)*std::uint64_t(v.height)*4;
-  if(masks && mask_bytes+metadata_bytes+surface_bytes>text::max_mask_bytes)return {Status::limit_exceeded};
+  // Presupuesto combinado (m3): imágenes + máscaras + metadatos + superficie
+  // ≤ 64 MiB. El pre-paso suma los bytes de imagen deduplicados por identidad
+  // del shared_ptr; sin imágenes el comportamiento es exactamente el actual.
+  {
+   std::set<const prep::DecodedImage*> seen;
+   for(const auto& event:frame.events()) {
+    if(const auto* img=image_command(event.command)) {
+     ++image_uses;
+     if(img->image && seen.insert(img->image.get()).second) image_bytes+=img->image->pixels.size();
+    }
+   }
+  }
+  if((masks || image_bytes>0) && image_bytes+mask_bytes+metadata_bytes+surface_bytes>text::max_mask_bytes)return {Status::limit_exceeded};
   Rect current{0,0,double(v.width),double(v.height)};
   for(const auto& event:frame.events()) {
    if(cancelled(cancel)) return {Status::cancelled,FrameStatus::ok,index,work};
@@ -191,6 +214,7 @@ template<class ClipPolicy=IntegerA8Clip,class Storage> Result render_impl(Storag
    const auto bounded=[](Rect r){return std::isfinite(r.l)&&std::isfinite(r.t)&&std::isfinite(r.r)&&std::isfinite(r.b)&&std::abs(r.l)<=65536&&std::abs(r.t)<=65536&&std::abs(r.r)<=65536&&std::abs(r.b)<=65536;};
    const bool translated_ok=std::visit([&](const auto& c){using T=std::decay_t<decltype(c)>;
     if constexpr(std::is_same_v<T,prep::Fill>||std::is_same_v<T,prep::Stroke>||std::is_same_v<T,prep::BoxShadow>||std::is_same_v<T,prep::PushClip>)return bounded(translated(c.rect));
+    else if constexpr(std::is_same_v<T,prep::Image>)return bounded(translated(c.destination));
     else if constexpr(std::is_same_v<T,Gradient>)return bounded(translated(c.rect))&&bounded(translated(c.gradient_rect));
     else if constexpr(std::is_same_v<T,prep::BorderGroup>)return bounded(translated(c.outer))&&bounded(translated(c.inner));
     else return true;
@@ -365,6 +389,16 @@ template<class ClipPolicy=IntegerA8Clip,class Storage> Result render_impl(Storag
      if(std::abs(pen_x)>(std::int64_t(1)<<40)||std::abs(pen_y)>(std::int64_t(1)<<40))
       return {Status::limit_exceeded,FrameStatus::ok,index,work};
     }
+   } else if(const auto* img=image_command(command)) {
+    if(!img->image) return {Status::unsupported,FrameStatus::ok,index,work};
+    // El recorte por viewport/clip no toca el source: el muestreo mapea
+    // desde original (sin recortar), así que un tile parcialmente visible
+    // muestrea la porción correcta automáticamente.
+    const auto original=translated(img->destination),r=intersect(current,original);
+    if(!empty(r)) {
+     if(!charge(work,pixel_count(r),4))return {Status::limit_exceeded,FrameStatus::ok,index,work};
+     Draw d{};d.rect=r;d.index=index;d.original=original;d.radius=0;d.clip=curve;d.image=img;draws.push_back(d);
+    }
    } else if(const auto* clip=std::get_if<prep::PushClip>(&command)) {
     const double radius=clip->radii.top_left_x;
     if(masks) {
@@ -532,6 +566,38 @@ template<class ClipPolicy=IntegerA8Clip,class Storage> Result render_impl(Storag
       // Subtract unquantized coverage; only one source-over for the ring.
       covered=outer_area-inner_area;
       }
+      if(draw.image) {
+       // Muestreo bilineal (S2) sobre texels premultiplicados; el blend es
+       // source-over idéntico a la rama de gradiente. La repetición la da el
+       // tile siguiente, pero el muestreo en el borde del tile NO se funde
+       // con el texel (0) del tile siguiente: costura documentada (m1),
+       // fijada por el caso K9 (escalón duro, no fusión entre tiles).
+       const auto& img=*draw.image;
+       const auto& decoded=*img.image;
+       const double orig_w=draw.original.r-draw.original.l,orig_h=draw.original.b-draw.original.t;
+       const double src_w=double(img.source.width),src_h=double(img.source.height);
+       const double u=double(img.source.x)+(double(x)+0.5-draw.original.l)*src_w/orig_w;
+       const double v=double(img.source.y)+(double(y)+0.5-draw.original.t)*src_h/orig_h;
+       const double fx=u-0.5,fy=v-0.5;
+       int i0=int(std::floor(fx)),j0=int(std::floor(fy));
+       const double t=fx-i0,s=fy-j0;
+       int i1=i0+1,j1=j0+1;
+       i0=std::clamp(i0,0,int(decoded.width)-1);i1=std::clamp(i1,0,int(decoded.width)-1);
+       j0=std::clamp(j0,0,int(decoded.height)-1);j1=std::clamp(j1,0,int(decoded.height)-1);
+       const auto texel=[&](int ix,int iy){return decoded.pixels.data()+(std::size_t(iy)*std::size_t(decoded.width)+std::size_t(ix))*4;};
+       const auto* p00=texel(i0,j0);const auto* p10=texel(i1,j0);
+       const auto* p01=texel(i0,j1);const auto* p11=texel(i1,j1);
+       double sample[4]{};
+       for(int c=0;c<4;++c)
+        sample[c]=(1-t)*(1-s)*p00[c]+t*(1-s)*p10[c]+(1-t)*s*p01[c]+t*s*p11[c];
+       const double cov=std::clamp(covered,0.0,1.0);
+       const double op=double(img.opacity);
+       const unsigned sA=byte(sample[3]/255.0*op*cov),inv=255-sA;
+       auto* p=pixels.data()+std::size_t(y)*stride+std::size_t(x)*4;
+       for(int c=0;c<3;++c)p[c]=std::uint8_t(std::min(sA,byte(sample[c]/255.0*op*cov))+mul(p[c],inv));
+       p[3]=std::uint8_t(sA+mul(p[3],inv));
+       continue;
+      }
       const unsigned coverage=byte(std::clamp(covered,0.0,1.0));
       const unsigned sa=mul(alpha,coverage),inv=255-sa;
       auto* p=pixels.data()+std::size_t(y)*stride+std::size_t(x)*4;
@@ -546,7 +612,7 @@ template<class ClipPolicy=IntegerA8Clip,class Storage> Result render_impl(Storag
   guard.active=false;
   return {Status::ok,FrameStatus::ok,0,work,corner_pixels,sampled_pixels,inner_corner_pixels,inner_sampled_pixels,clip_corner_pixels,joint_sampled_pixels,lookup.size(),mask_bytes,glyph_uses,mask_pixels,
    std::uint64_t(std::chrono::duration_cast<std::chrono::nanoseconds>(prepared_at-started).count()),
-   std::uint64_t(std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now()-prepared_at).count())};
+   std::uint64_t(std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now()-prepared_at).count()),image_uses,image_bytes};
  } catch(const std::bad_alloc&) {return {Status::allocation_failed,FrameStatus::ok,index,work};} catch(...) {return storage.unexpected(index,work);}
 }
 }

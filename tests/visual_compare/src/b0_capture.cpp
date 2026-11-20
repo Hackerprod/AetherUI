@@ -47,14 +47,23 @@ B0CaptureResult capture_b0(const Request& q,const ValidatedInputs& inputs,const 
  if(q.viewport.scale_quarters!=4)return reject(10,"NATIVE_UNSUPPORTED");
  if(!q.viewport.width||!q.viewport.height||q.viewport.width>2048||q.viewport.height>2048||inputs.html.size()>65536)return reject(8,"NATIVE_LIMIT_EXCEEDED");
  const ValidatedResource *regular=nullptr,*bold=nullptr;size_t total=0;
+ std::vector<aether_b0_source_image_v1> images;
  for(const auto& a:inputs.assets) {
+  if(a.resource.role=="image") {
+   // Solo raster decodificable por el registro (stb): SVG no se alimenta.
+   if(a.resource.mime!="image/png"&&a.resource.mime!="image/jpeg"&&a.resource.mime!="image/gif")return reject(6,"NATIVE_RESOURCE_UNSUPPORTED");
+   if(a.bytes.empty())return reject(6,"NATIVE_RESOURCE_UNSUPPORTED");
+   if(a.bytes.size()>16u*1024u*1024u)return reject(8,"NATIVE_LIMIT_EXCEEDED");
+   images.push_back({a.resource.path.c_str(),reinterpret_cast<const uint8_t*>(a.bytes.data()),a.bytes.size()});
+   continue;
+  }
   if(a.resource.role!="font"||a.resource.mime!="font/ttf")return reject(6,"NATIVE_RESOURCE_UNSUPPORTED");
   if(a.bytes.size()>16u*1024u*1024u-total)return reject(8,"NATIVE_LIMIT_EXCEEDED");total+=a.bytes.size();
   if(a.resource.path==q.regular_font){if(regular)return reject(6,"NATIVE_FONT_SELECTION");regular=&a;}
   if(a.resource.path==q.bold_font){if(bold)return reject(6,"NATIVE_FONT_SELECTION");bold=&a;}
  }
  if(!regular||!bold||regular==bold||regular->bytes.empty()||bold->bytes.empty())return reject(6,"NATIVE_FONT_SELECTION");
- if(inputs.assets.size()!=2)return reject(6,"NATIVE_RESOURCE_UNSUPPORTED");
+ if(inputs.assets.size()!=2+images.size())return reject(6,"NATIVE_RESOURCE_UNSUPPORTED");
  auto& m=r.metadata;m.regular_sha256=regular->resource.sha256;m.bold_sha256=bold->resource.sha256;
  // Sample cancellation on both sides of every synchronous ABI operation.
  if(token.cancelled())return reject(12,"CANCELLED");
@@ -64,19 +73,20 @@ B0CaptureResult capture_b0(const Request& q,const ValidatedInputs& inputs,const 
  r.has_metadata=true;
  m.capabilities=aether_b0_source_capabilities();
  if(token.cancelled())return reject(12,"CANCELLED");
- const auto options_size=aether_b0_source_options_v1_size();
+ const auto options_size=aether_b0_source_options_v2_size();
  if(token.cancelled())return reject(12,"CANCELLED");
  const auto diagnostic_size=aether_b0_source_diagnostic_v1_size();
  if(token.cancelled())return reject(12,"CANCELLED");
  const auto frame_size=aether_b0_source_frame_info_v1_size();
  if(token.cancelled())return reject(12,"CANCELLED");
  constexpr unsigned required=AETHER_B0_SOURCE_STATIC_STYLESHEET_CONTROLS|AETHER_B0_SOURCE_STATIC_SEMANTIC_PAGE|AETHER_B0_SOURCE_STATIC_INLINE_WRAP;
- if(m.abi_version!=AETHER_ABI_VERSION_CURRENT||(m.capabilities&required)!=required||options_size!=sizeof(aether_b0_source_options_v1)||diagnostic_size!=sizeof(aether_b0_source_diagnostic_v1)||frame_size!=sizeof(aether_b0_source_frame_info_v1))return reject(14,"NATIVE_ABI_MISMATCH");
- aether_b0_source_options_v1 options{};options.struct_size=sizeof(options);options.version=AETHER_B0_SOURCE_VERSION;
+ if(m.abi_version!=AETHER_ABI_VERSION_CURRENT||(m.capabilities&required)!=required||options_size!=sizeof(aether_b0_source_options_v2)||diagnostic_size!=sizeof(aether_b0_source_diagnostic_v1)||frame_size!=sizeof(aether_b0_source_frame_info_v1))return reject(14,"NATIVE_ABI_MISMATCH");
+ aether_b0_source_options_v2 options{};options.struct_size=sizeof(options);options.version=2;
  options.regular_font=reinterpret_cast<const uint8_t*>(regular->bytes.data());options.regular_font_size=regular->bytes.size();options.bold_font=reinterpret_cast<const uint8_t*>(bold->bytes.data());options.bold_font_size=bold->bytes.size();
+ options.images=images.empty()?nullptr:images.data();options.image_count=images.size();
  Session session;auto d=diagnostic();
  if(token.cancelled())return reject(12,"CANCELLED");
- auto status=aether_b0_source_create(q.viewport.width,q.viewport.height,inputs.html.data(),inputs.html.size(),&options,&session.value,&d);record(r,status,&d);
+ auto status=aether_b0_source_create_v2(q.viewport.width,q.viewport.height,inputs.html.data(),inputs.html.size(),&options,&session.value,&d);record(r,status,&d);
  if(token.cancelled())return reject(12,"CANCELLED");
  if(status!=AETHER_OK)return r;
  d=diagnostic();

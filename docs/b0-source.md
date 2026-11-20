@@ -12,8 +12,9 @@ handles and concurrent destruction are caller errors.
 
 This increment supports immutable HTML with stylesheet/class/id cascade and
 static text/password inputs and buttons, at fixed size and DPI 1. It does not
-support resize, media queries, interaction, external resources, authentication,
-or general browser HTML/CSS. Another size needs another independent session.
+support resize, media queries, interaction, network-fetched external resources, authentication,
+or general browser HTML/CSS. Images arrive only through the caller's image
+registry (registered bytes, never fetched over the network). Another size needs another independent session.
 
 Create copies HTML and regular/bold fonts. The caller may release them on return.
 Create parses once, compiles styles through the production compiler, resolves,
@@ -45,6 +46,17 @@ U+2022 bullets, one per scalar, never the authored value.
   are not admitted. Sizes 8..48 integer px, weights 400/700, line-height integer
   px >=size and <=96. Missing glyph rejects. Direct leaf text only; no mixed
   inline markup, wrapping or shaping extension. Simple interior spaces only.
+* Background images (single layer only): `background-image: url('...')` with
+  a registered source (unquoted `url(...)` also accepted; no data-URLs, no
+  shorthand `background`, no multi-layer values), `background-repeat` one of
+  repeat/no-repeat/repeat-x/repeat-y/space/round, `background-position` one
+  word (left/center/right/top/bottom) or one length (`Npx`/`N%`, 0..100 for %),
+  `background-size` auto/cover/contain or one length (`Npx`/`N%`, 0..8192 for %).
+  Only on boxes with radius 0. Budgets: input bytes <=64 MiB per image,
+  decoded dimensions 1..8192 each, decoded bytes <=16 MiB per image, decoded
+  bytes total <=64 MiB per frame, <=16384 tiles per layer. An unregistered
+  source rejects with UNSUPPORTED at stage PREPARATION (8), never paints
+  without the image.
 * Block/static/content-box, width auto/px, height auto, nonnegative px edges,
   uniform solid/none border, opaque text/solid background or transparent
   background. No authored display:none, flex, positions, percentages, calc,
@@ -116,7 +128,9 @@ and disallowed computed node styles stage 4/UNSUPPORTED.
 Solid backgrounds may be opaque or transparent. Radius does not clip descendants:
 overflow remains visible. Input text retains its existing rectangular content-box
 clip, including long values/placeholders and masked password bullets. Rounded
-clips, nested rounded clipping, shadows, images and gradients are not added.
+clips, nested rounded clipping, shadows and gradients are not added.
+Background images are supported only in square (radius 0) boxes; see Limits
+and subset.
 Text/control profiles 1/2 and interactive sessions retain their historical square
 box admission and exact focus-ring checks; source box authorization is a separate
 internal policy. Public structure sizes and ABI version 1 are unchanged.

@@ -18,6 +18,7 @@ struct Result {
  std::uint64_t joint_sampled_pixels{};
  std::uint64_t mask_count{}, mask_bytes{}, glyph_uses{}, mask_pixel_visits{};
  std::uint64_t preparation_ns{}, composition_ns{}; // measured only for successful render
+ std::uint64_t image_uses{}, image_bytes{}; // image tiles painted; unique decoded bytes
 };
 // R11: uniform circular rounded fills (central bands + grid16x16), uniform rounded strokes, one active uniform rounded clip plus rectangle clips; DPI=1.
 // Owner-thread synchronous call. No reentry or store mutation by callbacks.
