@@ -958,6 +958,14 @@ AETHER_API aether_status_t aether_surface_render(aether_surface_t surface, aethe
 #define AETHER_HTML_LTR_CSS_COVERAGE_INCOMPLETE 2u
 #define AETHER_HTML_LTR_INTERACTION_UNSUPPORTED 4u
 #define AETHER_HTML_LTR_ACCESSIBILITY_UNSUPPORTED 8u
+/* Imagen de entrada para render_html_ltr (ciclo 02): la clave `source` debe
+ * coincidir con el url('...') del CSS; los bytes son PNG/JPEG/GIF. Solo se
+ * leen con struct_size del tamaño nuevo (72); con tamaño v1 (56) se ignoran. */
+typedef struct {
+    const char* source;
+    const uint8_t* bytes;
+    size_t byte_count;
+} aether_html_ltr_image_v1;
 typedef struct aether_html_ltr_options_s {
     uint32_t struct_size;
     uint32_t profile;
@@ -966,6 +974,8 @@ typedef struct aether_html_ltr_options_s {
     const uint8_t* bold_font;
     size_t bold_font_size;
     uint32_t reserved[4];
+    const aether_html_ltr_image_v1* images;
+    size_t image_count;
 } aether_html_ltr_options;
 AETHER_API size_t aether_html_ltr_options_size(void);
 AETHER_API uint32_t aether_html_ltr_profile_limitations(uint32_t profile);

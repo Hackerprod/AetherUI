@@ -2010,6 +2010,29 @@ if(AETHERUI_BUILD_TESTS AND UNIX)
 endif()
 
 if(AETHERUI_BUILD_TESTS AND UNIX)
+    add_executable(aether_native_surface_background_image_test tests/test_native_surface_background_image.c)
+    set_target_properties(aether_native_surface_background_image_test PROPERTIES C_STANDARD 11 C_STANDARD_REQUIRED YES)
+    target_include_directories(aether_native_surface_background_image_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/tests")
+    target_link_libraries(aether_native_surface_background_image_test PRIVATE AetherUI::Core Threads::Threads)
+    target_compile_options(aether_native_surface_background_image_test PRIVATE -Werror)
+    add_test(NAME aether.native-surface-background-image COMMAND aether_native_surface_background_image_test
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/fonts/DejaVuSans.ttf"
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/fonts/DejaVuSans-Bold.ttf"
+        "${CMAKE_CURRENT_BINARY_DIR}/native-surface-background-image")
+endif()
+
+if(AETHERUI_BUILD_TESTS AND UNIX)
+    add_executable(aether_example_render_page ${CMAKE_CURRENT_SOURCE_DIR}/../examples/cpp/render-page/main.c)
+    set_target_properties(aether_example_render_page PROPERTIES C_STANDARD 11 C_STANDARD_REQUIRED YES)
+    target_link_libraries(aether_example_render_page PRIVATE AetherUI::Core)
+    target_compile_options(aether_example_render_page PRIVATE -Werror)
+    add_test(NAME aether.example-render-page COMMAND aether_example_render_page
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/fonts/DejaVuSans.ttf"
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/fonts/DejaVuSans-Bold.ttf"
+        "${CMAKE_CURRENT_BINARY_DIR}/example-render-page")
+endif()
+
+if(AETHERUI_BUILD_TESTS AND UNIX)
     add_executable(aether_native_interaction_test tests/test_native_interaction.c)
     set_target_properties(aether_native_interaction_test PROPERTIES C_STANDARD 11 C_STANDARD_REQUIRED YES)
     target_link_libraries(aether_native_interaction_test PRIVATE AetherUI::Core Threads::Threads)

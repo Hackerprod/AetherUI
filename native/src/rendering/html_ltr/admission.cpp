@@ -1,6 +1,9 @@
 #include "admission.h"
+#include "../../style_runtime/css_variable_tokens.h"
 #include <algorithm>
+#include <cctype>
 #include <limits>
+#include <string>
 
 namespace aether::rendering::html_ltr {
 std::uint32_t decode_scalar_utf8(std::string_view s, std::size_t& i) {
@@ -37,6 +40,30 @@ unsigned pixels(std::string_view v,unsigned lo,unsigned hi) {
     if(number<lo||number>hi)limit();
     return number;
 }
+// Espejo de pixels() para porcentajes: dígitos + '%'. Fuera de rango llama
+// a limit() (LIMIT_EXCEEDED), igual que pixels().
+unsigned percent(std::string_view v,unsigned lo,unsigned hi) {
+    if(v.size()<2||v.back()!='%')unsupported();
+    v.remove_suffix(1);
+    unsigned number=0;
+    for(char c:v) {if(c<'0'||c>'9')unsupported();unsigned digit=c-'0';if(number>(std::numeric_limits<unsigned>::max()-digit)/10)limit();number=number*10+digit;}
+    if(number<lo||number>hi)limit();
+    return number;
+}
+// Divide un valor en palabras separadas por espacios CSS. Falso si está
+// vacío o tiene más de max palabras (el compilador genérico acepta 1-2).
+bool split_words(std::string_view v,std::string_view* words,std::size_t max,std::size_t& count) {
+    count=0;std::size_t i=0;
+    while(i<v.size()) {
+        while(i<v.size()&&css_ws(v[i]))++i;
+        if(i==v.size())break;
+        if(count==max)return false;
+        const std::size_t start=i;
+        while(i<v.size()&&!css_ws(v[i]))++i;
+        words[count++]=v.substr(start,i-start);
+    }
+    return count>0;
+}
 bool inherited_property(std::string_view p) {return p=="font-family"||p=="font-size"||p=="font-weight"||p=="line-height"||p=="color";}
 void css(Node& node,std::string_view input) {
     std::size_t i=0;
@@ -58,7 +85,7 @@ void css(Node& node,std::string_view input) {
         const std::size_t vs=i;
         while(i<input.size()&&input[i]!=';') {
             const unsigned c=static_cast<unsigned char>(input[i]);
-            if(c>=128||input[i]=='\\'||input[i]=='/'||input[i]=='@'||input[i]=='!'||input[i]=='('||input[i]==')')unsupported();
+            if(c>=128||input[i]=='\\'||input[i]=='/'||input[i]=='@'||input[i]=='!'||(prop!="background-image"&&(input[i]=='('||input[i]==')')))unsupported();
             ++i;
         }
         auto value=trim(input.substr(vs,i-vs));if(value.empty())invalid();if(i<input.size())++i;
@@ -66,6 +93,56 @@ void css(Node& node,std::string_view input) {
         if(node.tag=="html"&&!inherited_property(prop))unsupported();
         if(prop=="color")node.inherited.color_rgb=color(value);
         else if(prop=="background-color") {if(value!="transparent") (void)color(value);}
+        else if(prop=="background-image") {
+            // background-image: un solo url(...). El url('...') entrecomillado
+            // lexa como varios tokens (función + string + cierre), así que el
+            // bucle genérico de un token lo rechazaría; decode_url acepta ambas
+            // formas y exige que todo el valor sea la url (url(a), url(b)
+            // falla → unsupported). Sin data-URLs (espejo del gate B0).
+            if(value!="none") {
+                css_variable_lexer lexer(value.data(),value.size());
+                std::string source;
+                if(!lexer.decode_url(source))unsupported();
+                if(source.empty())unsupported();
+                if(source.size()>=5) {
+                    std::string head=source.substr(0,5);
+                    for(auto& c:head)c=char(std::tolower(static_cast<unsigned char>(c)));
+                    if(head=="data:")unsupported();
+                }
+            }
+        }
+        else if(prop=="background-repeat") {
+            // El compilador genérico acepta 1-2 palabras (parse_repeat).
+            std::string_view w[2];std::size_t n=0;
+            if(!split_words(value,w,2,n))unsupported();
+            for(std::size_t k=0;k<n;++k) {auto word=w[k];if(word!="repeat"&&word!="no-repeat"&&word!="repeat-x"&&word!="repeat-y"&&word!="space"&&word!="round")unsupported();}
+        }
+        else if(prop=="background-position") {
+            // Una o dos palabras, cada una keyword o longitud Npx (0..8192)
+            // o porcentaje N% (0..100), espejo del gate B0 (:388).
+            std::string_view w[2];std::size_t n=0;
+            if(!split_words(value,w,2,n))unsupported();
+            for(std::size_t k=0;k<n;++k) {
+                auto word=w[k];
+                if(word=="left"||word=="center"||word=="right"||word=="top"||word=="bottom")continue;
+                if(word.size()>=2&&word.back()=='%') {(void)percent(word,0,100);continue;}
+                (void)pixels(word,0,8192);
+            }
+        }
+        else if(prop=="background-size") {
+            // auto|cover|contain, o una o dos longitudes Npx (0..8192) / N%
+            // (0..8192), espejo del gate B0 (:389).
+            if(value!="auto"&&value!="cover"&&value!="contain") {
+                std::string_view w[2];std::size_t n=0;
+                if(!split_words(value,w,2,n))unsupported();
+                for(std::size_t k=0;k<n;++k) {
+                    auto word=w[k];
+                    if(word=="auto")continue;
+                    if(word.size()>=2&&word.back()=='%') {(void)percent(word,0,8192);continue;}
+                    (void)pixels(word,0,8192);
+                }
+            }
+        }
         else if(prop=="border-color") (void)color(value);
         else if(prop=="font-family") {if(value!="AetherLTR")unsupported();}
         else if(prop=="font-size")node.inherited.font_size=pixels(value,8,48);

@@ -2,9 +2,11 @@
 #include "../rendering/native_frame.h"
 #include "../rendering/preparation/native_command_source.h"
 #include "../rendering/software/software_renderer.h"
+#include <cstddef>
 #include <cstring>
 #include "../rendering/html_ltr/session.h"
 #include "../rendering/html_ltr/admission.h"
+#include "../rendering/html_ltr/image_registry.h"
 #include "../rendering/html_ltr/raster_coordinate.h"
 #include <memory>
 #include <new>
@@ -15,7 +17,13 @@
 #define SURFACE_STAGE(name) ((void)0)
 #endif
 namespace r = aether::rendering;
+namespace h = aether::rendering::html_ltr;
 namespace p = aether::rendering::preparation;
+// Layout de aether_html_ltr_options (ciclo 02): el tamaño v1 (56) es
+// exactamente offsetof(images); el tamaño nuevo es 72. Una deriva de layout
+// debe fallar en compilación, no en un test.
+static_assert(offsetof(aether_html_ltr_options, images) == 56, "v1 size must stay 56");
+static_assert(sizeof(aether_html_ltr_options) == 72, "v2 size must stay 72");
 struct aether_surface_s {
 #ifdef AETHER_SURFACE_TESTING
     r::FrameStore store{[] { SURFACE_STAGE(allocation); }};
@@ -75,10 +83,21 @@ AETHER_API aether_status_t aether_surface_render_html_ltr(aether_surface_t surfa
         auto status = frame_status(surface->store.current_viewport(viewport));
         if (status != AETHER_OK) return status;
         if (!html || !options) return AETHER_ERROR_NULL_ARG;
-        if (options->struct_size != sizeof(*options) || (options->profile != 1 && options->profile != 2) ||
+        const bool v1_size = options->struct_size == offsetof(aether_html_ltr_options, images);
+        const bool v2_size = options->struct_size == sizeof(*options);
+        if ((!v1_size && !v2_size) || (options->profile != 1 && options->profile != 2) ||
             !options->regular_font || !options->regular_font_size ||
             (bool(options->bold_font) != bool(options->bold_font_size)))
             return AETHER_ERROR_INVALID_ARGUMENT;
+        if (v2_size) {   // Solo con tamaño nuevo: con tamaño v1 `images`/`image_count`
+            if (options->image_count && !options->images)   // están fuera del struct del llamante
+                return AETHER_ERROR_INVALID_ARGUMENT;        // y no se leen nunca
+            for (size_t i = 0; i < options->image_count; ++i) {
+                const auto& e = options->images[i];
+                if (!e.source || !*e.source || !e.bytes || !e.byte_count)
+                    return AETHER_ERROR_INVALID_ARGUMENT;
+            }
+        }
         for (auto reserved : options->reserved) if (reserved) return AETHER_ERROR_INVALID_ARGUMENT;
         if (!viewport.width || !viewport.height) return AETHER_ERROR_SUSPENDED;
         if (!length) return AETHER_ERROR_INVALID_ARGUMENT;
@@ -93,7 +112,19 @@ AETHER_API aether_status_t aether_surface_render_html_ltr(aether_surface_t surfa
         std::vector<uint8_t> regular(options->regular_font, options->regular_font + options->regular_font_size);
         std::vector<uint8_t> bold;
         if (options->bold_font_size) bold.assign(options->bold_font, options->bold_font + options->bold_font_size);
+        std::shared_ptr<h::ImageRegistry> registry;
+        if (v2_size && options->image_count) {   // Guarda v2_size: con tamaño v1
+            registry = std::make_shared<h::ImageRegistry>();  // `image_count` (offset 64)
+            for (size_t i = 0; i < options->image_count; ++i) {  // no se lee nunca
+                auto icode = registry->add(options->images[i].source, options->images[i].bytes, options->images[i].byte_count);
+                if (icode != AETHER_OK) {
+                    auto mapped = icode == AETHER_ERROR_PARSE_FAILED ? AETHER_ERROR_UNSUPPORTED : icode;
+                    return mapped;
+                }
+            }
+        }
         r::html_ltr::HtmlLtrSession session(std::move(owned_html), std::move(regular), std::move(bold), viewport, options->profile);
+        if (registry) session.set_image_registry(std::move(registry));
         const auto& prepared = session.prepare();
         HTML_LTR_STAGE(candidate);
         const auto rendered = r::software::render_a8(surface->store, prepared, session.masks(), nullptr);

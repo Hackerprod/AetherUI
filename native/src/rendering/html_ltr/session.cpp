@@ -1,9 +1,11 @@
 #include "session.h"
 #include "session_validation.h"
 #include "admission.h"
+#include "image_registry.h"
 #include "measure_bridge.h"
 #include "paint_finalize.h"
 #include "raster_coordinate.h"
+#include "../native_paint_list.h"
 #include "control_presentation.h"
 #include "../../layout/form_controls.h"
 #include "../../layout/layout_internal.h"
@@ -20,6 +22,7 @@ struct HtmlLtrSession::State {
  struct Occurrence {std::shared_ptr<const text::ShapedRun> run;std::shared_ptr<const FontProduct> product;aether_node_s* owner;uint64_t id;};
  uint32_t profile;std::string html;Inventory inventory;FontProvider fonts;Viewport viewport;
  aether_doc_t doc{};aether_style_runtime_t runtime{};aether_style_revision_t revision{};aether_style_map_t map{};aether_layout_engine_t engine{};aether_layout_result_t layout{};aether_display_list_builder_t builder{};
+ std::shared_ptr<const ImageRegistry> registry;
  std::vector<aether_node_t> nodes;std::map<aether_node_t,Owner> owners;std::map<const text::ShapedRun*,Occurrence> occurrences;std::unique_ptr<NativePaintList> paint;
  std::vector<std::shared_ptr<const text::GlyphMaskA8>> masks;std::optional<preparation::PreparedFrame> prepared;
  uint64_t epoch{},nonstate{},serial{};std::thread::id thread=std::this_thread::get_id();aether_status_t bridge_error=AETHER_OK;
@@ -110,19 +113,23 @@ struct HtmlLtrSession::State {
   }
   for(size_t i=1;i<nodes.size();++i)require(aether_layout_result_find_primary_box(layout,nodes[i]));
   for(const auto& [node,owner]:owners){if(owner.control)require(controls.contains(node));require(collected[node]==(owner.control?owner.control->text:inventory.nodes[owner.ordinal].text));}
-  core(aether_display_list_builder_create(nullptr,nullptr,&builder));core(build_native_opacity(builder,layout,map,nullptr,paint));valid();
+  core(aether_display_list_builder_create(nullptr,nullptr,&builder));
+  if(registry)aether_display_list_builder_set_image_dimensions_callback(builder,&ImageRegistry::dimensions,const_cast<ImageRegistry*>(registry.get()));
+  core(build_native_opacity(builder,layout,map,nullptr,paint));valid();
   #ifdef AETHER_HTML_LTR_TESTING
   testing::inspect(layout,paint.get());
 #endif
   for(const auto& [node,o]:owners)if(o.control){aether::layout::BoxStyleSnapshot st(o.record->style(),o.record->measures());check_control(o.control,node,st);}
+  if(registry)registry->attach(NativeListAccess::list(*paint),*paint);
   masks=finalize_paint(*paint,final,fonts,controls,profile);valid();HTML_LTR_STAGE(snapshot);auto snapshot=preparation::snapshot_native_opacity(*paint);
-  if(auto e=std::get_if<preparation::Error>(&snapshot))throw Error{e->code==preparation::ErrorCode::OUT_OF_MEMORY?AETHER_ERROR_OUT_OF_MEMORY:e->code==preparation::ErrorCode::LIMIT_EXCEEDED?AETHER_ERROR_LIMIT_EXCEEDED:AETHER_ERROR_INTERNAL};
-  HTML_LTR_STAGE(preparation);auto frame=preparation::prepare(std::get<preparation::Snapshot>(snapshot));if(auto e=std::get_if<preparation::Error>(&frame))throw Error{e->code==preparation::ErrorCode::OUT_OF_MEMORY?AETHER_ERROR_OUT_OF_MEMORY:e->code==preparation::ErrorCode::LIMIT_EXCEEDED?AETHER_ERROR_LIMIT_EXCEEDED:AETHER_ERROR_INTERNAL};valid();prepared.emplace(std::get<preparation::PreparedFrame>(std::move(frame)));
+  if(auto e=std::get_if<preparation::Error>(&snapshot))throw Error{e->code==preparation::ErrorCode::UNSUPPORTED_TAG?AETHER_ERROR_UNSUPPORTED:e->code==preparation::ErrorCode::OUT_OF_MEMORY?AETHER_ERROR_OUT_OF_MEMORY:e->code==preparation::ErrorCode::LIMIT_EXCEEDED?AETHER_ERROR_LIMIT_EXCEEDED:AETHER_ERROR_INTERNAL};
+  HTML_LTR_STAGE(preparation);auto frame=preparation::prepare(std::get<preparation::Snapshot>(snapshot));if(auto e=std::get_if<preparation::Error>(&frame))throw Error{e->code==preparation::ErrorCode::UNSUPPORTED_TAG?AETHER_ERROR_UNSUPPORTED:e->code==preparation::ErrorCode::OUT_OF_MEMORY?AETHER_ERROR_OUT_OF_MEMORY:e->code==preparation::ErrorCode::LIMIT_EXCEEDED?AETHER_ERROR_LIMIT_EXCEEDED:AETHER_ERROR_INTERNAL};valid();prepared.emplace(std::get<preparation::PreparedFrame>(std::move(frame)));
  }
 };
 void HtmlLtrSession::install(aether_layout_engine_s* e,std::shared_ptr<HtmlLtrMeasureBridge> b){require(e&&!e->layout_in_progress&&!e->html_ltr_bridge_&&!e->text_selection_&&!e->synthetic_text_policy_&&!e->text_measurer&&!e->contextual_text_measurer);e->html_ltr_bridge_=std::move(b);}
 HtmlLtrSession::HtmlLtrSession(std::string h,std::vector<uint8_t> r,std::vector<uint8_t> b,Viewport v,uint32_t p):state_(std::make_unique<State>(std::move(h),std::move(r),std::move(b),v,p)){}
 HtmlLtrSession::~HtmlLtrSession()=default;
+void HtmlLtrSession::set_image_registry(std::shared_ptr<const ImageRegistry> registry){state_->registry=std::move(registry);}
 const preparation::PreparedFrame& HtmlLtrSession::prepare(){state_->run();return *state_->prepared;}
 const std::vector<std::shared_ptr<const text::GlyphMaskA8>>& HtmlLtrSession::masks()const noexcept{return state_->masks;}
 }

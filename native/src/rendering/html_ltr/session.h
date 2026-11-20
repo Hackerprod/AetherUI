@@ -10,6 +10,7 @@ struct aether_layout_result_s;
 namespace aether::rendering { class NativePaintList; }
 namespace aether::rendering::html_ltr {
 class HtmlLtrMeasureBridge;
+class ImageRegistry;
 class HtmlLtrSession final {
  struct State;
  std::unique_ptr<State> state_;
@@ -17,6 +18,9 @@ class HtmlLtrSession final {
 public:
  HtmlLtrSession(std::string,std::vector<uint8_t>,std::vector<uint8_t>,Viewport,uint32_t profile=1);
  ~HtmlLtrSession();
+ // Registro de imágenes (ciclo 02): llamable antes de prepare().
+ // Sin registro, todo background-image rechaza como antes.
+ void set_image_registry(std::shared_ptr<const ImageRegistry> registry);
  HtmlLtrSession(const HtmlLtrSession&)=delete;
  const preparation::PreparedFrame& prepare();
  const std::vector<std::shared_ptr<const text::GlyphMaskA8>>& masks() const noexcept;
