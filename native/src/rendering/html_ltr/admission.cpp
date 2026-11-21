@@ -3,6 +3,8 @@
 #include "../../css/linear_gradient.h"
 #include <algorithm>
 #include <cctype>
+#include <cmath>
+#include <cstdlib>
 #include <limits>
 #include <string>
 
@@ -75,6 +77,125 @@ bool starts_gradient(std::string_view v) {
         if(char(std::tolower(static_cast<unsigned char>(v[i])))!=prefix[i])return false;
     return true;
 }
+bool iequals(std::string_view a,std::string_view b) {
+    if(a.size()!=b.size())return false;
+    for(std::size_t i=0;i<a.size();++i)
+        if(char(std::tolower(static_cast<unsigned char>(a[i])))!=char(std::tolower(static_cast<unsigned char>(b[i]))))return false;
+    return true;
+}
+// Ciclo 04 (Cambio 1): longitud con signo para box-shadow: decimal con
+// signo + sufijo "px" obligatorio, salvo el 0 sin unidad (el check del
+// runtime acepta el número 0 como longitud cero; la política
+// sin-unidad-a-px solo existe en el APPLY, aether_css_length_try_parse,
+// css_length.cpp:369-372). Espejo de la gramática de parse_numeric_token
+// (css_length.cpp:42-95): dígitos con fracción y exponente opcionales;
+// la unidad "px" es insensible a mayúsculas. Un 0 con mantisa no nula que
+// redondea a 0 (p. ej. 1e-999) también es falso, como en el runtime.
+// Sin unidad distinta de cero → falso.
+bool signed_length(std::string_view v,double& out) {
+    std::size_t i=0;
+    if(i<v.size()&&(v[i]=='+'||v[i]=='-'))++i;
+    const std::size_t digits_start=i;
+    bool nonzero=false;
+    while(i<v.size()&&v[i]>='0'&&v[i]<='9'){nonzero|=(v[i]!='0');++i;}
+    bool has_digits=i!=digits_start;
+    if(i<v.size()&&v[i]=='.'&&i+1<v.size()&&v[i+1]>='0'&&v[i+1]<='9') {
+        ++i;
+        while(i<v.size()&&v[i]>='0'&&v[i]<='9'){nonzero|=(v[i]!='0');++i;}
+        has_digits=true;
+    }
+    if(!has_digits)return false;
+    if(i<v.size()&&(v[i]=='e'||v[i]=='E')) {
+        std::size_t e=i+1;
+        if(e<v.size()&&(v[e]=='+'||v[e]=='-'))++e;
+        if(e>=v.size()||v[e]<'0'||v[e]>'9')return false;
+        while(e<v.size()&&v[e]>='0'&&v[e]<='9')++e;
+        i=e;
+    }
+    const std::size_t number_end=i;
+    bool px=false;
+    if(number_end+2==v.size()&&iequals(v.substr(number_end,2),"px"))px=true;
+    else if(number_end!=v.size())return false;
+    std::string num(v.substr(0,number_end));
+    char* end=nullptr;
+    const double value=std::strtod(num.c_str(),&end);
+    if(end==nullptr||*end!='\0')return false;
+    if(!std::isfinite(value))return false;
+    if(value==0.0&&nonzero)return false;
+    if(!px&&value!=0.0)return false;
+    out=value;
+    return true;
+}
+// Ciclo 04 (Cambio 1): una sombra de la lista, espejo de parse_component
+// (shadow_values.cpp:11-81). El color y `inset` pueden rodear el grupo de
+// longitudes pero nunca partirlo; color duplicado o `inset` duplicado →
+// falso; más de 4 o menos de 2 longitudes → falso. `inset` se rechaza
+// siempre (pérdida silenciosa en el builder, §1 S2). Los topes son los
+// del kernel (render_kernel.h:374-377): blur == 0 o 1 <= blur <= 64;
+// |offset|, |spread| <= 8192.
+bool shadow_component(std::string_view v) {
+    std::string_view w[6];std::size_t n=0;
+    if(!split_words(v,w,6,n))return false;
+    bool has_color=false,lengths_closed=false;
+    int length_count=0;
+    for(std::size_t k=0;k<n;++k) {
+        auto word=w[k];
+        if(iequals(word,"inset"))return false;
+        if(iequals(word,"currentcolor")) {
+            if(has_color)return false;
+            has_color=true;
+            if(length_count)lengths_closed=true;
+            continue;
+        }
+        {
+            // La misma función que usa el parser del runtime
+            // (aether_color_rgba_try_parse): hex 3/4/6/8 + 148 nombres +
+            // transparent. Las formas funcionales rgb()/rgba() no pueden
+            // llegar aquí: el escáner de valores (:99) bloquea los
+            // paréntesis para cualquier propiedad que no sea
+            // background-image.
+            std::string token(word);
+            aether_color_rgba c{};
+            if(aether_color_rgba_try_parse(token.c_str(),&c)) {
+                if(has_color)return false;
+                has_color=true;
+                if(length_count)lengths_closed=true;
+                continue;
+            }
+        }
+        if(lengths_closed)return false;
+        double value=0;
+        if(!signed_length(word,value))return false;
+        if(length_count==4)return false;
+        if(length_count==0||length_count==1) {
+            if(std::fabs(value)>8192)return false;
+        } else if(length_count==2) {
+            if(value<0)return false;
+            if(value!=0&&value<1)return false;
+            if(value>64)return false;
+        } else {
+            if(std::fabs(value)>8192)return false;
+        }
+        ++length_count;
+    }
+    return length_count>=2;
+}
+// Ciclo 04 (Cambio 1): lista de sombras separadas por comas, espejo de
+// shadow_list_parse (shadow_values.cpp:85). División simple por coma: el
+// escáner ya bloquea los paréntesis, así que ninguna coma puede estar
+// dentro de una función.
+bool shadow_value(std::string_view v) {
+    if(iequals(v,"none"))return true;
+    std::size_t i=0;
+    for(;;) {
+        const std::size_t comma=v.find(',',i);
+        const std::string_view component=comma==std::string_view::npos?v.substr(i):v.substr(i,comma-i);
+        if(!shadow_component(component))return false;
+        if(comma==std::string_view::npos)break;
+        i=comma+1;
+    }
+    return true;
+}
 void css(Node& node,std::string_view input) {
     bool gradient_layer=false; // Ciclo 03 (Cambio 3): background-image es un gradiente.
     std::size_t i=0;
@@ -131,14 +252,25 @@ void css(Node& node,std::string_view input) {
             }
         }
         else if(prop=="background-repeat") {
-            // El compilador genérico acepta 1-2 palabras (parse_repeat).
+            // Ciclo 04 (Cambio 4a): repeat-x/repeat-y solo como palabra
+            // única; en pares solo repeat/no-repeat/space/round
+            // (parse_repeat, background_layers.cpp:116-133). Un par con
+            // repeat-x/repeat-y fallaba en el apply del runtime (página
+            // entera rc=-10); ahora se rechaza en la puerta documentada,
+            // con el mismo rc.
             std::string_view w[2];std::size_t n=0;
             if(!split_words(value,w,2,n))unsupported();
             for(std::size_t k=0;k<n;++k) {auto word=w[k];if(word!="repeat"&&word!="no-repeat"&&word!="repeat-x"&&word!="repeat-y"&&word!="space"&&word!="round")unsupported();}
+            if(n==2)for(std::size_t k=0;k<n;++k) {auto word=w[k];if(word=="repeat-x"||word=="repeat-y")unsupported();}
         }
         else if(prop=="background-position") {
             // Una o dos palabras, cada una keyword o longitud Npx (0..8192)
             // o porcentaje N% (0..100), espejo del gate B0 (:388).
+            // Ciclo 04 (Cambio 4b): deliberadamente permisivo por palabra:
+            // un par con ejes en conflicto (p. ej. "left right") lo descarta
+            // el apply con chequeo del compilador al valor inicial "0% 0%"
+            // (el resultado correcto según CSS); restringir la rama sería
+            // una regresión (la página hoy renderiza).
             std::string_view w[2];std::size_t n=0;
             if(!split_words(value,w,2,n))unsupported();
             for(std::size_t k=0;k<n;++k) {
@@ -161,6 +293,17 @@ void css(Node& node,std::string_view input) {
                     (void)pixels(word,0,8192);
                 }
             }
+        }
+        else if(prop=="box-shadow") {
+            // Ciclo 04 (Cambio 1): parser propio px-only, espejo de la
+            // estructura del parser del runtime (shadow_list_parse,
+            // shadow_values.cpp:85; parse_component :11-81). `none` →
+            // lista vacía; una o varias sombras separadas por coma; cada
+            // sombra 2–4 longitudes + color opcional + `inset` opcional.
+            // `inset` se rechaza siempre (pérdida silenciosa en el
+            // builder); los topes del kernel (blur 0 o 1..64, |offset| y
+            // |spread| <= 8192) se comprueban aquí (§2.5 R2).
+            if(!shadow_value(value))unsupported();
         }
         else if(prop=="border-color") (void)color(value);
         else if(prop=="font-family") {if(value!="AetherLTR")unsupported();}

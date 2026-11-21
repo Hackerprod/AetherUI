@@ -526,6 +526,24 @@ if(AETHERUI_BUILD_TESTS)
     set_target_properties(aether_gradient_cost_test PROPERTIES CXX_EXTENSIONS OFF)
     add_test(NAME aether.gradient-cost COMMAND aether_gradient_cost_test)
 
+    # Ciclo 04 (§3.5): coste y píxeles del kernel para box-shadow (K1–K6).
+    # Mismo patrón que el test de coste de gradiente: compila las fuentes
+    # internas en el binario, sin enlazar AetherUI::Core. Sin assert() para
+    # Release. (native_command_source.cpp no se compila: referencia símbolos
+    # ABI que solo existen en Core — desviación D1 del ciclo 03.)
+    add_executable(aether_shadow_cost_test tests/test_shadow_cost.cpp
+        src/rendering/software/software_renderer.cpp
+        src/rendering/native_frame.cpp
+        src/rendering/preparation/aether_command_source.cpp
+        src/rendering/preparation/paint_snapshot.cpp
+        src/rendering/preparation/preparation_metrics.cpp)
+    target_include_directories(aether_shadow_cost_test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/rendering/preparation/include"
+        "${CMAKE_CURRENT_SOURCE_DIR}/include")
+    target_compile_features(aether_shadow_cost_test PRIVATE cxx_std_20)
+    set_target_properties(aether_shadow_cost_test PROPERTIES CXX_EXTENSIONS OFF)
+    add_test(NAME aether.shadow-cost COMMAND aether_shadow_cost_test)
+
     # Exercise registered private callbacks, including the shorthand fallback,
     # without adding exports to the public library.
     add_executable(aether_gradient_boundary_dispatch_test tests/test_gradient_boundary_dispatch.cpp
@@ -2069,6 +2087,19 @@ if(AETHERUI_BUILD_TESTS AND UNIX)
         "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/fonts/DejaVuSans.ttf"
         "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/fonts/DejaVuSans-Bold.ttf"
         "${CMAKE_CURRENT_BINARY_DIR}/native-surface-gradient")
+endif()
+
+if(AETHERUI_BUILD_TESTS AND UNIX)
+    # Ciclo 04 (§3.6): box-shadow por la API pública de superficie (G1–G8 + G-B0).
+    add_executable(aether_native_surface_box_shadow_test tests/test_native_surface_box_shadow.c)
+    set_target_properties(aether_native_surface_box_shadow_test PROPERTIES C_STANDARD 11 C_STANDARD_REQUIRED YES)
+    target_include_directories(aether_native_surface_box_shadow_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/tests")
+    target_link_libraries(aether_native_surface_box_shadow_test PRIVATE AetherUI::Core Threads::Threads)
+    target_compile_options(aether_native_surface_box_shadow_test PRIVATE -Werror)
+    add_test(NAME aether.native-surface-box-shadow COMMAND aether_native_surface_box_shadow_test
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/fonts/DejaVuSans.ttf"
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/fonts/DejaVuSans-Bold.ttf"
+        "${CMAKE_CURRENT_BINARY_DIR}/native-surface-box-shadow")
 endif()
 
 if(AETHERUI_BUILD_TESTS AND UNIX)

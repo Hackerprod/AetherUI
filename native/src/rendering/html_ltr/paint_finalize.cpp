@@ -145,6 +145,25 @@ void validate_controls(const NativePaintList& native,FontProvider& provider,BoxP
    }
    break;
   }
+  case AETHER_PAINT_DRAW_BOX_SHADOW: {
+   // Ciclo 04 (Cambio 3): espejo de lo que el snapshot ya comprueba
+   // (paint_snapshot.cpp:107-111, ayudantes :16-29). La procedencia de
+   // los topes del kernel (8192, blur 64, blur (0,1)) NO se duplica aquí:
+   // los garantiza css() (§2.5) y los aplica el kernel en prepare.
+   const auto& p = command.data.draw_box_shadow;
+   rect(p.rect); box_radius(p.rect, p.radii, policy);
+   const auto& c = p.shadow.color;
+   if(!std::isfinite(c.r) || !std::isfinite(c.g) || !std::isfinite(c.b) ||
+      !std::isfinite(c.a) || c.r < 0 || c.r > 1 || c.g < 0 || c.g > 1 ||
+      c.b < 0 || c.b > 1 || c.a < 0 || c.a > 1) unsupported(); // snapshot :26-29
+   // (opaque() no sirve: exige a == 1)
+   if(!std::isfinite(p.shadow.offset_x) || !std::isfinite(p.shadow.offset_y)) unsupported();
+   if(!std::isfinite(p.shadow.spread_radius)) unsupported();
+   if(!std::isfinite(p.shadow.blur_radius) || p.shadow.blur_radius < 0) unsupported(); // :16
+   if(p.shadow.inset != AETHER_FALSE && p.shadow.inset != AETHER_TRUE) unsupported();
+   if(p.shadow.inset == AETHER_TRUE) unsupported();       // defensa en profundidad, §2.5
+   break;
+  }
   case AETHER_PAINT_DRAW_BACKGROUND_IMAGE: {
    const auto& d = command.data.draw_background_image;
    if (!d.has_resolved_geometry) break; // Sin resolver: NO rechazar aquí.

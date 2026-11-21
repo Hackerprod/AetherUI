@@ -40,7 +40,12 @@ inline void verify_style(aether_style_map_t map,aether_node_t node,const Node& a
  const auto& e=authored.inherited;
  require(s.font_size==e.font_size&&s.font_weight==int(e.font_weight)&&s.line_height==e.line_height&&same(s.color,color(e.color_rgb))&&std::string_view(s.font_family)=="AetherLTR");
  require(s.display==AETHER_DISPLAY_BLOCK&&s.position==AETHER_POSITION_STATIC&&s.box_sizing==AETHER_BOX_SIZING_CONTENT_BOX&&s.height.unit==AETHER_CSS_UNIT_AUTO&&s.opacity==1&&s.visible&&s.white_space==AETHER_WHITE_SPACE_NOWRAP&&s.text_align==AETHER_TEXT_ALIGN_START&&s.text_transform==AETHER_TEXT_TRANSFORM_NONE&&s.overflow_x==(authored.tag=="html"?AETHER_OVERFLOW_CLIP:AETHER_OVERFLOW_VISIBLE)&&s.overflow_y==(authored.tag=="html"?AETHER_OVERFLOW_CLIP:AETHER_OVERFLOW_VISIBLE));
- require(!s.has_text_gradient&&(s.background_layers.count==0||(s.background_layers.count==1&&((s.background_layers.items[0].kind==AETHER_BACKGROUND_LAYER_IMAGE_URL&&s.background_layers.items[0].image_source&&*s.background_layers.items[0].image_source)||s.background_layers.items[0].kind==AETHER_BACKGROUND_LAYER_LINEAR_GRADIENT)))&&!s.backdrop_filters.count&&!s.transforms.count&&!s.text_shadows.count&&!s.box_shadows.count&&!s.transition_properties&&!s.transition_duration&&!s.transition_delay&&s.z_index_kind==AETHER_Z_INDEX_AUTO);
+ require(!s.has_text_gradient&&(s.background_layers.count==0||(s.background_layers.count==1&&((s.background_layers.items[0].kind==AETHER_BACKGROUND_LAYER_IMAGE_URL&&s.background_layers.items[0].image_source&&*s.background_layers.items[0].image_source)||s.background_layers.items[0].kind==AETHER_BACKGROUND_LAYER_LINEAR_GRADIENT)))&&!s.backdrop_filters.count&&!s.transforms.count&&!s.text_shadows.count&&!s.transition_properties&&!s.transition_duration&&!s.transition_delay&&s.z_index_kind==AETHER_Z_INDEX_AUTO);
+ // Ciclo 04 (Cambio 2): box_shadows admitidas exigiendo inset == FALSE por
+ // sombra (sin re-chequeo de topes: los garantiza css(), §2.5). `inset` es
+ // el único caso de pérdida silenciosa en el builder; si una futura
+ // modificación lo admitiera en css(), la página fallaría en voz alta aquí.
+ for(int32_t i=0;i<s.box_shadows.count;++i)require(s.box_shadows.items[i].inset==AETHER_FALSE);
  const auto zero_radius=[](aether_corner_radius r){return r.horizontal.value==0&&r.vertical.value==0;};
  require(zero_radius(s.border_radii.top_left)&&zero_radius(s.border_radii.top_right)&&zero_radius(s.border_radii.bottom_left)&&zero_radius(s.border_radii.bottom_right));
  std::map<std::string,std::string> ds(authored.declarations.begin(),authored.declarations.end());

@@ -84,17 +84,34 @@ int main(int argc,char** argv){
  /* S8 — coherencia admisión/compilador. */
  {const char* red_images[]={"url(red1.png)","url('red1.png')"};
   for(size_t k=0;k<sizeof(red_images)/sizeof(red_images[0]);++k){char* style=div_with_image(red_images[k]);char* html=div_page(style);char label[64];snprintf(label,sizeof(label),"S8 image %zu",k);s8_admitted(s,&with_red,html,label,0,0,255);free(style);free(html);}
-  {const char* repeats[]={"no-repeat"};
+  {const char* repeats[]={"no-repeat","repeat no-repeat","repeat-x","repeat-y"};
    for(size_t k=0;k<sizeof(repeats)/sizeof(repeats[0]);++k){char* style=div_with_repeat(repeats[k]);char* html=div_page(style);char label[64];snprintf(label,sizeof(label),"S8 repeat %zu",k);s8_admitted(s,&with_red,html,label,0,0,255);free(style);free(html);}}
+  /* Ciclo 04 (Cambio 4a): repeat-x/repeat-y solo como palabra única; en
+     pares solo repeat/no-repeat/space/round. Estos pares se rechazaban ya
+     en el apply del runtime (rc=-10); ahora se rechazan en admisión, con
+     el mismo rc. */
+  {const char* bad_repeats[]={"repeat repeat-x","repeat-x repeat","repeat-x repeat-y","no-repeat repeat-x","space repeat-y"};
+   for(size_t k=0;k<sizeof(bad_repeats)/sizeof(bad_repeats[0]);++k){char* style=div_with_repeat(bad_repeats[k]);char* html=div_page(style);char label[64];snprintf(label,sizeof(label),"S8 bad repeat %zu",k);s8_rejected(s,&with_red,html,label);free(style);free(html);}}
   /* `repeat` solo con el tile 1x1 no cabe: 480x84 = 40320 tiles > 16384
      (regla R1 del ciclo 01: el desbordamiento rechaza en snapshot). Con
      tile 4x4 son 120x21 = 2520 tiles y el repeat sí renderiza. */
   {char* style=(char*)malloc(1024);CHECK(style);CHECK(snprintf(style,1024,"background-color:#ffffff;background-image:url('red1.png');background-repeat:repeat;background-size:4px 4px;padding-left:16px;padding-top:12px;padding-bottom:12px")>0);char* html=div_page(style);s8_admitted(s,&with_red,html,"S8 repeat 4px",0,0,255);free(style);free(html);}
+  /* Ciclo 04 (desviación D5): "space round" con el tile 1x1 también supera
+     R1 — space/round teselan la rejilla completa (480x84 = 40320 tiles >
+     16384) y el snapshot rechaza, igual que `repeat` solo. Con tile 4x4
+     son 120x21 = 2520 tiles y renderiza (verificado con la sonda
+     probe_space_round.c: rc=0). La admisión en css() es correcta; el
+     rechazo era del snapshot, no de la admisión. */
+  {char* style=(char*)malloc(1024);CHECK(style);CHECK(snprintf(style,1024,"background-color:#ffffff;background-image:url('red1.png');background-repeat:space round;background-size:4px 4px;padding-left:16px;padding-top:12px;padding-bottom:12px")>0);char* html=div_page(style);s8_admitted(s,&with_red,html,"S8 space round 4px",0,0,255);free(style);free(html);}
   {const char* sizes[]={"background-size:cover","background-size:4px 4px"};
    for(size_t k=0;k<sizeof(sizes)/sizeof(sizes[0]);++k){char* style=div_with_extra(sizes[k]);char* html=div_page(style);char label[64];snprintf(label,sizeof(label),"S8 size %zu",k);s8_admitted(s,&with_red,html,label,0,0,255);free(style);free(html);}}
   {char* style=div_with_image("none");char* html=div_page(style);s8_admitted(s,&with_red,html,"S8 none",255,255,255);free(style);free(html);}
   {const char* positions[]={"background-position:center","background-position:10px 20%"};
    for(size_t k=0;k<sizeof(positions)/sizeof(positions[0]);++k){char* style=div_with_extra(positions[k]);char* html=div_page(style);char label[64];snprintf(label,sizeof(label),"S8 position %zu",k);s8_admitted(s,&with_red,html,label,255,255,255);free(style);free(html);}}
+  /* Ciclo 04 (Cambio 4b): "left right" sigue admitido (sin cambio de
+     código): el par inválido se descarta al valor inicial "0% 0%" y el
+     tile 1x1 se pinta en (24,24). */
+  {char* style=div_with_extra("background-position:left right");char* html=div_page(style);s8_admitted(s,&with_red,html,"S8 position left right",0,0,255);free(style);free(html);}
   {const char* bad_images[]={"url(a), url(b)","url(data:image/png;base64,AAAA)","url()","url('')"};
    for(size_t k=0;k<sizeof(bad_images)/sizeof(bad_images[0]);++k){char* style=div_with_image(bad_images[k]);char* html=div_page(style);char label[64];snprintf(label,sizeof(label),"S8 bad image %zu",k);s8_rejected(s,&with_red,html,label);free(style);free(html);}}
   {char* style=div_with_repeat("banana");char* html=div_page(style);s8_rejected(s,&with_red,html,"S8 bad repeat");free(style);free(html);}

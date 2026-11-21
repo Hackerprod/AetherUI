@@ -9,7 +9,9 @@ proof of overlapping CSS opacity groups. Text, images, unsupported scroll and
 other unsupported commands fail rather than falling back. Gradient budgets
 are per-pixel interior 1 / border 2048 (cycle 03); large gradients render
 in the surface route, and large-gradient P4 is PASS there. B0 still does
-not admit gradients. Native text,
+not admit gradients. Box-shadow budgets are `(columns+rows)·256 + 2/px`
+(cycle 04); exterior shadows render in the surface route; `inset` is
+rejected. B0 still does not admit box-shadow. Native text,
 resources and a complete real page remain R2 work.
 
 ## Ownership and states
