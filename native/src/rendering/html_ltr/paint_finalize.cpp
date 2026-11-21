@@ -73,7 +73,8 @@ void validate_controls(const NativePaintList& native,FontProvider& provider,BoxP
  const auto* list=NativeListAccess::list(native);if(!list)internal();
  if(!native.scroll.empty())unsupported();
  if(!list->border_groups.empty())unsupported(); // nonuniform emitter, outside profile
- if(list->native_gradient_unproven||!list->native_srgb_gradients.empty()||list->native_gradient_stop_count)unsupported();
+ if(list->native_gradient_unproven)unsupported(); // Ciclo 03 (Cambio 7): los gradientes probados
+ // ya no se rechazan aquí; solo el flag unproven sigue siendo un rechazo.
  reserve_items(provider,list->commands.size(),sizeof(std::pair<int,std::int64_t>));
  std::vector<std::pair<int,std::int64_t>> controls;
  const auto& focus=native.interaction_focus;
@@ -124,6 +125,26 @@ void validate_controls(const NativePaintList& native,FontProvider& provider,BoxP
   case AETHER_PAINT_END_PAINT_CHUNK:
    if(controls.empty()||controls.back()!=std::pair<int,std::int64_t>{AETHER_PAINT_BEGIN_PAINT_CHUNK,command.data.paint_chunk.style_node_id})internal();
    controls.pop_back();break;
+  case AETHER_PAINT_FILL_ROUNDED_RECT_GRADIENT: {
+   // Ciclo 03 (Cambio 7): espejo de lo que el snapshot ya comprueba
+   // (paint_snapshot.cpp, LinearGradientFill). La procedencia del puntero
+   // de paradas no se duplica aquí: es trabajo del snapshot.
+   const auto& g = command.data.fill_rounded_rect_gradient;
+   rect(g.rect); box_radius(g.rect, g.radii, policy);
+   rect(g.gradient_rect);
+   if (g.gradient_rect.width <= 0 || g.gradient_rect.height <= 0) unsupported();
+   const double norm = std::hypot(double(g.gradient.direction_x), double(g.gradient.direction_y));
+   if (!std::isfinite(norm) || norm < .9999 || norm > 1.0001) unsupported();
+   if (!g.gradient.stops || g.gradient.stop_count < 2 || g.gradient.stop_count > 64) unsupported();
+   if (!std::isfinite(g.opacity) || g.opacity < 0 || g.opacity > 1) unsupported();
+   float previous = 0;
+   for (int32_t i = 0; i < g.gradient.stop_count; ++i) {
+    const auto& stop = g.gradient.stops[i];
+    if (!std::isfinite(stop.offset) || stop.offset < 0 || stop.offset > 1 || stop.offset < previous) unsupported();
+    previous = stop.offset;
+   }
+   break;
+  }
   case AETHER_PAINT_DRAW_BACKGROUND_IMAGE: {
    const auto& d = command.data.draw_background_image;
    if (!d.has_resolved_geometry) break; // Sin resolver: NO rechazar aquí.

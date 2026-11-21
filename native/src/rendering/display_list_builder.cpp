@@ -625,6 +625,11 @@ static void paint_background_layers(aether_display_list_builder_s* builder,
                         continue;
                     }
                 }
+                // Ciclo 03 (Cambio 8): área cero — saltar la capa sin
+                // marcar unproven (espejo del Cambio 6 en el validate).
+                // Un div de área cero no deja ningún rastro de gradiente
+                // en la lista.
+                if (paint_rect.width<=0 || paint_rect.height<=0) continue;
                 aether_background_image_geometry_context_s context{};
                 context.paint_rect = paint_rect;
                 context.has_intrinsic_size = false;
@@ -769,6 +774,11 @@ static void validate_native_gradient_domain(aether_display_list_builder_s* build
                 measures->background_gradient()!=aether::css::GradientEvidence::explicit_srgb_cardinal_angle ||
                 layer.gradient.stops.size()<2 || layer.gradient.stops.size()>64)
                 throw std::runtime_error("native gradient provenance unsupported");
+            // Ciclo 03 (Cambio 6): un nodo con área cero no pinta nada;
+            // saltar la capa antes de construir la geometría (la guarda de
+            // área cero haría fallar el validate). La procedencia se
+            // mantiene antes del salto.
+            if (box->border_box.width<=0 || box->border_box.height<=0) continue;
             aether_background_image_geometry_context_s geometry{};
             geometry.paint_rect=box->border_box; geometry.has_intrinsic_size=false;
             geometry.max_tiles=(65536-total_stops)/layer.gradient.stops.size();

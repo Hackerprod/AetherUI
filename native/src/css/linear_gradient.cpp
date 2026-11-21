@@ -307,11 +307,12 @@ bool aether_linear_gradient_g1_source_supported(const char* source) {
     for (int i=0;i<g.stop_count;++i) {
         const auto& p=g.stops[i].position;
         if (!g.stops[i].has_position) continue;
-        // Context-free exclusions precede the later geometry-dependent length check.
-        if (!std::isfinite(p.value) || p.value<0) return false;
-        if (p.unit==AETHER_CSS_UNIT_PERCENT && p.value>100) return false;
-        // G1 excludes calc/mixed-unit stop positions rather than guessing their range.
-        if (p.unit==AETHER_CSS_UNIT_LINEAR) return false;
+        // Ciclo 03 (Cambio 5): g1 admite solo posiciones en % o sin
+        // posición. Cualquier longitud (px, em, rem, vw, vh, calc/LINEAR)
+        // se rechaza aquí, sin llegar al chequeo dependiente de la
+        // geometría del validate (que afloraría como INTERNAL).
+        if (p.unit!=AETHER_CSS_UNIT_PERCENT) return false;
+        if (!std::isfinite(p.value) || p.value<0 || p.value>100) return false;
     }
     return true;
 }

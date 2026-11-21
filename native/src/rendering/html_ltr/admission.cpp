@@ -1,5 +1,6 @@
 #include "admission.h"
 #include "../../style_runtime/css_variable_tokens.h"
+#include "../../css/linear_gradient.h"
 #include <algorithm>
 #include <cctype>
 #include <limits>
@@ -65,7 +66,17 @@ bool split_words(std::string_view v,std::string_view* words,std::size_t max,std:
     return count>0;
 }
 bool inherited_property(std::string_view p) {return p=="font-family"||p=="font-size"||p=="font-weight"||p=="line-height"||p=="color";}
+// Ciclo 03 (Cambio 1): ¿empieza el valor por "linear-gradient("?
+// Comparación insensible a mayúsculas; el parser decide el resto.
+bool starts_gradient(std::string_view v) {
+    constexpr std::string_view prefix="linear-gradient(";
+    if(v.size()<prefix.size())return false;
+    for(std::size_t i=0;i<prefix.size();++i)
+        if(char(std::tolower(static_cast<unsigned char>(v[i])))!=prefix[i])return false;
+    return true;
+}
 void css(Node& node,std::string_view input) {
+    bool gradient_layer=false; // Ciclo 03 (Cambio 3): background-image es un gradiente.
     std::size_t i=0;
     while(i<input.size()) {
         while(i<input.size()&&css_ws(input[i]))++i;
@@ -94,12 +105,20 @@ void css(Node& node,std::string_view input) {
         if(prop=="color")node.inherited.color_rgb=color(value);
         else if(prop=="background-color") {if(value!="transparent") (void)color(value);}
         else if(prop=="background-image") {
+            // Ciclo 03 (Cambio 1): linear-gradient(...) g1. El predicado es
+            // la misma función que fija la evidencia del builder, así que
+            // admisión y builder no pueden divergir en qué formas son g1.
+            // Tras el Cambio 5 solo admite posiciones en % o sin posición.
+            if(value!="none"&&starts_gradient(value)) {
+                std::string source(value);
+                if(!aether_linear_gradient_g1_source_supported(source.c_str()))unsupported();
+                gradient_layer=true;
+            } else if(value!="none") {
             // background-image: un solo url(...). El url('...') entrecomillado
             // lexa como varios tokens (función + string + cierre), así que el
             // bucle genérico de un token lo rechazaría; decode_url acepta ambas
             // formas y exige que todo el valor sea la url (url(a), url(b)
             // falla → unsupported). Sin data-URLs (espejo del gate B0).
-            if(value!="none") {
                 css_variable_lexer lexer(value.data(),value.size());
                 std::string source;
                 if(!lexer.decode_url(source))unsupported();
@@ -153,6 +172,26 @@ void css(Node& node,std::string_view input) {
         else if(prop=="margin-top"||prop=="margin-right"||prop=="margin-bottom"||prop=="margin-left"||prop=="padding-top"||prop=="padding-right"||prop=="padding-bottom"||prop=="padding-left"||prop=="border-width") (void)pixels(value,0,128);
         else unsupported();
         node.declarations.emplace_back(prop,value);
+    }
+    // Ciclo 03 (Cambio 3): con gradiente, background-size solo admite
+    // auto/cover/contain (o una lista de palabras todas auto, idéntica a
+    // auto). Con longitudes explícitas la baldosa puede ser
+    // arbitrariamente pequeña y el desbordamiento afloraría como INTERNAL;
+    // aquí es un rechazo limpio. El post-bucle cubre ambos órdenes de
+    // declaración (size antes o después de image).
+    if(gradient_layer) {
+        for(const auto& d:node.declarations) {
+            if(d.first!="background-size")continue;
+            const auto& v=d.second;
+            if(v=="auto"||v=="cover"||v=="contain")continue;
+            std::string_view w[2];std::size_t n=0;
+            bool all_auto=false;
+            if(split_words(v,w,2,n)) {
+                all_auto=true;
+                for(std::size_t k=0;k<n;++k)if(w[k]!="auto")all_auto=false;
+            }
+            if(!all_auto)unsupported();
+        }
     }
     if(node.inherited.line_height<node.inherited.font_size)unsupported();
 }

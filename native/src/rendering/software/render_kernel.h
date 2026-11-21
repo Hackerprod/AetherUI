@@ -79,6 +79,41 @@ template<class Draw> double joint_area(const Draw& d,Rect b,std::uint64_t& sampl
  }
  return (b.r-b.l)*(b.b-b.t)*count/256;
 }
+// Ciclo 03 (§2.2, §2.6): clasificación interior/borde de un píxel de
+// gradiente. Un SOLO predicado, usado por el pre-paso de cargo y por el
+// bucle raster: si ambos divergieran, el presupuesto mentiría.
+// Interior cuando (1) el píxel está totalmente dentro del rect recortado
+// r, (2) radio 0 o banda central del rect original, y clip 0 o banda
+// central del clip, y (3) ninguna parada cae estrictamente dentro del
+// rango-t del píxel. El color es afín sobre el píxel en ese caso, así que
+// una muestra en el centro iguala la media de 256 (salvo ~1e-14).
+template<class Gradient> bool gradient_pixel_interior(
+    Rect r,Rect original,double radius,CurvedClip clip,
+    const Gradient& g,Rect gradient_rect,int x,int y) noexcept {
+ // (1) Píxel totalmente dentro de r.
+ if(double(x)<r.l || double(x)+1>r.r || double(y)<r.t || double(y)+1>r.b) return false;
+ // (2) Radio 0 o banda central de o; clip 0 o banda central del clip.
+ const Rect b{double(x),double(y),double(x)+1,double(y)+1};
+ if(radius!=0 && !central(b,CurvedClip{original,radius})) return false;
+ if(clip.radius!=0 && !central(b,clip)) return false;
+ // (3) Ninguna parada estrictamente dentro del rango-t del píxel.
+ // t es afín: el rango sobre el píxel está en dos esquinas opuestas.
+ const double length=(gradient_rect.r-gradient_rect.l)*std::abs(g.direction_x)+
+                     (gradient_rect.b-gradient_rect.t)*std::abs(g.direction_y);
+ if(!(length>0) || !std::isfinite(length)) return false;
+ const double cx=(gradient_rect.l+gradient_rect.r)*.5,cy=(gradient_rect.t+gradient_rect.b)*.5;
+ const auto t=[&](double px,double py) {
+  return .5+((px-cx)*g.direction_x+(py-cy)*g.direction_y)/length;
+ };
+ const double xlo=g.direction_x>=0?double(x):double(x)+1;
+ const double xhi=g.direction_x>=0?double(x)+1:double(x);
+ const double ylo=g.direction_y>=0?double(y):double(y)+1;
+ const double yhi=g.direction_y>=0?double(y)+1:double(y);
+ const double tmin=t(xlo,ylo),tmax=t(xhi,yhi);
+ for(const auto& stop:g.stops)
+  if(stop.offset>tmin && stop.offset<tmax) return false;
+ return true;
+}
 // Inputs already clipped to the viewport, so integer products are <=8192^2.
 inline std::uint64_t pixel_count(Rect r) noexcept {
  if(empty(r)) return 0;
@@ -233,12 +268,22 @@ template<class ClipPolicy=IntegerA8Clip,class Storage> Result render_impl(Storag
        (fill->rect.width<=0 || fill->rect.height<=0 || 2*radius>std::min(fill->rect.width,fill->rect.height))))
      return {Status::unsupported,FrameStatus::ok,index,work};
     const auto original=translated(fill->rect),r=intersect(current,original);
-    // 256 samples, bounded binary stop lookup (<=7 comparisons) and blend.
-    // Charged before candidate allocation; solid draws retain their fast path.
-    if(!charge(work,pixel_count(r),256*8))return {Status::limit_exceeded,FrameStatus::ok,index,work};
+    // Ciclo 03 (§2.2, §2.6): interior 1 muestra, borde 256. El cargo usa
+    // el mismo predicado que el bucle raster y se calcula antes de la
+    // asignación del candidato, como hoy: interior×1 + borde×2048.
+    const auto gradient_rect=translated(fill->gradient_rect);
+    std::uint64_t interior=0,border=0;
+    {
+     const int x0=int(std::floor(r.l)),x1=int(std::ceil(r.r));
+     const int y0=int(std::floor(r.t)),y1=int(std::ceil(r.b));
+     for(int y=y0;y<y1;++y) for(int x=x0;x<x1;++x)
+      if(gradient_pixel_interior(r,original,radius,curve,*fill,gradient_rect,x,y))++interior;
+      else ++border;
+    }
+    if(!charge(work,interior,1)||!charge(work,border,256*8))return {Status::limit_exceeded,FrameStatus::ok,index,work};
     if(!empty(r)) {
      Draw d{};d.rect=r;d.index=index;d.original=original;d.radius=radius;d.clip=curve;
-     d.gradient=fill;d.gradient_rect=translated(fill->gradient_rect);draws.push_back(d);
+     d.gradient=fill;d.gradient_rect=gradient_rect;draws.push_back(d);
     }
    } else if(const auto* fill=std::get_if<prep::Fill>(&command)) {
     const double radius=fill->radii.top_left_x;
@@ -509,7 +554,15 @@ template<class ClipPolicy=IntegerA8Clip,class Storage> Result render_impl(Storag
       const auto b=intersect(r,{double(x),double(y),double(x)+1,double(y)+1});
       if(draw.gradient) {
        double sums[4]{};
-       for(int sy=0;sy<16;++sy)for(int sx=0;sx<16;++sx) {
+       // Ciclo 03 (§2.2, §2.6): píxel interior — el color es afín sobre el
+       // píxel, así que una muestra en el centro iguala la media de 256.
+       // El mismo predicado que el pre-paso de cargo. El píxel interior
+       // es 1x1 completo, así que scale es 1/256 y sums*scale es la muestra.
+       if(gradient_pixel_interior(draw.rect,draw.original,draw.radius,draw.clip,
+                                  *draw.gradient,draw.gradient_rect,x,y)) {
+        double sample[4];gradient_sample(*draw.gradient,draw.gradient_rect,x+.5,y+.5,sample);
+        for(int c=0;c<4;++c)sums[c]=sample[c]*256;
+       } else for(int sy=0;sy<16;++sy)for(int sx=0;sx<16;++sx) {
         const double px=b.l+(sx+.5)*(b.r-b.l)/16,py=b.t+(sy+.5)*(b.b-b.t)/16;
         if(!contains(draw.original,draw.radius,px,py) ||
            (draw.clip.radius>0&&!contains(draw.clip.original,draw.clip.radius,px,py)))continue;

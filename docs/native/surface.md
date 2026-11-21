@@ -6,8 +6,10 @@ preparation and software rendering, not a host-supplied command adapter. Public
 lists have already lost some native metadata, including CSS opacity grouping;
 this API cannot retrospectively detect all such omissions. Color alpha is not
 proof of overlapping CSS opacity groups. Text, images, unsupported scroll and
-other unsupported commands fail rather than falling back. Existing gradient
-budgets remain unchanged; large-gradient P4 is still FAIL/PENDING. Native text,
+other unsupported commands fail rather than falling back. Gradient budgets
+are per-pixel interior 1 / border 2048 (cycle 03); large gradients render
+in the surface route, and large-gradient P4 is PASS there. B0 still does
+not admit gradients. Native text,
 resources and a complete real page remain R2 work.
 
 ## Ownership and states
